@@ -28,6 +28,15 @@ DISPLAY_MODE = 1
 CURRENT_SESSION_TRIAL = 0  
 N_TRIALS = 0  
 
+# ==========================================
+# 🌟 修正區：將資料夾與檔案清單提升為全域變數
+# ==========================================
+DATA_DIR = "tw_stock_data_vip"
+TARGET_FILES = []
+if os.path.exists(DATA_DIR):
+    TARGET_FILES = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+# ==========================================
+
 def evaluate_single_stock(file_path, params):
     try:
         if file_path not in WORKER_CACHE:
@@ -189,17 +198,17 @@ def monitoring_callback(study, trial):
         print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}\n")
 
 if __name__ == "__main__":
-    DATA_DIR = "tw_stock_data_vip"
-    
+    # ==========================================
+    # 🌟 修正區：只需要檢查剛剛在全域宣告的路徑是否有效即可
+    # ==========================================
     if not os.path.exists(DATA_DIR):
         print("❌ 找不到資料夾，請確認路徑。")
         exit()
         
-    TARGET_FILES = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
-    
     if len(TARGET_FILES) == 0:
         print("📂 資料夾內無 CSV 檔案。")
         exit()
+    # ==========================================
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (平滑引導進化版){C_RESET}")
