@@ -54,7 +54,7 @@ def evaluate_single_stock(file_path, params):
         return run_v16_backtest(df, params)
     except Exception:
         return None
-
+ 
 def objective(trial):
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
