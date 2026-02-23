@@ -58,7 +58,7 @@ def evaluate_single_stock(file_path, params):
 def objective(trial):
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
-    ai_use_vol = trial.suggest_categorical("use_vol", [True, False])
+    ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
