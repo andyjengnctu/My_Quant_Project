@@ -1,0 +1,76 @@
+ 發現穩健型聖杯！ (第 156 次測試) | 綜合評分: 641.48
+   📊 [全市場平均] 勝率: 45.96% | 期望值:  9.75R | 風報比: 12.13
+   📈 [交易頻率]   總交易: 7124次 | 單檔平均: 13.8次
+   🛡️ [風險與獲利] 平均回撤:  4.13% | 平均資產成長:   4.00%
+   ⚙️ [參數設定]   {'atr_len': 10, 'atr_times_init': 3.0, 'atr_times_trail': 4.1, 'atr_buy_tol': 1.4000000000000001, 'high_len': 235, 'tp_percent': 0.35000000000000003}
+
+
+
+=====================================
+import pandas as pd
+import os
+import warnings
+
+# 從您的模組引入參數配置與核心引擎
+from v16_config import V16StrategyParams
+from v16_core import run_v16_backtest
+
+warnings.filterwarnings('ignore')
+
+def compare_with_tv(csv_file_path):
+    print(f"\n🔍 正在讀取 TV 歷史資料: {csv_file_path}")
+    
+    if not os.path.exists(csv_file_path):
+        print(f"❌ 找不到檔案！請確認 {csv_file_path} 是否存在。")
+        return
+        
+    df = pd.read_csv(csv_file_path)
+    df.columns = [c.capitalize() for c in df.columns]
+    
+    if 'Time' in df.columns:
+        df['Time'] = pd.to_datetime(df['Time'])
+        df.set_index('Time', inplace=True)
+    elif 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        
+    # 🌟 實例化策略參數 (預設就是您 TV 裡的參數)
+    # 如果未來想測別的參數，只要 new_params = V16StrategyParams(atr_len=14) 即可
+    params = V16StrategyParams()
+    
+    # 呼叫核心引擎進行運算
+    stats = run_v16_backtest(df, params)
+    
+    if not stats:
+        print("❌ 運算失敗：無法產生指標訊號。")
+        return
+
+    # 印出與 TV 相同的面板
+    print("\n[Python 模組化核心引擎與 TV 交叉比對]")
+    print("┌───────────────────────────┐")
+    print(f"│ 資產成長: {stats['asset_growth']:>6.2f}%       │")
+    print(f"│   交易次數: {stats['trade_count']:>3}           │")
+    print(f"│   錯失買點: {stats['missed_buys']:>3}次         │")
+    print(f"│   單筆報酬: {stats['score']:>6.2f}%       │")
+    print("│                           │")
+    print(f"│     勝率: {stats['win_rate']:>6.2f}%         │")
+    print(f"│   風報比: {stats['payoff_ratio']:>6.2f}          │")
+    print(f"│   期望值: {stats['expected_value']:>6.2f} R        │")
+    print(f"│ 最大回撤: {stats['max_drawdown']:>6.2f}%       │")
+    print("└───────────────────────────┘")
+    print("對比完成！請對照您的 TV 截圖。\n")
+
+if __name__ == "__main__":
+    print("🚀 v16 模組化獨立核心驗證工具啟動...")
+    while True:
+        ticker_input = input("請輸入要測試的股票代碼 (例如 2330，輸入 'q' 離開): ").strip()
+        
+        if ticker_input.lower() == 'q':
+            print("離開測試程式。")
+            break
+            
+        if not ticker_input:
+            continue
+            
+        target_csv_path = f"testing_csv/TV_Data_Full_{ticker_input}.csv"
+        compare_with_tv(target_csv_path)

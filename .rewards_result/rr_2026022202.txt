@@ -1,0 +1,203 @@
+🏆 發現穩健型高獲利聖杯！ (第 165 次測試) | 資金效率評分: 3257.84
+   📊 [全市場平均] 勝率: 51.96% | 期望值:  1.60R | 風報比: 2.79
+   📈 [交易頻率]   總交易: 9989次 | 單檔平均: 18.9次
+   💰 [獲利與風險] 總累積獲利: 15987.2 R (平均每檔 28.7R) | 平均回撤:  3.91%
+   ⚙️ [參數設定]   {'atr_len': 6, 'atr_times_init': 3.5, 'atr_times_trail': 4.0, 'atr_buy_tol': 1.5, 'high_len': 100, 'tp_percent': 0.5}
+
+
+
+=====================================
+import os
+import time
+import math
+import json
+import optuna
+import pandas as pd
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime
+
+# 引入核心模組與參數設定
+from v16_config import V16StrategyParams
+from v16_core import run_v16_backtest
+
+# 忽略警告與隱藏 Optuna 預設洗版日誌
+warnings.filterwarnings('ignore')
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+C_RED = '\033[91m'
+C_YELLOW = '\033[93m'
+C_CYAN = '\033[96m'
+C_GREEN = '\033[92m'
+C_RESET = '\033[0m'
+C_GRAY = '\033[90m'
+
+# ==========================================
+# 1. 獨立的單檔運算函數 (供 Scanner 級別多進程呼叫)
+# ==========================================
+def evaluate_single_stock(file_path, params):
+    """ 讀取單一 CSV 並執行回測，交給 OS 快取來處理極速讀取 """
+    try:
+        df = pd.read_csv(file_path)
+        if len(df) < 100:
+            return None
+        df.columns = [c.capitalize() for c in df.columns]
+        if 'Time' in df.columns:
+            df.set_index('Time', inplace=True)
+        elif 'Date' in df.columns:
+            df.set_index('Date', inplace=True)
+            
+        return run_v16_backtest(df, params)
+    except Exception:
+        return None
+
+# ==========================================
+# 2. AI 訓練大腦 (Objective)
+# ==========================================
+def objective(trial):
+    # 🛡️ 加入人性枷鎖與實戰頻率限制
+    ai_params = V16StrategyParams(
+        atr_len = trial.suggest_int("atr_len", 5, 20),
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
+        
+        # 🔒 鎖死過大的追蹤停利，最高只准忍受 4.5 倍 ATR 回檔
+        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 5.0, step=0.1), 
+        
+        # 🔒 放寬追價容忍度，讓訊號更容易成交 (不漏接飆股)
+        atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
+        
+        # 🔒 突破天數限制在「近2個月~近半年」，確保交易頻率充足
+        high_len = trial.suggest_int("high_len", 40, 120, step=5),
+        
+        # 🔒 強制至少獲利了結 40%，先收回成本與利潤，降低心理壓力
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
+    )
+
+    all_stats = []
+    max_single_mdd = 0.0
+
+    # 🚀 啟動多進程極速運算
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(evaluate_single_stock, fp, ai_params) for fp in TARGET_FILES]
+        
+        for future in as_completed(futures):
+            stats = future.result()
+            if stats and stats['trade_count'] > 0:
+                all_stats.append(stats)
+                max_single_mdd = max(max_single_mdd, stats['max_drawdown'])
+                
+                # ⚡ 防線 1：單檔極限提早中止 (系統性風險防護)
+                if max_single_mdd > 40.0:
+                    for f in futures: f.cancel()
+                    return -9999.0
+
+    # 防呆：全市場不到 10% 的股票有交易則淘汰
+    if len(all_stats) < (len(TARGET_FILES) * 0.1):
+        return -9999.0
+
+    valid_count = len(all_stats)
+    total_trades = sum(s['trade_count'] for s in all_stats)
+    
+    if total_trades == 0:
+        return -9999.0
+        
+    avg_trades = total_trades / valid_count
+    
+    # 🌟 採用「交易次數加權平均」，消除 100% 勝率妖股的極端干擾
+    avg_ev = sum(s['expected_value'] * s['trade_count'] for s in all_stats) / total_trades
+    avg_winrate = sum(s['win_rate'] * s['trade_count'] for s in all_stats) / total_trades
+    avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
+    
+    # MDD 使用一般平均
+    avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
+
+    # 💰 核心量化指標：全市場總累積期望值 (Total R)
+    total_R_value = total_trades * avg_ev 
+
+    # 寫入 Trial 供 Callback 讀取
+    trial.set_user_attr("win_rate", avg_winrate)
+    trial.set_user_attr("ev", avg_ev)
+    trial.set_user_attr("trades_total", total_trades) 
+    trial.set_user_attr("trades_avg", avg_trades) 
+    trial.set_user_attr("mdd", avg_mdd)
+    trial.set_user_attr("total_R", total_R_value)
+    trial.set_user_attr("payoff", avg_payoff)
+
+    # 🛡️ 終極防線：
+    # 1. 平均回撤 > 15% 淘汰
+    # 2. 平均勝率 < 45% 淘汰 (保護心理)
+    # 3. 期望值 <= 0 淘汰
+    # 4. 總 R 值 < 2000 淘汰 (拒絕不賺錢的策略)
+    if avg_mdd > 15.0 or avg_ev <= 0 or avg_winrate < 45.0 or total_R_value < 2000.0:
+        return -9999.0
+        
+    # 🏆 新版目標函數：純粹的資金效率 = 總賺取的 R 值 / (平均 MDD + 1)
+    # 分子越大越好，分母越小越好
+    final_score = total_R_value / (avg_mdd + 1.0)
+    
+    return final_score
+
+# ==========================================
+# 3. 監視器：即時列印單次進度與破紀錄明細
+# ==========================================
+def monitoring_callback(study, trial):
+    duration = trial.duration.total_seconds() if trial.duration else 0.0
+    
+    if trial.value and trial.value <= -9000:
+        status_text = f"{C_YELLOW}淘汰 (觸發防線){C_RESET}"
+        score_text = "N/A"
+    else:
+        status_text = f"{C_GREEN}順利完賽{C_RESET}"
+        score_text = f"{trial.value:.2f}"
+        
+    print(f"{C_GRAY}⏳ [完成測試 {trial.number + 1:>3}] 耗時: {duration:>5.2f} 秒 | 資金效率評分: {score_text:>6} | 狀態: {status_text}{C_RESET}")
+
+    if study.best_trial.number == trial.number and trial.value and trial.value > -9000:
+        attrs = trial.user_attrs
+        print(f"\n{C_RED}🏆 發現穩健型高獲利聖杯！ (第 {trial.number + 1} 次測試) | 資金效率評分: {trial.value:.2f}{C_RESET}")
+        print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 期望值: {attrs['ev']:>5.2f}R | 風報比: {attrs['payoff']:>4.2f}")
+        print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次")
+        print(f"   💰 [獲利與風險] 總累積獲利: {attrs['total_R']:>7.1f} R (平均每檔 {attrs['total_R']/len(TARGET_FILES):>4.1f}R) | 平均回撤: {attrs['mdd']:>5.2f}%")
+        print(f"   ⚙️ [參數設定]   {trial.params}")
+        print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}\n")
+
+# ==========================================
+# 4. 啟動訓練所
+# ==========================================
+if __name__ == "__main__":
+    DATA_DIR = "tw_stock_data_vip"
+    
+    if not os.path.exists(DATA_DIR):
+        print("❌ 找不到資料夾，請確認路徑。")
+        exit()
+        
+    # 準備好所有檔案路徑，供 Worker 讀取
+    TARGET_FILES = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+    
+    if len(TARGET_FILES) == 0:
+        print("📂 資料夾內無 CSV 檔案。")
+        exit()
+
+    print(f"{C_CYAN}🚀 已找到 {len(TARGET_FILES)} 檔全市場股票，準備啟動多核心極速訓練引擎...{C_RESET}")
+
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42))
+    
+    # 您可以依據自己的時間安排次數，實戰建議 200 ~ 500 次
+    N_TRIALS = 300 
+    print(f"{C_CYAN}🚀 開始進行 {N_TRIALS} 次全市場極速測試 (已切換為 Total R-Multiple 終極評估機制)...{C_RESET}\n")
+    
+    start_time = time.time()
+    
+    # n_jobs=1 是為了讓 Scanner 的多進程火力全開
+    study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
+    
+    end_time = time.time()
+    
+    print(f"\n{C_YELLOW}================================================================================{C_RESET}")
+    print(f"🏁 訓練結束！總計完成 {N_TRIALS} 次測試，總耗時: {end_time - start_time:.2f} 秒。")
+    print(f"✨ AI 全市場最強資金效率分數: {study.best_value:.2f}")
+    
+    with open("v16_best_params.json", "w") as f:
+        json.dump(study.best_params, f, indent=4)
+        
+    print(f"{C_GREEN}💾 已自動將聖杯參數儲存至 'v16_best_params.json'！{C_RESET}")
