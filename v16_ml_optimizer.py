@@ -16,7 +16,7 @@ from v16_core import run_v16_backtest
 warnings.filterwarnings('ignore') #test-branch
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-C_RED = '\033[91m'
+C_RED = '\033[91m' 
 C_YELLOW = '\033[93m'
 C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
