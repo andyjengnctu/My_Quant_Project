@@ -71,10 +71,10 @@ def objective(trial):
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 5.0, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 5.0, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 120, step=5),
+        high_len = trial.suggest_int("high_len", 40, 150, step=5),
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
         
         use_bb = ai_use_bb,
@@ -88,7 +88,7 @@ def objective(trial):
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,#orginal 1~10
-        vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19 #changed
+        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19 #changed
     )
 
     all_stats = []
