@@ -99,7 +99,7 @@ def prep_stock_data_and_trades(df, params):
 def get_pit_stats(trade_logs, current_date):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
-    if trade_count < 5: return False, 0.0, 0.0 #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<設定歷史績效過濾條件 <<<<<<<<<<<<<<<<
+    if trade_count < 5: return False, 0.0, 0.0 
     wins = [t for t in past_trades if t['pnl'] > 0]
     losses = [t for t in past_trades if t['pnl'] <= 0]
     win_rate = len(wins) / trade_count
@@ -107,9 +107,9 @@ def get_pit_stats(trade_logs, current_date):
     avg_loss = abs(sum(t['pnl'] for t in losses) / len(losses)) if losses else 0.0
     payoff = avg_win / avg_loss if avg_loss > 0 else (5.0 if avg_win > 0 else 0)
     ev = (win_rate * payoff) - (1 - win_rate)
-    return (win_rate >= 0.0) and (ev > 0.0), ev, win_rate #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<設定歷史績效過濾條件 <<<<<<<<<<<<<<<<
+    return (win_rate >= 0.0) and (ev > 0.0), ev, win_rate 
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015):
+def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs = {}
     all_trade_logs = {}
@@ -127,7 +127,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             df[date_col] = pd.to_datetime(df[date_col])
             df.set_index(date_col, inplace=True)
             
-            # 💡 這裡依然從資料第一天開始運算，讓 get_pit_stats 有完整的「過去經驗」
             df, logs = prep_stock_data_and_trades(df, params)
             all_dfs[ticker] = df
             all_trade_logs[ticker] = logs
@@ -138,9 +137,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     sorted_dates = sorted(list(master_dates))
     all_dfs_fast = {ticker: df.to_dict('index') for ticker, df in all_dfs.items()}
     
-    # ==========================================
-    # 🌟 尋找使用者指定的起始年份 Index
-    # ==========================================
     start_dt = pd.to_datetime(f"{start_year}-01-01")
     start_idx = 1
     for idx, d in enumerate(sorted_dates):
@@ -149,6 +145,17 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             break
             
     print(f"\n{C_GREEN}✅ 預處理完成！自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n")
+
+    benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
+    benchmark_start_price = None
+    bm_peak_price = None     
+    bm_max_drawdown = 0.0    
+    
+    if benchmark_data:
+        base_date = sorted_dates[start_idx - 1] if start_idx > 0 else sorted_dates[0]
+        if base_date in benchmark_data:
+            benchmark_start_price = benchmark_data[base_date]['Close']
+            bm_peak_price = benchmark_start_price
 
     initial_capital = params.initial_capital
     cash = initial_capital
@@ -159,7 +166,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     max_drawdown = 0.0
     current_equity = initial_capital 
 
-    # 💡 迴圈從 start_idx 開始跑，之前的資料只作為 AI 統計勝率的歷史庫
     for i in range(start_idx, len(sorted_dates)):
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
@@ -173,9 +179,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         candidates_today = []
         tickers_to_remove = []
 
-        # ------------------------------------------
-        # 階段 A: 處理賣出訊號
-        # ------------------------------------------
         for ticker, pos in portfolio.items():
             fast_df = all_dfs_fast[ticker]
             if today not in fast_df: continue 
@@ -212,9 +215,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
         for t in tickers_to_remove: del portfolio[t]
 
-        # ------------------------------------------
-        # 階段 B: 尋找買進訊號
-        # ------------------------------------------
         for ticker, fast_df in all_dfs_fast.items():
             if ticker in portfolio: continue 
             if ticker in held_yesterday: continue 
@@ -230,9 +230,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                     sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * params.atr_times_init))
                     candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev})
 
-        # ------------------------------------------
-        # 階段 C: 資金分配與換股邏輯 (🌟 全面套用 1% 固定風險)
-        # ------------------------------------------
         if candidates_today:
             candidates_today.sort(key=lambda x: x['ev'], reverse=True)
             for cand in candidates_today:
@@ -279,9 +276,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                                 portfolio[cand['ticker']] = {'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 'tp_half': tp_target, 'sold_half': False, 'risk_used': params.fixed_risk, 'last_px': cand['buy_price']}
                                 trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"汰弱換入 (EV:{cand['ev']:.2f})", "Price": cand['buy_price'], "PnL": 0, "Risk": params.fixed_risk})
 
-        # ------------------------------------------
-        # 盤後結算
-        # ------------------------------------------
         today_equity = cash  
         for pt, pos in portfolio.items():
             if today in all_dfs_fast[pt]:
@@ -295,11 +289,34 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         invested_capital = today_equity - cash
         exposure_pct = (invested_capital / today_equity) * 100 if today_equity > 0 else 0
 
+        strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
+        bm_ret_pct = 0.0
+        
+        if benchmark_data and today in benchmark_data:
+            current_bm_px = benchmark_data[today]['Close']
+            
+            if benchmark_start_price is None:
+                benchmark_start_price = current_bm_px
+                bm_peak_price = current_bm_px
+                
+            if benchmark_start_price and benchmark_start_price > 0:
+                bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100
+                
+            if bm_peak_price is not None:
+                if current_bm_px > bm_peak_price:
+                    bm_peak_price = current_bm_px
+                
+                current_bm_drawdown = (bm_peak_price - current_bm_px) / bm_peak_price * 100
+                if current_bm_drawdown > bm_max_drawdown:
+                    bm_max_drawdown = current_bm_drawdown
+
         equity_curve.append({
             "Date": today.strftime('%Y-%m-%d'), 
             "Equity": today_equity,
             "Invested_Amount": invested_capital, 
-            "Exposure_Pct": exposure_pct 
+            "Exposure_Pct": exposure_pct,
+            "Strategy_Return_Pct": strategy_ret_pct,
+            f"Benchmark_{benchmark_ticker}_Pct": bm_ret_pct
         })
         
         if today_equity > peak_equity: peak_equity = today_equity
@@ -311,8 +328,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     df_trades = pd.DataFrame(trade_history)
     total_return = (today_equity - params.initial_capital) / params.initial_capital * 100
     win_rate = len(df_trades[df_trades['PnL'] > 0]) / len(df_trades[df_trades['PnL'] != 0]) * 100 if len(df_trades[df_trades['PnL'] != 0]) > 0 else 0
+    final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
 
-    return df_equity, df_trades, total_return, max_drawdown, win_rate, today_equity
+    return df_equity, df_trades, total_return, max_drawdown, win_rate, today_equity, final_bm_return, bm_max_drawdown
 
 if __name__ == "__main__":
     import time
@@ -327,9 +345,11 @@ if __name__ == "__main__":
     ans_pos = input(f"👉 2. 請設定「最大持倉數量」 (直接按 Enter 預設為 10): ").strip()
     USER_MAX_POS = int(ans_pos) if ans_pos.isdigit() else 10
 
-    # 🌟 新增年份輸入選項
     ans_year = input(f"👉 3. 請設定「開始回測年份」 (輸入西元年，直接按 Enter 推薦預設為 2015): ").strip()
     USER_START_YEAR = int(ans_year) if ans_year.isdigit() else 2015
+
+    ans_bm = input(f"👉 4. 請輸入大盤比較標的 (直接按 Enter 預設為 0050): ").strip()
+    USER_BENCHMARK = ans_bm if ans_bm else "0050"
 
     params, is_loaded = load_dynamic_params("v16_best_params.json")
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
@@ -337,28 +357,48 @@ if __name__ == "__main__":
 
     start_time = time.time()
     
-    # 將年份傳入函數
-    df_eq, df_tr, tot_ret, mdd, win_rate, final_eq = run_portfolio_simulation(
-        DATA_DIR, params, max_positions=USER_MAX_POS, enable_rotation=USER_ROTATION, start_year=USER_START_YEAR
+    df_eq, df_tr, tot_ret, mdd, win_rate, final_eq, bm_ret, bm_mdd = run_portfolio_simulation(
+        DATA_DIR, params, max_positions=USER_MAX_POS, enable_rotation=USER_ROTATION, start_year=USER_START_YEAR, benchmark_ticker=USER_BENCHMARK
     )
     end_time = time.time()
     
     avg_exposure = df_eq['Exposure_Pct'].mean()
     max_exposure = df_eq['Exposure_Pct'].max()
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
+    alpha = tot_ret - bm_ret
+    mdd_diff = bm_mdd - mdd
+    
+    # === 表格資料字串格式化 ===
+    sys_ret_str = f"+{tot_ret:.2f}%" if tot_ret > 0 else f"{tot_ret:.2f}%"
+    bm_ret_str  = f"+{bm_ret:.2f}%" if bm_ret > 0 else f"{bm_ret:.2f}%"
+    alpha_str   = f"+{alpha:.2f}%" if alpha > 0 else f"{alpha:.2f}%"
+    
+    sys_mdd_str = f"-{mdd:.2f}%"
+    bm_mdd_str  = f"-{bm_mdd:.2f}%"
+    mdd_diff_str = f"少跌 {mdd_diff:.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
+    
+    # 決定顏色
+    alpha_color = C_GREEN if alpha > 0 else C_RED
+    sys_ret_color = C_GREEN if tot_ret > 0 else C_RED
+    mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
     
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ 汰弱換股模式:   {mode_display}")
-    print(f"💼 最大持股上限:   {USER_MAX_POS} 檔")
-    print(f"⏱️ 回測總耗時:     {end_time - start_time:.2f} 秒")
-    print(f"💰 最終總資產:     {final_eq:,.0f} 元")
-    print(f"📈 總資產報酬率:   {tot_ret:>.2f} %")
-    print(f"📉 最大回撤 (MDD): {mdd:>.2f} %")
-    print(f"🎯 實戰勝率:       {win_rate:>.2f} %")
-    print(f"🔄 總交易紀錄:     {len(df_tr)} 筆")
-    print(f"🌊 平均資金水位:   {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
+    print(f"⚙️ 基礎設定")
+    print(f"--------------------------------------------------------------------------------")
+    print(f"模式: {mode_display} | 最大持股: {USER_MAX_POS} 檔 | 回測總耗時: {end_time - start_time:.2f} 秒")
+    print(f"實戰勝率: {win_rate:>.2f} % | 總交易紀錄: {len(df_tr)} 筆 | 最終資產: {final_eq:,.0f} 元")
+    print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
+    print(f"--------------------------------------------------------------------------------")
+    print(f"🏆 績效與風險對比表")
+    print(f"--------------------------------------------------------------------------------")
+    
+    # 建立對齊完美的 Markdown 表格 (結合 ANSI 顏色)
+    print(f"| 指標項目       | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
+    print(f"|----------------|----------------|-----------------|----------------|")
+    print(f"| 總資產報酬率   | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
+    print(f"| 最大回撤 (MDD) | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     with pd.ExcelWriter("V16_Portfolio_Report.xlsx") as writer:
