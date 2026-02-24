@@ -5,7 +5,7 @@ import math
 import json
 import optuna
 import numpy as np
-import pandas as pd #test_stage
+import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
@@ -13,7 +13,7 @@ from datetime import datetime
 from v16_config import V16StrategyParams
 from v16_core import run_v16_backtest
 
-warnings.filterwarnings('ignore') #test-branch
+warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 C_RED = '\033[91m' 
@@ -27,24 +27,20 @@ WORKER_CACHE = {}
 DISPLAY_MODE = 1  
 CURRENT_SESSION_TRIAL = 0  
 N_TRIALS = 0  
+TRAIN_END_YEAR = None # 🌟 新增：全域訓練截止年份
 
-# ==========================================
-# 🌟 修正區：將資料夾與檔案清單提升為全域變數
-# ==========================================
 DATA_DIR = "tw_stock_data_vip"
 TARGET_FILES = []
 if os.path.exists(DATA_DIR):
     TARGET_FILES = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
-# ==========================================
 
-def evaluate_single_stock(file_path, params):
+def evaluate_single_stock(file_path, params, train_end_year=None):
     try:
-        if file_path not in WORKER_CACHE:
+        # 🌟 修改：加入年份作為快取鍵值，避免混淆
+        cache_key = f"{file_path}_{train_end_year}" 
+        if cache_key not in WORKER_CACHE:
             df = pd.read_csv(file_path)
-            if len(df) < 100:
-                WORKER_CACHE[file_path] = None
-                return None
-                
+            
             df.columns = [c.capitalize() for c in df.columns]
             df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
             
@@ -54,10 +50,18 @@ def evaluate_single_stock(file_path, params):
             elif 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date'])
                 df.set_index('Date', inplace=True)
+
+            # 🌟 核心過濾器：斬斷未來的記憶
+            if train_end_year is not None:
+                df = df[df.index <= pd.to_datetime(f"{train_end_year}-12-31")]
                 
-            WORKER_CACHE[file_path] = df
+            if len(df) < 100:
+                WORKER_CACHE[cache_key] = None
+                return None
+                
+            WORKER_CACHE[cache_key] = df
             
-        df = WORKER_CACHE[file_path]
+        df = WORKER_CACHE[cache_key]
         if df is None: return None
             
         return run_v16_backtest(df, params)
@@ -87,15 +91,16 @@ def objective(trial):
         kc_len = trial.suggest_int("kc_len", 10, 30, step=2) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
-        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,#orginal 1~10
-        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19 #changed
+        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
+        vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19 
     )
 
     all_stats = []
     max_single_mdd = 0.0
 
     with ProcessPoolExecutor() as executor:
-        futures = [executor.submit(evaluate_single_stock, fp, ai_params) for fp in TARGET_FILES]
+        # 🌟 傳入訓練截止年份
+        futures = [executor.submit(evaluate_single_stock, fp, ai_params, TRAIN_END_YEAR) for fp in TARGET_FILES]
         for future in as_completed(futures):
             stats = future.result()
             if stats and stats['trade_count'] > 0:
@@ -198,9 +203,6 @@ def monitoring_callback(study, trial):
         print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}\n")
 
 if __name__ == "__main__":
-    # ==========================================
-    # 🌟 修正區：只需要檢查剛剛在全域宣告的路徑是否有效即可
-    # ==========================================
     if not os.path.exists(DATA_DIR):
         print("❌ 找不到資料夾，請確認路徑。")
         exit()
@@ -208,10 +210,9 @@ if __name__ == "__main__":
     if len(TARGET_FILES) == 0:
         print("📂 資料夾內無 CSV 檔案。")
         exit()
-    # ==========================================
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (平滑引導進化版){C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (支援樣本外測試版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
@@ -219,6 +220,14 @@ if __name__ == "__main__":
     db_file_name = "v16_ai_memory.db"
     DB_NAME = f"sqlite:///{db_file_name}"
     STUDY_NAME = "v16_global_optimization"
+
+    # 🌟 新增：詢問使用者是否要限制訓練時間
+    ans_year = input(f"\n👉 請設定【AI 訓練截止年份】\n(例如輸入 2020，AI 將完全看不到 2021 年以後的資料。直接按 Enter 預設為看全歷史): ").strip()
+    if ans_year.isdigit():
+        TRAIN_END_YEAR = int(ans_year)
+        print(f"{C_RED}⚠️ 注意：AI 大腦已被蒙上眼罩，只能使用 【{TRAIN_END_YEAR} 年 12 月 31 日】 以前的數據進行訓練！{C_RESET}")
+    else:
+        print(f"{C_GRAY}📖 AI 將使用全部歷史數據進行訓練。{C_RESET}")
 
     if os.path.exists(db_file_name):
         print(f"\n{C_YELLOW}⚠️ 系統偵測到已存在的 AI 記憶庫！{C_RESET}")
@@ -249,38 +258,6 @@ if __name__ == "__main__":
     completed_trials = len(study.trials)
     if completed_trials > 0:
         print(f"\n{C_GREEN}✅ 記憶庫載入成功！大腦已累積 {completed_trials} 次歷史經驗。將從第 {completed_trials + 1} 次繼續探索！{C_RESET}")
-        
-        try:
-            best_trial = study.best_trial
-            if best_trial.value and best_trial.value > -9000:
-                attrs = best_trial.user_attrs
-                p = best_trial.params
-                
-                bb_str = f"啟用 ({p.get('bb_len', 20)} 日, 寬度 {p.get('bb_mult', 2.0):.1f} 倍)" if p.get('use_bb', False) else "[關閉]"
-                kc_str = f"啟用 ({p.get('kc_len', 20)} 日, 寬度 {p.get('kc_mult', 2.0):.1f} 倍)" if p.get('use_kc', False) else "[關閉]"
-                vol_str = f"啟用 (短 {p.get('vol_short_len', 5)} 日 > 長 {p.get('vol_long_len', 19)} 日)" if p.get('use_vol', False) else "[關閉]"
-                
-                penalty_val = attrs.get('penalty', 1.0)
-                if penalty_val < 1.0:
-                    penalty_str = f"{C_YELLOW}⚠️ 頻率過低懲罰 (分數打 {penalty_val*100:.1f} 折){C_RESET}"
-                else:
-                    penalty_str = f"{C_GREEN}✅ 交易頻率達標 (無懲罰){C_RESET}"
-
-                print(f"\n{C_YELLOW}🏆 【目前記憶庫中的最強聖杯紀錄】 | 最終資金效率: {best_trial.value:.2f}{C_RESET}")
-                print(f"   📊 [全市場平均] 勝率: {attrs.get('win_rate', 0):>5.2f}% | 期望值: {attrs.get('ev', 0):>5.2f}R | 風報比: {attrs.get('payoff', 0):>4.2f}")
-                print(f"   📈 [交易頻率]   總交易: {attrs.get('trades_total', 0)}次 | 單檔平均: {attrs.get('trades_avg', 0):.1f}次 | {penalty_str}")
-                print(f"   💰 [獲利與風險] 總累積獲利: {attrs.get('total_R', 0):>7.1f} R | 平均回撤: {attrs.get('mdd', 0):>5.2f}% (原始毛分: {attrs.get('raw_score', 0):.2f})")
-                print(f"   ⚙️ [核心參數] 突破: {p.get('high_len', 0):>3} 日新高 | ATR 週期: {p.get('atr_len', 0):>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
-                print(f"                 掛單: +{p.get('atr_buy_tol', 0):.1f} ATR | 停損: -{p.get('atr_times_init', 0):.1f} ATR | 追蹤停利: -{p.get('atr_times_trail', 0):.1f} ATR")
-                print(f"   🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
-                print(f"                 阿肯那通道(KC): {kc_str}")
-                print(f"                 均量爆發 (Vol): {vol_str}")
-                print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
-            else:
-                print(f"{C_GRAY}   (目前歷史紀錄中尚未找到符合及格線的參數組合，AI 將繼續努力...){C_RESET}")
-        except Exception:
-            pass
-            
     else:
         print(f"\n{C_YELLOW}🌟 全新記憶庫已建立！準備展開未知的探索...{C_RESET}")
     
@@ -288,12 +265,10 @@ if __name__ == "__main__":
     
     start_time = time.time()
     
-    # 🌟 修改：攔截 Ctrl+C，印出提示後直接安全退出
     try:
         study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
     except KeyboardInterrupt:
         print(f"\n\n{C_YELLOW}⚠️ 偵測到使用者強制中斷 (Ctrl+C)！進度已安全保留在資料庫中。{C_RESET}")
-        print(f"{C_GRAY}💡 提示：若需匯出並覆寫 JSON，請重新執行程式並將訓練次數設為 0。{C_RESET}")
         sys.exit(0)
     
     end_time = time.time()
