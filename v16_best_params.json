@@ -8,10 +8,10 @@
     "atr_buy_tol": 0.1,
     "high_len": 120,
     "tp_percent": 0.05,
-    "bb_len": 18,
+    "bb_len": 22,
     "bb_mult": 1.4,
-    "kc_len": 20,
-    "kc_mult": 2.1,
+    "kc_len": 24,
+    "kc_mult": 2.2,
     "vol_short_len": 8,
     "vol_long_len": 16
 }
