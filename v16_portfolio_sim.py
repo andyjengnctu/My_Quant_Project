@@ -109,7 +109,7 @@ def get_pit_stats(trade_logs, current_date):
     ev = (win_rate * payoff) - (1 - win_rate)
     return (win_rate >= 0.0) and (ev > 0.0), ev, win_rate #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<設定歷史績效過濾條件 <<<<<<<<<<<<<<<<
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False):
+def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015):
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs = {}
     all_trade_logs = {}
@@ -126,6 +126,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             date_col = 'Time' if 'Time' in df.columns else 'Date'
             df[date_col] = pd.to_datetime(df[date_col])
             df.set_index(date_col, inplace=True)
+            
+            # 💡 這裡依然從資料第一天開始運算，讓 get_pit_stats 有完整的「過去經驗」
             df, logs = prep_stock_data_and_trades(df, params)
             all_dfs[ticker] = df
             all_trade_logs[ticker] = logs
@@ -135,7 +137,18 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     sorted_dates = sorted(list(master_dates))
     all_dfs_fast = {ticker: df.to_dict('index') for ticker, df in all_dfs.items()}
-    print(f"\n{C_GREEN}✅ 預處理完成！啟動時間軸回測...{C_RESET}\n")
+    
+    # ==========================================
+    # 🌟 尋找使用者指定的起始年份 Index
+    # ==========================================
+    start_dt = pd.to_datetime(f"{start_year}-01-01")
+    start_idx = 1
+    for idx, d in enumerate(sorted_dates):
+        if d >= start_dt:
+            start_idx = max(1, idx)
+            break
+            
+    print(f"\n{C_GREEN}✅ 預處理完成！自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n")
 
     initial_capital = params.initial_capital
     cash = initial_capital
@@ -146,7 +159,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     max_drawdown = 0.0
     current_equity = initial_capital 
 
-    for i in range(1, len(sorted_dates)):
+    # 💡 迴圈從 start_idx 開始跑，之前的資料只作為 AI 統計勝率的歷史庫
+    for i in range(start_idx, len(sorted_dates)):
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
         
@@ -309,16 +323,23 @@ if __name__ == "__main__":
     
     ans_rot = input(f"👉 1. 是否啟用「汰弱換股」模式？ (輸入 Y 啟用，直接按 Enter 預設為 N 鎖倉): ").strip().upper()
     USER_ROTATION = True if ans_rot == 'Y' else False
+    
     ans_pos = input(f"👉 2. 請設定「最大持倉數量」 (直接按 Enter 預設為 10): ").strip()
     USER_MAX_POS = int(ans_pos) if ans_pos.isdigit() else 10
+
+    # 🌟 新增年份輸入選項
+    ans_year = input(f"👉 3. 請設定「開始回測年份」 (輸入西元年，直接按 Enter 推薦預設為 2015): ").strip()
+    USER_START_YEAR = int(ans_year) if ans_year.isdigit() else 2015
 
     params, is_loaded = load_dynamic_params("v16_best_params.json")
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
     else: print(f"\n{C_YELLOW}⚠️ 找不到 v16_best_params.json，使用預設參數。{C_RESET}")
 
     start_time = time.time()
+    
+    # 將年份傳入函數
     df_eq, df_tr, tot_ret, mdd, win_rate, final_eq = run_portfolio_simulation(
-        DATA_DIR, params, max_positions=USER_MAX_POS, enable_rotation=USER_ROTATION
+        DATA_DIR, params, max_positions=USER_MAX_POS, enable_rotation=USER_ROTATION, start_year=USER_START_YEAR
     )
     end_time = time.time()
     
@@ -327,7 +348,7 @@ if __name__ == "__main__":
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
     
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
-    print(f"📊 【投資組合實戰模擬報告 (Point-In-Time 真實重現)】")
+    print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ 汰弱換股模式:   {mode_display}")
     print(f"💼 最大持股上限:   {USER_MAX_POS} 檔")
