@@ -87,7 +87,7 @@ def objective(trial):
         kc_len = trial.suggest_int("kc_len", 10, 30, step=2) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
-        vol_short_len = trial.suggest_int("vol_short_len", 3, 10) if ai_use_vol else 5,
+        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,#orginal 1~10
         vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19 #changed
     )
 

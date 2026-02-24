@@ -107,7 +107,7 @@ def get_pit_stats(trade_logs, current_date):
     avg_loss = abs(sum(t['pnl'] for t in losses) / len(losses)) if losses else 0.0
     payoff = avg_win / avg_loss if avg_loss > 0 else (5.0 if avg_win > 0 else 0)
     ev = (win_rate * payoff) - (1 - win_rate)
-    return (win_rate >= 0.35) and (ev > 0.2), ev, win_rate #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<設定歷史績效過濾條件 <<<<<<<<<<<<<<<<
+    return (win_rate >= 0.0) and (ev > 0.0), ev, win_rate #<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<設定歷史績效過濾條件 <<<<<<<<<<<<<<<<
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False):
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
