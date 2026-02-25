@@ -20,6 +20,14 @@ C_GREEN = '\033[92m'
 C_GRAY = '\033[90m'
 C_RESET = '\033[0m'
 
+# ==========================================
+# 🌟 歷史績效過濾器設定 (方便隨時調整)
+# ==========================================
+MIN_HISTORY_TRADES = 1       # 門檻一：最少需要幾筆歷史交易紀錄才准買進 (預設: 1)
+MIN_HISTORY_EV = 0.0        # 門檻二：歷史平均期望值 (R倍數) 必須大於多少 (預設: 0.0)
+MIN_HISTORY_WIN_RATE = 0.5  # 門檻三：歷史勝率必須大於多少 (預設: 0.35)
+# ==========================================
+
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
     if os.path.exists(json_file):
@@ -40,29 +48,41 @@ def prep_stock_data_and_trades(df, params):
     O, V = df['Open'].values, df['Volume'].values
 
     ATR_main = tv_atr(H, L, C, params.atr_len)
-    ATR_kc = tv_atr(H, L, C, params.kc_len)
-    HighN = df['High'].shift(1).rolling(params.high_len, min_periods=1).max().values
-    
-    KC_Mid = tv_ema(C, params.kc_len)
-    KC_Lower = KC_Mid - ATR_kc * params.kc_mult
+    HighN = pd.Series(H).shift(1).rolling(params.high_len, min_periods=1).max().values
     
     SuperTrend_Dir = tv_supertrend(H, L, C, ATR_main, params.atr_times_trail)
     isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (np.roll(SuperTrend_Dir, 1) == -1)
     isSupertrend_Bearish_Flip[0] = False
     
-    BB_Mid = df['Close'].rolling(params.bb_len).mean().values
-    BB_Upper = BB_Mid + params.bb_mult * df['Close'].rolling(params.bb_len).std(ddof=0).values
-    VolS = df['Volume'].rolling(params.vol_short_len).mean().values
-    VolL = df['Volume'].rolling(params.vol_long_len).mean().values
-    
     isPriceCrossover = (C > HighN) & (np.roll(C, 1) <= np.roll(HighN, 1))
     isPriceCrossover[0] = False
-    isKcCrossunder = (C < KC_Lower) & (np.roll(C, 1) >= np.roll(KC_Lower, 1))
-    isKcCrossunder[0] = False
     
-    volCondition = np.isnan(V) | (VolS > VolL)
-    buyCondition = (C > O) & (C > BB_Upper) & isPriceCrossover & volCondition
-    sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | (isKcCrossunder & (C < O))
+    if getattr(params, 'use_bb', True):
+        BB_Mid = pd.Series(C).rolling(params.bb_len).mean().values
+        BB_Upper = BB_Mid + params.bb_mult * pd.Series(C).rolling(params.bb_len).std(ddof=0).values
+        bbCondition = (C > BB_Upper)
+    else:
+        bbCondition = np.ones_like(C, dtype=bool) 
+        
+    if getattr(params, 'use_kc', True):
+        ATR_kc = tv_atr(H, L, C, params.kc_len)
+        KC_Mid = tv_ema(C, params.kc_len)
+        KC_Lower = KC_Mid - ATR_kc * params.kc_mult
+        isKcCrossunder = (C < KC_Lower) & (np.roll(C, 1) >= np.roll(KC_Lower, 1))
+        isKcCrossunder[0] = False
+        kcSellCondition = (isKcCrossunder & (C < O))
+    else:
+        kcSellCondition = np.zeros_like(C, dtype=bool) 
+        
+    if getattr(params, 'use_vol', True):
+        VolS = pd.Series(V).rolling(params.vol_short_len).mean().values
+        VolL = pd.Series(V).rolling(params.vol_long_len).mean().values
+        volCondition = np.isnan(V) | (VolS > VolL)
+    else:
+        volCondition = np.ones_like(C, dtype=bool)
+
+    buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
+    sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
 
     df['ATR'] = ATR_main
     df['is_setup'] = buyCondition
@@ -76,15 +96,24 @@ def prep_stock_data_and_trades(df, params):
 
     trade_logs = []
     in_position = False
-    entry_price, sl_price = 0.0, 0.0
+    entry_price, sl_price, initial_sl_price = 0.0, 0.0, 0.0
     dates = df.index.values
     
     for i in range(1, len(df)):
-        if np.isnan(ATR_main[i-1]) or np.isnan(BB_Upper[i-1]): continue
+        if np.isnan(ATR_main[i-1]): continue
         if in_position:
             if sellCondition[i-1] or L[i] <= sl_price:
                 exit_price = O[i] if sellCondition[i-1] else min(O[i], sl_price)
-                trade_logs.append({'exit_date': pd.to_datetime(dates[i]), 'pnl': (exit_price - entry_price) / entry_price})
+                
+                initial_risk = entry_price - initial_sl_price
+                if initial_risk <= 0: initial_risk = entry_price * 0.01
+                r_multiple = (exit_price - entry_price) / initial_risk
+                
+                trade_logs.append({
+                    'exit_date': pd.to_datetime(dates[i]), 
+                    'pnl': (exit_price - entry_price) / entry_price,
+                    'r_mult': r_multiple
+                })
                 in_position = False
             else:
                 new_sl = C[i] - (ATR_main[i] * params.atr_times_trail)
@@ -92,23 +121,30 @@ def prep_stock_data_and_trades(df, params):
         else:
             if buyCondition[i-1] and L[i] <= buy_limits[i-1]:
                 entry_price = min(O[i], buy_limits[i-1])
-                sl_price = entry_price - (ATR_main[i-1] * params.atr_times_init)
+                initial_sl_price = entry_price - (ATR_main[i-1] * params.atr_times_init)
+                sl_price = initial_sl_price
                 in_position = True
     return df, trade_logs
 
 def get_pit_stats(trade_logs, current_date):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
-    if trade_count < 5: return False, 0.0, 0.0 
+    
+    # 🌟 第一道鎖：歷史次數必須達標
+    if trade_count < MIN_HISTORY_TRADES: return False, 0.0, 0.0 
+    
+    ev_r = sum(t['r_mult'] for t in past_trades) / trade_count
     wins = [t for t in past_trades if t['pnl'] > 0]
-    losses = [t for t in past_trades if t['pnl'] <= 0]
     win_rate = len(wins) / trade_count
-    avg_win = sum(t['pnl'] for t in wins) / len(wins) if wins else 0.0
-    avg_loss = abs(sum(t['pnl'] for t in losses) / len(losses)) if losses else 0.0
-    payoff = avg_win / avg_loss if avg_loss > 0 else (5.0 if avg_win > 0 else 0)
-    ev = (win_rate * payoff) - (1 - win_rate)
-    return (win_rate >= 0.0) and (ev > 0.0), ev, win_rate 
+    
+    # 🌟 第二、三道鎖：期望值與勝率必須同時達標
+    is_candidate = (ev_r > MIN_HISTORY_EV) and (win_rate >= MIN_HISTORY_WIN_RATE)
+    
+    return is_candidate, ev_r, win_rate 
 
+# ==========================================
+# 投資組合實戰回測引擎
+# ==========================================
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs = {}
@@ -194,8 +230,12 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                 pnl = (net_price - pos['entry']) * pos['qty']
                 cash += (net_price * pos['qty'])
                 
+                risk_per_share = pos['entry'] - pos['initial_sl_net']
+                if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
+                r_mult = (net_price - pos['entry']) / risk_per_share
+                
                 t_type = "指標賣訊" if is_ind_sell else "停損出場"
-                trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "PnL": pnl, "Risk": params.fixed_risk})
+                trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
                 tickers_to_remove.append(ticker)
                 continue
                 
@@ -206,9 +246,14 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                     net_price = calc_net_sell_price(exec_price, sell_qty, params)
                     pnl = (net_price - pos['entry']) * sell_qty
                     cash += (net_price * sell_qty)
+                    
+                    risk_per_share = pos['entry'] - pos['initial_sl_net']
+                    if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
+                    r_mult = (net_price - pos['entry']) / risk_per_share
+                    
                     pos['qty'] -= sell_qty
                     pos['sold_half'] = True
-                    trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "PnL": pnl, "Risk": params.fixed_risk})
+                    trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
             
             new_sl = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
             if new_sl > pos['sl']: pos['sl'] = new_sl
@@ -242,8 +287,18 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                             cash -= cost_total
                             net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, params)
                             tp_target = adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share))
-                            portfolio[cand['ticker']] = {'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 'tp_half': tp_target, 'sold_half': False, 'risk_used': params.fixed_risk, 'last_px': cand['buy_price']}
-                            trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f})", "Price": cand['buy_price'], "PnL": 0, "Risk": params.fixed_risk})
+                            
+                            portfolio[cand['ticker']] = {
+                                'qty': qty, 
+                                'entry': entry_cost_per_share, 
+                                'sl': cand['sl_price'], 
+                                'initial_sl_net': net_sl_per_share,
+                                'tp_half': tp_target, 
+                                'sold_half': False, 
+                                'risk_used': params.fixed_risk, 
+                                'last_px': cand['buy_price']
+                            }
+                            trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": cand['buy_price'], "PnL": 0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
                 
                 elif len(portfolio) == max_positions and enable_rotation:
                     weakest_ticker, lowest_return = None, 0.0 
@@ -262,7 +317,12 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                         net_price = calc_net_sell_price(sell_price, pos['qty'], params)
                         pnl = (net_price - pos['entry']) * pos['qty']
                         cash += (net_price * pos['qty'])
-                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出", "Price": sell_price, "PnL": pnl, "Risk": params.fixed_risk})
+                        
+                        risk_per_share = pos['entry'] - pos['initial_sl_net']
+                        if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
+                        r_mult = (net_price - pos['entry']) / risk_per_share
+                        
+                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出", "Price": sell_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
                         del portfolio[weakest_ticker]
                         
                         qty = calc_position_size(cand['buy_price'], cand['sl_price'], current_equity, params.fixed_risk, params)
@@ -273,8 +333,18 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                                 cash -= cost_total
                                 net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, params)
                                 tp_target = adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share))
-                                portfolio[cand['ticker']] = {'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 'tp_half': tp_target, 'sold_half': False, 'risk_used': params.fixed_risk, 'last_px': cand['buy_price']}
-                                trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"汰弱換入 (EV:{cand['ev']:.2f})", "Price": cand['buy_price'], "PnL": 0, "Risk": params.fixed_risk})
+                                
+                                portfolio[cand['ticker']] = {
+                                    'qty': qty, 
+                                    'entry': entry_cost_per_share, 
+                                    'sl': cand['sl_price'], 
+                                    'initial_sl_net': net_sl_per_share,
+                                    'tp_half': tp_target, 
+                                    'sold_half': False, 
+                                    'risk_used': params.fixed_risk, 
+                                    'last_px': cand['buy_price']
+                                }
+                                trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"汰弱換入 (EV:{cand['ev']:.2f}R)", "Price": cand['buy_price'], "PnL": 0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 
         today_equity = cash  
         for pt, pos in portfolio.items():
@@ -327,16 +397,30 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     df_equity = pd.DataFrame(equity_curve)
     df_trades = pd.DataFrame(trade_history)
     total_return = (today_equity - params.initial_capital) / params.initial_capital * 100
-    win_rate = len(df_trades[df_trades['PnL'] > 0]) / len(df_trades[df_trades['PnL'] != 0]) * 100 if len(df_trades[df_trades['PnL'] != 0]) > 0 else 0
+    
+    closed_trades = df_trades[df_trades['PnL'] != 0] if not df_trades.empty else pd.DataFrame()
+    if len(closed_trades) > 0:
+        win_rate = len(closed_trades[closed_trades['PnL'] > 0]) / len(closed_trades) * 100
+        pf_ev = closed_trades['R_Multiple'].mean() 
+        
+        wins = closed_trades[closed_trades['R_Multiple'] > 0]
+        losses = closed_trades[closed_trades['R_Multiple'] <= 0]
+        
+        avg_win_r = wins['R_Multiple'].mean() if len(wins) > 0 else 0
+        avg_loss_r = abs(losses['R_Multiple'].mean()) if len(losses) > 0 else 0
+        pf_payoff = avg_win_r / avg_loss_r if avg_loss_r > 0 else 0.0
+    else:
+        win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
+        
     final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
 
-    return df_equity, df_trades, total_return, max_drawdown, win_rate, today_equity, final_bm_return, bm_max_drawdown
+    return df_equity, df_trades, total_return, max_drawdown, win_rate, pf_ev, pf_payoff, today_equity, final_bm_return, bm_max_drawdown
 
 if __name__ == "__main__":
     import time
     DATA_DIR = "tw_stock_data_vip"
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：固定 1% 嚴格資金控管版{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (R-Multiple) 結算版{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     ans_rot = input(f"👉 1. 是否啟用「汰弱換股」模式？ (輸入 Y 啟用，直接按 Enter 預設為 N 鎖倉): ").strip().upper()
@@ -357,7 +441,7 @@ if __name__ == "__main__":
 
     start_time = time.time()
     
-    df_eq, df_tr, tot_ret, mdd, win_rate, final_eq, bm_ret, bm_mdd = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd = run_portfolio_simulation(
         DATA_DIR, params, max_positions=USER_MAX_POS, enable_rotation=USER_ROTATION, start_year=USER_START_YEAR, benchmark_ticker=USER_BENCHMARK
     )
     end_time = time.time()
@@ -368,7 +452,6 @@ if __name__ == "__main__":
     alpha = tot_ret - bm_ret
     mdd_diff = bm_mdd - mdd
     
-    # === 表格資料字串格式化 ===
     sys_ret_str = f"+{tot_ret:.2f}%" if tot_ret > 0 else f"{tot_ret:.2f}%"
     bm_ret_str  = f"+{bm_ret:.2f}%" if bm_ret > 0 else f"{bm_ret:.2f}%"
     alpha_str   = f"+{alpha:.2f}%" if alpha > 0 else f"{alpha:.2f}%"
@@ -377,7 +460,6 @@ if __name__ == "__main__":
     bm_mdd_str  = f"-{bm_mdd:.2f}%"
     mdd_diff_str = f"少跌 {mdd_diff:.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
     
-    # 決定顏色
     alpha_color = C_GREEN if alpha > 0 else C_RED
     sys_ret_color = C_GREEN if tot_ret > 0 else C_RED
     mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
@@ -388,17 +470,18 @@ if __name__ == "__main__":
     print(f"⚙️ 基礎設定")
     print(f"--------------------------------------------------------------------------------")
     print(f"模式: {mode_display} | 最大持股: {USER_MAX_POS} 檔 | 回測總耗時: {end_time - start_time:.2f} 秒")
-    print(f"實戰勝率: {win_rate:>.2f} % | 總交易紀錄: {len(df_tr)} 筆 | 最終資產: {final_eq:,.0f} 元")
+    print(f"總交易紀錄: {len(df_tr)} 筆 | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
     print(f"--------------------------------------------------------------------------------")
     print(f"🏆 績效與風險對比表")
     print(f"--------------------------------------------------------------------------------")
-    
-    # 建立對齊完美的 Markdown 表格 (結合 ANSI 顏色)
     print(f"| 指標項目       | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
     print(f"|----------------|----------------|-----------------|----------------|")
     print(f"| 總資產報酬率   | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
     print(f"| 最大回撤 (MDD) | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
+    print(f"| 系統實戰勝率   | {win_rate:>6.2f} %       | -               | -              |")
+    print(f"| 盈虧風報比     | {pf_payoff:>6.2f}         | -               | -              |")
+    print(f"| 實戰期望值(EV) | {pf_ev:>6.2f} R       | -               | -              |")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     with pd.ExcelWriter("V16_Portfolio_Report.xlsx") as writer:

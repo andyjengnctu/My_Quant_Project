@@ -103,14 +103,14 @@ def tv_supertrend(high, low, close, atr, multiplier):
     return direction
 
 # ==========================================
-# 2. 回測核心引擎
+# 2. 回測核心引擎 (已注入 R-Multiple 真實期望值修復)
 # ==========================================
 def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
 
     ATR_main = tv_atr(H, L, C, params.atr_len)
-    HighN = df['High'].shift(1).rolling(params.high_len, min_periods=1).max().values
+    HighN = pd.Series(H).shift(1).rolling(params.high_len, min_periods=1).max().values
     
     SuperTrend_Dir = tv_supertrend(H, L, C, ATR_main, params.atr_times_trail)
     isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (np.roll(SuperTrend_Dir, 1) == -1)
@@ -119,24 +119,21 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     isPriceCrossover = (C > HighN) & (np.roll(C, 1) <= np.roll(HighN, 1))
     isPriceCrossover[0] = False
     
-    # 🌟 AI 動態開關：布林通道
     if params.use_bb:
-        BB_Mid = df['Close'].rolling(params.bb_len).mean().values
-        BB_Upper = BB_Mid + params.bb_mult * df['Close'].rolling(params.bb_len).std(ddof=0).values
+        BB_Mid = pd.Series(C).rolling(params.bb_len).mean().values
+        BB_Upper = BB_Mid + params.bb_mult * pd.Series(C).rolling(params.bb_len).std(ddof=0).values
         bbCondition = (C > BB_Upper)
     else:
-        bbCondition = np.ones_like(C, dtype=bool) # 全數通過
-        BB_Upper = np.ones_like(C) # 防呆
+        bbCondition = np.ones_like(C, dtype=bool) 
+        BB_Upper = np.ones_like(C) 
 
-    # 🌟 AI 動態開關：成交量
     if params.use_vol:
-        VolS = df['Volume'].rolling(params.vol_short_len).mean().values
-        VolL = df['Volume'].rolling(params.vol_long_len).mean().values
+        VolS = pd.Series(V).rolling(params.vol_short_len).mean().values
+        VolL = pd.Series(V).rolling(params.vol_long_len).mean().values
         volCondition = np.isnan(V) | (VolS > VolL)
     else:
         volCondition = np.ones_like(C, dtype=bool)
 
-    # 🌟 AI 動態開關：阿肯那通道 (KC)
     if params.use_kc:
         ATR_kc = tv_atr(H, L, C, params.kc_len)
         KC_Mid = tv_ema(C, params.kc_len)
@@ -145,9 +142,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         isKcCrossunder[0] = False
         kcSellCondition = (isKcCrossunder & (C < O))
     else:
-        kcSellCondition = np.zeros_like(C, dtype=bool) # 永遠不觸發 KC 賣出
+        kcSellCondition = np.zeros_like(C, dtype=bool) 
 
-    # 最終買賣訊號組裝
     buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
     sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
 
@@ -164,6 +160,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     totalProfit, totalLoss = 0.0, 0.0
     missedBuyCount = 0
     peakCapital, maxDrawdownPct = currentCapital, 0.0
+
+    # 🌟 新增：用於記錄真實 R 倍數的變數
+    initial_risk_total = 0.0
+    total_r_multiple = 0.0
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
@@ -192,6 +192,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                 entryPrice = calc_entry_price(buyPrice, buyQty, params)
                 sellPriceHalf = adjust_to_tick(buyPrice + (entryPrice - calc_net_sell_price(initialStopLossPrice, buyQty, params)))
                 positionSize = buyQty
+                
+                # 🌟 記錄這筆交易的「初始總風險金額 (1R)」(買入總成本 - 停損淨回收)
+                est_stop_net = calc_net_sell_price(initialStopLossPrice, buyQty, params)
+                initial_risk_total = (entryPrice * buyQty) - (est_stop_net * buyQty)
+                # 防呆機制：若風險為0，預設給予 1% 資金作為極小風險分母
+                if initial_risk_total <= 0: initial_risk_total = currentCapital * 0.01 
 
         isHoldingFromYesterday = (pos_start_of_current_bar > 0) and (not buyTriggered)
         
@@ -220,6 +226,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                 sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
                 profitValue = cumulativeProfit + (sellNetPrice - entryPrice) * sellQty
                 
+                # 🌟 核心修復：計算真實 R 倍數並累加
+                trade_r_mult = profitValue / initial_risk_total
+                total_r_multiple += trade_r_mult
+                
                 if profitValue > 0:
                     fullWins += 1
                     totalProfit += profitValue
@@ -246,21 +256,27 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
-    expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
+    
+    # 🌟 覆寫期望值算法：取代舊有公式，直接使用所有 R 倍數的平均值！
+    expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
+    
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (positionSize == 0)
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
-    isCandidate = (tradeCount >= 5) and (winRate >= 50) and (expectedValue > 0)
+    
+    # 🌟 修正歷史過濾器：將 5 次放寬為 2 次，以免殺掉優秀的神聖杯
+    isCandidate = (tradeCount >= 2) and (winRate >= 35) and (expectedValue > 0)
 
     active_stop_today = max(initialStopLossPrice, trailingStopPrice) if positionSize > 0 else np.nan
     is_in_buy_zone = (positionSize > 0) and (not soldHalf) and (C[-1] > active_stop_today) and (C[-1] < sellPriceHalf)
 
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, "expected_value": expectedValue,
+        "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
+        "expected_value": expectedValue, # 這裡送出去的，已經是絕對純淨的 R 倍數期望值！
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, "is_in_buy_zone": is_in_buy_zone,
         "active_stop": active_stop_today, "target_half": sellPriceHalf, "current_position": positionSize
