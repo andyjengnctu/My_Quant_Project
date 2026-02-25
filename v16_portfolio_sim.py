@@ -462,7 +462,6 @@ if __name__ == "__main__":
     sys_ret_color = C_GREEN if tot_ret > 0 else C_RED
     mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
     
-    # 🌟 新增計算 RoMD (報酬回撤比)
     sys_romd = (tot_ret / abs(mdd)) if mdd != 0 else 0.0
     bm_romd = (bm_ret / abs(bm_mdd)) if bm_mdd != 0 else 0.0
     romd_diff = sys_romd - bm_romd
@@ -497,3 +496,66 @@ if __name__ == "__main__":
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)
     print(f"{C_GREEN}📁 完整資產曲線與交易明細已匯出至: V16_Portfolio_Report.xlsx{C_RESET}")
+
+    # ==========================================
+    # 🌟 終極升級：自動產生「互動式網頁看板 (HTML)」
+    # ==========================================
+    print(f"{C_CYAN}📈 正在自動生成互動式網頁看板...{C_RESET}")
+    try:
+        import plotly.graph_objects as go
+        import webbrowser
+        
+        # 建立畫布
+        fig = go.Figure()
+        
+        # 加入 V16 策略淨值線 (紅色)
+        fig.add_trace(go.Scatter(
+            x=df_eq['Date'], 
+            y=df_eq['Strategy_Return_Pct'],
+            mode='lines',
+            name='V16 尊爵系統報酬 (%)',
+            line=dict(color='#ff3333', width=3)
+        ))
+        
+        # 加入大盤淨值線 (藍色)
+        bm_col = f"Benchmark_{USER_BENCHMARK}_Pct"
+        if bm_col in df_eq.columns:
+            fig.add_trace(go.Scatter(
+                x=df_eq['Date'], 
+                y=df_eq[bm_col],
+                mode='lines',
+                name=f'同期大盤 {USER_BENCHMARK} (%)',
+                line=dict(color='#4dabf5', width=2),
+                opacity=0.8
+            ))
+            
+        # 設定版面配置與深色主題
+        fig.update_layout(
+            title=f'<b>V16 投資組合實戰淨值 vs {USER_BENCHMARK} 大盤</b> ({USER_START_YEAR} 至今)',
+            xaxis_title='日期',
+            yaxis_title='累積報酬率 (%)',
+            template='plotly_dark',
+            hovermode='x unified', # 滑鼠移過去會同時顯示兩條線的數據
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01,
+                bgcolor="rgba(0,0,0,0.5)"
+            ),
+            margin=dict(l=40, r=40, t=60, b=40)
+        )
+        
+        # 存成 HTML 網頁檔
+        html_filename = "V16_Portfolio_Dashboard.html"
+        fig.write_html(html_filename)
+        print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
+        
+        # 🌟 神奇魔法：自動在您的瀏覽器打開這個網頁！
+        file_url = 'file://' + os.path.realpath(html_filename)
+        webbrowser.open(file_url)
+        
+    except ImportError:
+        print(f"{C_RED}⚠️ 無法產生動態網頁。請先在終端機執行: pip install plotly{C_RESET}")
+    except Exception as e:
+        print(f"{C_RED}⚠️ 圖表產生失敗: {e}{C_RESET}")
