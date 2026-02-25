@@ -6,7 +6,7 @@ class V16StrategyParams:
     
     # 1. 資金與風險控管
     initial_capital: float = 4000000.0
-    fixed_risk: float = 0.01            # 單筆固定風險限制 (嚴格鎖定 1%)
+    fixed_risk: float = 0.02            # 單筆固定風險限制 (嚴格鎖定 1%)
     tp_percent: float = 0.5             # 半平倉停利比例 (50%)
     
     # 2. 停損與追價參數 (ATR)

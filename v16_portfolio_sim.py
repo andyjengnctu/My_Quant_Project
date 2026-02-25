@@ -23,9 +23,9 @@ C_RESET = '\033[0m'
 # ==========================================
 # 🌟 歷史績效過濾器設定 (方便隨時調整)
 # ==========================================
-MIN_HISTORY_TRADES = 1       # 門檻一：最少需要幾筆歷史交易紀錄才准買進 (預設: 1)
-MIN_HISTORY_EV = 0.0        # 門檻二：歷史平均期望值 (R倍數) 必須大於多少 (預設: 0.0)
-MIN_HISTORY_WIN_RATE = 0.5  # 門檻三：歷史勝率必須大於多少 (預設: 0.35)
+MIN_HISTORY_TRADES = 1       # 門檻一：最少需要幾筆歷史交易紀錄才准買進 (預設: 2)
+MIN_HISTORY_EV = 0.0         # 門檻二：歷史平均期望值 (R倍數) 必須大於多少 (預設: 0.0)
+MIN_HISTORY_WIN_RATE = 0.50  # 門檻三：歷史勝率必須大於多少 (預設: 0.35，即 35%)
 # ==========================================
 
 def load_dynamic_params(json_file):
@@ -130,14 +130,12 @@ def get_pit_stats(trade_logs, current_date):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
     
-    # 🌟 第一道鎖：歷史次數必須達標
     if trade_count < MIN_HISTORY_TRADES: return False, 0.0, 0.0 
     
     ev_r = sum(t['r_mult'] for t in past_trades) / trade_count
     wins = [t for t in past_trades if t['pnl'] > 0]
     win_rate = len(wins) / trade_count
     
-    # 🌟 第二、三道鎖：期望值與勝率必須同時達標
     is_candidate = (ev_r > MIN_HISTORY_EV) and (win_rate >= MIN_HISTORY_WIN_RATE)
     
     return is_candidate, ev_r, win_rate 
@@ -464,6 +462,16 @@ if __name__ == "__main__":
     sys_ret_color = C_GREEN if tot_ret > 0 else C_RED
     mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
     
+    # 🌟 新增計算 RoMD (報酬回撤比)
+    sys_romd = (tot_ret / abs(mdd)) if mdd != 0 else 0.0
+    bm_romd = (bm_ret / abs(bm_mdd)) if bm_mdd != 0 else 0.0
+    romd_diff = sys_romd - bm_romd
+
+    sys_romd_str = f"{sys_romd:.2f}"
+    bm_romd_str = f"{bm_romd:.2f}"
+    romd_diff_str = f"+{romd_diff:.2f}" if romd_diff > 0 else f"{romd_diff:.2f}"
+    romd_diff_color = C_GREEN if romd_diff > 0 else C_RED
+    
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -475,13 +483,14 @@ if __name__ == "__main__":
     print(f"--------------------------------------------------------------------------------")
     print(f"🏆 績效與風險對比表")
     print(f"--------------------------------------------------------------------------------")
-    print(f"| 指標項目       | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
-    print(f"|----------------|----------------|-----------------|----------------|")
-    print(f"| 總資產報酬率   | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
-    print(f"| 最大回撤 (MDD) | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
-    print(f"| 系統實戰勝率   | {win_rate:>6.2f} %       | -               | -              |")
-    print(f"| 盈虧風報比     | {pf_payoff:>6.2f}         | -               | -              |")
-    print(f"| 實戰期望值(EV) | {pf_ev:>6.2f} R       | -               | -              |")
+    print(f"| 指標項目         | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
+    print(f"|------------------|----------------|-----------------|----------------|")
+    print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
+    print(f"| 最大回撤 (MDD)   | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
+    print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd_str:<14}{C_RESET} | {bm_romd_str:<15} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
+    print(f"| 系統實戰勝率     | {win_rate:>6.2f} %       | -               | -              |")
+    print(f"| 盈虧風報比       | {pf_payoff:>6.2f}         | -               | -              |")
+    print(f"| 實戰期望值(EV)   | {pf_ev:>6.2f} R       | -               | -              |")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     with pd.ExcelWriter("V16_Portfolio_Report.xlsx") as writer:
