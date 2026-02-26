@@ -26,10 +26,10 @@ C_GRAY = '\033[90m'
 # ==========================================
 # 🌟 AI 機器學習優化器核心設定 (方便隨時調整)
 # ==========================================
-TARGET_MDD_HALF_LIFE = 25.0       # 當 MDD 達到此數值(%)時，策略總分打對折 (數值越小，AI 越保守): defualt = 20.0
+TARGET_MDD_HALF_LIFE = 20.0       # 當 MDD 達到此數值(%)時，策略總分打對折 (數值越小，AI 越保守): defualt = 20.0
 EXPECTED_TRADES_PER_STOCK = 5.0   # 平均每檔股票預期最少交易次數 (未達標則分數按比例打折): defualt = 5.0
 MIN_TOTAL_TRADES = 50             # 全市場總交易次數底線 (低於此數值代表統計樣本數不足，直接淘汰): defualt = 50 
-MAX_ALLOWABLE_MDD = 100.0          # 單檔股票可容忍的極限回撤(%) (超過直接提早中止，節省算力): defual = 60.0
+MAX_ALLOWABLE_MDD = 60.0          # 單檔股票可容忍的極限回撤(%) (超過直接提早中止，節省算力): defual = 60.0
 # ==========================================
 
 WORKER_CACHE = {}
@@ -137,24 +137,35 @@ def objective(trial):
     avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
 
-    # =========================================================
-    # 🌟 全新機構級平滑計分模型 (SQN-like Gradient Reward)
+# =========================================================
+    # 🌟 混合動力計分模型 (Hybrid Reward System) - 破解局部卡死
     # =========================================================
     
-    # 1. 交易頻率機會因子 (平方根)：防止 AI 為了追求總 R 而瘋狂過度交易
+    # 1. 機會因子：防止過度交易
     opportunity_factor = math.sqrt(total_trades)
     
-    # 2. 回撤平滑懲罰：使用置頂的 TARGET_MDD_HALF_LIFE 決定衰減幅度
+    # 2. 回撤平滑懲罰：使用置頂的 TARGET_MDD_HALF_LIFE
     risk_penalty = TARGET_MDD_HALF_LIFE / (TARGET_MDD_HALF_LIFE + avg_mdd) 
     
-    # 3. 基礎分數 (如果 EV 是負的，分數自然是負的，AI 就有梯度可以爬坡)
-    raw_score = avg_ev * opportunity_factor * risk_penalty
-
-    # 4. 交易量過低懲罰：使用置頂的 EXPECTED_TRADES_PER_STOCK 計算及格線
+    # 3. 交易量過低懲罰
     ideal_min_trades = len(TARGET_FILES) * EXPECTED_TRADES_PER_STOCK
     frequency_penalty = min(1.0, total_trades / ideal_min_trades)
     
-    final_score = raw_score * frequency_penalty
+# 🌟 4. 加入「勝率」作為強制引導繩索
+    # 如果勝率低於 40%，分數直接開根號或嚴重縮水，逼 AI 放棄低勝率海龜戰法
+    if avg_winrate < 40.0:
+        win_rate_factor = (avg_winrate / 40.0) ** 3  # 三次方懲罰，極度打壓低勝率
+    else:
+        win_rate_factor = avg_winrate / 100.0 
+
+    # 🌟 5. 分開處理「正 EV」與「負 EV」的給分邏輯
+    if avg_ev > 0:
+        raw_score = avg_ev * opportunity_factor * risk_penalty * win_rate_factor
+        final_score = raw_score * frequency_penalty
+    else:
+        # 虧損時依然給予平滑引導
+        raw_score = avg_ev + (win_rate_factor * 0.5) - (avg_mdd / 100.0)
+        final_score = raw_score
 
     trial.set_user_attr("win_rate", avg_winrate)
     trial.set_user_attr("ev", avg_ev)
@@ -264,8 +275,8 @@ if __name__ == "__main__":
     display_input = input(f"👉 請選擇顯示模式： [1] 簡潔模式(預設，不洗版)  [2] 詳細模式(顯示每筆): ").strip()
     DISPLAY_MODE = 2 if display_input == '2' else 1
 
-    trials_input = input(f"👉 請輸入本次要進行的 AI 訓練次數 (直接按 Enter 預設為 300): ").strip()
-    N_TRIALS = int(trials_input) if trials_input.isdigit() else 300
+    trials_input = input(f"👉 請輸入本次要進行的 AI 訓練次數 (直接按 Enter 預設為 100,000): ").strip()
+    N_TRIALS = int(trials_input) if trials_input.isdigit() else 100000
     
     study = optuna.create_study(
         study_name=STUDY_NAME,               
