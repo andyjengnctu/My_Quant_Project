@@ -23,11 +23,20 @@ C_GREEN = '\033[92m'
 C_RESET = '\033[0m'
 C_GRAY = '\033[90m'
 
+# ==========================================
+# 🌟 AI 機器學習優化器核心設定 (方便隨時調整)
+# ==========================================
+TARGET_MDD_HALF_LIFE = 25.0       # 當 MDD 達到此數值(%)時，策略總分打對折 (數值越小，AI 越保守): defualt = 20.0
+EXPECTED_TRADES_PER_STOCK = 5.0   # 平均每檔股票預期最少交易次數 (未達標則分數按比例打折): defualt = 5.0
+MIN_TOTAL_TRADES = 50             # 全市場總交易次數底線 (低於此數值代表統計樣本數不足，直接淘汰): defualt = 50 
+MAX_ALLOWABLE_MDD = 100.0          # 單檔股票可容忍的極限回撤(%) (超過直接提早中止，節省算力): defual = 60.0
+# ==========================================
+
 WORKER_CACHE = {}
 DISPLAY_MODE = 1  
 CURRENT_SESSION_TRIAL = 0  
 N_TRIALS = 0  
-TRAIN_END_YEAR = None # 🌟 新增：全域訓練截止年份
+TRAIN_END_YEAR = None 
 
 DATA_DIR = "tw_stock_data_vip"
 TARGET_FILES = []
@@ -36,7 +45,6 @@ if os.path.exists(DATA_DIR):
 
 def evaluate_single_stock(file_path, params, train_end_year=None):
     try:
-        # 🌟 修改：加入年份作為快取鍵值，避免混淆
         cache_key = f"{file_path}_{train_end_year}" 
         if cache_key not in WORKER_CACHE:
             df = pd.read_csv(file_path)
@@ -51,7 +59,6 @@ def evaluate_single_stock(file_path, params, train_end_year=None):
                 df['Date'] = pd.to_datetime(df['Date'])
                 df.set_index('Date', inplace=True)
 
-            # 🌟 核心過濾器：斬斷未來的記憶
             if train_end_year is not None:
                 df = df[df.index <= pd.to_datetime(f"{train_end_year}-12-31")]
                 
@@ -75,10 +82,10 @@ def objective(trial):
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 5.0, step=0.1),
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 5.0, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 150, step=5),
+        high_len = trial.suggest_int("high_len", 40, 120, step=5),
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
         
         use_bb = ai_use_bb,
@@ -91,7 +98,7 @@ def objective(trial):
         kc_len = trial.suggest_int("kc_len", 10, 30, step=2) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
-        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
+        vol_short_len = trial.suggest_int("vol_short_len", 3, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19 
     )
 
@@ -99,7 +106,6 @@ def objective(trial):
     max_single_mdd = 0.0
 
     with ProcessPoolExecutor() as executor:
-        # 🌟 傳入訓練截止年份
         futures = [executor.submit(evaluate_single_stock, fp, ai_params, TRAIN_END_YEAR) for fp in TARGET_FILES]
         for future in as_completed(futures):
             stats = future.result()
@@ -107,20 +113,22 @@ def objective(trial):
                 all_stats.append(stats)
                 max_single_mdd = max(max_single_mdd, stats['max_drawdown'])
                 
-                if max_single_mdd > 85.0:
-                    trial.set_user_attr("fail_reason", f"極端風險 ({max_single_mdd:.1f}%)")
+                # 🌟 使用置頂參數：極端回撤提早中止
+                if max_single_mdd > MAX_ALLOWABLE_MDD:
+                    trial.set_user_attr("fail_reason", f"單檔極端回撤 ({max_single_mdd:.1f}%)")
                     for f in futures: f.cancel()
                     return -9999.0
 
     if len(all_stats) < (len(TARGET_FILES) * 0.05) or not all_stats:
-        trial.set_user_attr("fail_reason", "無效交易參數")
+        trial.set_user_attr("fail_reason", "交易過於冷清")
         return -9999.0
 
     valid_count = len(all_stats)
     total_trades = sum(s['trade_count'] for s in all_stats)
     
-    if total_trades == 0:
-        trial.set_user_attr("fail_reason", "交易次數為 0")
+    # 🌟 使用置頂參數：總交易樣本數防線
+    if total_trades < MIN_TOTAL_TRADES:
+        trial.set_user_attr("fail_reason", f"樣本數不足 (<{MIN_TOTAL_TRADES}次)")
         return -9999.0
         
     avg_trades = total_trades / valid_count
@@ -128,26 +136,34 @@ def objective(trial):
     avg_winrate = sum(s['win_rate'] * s['trade_count'] for s in all_stats) / total_trades
     avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
-    total_R_value = total_trades * avg_ev 
 
-    ideal_min_trades = len(TARGET_FILES) * 8
-    trade_penalty = min(1.0, total_trades / ideal_min_trades)
-
-    if avg_mdd > 35.0: return -9999.0
-    if avg_ev <= 0: return -9999.0
-    if avg_winrate < 35.0: return -9999.0
+    # =========================================================
+    # 🌟 全新機構級平滑計分模型 (SQN-like Gradient Reward)
+    # =========================================================
     
-    raw_score = total_R_value / (avg_mdd + 1.0)
-    final_score = raw_score * trade_penalty 
+    # 1. 交易頻率機會因子 (平方根)：防止 AI 為了追求總 R 而瘋狂過度交易
+    opportunity_factor = math.sqrt(total_trades)
+    
+    # 2. 回撤平滑懲罰：使用置頂的 TARGET_MDD_HALF_LIFE 決定衰減幅度
+    risk_penalty = TARGET_MDD_HALF_LIFE / (TARGET_MDD_HALF_LIFE + avg_mdd) 
+    
+    # 3. 基礎分數 (如果 EV 是負的，分數自然是負的，AI 就有梯度可以爬坡)
+    raw_score = avg_ev * opportunity_factor * risk_penalty
+
+    # 4. 交易量過低懲罰：使用置頂的 EXPECTED_TRADES_PER_STOCK 計算及格線
+    ideal_min_trades = len(TARGET_FILES) * EXPECTED_TRADES_PER_STOCK
+    frequency_penalty = min(1.0, total_trades / ideal_min_trades)
+    
+    final_score = raw_score * frequency_penalty
 
     trial.set_user_attr("win_rate", avg_winrate)
     trial.set_user_attr("ev", avg_ev)
     trial.set_user_attr("trades_total", total_trades) 
     trial.set_user_attr("trades_avg", avg_trades) 
     trial.set_user_attr("mdd", avg_mdd)
-    trial.set_user_attr("total_R", total_R_value)
+    trial.set_user_attr("total_R", total_trades * avg_ev)
     trial.set_user_attr("payoff", avg_payoff)
-    trial.set_user_attr("penalty", trade_penalty)
+    trial.set_user_attr("penalty", frequency_penalty)
     trial.set_user_attr("raw_score", raw_score)
         
     return final_score
@@ -162,8 +178,11 @@ def monitoring_callback(study, trial):
         fail_msg = trial.user_attrs.get("fail_reason", "方向錯誤")
         status_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}"
         score_text = "N/A"
+    elif trial.value and trial.value < 0:
+        status_text = f"{C_RED}摸索中(虧損){C_RESET}"
+        score_text = f"{trial.value:.2f}"
     else:
-        status_text = f"{C_GREEN}進化中{C_RESET}"
+        status_text = f"{C_GREEN}進化中(獲利){C_RESET}"
         score_text = f"{trial.value:.2f}"
         
     line_text = f"{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.2f} 秒 | 最終分數: {score_text:>7} | 狀態: {status_text}{C_RESET}"
@@ -173,7 +192,8 @@ def monitoring_callback(study, trial):
     else:
         print(line_text)
 
-    if study.best_trial.number == trial.number and trial.value and trial.value > -9000:
+    # 🌟 只有「正期望值 (分數大於 0)」的破紀錄，才值得我們歡呼列印出來
+    if study.best_trial.number == trial.number and trial.value and trial.value > 0:
         
         if DISPLAY_MODE == 1:
             print() 
@@ -191,10 +211,10 @@ def monitoring_callback(study, trial):
         else:
             penalty_str = f"{C_GREEN}✅ 交易頻率達標 (無懲罰){C_RESET}"
 
-        print(f"\n{C_RED}🏆 破紀錄！發現更強的參數進化！ (累積第 {trial.number + 1} 次測試) | 最終資金效率: {trial.value:.2f}{C_RESET}")
-        print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 期望值: {attrs['ev']:>5.2f}R | 風報比: {attrs['payoff']:>4.2f}")
+        print(f"\n{C_RED}🏆 破紀錄！發現更強的參數進化！ (累積第 {trial.number + 1} 次測試) | 最終資金效率(SQN): {trial.value:.2f}{C_RESET}")
+        print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 真實期望值(EV): {attrs['ev']:>5.2f} R | 盈虧比參考: {attrs['payoff']:>4.2f}")
         print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次 | {penalty_str}")
-        print(f"   💰 [獲利與風險] 總累積獲利: {attrs['total_R']:>7.1f} R | 平均回撤: {attrs['mdd']:>5.2f}% (原始毛分: {attrs.get('raw_score', 0):.2f})")
+        print(f"   💰 [獲利與風險] 總累積獲利: {attrs['total_R']:>7.1f} R | 平均回撤: {attrs['mdd']:>5.2f}% ")
         print(f"   ⚙️ [核心參數] 突破: {p['high_len']:>3} 日新高 | ATR 週期: {p['atr_len']:>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
         print(f"                 掛單: +{p['atr_buy_tol']:.1f} ATR | 停損: -{p['atr_times_init']:.1f} ATR | 追蹤停利: -{p['atr_times_trail']:.1f} ATR")
         print(f"   🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
@@ -212,7 +232,7 @@ if __name__ == "__main__":
         exit()
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (支援樣本外測試版){C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (SQN 平滑梯度引導版 + 樣本外測試){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
@@ -221,7 +241,7 @@ if __name__ == "__main__":
     DB_NAME = f"sqlite:///{db_file_name}"
     STUDY_NAME = "v16_global_optimization"
 
-    # 🌟 新增：詢問使用者是否要限制訓練時間
+    # 🌟 時光眼罩設定
     ans_year = input(f"\n👉 請設定【AI 訓練截止年份】\n(例如輸入 2020，AI 將完全看不到 2021 年以後的資料。直接按 Enter 預設為看全歷史): ").strip()
     if ans_year.isdigit():
         TRAIN_END_YEAR = int(ans_year)
@@ -277,12 +297,12 @@ if __name__ == "__main__":
     print(f"🏁 訓練結束！總耗時: {end_time - start_time:.2f} 秒。")
     
     try:
-        if study.best_value and study.best_value > -9000:
-            print(f"✨ AI 記憶庫中目前的最強資金效率分數: {study.best_value:.2f}")
+        if study.best_value and study.best_value > 0:
+            print(f"✨ AI 記憶庫中目前的最強資金效率(SQN)分數: {study.best_value:.2f}")
             with open("v16_best_params.json", "w") as f:
                 json.dump(study.best_params, f, indent=4)
             print(f"{C_GREEN}💾 已成功將最強參數匯出至 'v16_best_params.json'！{C_RESET}")
         else:
-            print(f"{C_GRAY}⚠️ 目前記憶庫中尚無及格的參數，無法匯出 JSON。{C_RESET}")
+            print(f"{C_GRAY}⚠️ 目前記憶庫中尚無獲利的參數，無法匯出 JSON。請增加訓練次數。{C_RESET}")
     except ValueError:
         print(f"{C_GRAY}⚠️ 記憶庫尚無完成的紀錄。{C_RESET}")
