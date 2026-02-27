@@ -186,7 +186,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             trailingStopPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_trail)
             soldHalf, cumulativeProfit = False, 0.0
             
-            buyQty = calc_position_size(buyPrice, initialStopLossPrice, currentCapital, params.fixed_risk, params)
+            # 🌟 核心修改：判斷是否啟用複利。若無 (AI 訓練)，永遠用 initial_capital 算部位
+            sizing_capital = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
+            buyQty = calc_position_size(buyPrice, initialStopLossPrice, sizing_capital, params.fixed_risk, params)
             
             if buyQty > 0:
                 entryPrice = calc_entry_price(buyPrice, buyQty, params)

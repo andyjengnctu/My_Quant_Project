@@ -34,3 +34,6 @@ class V16StrategyParams:
     sell_fee: float = 0.000855          # 賣出手續費率
     tax_rate: float = 0.003             # 證交稅率
     min_fee: int = 20                   # 最低手續費 (元)
+    
+    # 🌟 6. 新增：複利開關 (預設為 True，讓您的 Portfolio 模擬器能正常滾雪球)
+    use_compounding: bool = True
