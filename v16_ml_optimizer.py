@@ -152,11 +152,16 @@ def objective(trial):
     # =========================================================
     # 這裡加入您最偉大的構想！用 math.sqrt 作為時間懲罰，逼迫 AI 學會高周轉率的藝術。
     # time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
-    time_penalty_divisor = avg_holding_days + 1.0
-    win_rate_impact = (avg_winrate / 50) ** 2
-    growth_impact = min(1.0, (avg_growth / 10 ) ** 2)
 
-    raw_score = (total_trades * avg_ev * win_rate_impact * growth_impact) / (avg_mdd ** 2.0 + 1.0) * 1000
+    trade_impact = total_trades ** 1.0
+    ev_impact = avg_ev ** 1.0
+    win_rate_impact = (avg_winrate / 50) ** 1.0
+    growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
+
+    mmd_impact = avg_mdd ** 1.0
+    time_impact = avg_holding_days ** 0.5
+
+    raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 10000
     
     # 將時間效率折現進去
     # final_score = (raw_score / time_penalty_divisor) * trade_penalty 
@@ -262,8 +267,8 @@ if __name__ == "__main__":
     display_input = input(f"👉 請選擇顯示模式： [1] 簡潔模式(預設，不洗版)  [2] 詳細模式(顯示每筆): ").strip()
     DISPLAY_MODE = 2 if display_input == '2' else 1
 
-    trials_input = input(f"👉 請輸入本次要進行的 AI 訓練次數 (直接按 Enter 預設為 300): ").strip()
-    N_TRIALS = int(trials_input) if trials_input.isdigit() else 300
+    trials_input = input(f"👉 請輸入本次要進行的 AI 訓練次數 (直接按 Enter 預設為 100,000): ").strip()
+    N_TRIALS = int(trials_input) if trials_input.isdigit() else 100000
     
     study = optuna.create_study(
         study_name=STUDY_NAME,               
