@@ -150,22 +150,23 @@ def objective(trial):
     # =========================================================
     # 🌟 實戰派公式 2.0：RoMD × 期望值 ÷ √(平均持倉天數)
     # =========================================================
-    # 這裡加入您最偉大的構想！用 math.sqrt 作為時間懲罰，逼迫 AI 學會高周轉率的藝術。
-    # time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
 
-    trade_impact = total_trades ** 1.0
-    ev_impact = avg_ev ** 1.0
-    win_rate_impact = (avg_winrate / 50) ** 1.0
-    growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
 
-    mmd_impact = avg_mdd ** 1.0
-    time_impact = avg_holding_days ** 0.5
+    # trade_impact = total_trades ** 1.0
+    # ev_impact = avg_ev ** 1.0
+    # win_rate_impact = (avg_winrate / 50) ** 1.0
+    # growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
+    # mmd_impact = avg_mdd ** 1.0
+    # time_impact = avg_holding_days ** 0.5
+    #raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 1
+    # final_score = raw_score * trade_penalty  
 
-    raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 10000
-    
-    # 將時間效率折現進去
-    # final_score = (raw_score / time_penalty_divisor) * trade_penalty 
-    final_score = raw_score * trade_penalty  
+    #time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
+    #raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0)    
+    #final_score = (raw_score / time_penalty_divisor) * trade_penalty * 10000
+
+    raw_score = total_R_value / (avg_mdd + 1.0)
+    final_score = raw_score * trade_penalty 
 
     # 寫入 Trial 供顯示
     trial.set_user_attr("win_rate", avg_winrate)

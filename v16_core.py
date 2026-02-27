@@ -260,8 +260,13 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
-    expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
+    # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
+    # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
     
+    # ✅ 換回這行 (舊版實際盈虧期望值 EV)
+    # 恢復您原本在 TV 面板上的標準算法，這能真實反映「截斷虧損、讓利潤奔跑」的實力
+    expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
+
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
