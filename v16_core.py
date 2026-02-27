@@ -103,7 +103,7 @@ def tv_supertrend(high, low, close, atr, multiplier):
     return direction
 
 # ==========================================
-# 2. 回測核心引擎 (已注入 R-Multiple 真實期望值修復)
+# 2. 回測核心引擎 (單利雙引擎 + 持倉天數紀錄)
 # ==========================================
 def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
@@ -161,14 +161,18 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     missedBuyCount = 0
     peakCapital, maxDrawdownPct = currentCapital, 0.0
 
-    # 🌟 新增：用於記錄真實 R 倍數的變數
     initial_risk_total = 0.0
     total_r_multiple = 0.0
+    total_bars_held = 0  # 🌟 新增：總持倉天數計數器
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
         
         pos_start_of_current_bar = positionSize
+        
+        # 🌟 新增：只要今天手上有股票，持倉天數就 +1
+        if positionSize > 0:
+            total_bars_held += 1
             
         if positionSize > 0 and C[j] > buyPrice + (ATR_main[j] * params.atr_times_trail):
             new_trail = C[j] - (ATR_main[j] * params.atr_times_trail)
@@ -186,7 +190,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             trailingStopPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_trail)
             soldHalf, cumulativeProfit = False, 0.0
             
-            # 🌟 核心修改：判斷是否啟用複利。若無 (AI 訓練)，永遠用 initial_capital 算部位
+            # 單利/複利智慧切換
             sizing_capital = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyPrice, initialStopLossPrice, sizing_capital, params.fixed_risk, params)
             
@@ -195,11 +199,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                 sellPriceHalf = adjust_to_tick(buyPrice + (entryPrice - calc_net_sell_price(initialStopLossPrice, buyQty, params)))
                 positionSize = buyQty
                 
-                # 🌟 記錄這筆交易的「初始總風險金額 (1R)」(買入總成本 - 停損淨回收)
                 est_stop_net = calc_net_sell_price(initialStopLossPrice, buyQty, params)
                 initial_risk_total = (entryPrice * buyQty) - (est_stop_net * buyQty)
-                # 防呆機制：若風險為0，預設給予 1% 資金作為極小風險分母
-                if initial_risk_total <= 0: initial_risk_total = currentCapital * 0.01 
+                if initial_risk_total <= 0: initial_risk_total = sizing_capital * 0.01 
 
         isHoldingFromYesterday = (pos_start_of_current_bar > 0) and (not buyTriggered)
         
@@ -228,7 +230,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                 sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
                 profitValue = cumulativeProfit + (sellNetPrice - entryPrice) * sellQty
                 
-                # 🌟 核心修復：計算真實 R 倍數並累加
                 trade_r_mult = profitValue / initial_risk_total
                 total_r_multiple += trade_r_mult
                 
@@ -259,7 +260,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
-    # 🌟 覆寫期望值算法：取代舊有公式，直接使用所有 R 倍數的平均值！
     expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
     
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
@@ -269,17 +269,20 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-    # 🌟 修正歷史過濾器：將 5 次放寬為 2 次，以免殺掉優秀的神聖杯
     isCandidate = (tradeCount >= 2) and (winRate >= 35) and (expectedValue > 0)
 
     active_stop_today = max(initialStopLossPrice, trailingStopPrice) if positionSize > 0 else np.nan
     is_in_buy_zone = (positionSize > 0) and (not soldHalf) and (C[-1] > active_stop_today) and (C[-1] < sellPriceHalf)
 
+    # 🌟 新增：結算平均單筆持倉天數
+    avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
+
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
         "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
-        "expected_value": expectedValue, # 這裡送出去的，已經是絕對純淨的 R 倍數期望值！
+        "expected_value": expectedValue, 
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, "is_in_buy_zone": is_in_buy_zone,
-        "active_stop": active_stop_today, "target_half": sellPriceHalf, "current_position": positionSize
+        "active_stop": active_stop_today, "target_half": sellPriceHalf, "current_position": positionSize,
+        "avg_bars_held": avg_bars_held  # 🌟 送出平均天數
     }

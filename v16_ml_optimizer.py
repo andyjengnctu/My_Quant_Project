@@ -29,8 +29,6 @@ CURRENT_SESSION_TRIAL = 0
 N_TRIALS = 0  
 
 # ==========================================
-# 🌟 修正區：將資料夾與檔案清單提升為全域變數
-# ==========================================
 DATA_DIR = "tw_stock_data_vip"
 TARGET_FILES = []
 if os.path.exists(DATA_DIR):
@@ -71,12 +69,11 @@ def objective(trial):
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
-        # 🌟 物理封印：限制停損距離在人類能承受的範圍 (最大 3.0倍)，根絕騙低回撤的假象
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.0, step=0.1),
-        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 3.5, step=0.1), 
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
+        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 150, step=5),
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         
         use_bb = ai_use_bb,
         use_kc = ai_use_kc,
@@ -89,9 +86,9 @@ def objective(trial):
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
-        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19,
+        vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19,
         
-        # 🌟 核心環境控制：強制關閉複利，讓 AI 跑出純淨無瑕的「單利真金白銀」！
+        # 🌟 核心環境控制：強制關閉複利，讓 AI 跑出純淨無瑕的「單利真金白銀」
         use_compounding = False
     )
 
@@ -128,14 +125,15 @@ def objective(trial):
     avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
     total_R_value = total_trades * avg_ev 
-    
-    # 🌟 取得純淨單利總資產成長率
     avg_growth = sum(s['asset_growth'] for s in all_stats) / valid_count 
+    
+    # 🌟 新增：計算全市場的「平均單筆持倉天數」
+    avg_holding_days = sum(s['avg_bars_held'] * s['trade_count'] for s in all_stats) / total_trades
 
     ideal_min_trades = len(TARGET_FILES) * 8
     trade_penalty = min(1.0, total_trades / ideal_min_trades)
 
-    # 🌟 詳細記錄淘汰原因
+    # 詳細記錄淘汰原因
     if avg_mdd > 35.0: 
         trial.set_user_attr("fail_reason", f"回撤過大 ({avg_mdd:.1f}%)")
         return -9999.0
@@ -145,17 +143,26 @@ def objective(trial):
     if avg_winrate < 35.0: 
         trial.set_user_attr("fail_reason", f"勝率過低 ({avg_winrate:.1f}%)")
         return -9999.0
-    if avg_growth <= 0: 
+    if avg_growth <= 0.0: 
         trial.set_user_attr("fail_reason", f"沒賺到真金白銀 ({avg_growth:.1f}%)")
         return -9999.0
     
     # =========================================================
-    # 🌟 終極實戰派公式：RoMD (單利報酬回撤比) × 期望值 (EV)
+    # 🌟 實戰派公式 2.0：RoMD × 期望值 ÷ √(平均持倉天數)
     # =========================================================
-    raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0)
-    final_score = raw_score * trade_penalty * 10000 
+    # 這裡加入您最偉大的構想！用 math.sqrt 作為時間懲罰，逼迫 AI 學會高周轉率的藝術。
+    # time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
+    time_penalty_divisor = avg_holding_days + 1.0
+    win_rate_impact = (avg_winrate / 50) ** 2
+    growth_impact = min(1.0, (avg_growth / 10 ) ** 2)
 
-    # 寫入 Trial
+    raw_score = (total_trades * avg_ev * win_rate_impact * growth_impact) / (avg_mdd ** 2.0 + 1.0) * 1000
+    
+    # 將時間效率折現進去
+    # final_score = (raw_score / time_penalty_divisor) * trade_penalty 
+    final_score = raw_score * trade_penalty  
+
+    # 寫入 Trial 供顯示
     trial.set_user_attr("win_rate", avg_winrate)
     trial.set_user_attr("ev", avg_ev)
     trial.set_user_attr("trades_total", total_trades) 
@@ -166,6 +173,7 @@ def objective(trial):
     trial.set_user_attr("payoff", avg_payoff)
     trial.set_user_attr("penalty", trade_penalty)
     trial.set_user_attr("raw_score", raw_score)
+    trial.set_user_attr("hold_days", avg_holding_days) # 🌟 記錄平均持倉天數
         
     return final_score
 
@@ -175,7 +183,6 @@ def monitoring_callback(study, trial):
     
     duration = trial.duration.total_seconds() if trial.duration else 0.0
     
-    # 🌟 在這裡將 fail_reason 顯示出來
     if trial.value and trial.value <= -9000:
         fail_msg = trial.user_attrs.get("fail_reason", "方向錯誤")
         status_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}"
@@ -211,7 +218,8 @@ def monitoring_callback(study, trial):
 
         print(f"\n{C_RED}🏆 破紀錄！發現更強的參數進化！ (累積第 {trial.number + 1} 次測試) | 最終資金效率: {trial.value:.2f}{C_RESET}")
         print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 期望值: {attrs['ev']:>5.2f}R | 風報比: {attrs['payoff']:>4.2f}")
-        print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次 | {penalty_str}")
+        # 🌟 印出平均持倉天數，讓您感受資金效率的變化
+        print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次 | 平均抱牢: {attrs.get('hold_days', 0):.1f} 天 | {penalty_str}")
         print(f"   💰 [獲利與風險] 平均純單利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs['mdd']:>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
         print(f"   ⚙️ [核心參數] 突破: {p['high_len']:>3} 日新高 | ATR 週期: {p['atr_len']:>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
         print(f"                 掛單: +{p['atr_buy_tol']:.1f} ATR | 停損: -{p['atr_times_init']:.1f} ATR | 追蹤停利: -{p['atr_times_trail']:.1f} ATR")
@@ -230,7 +238,7 @@ if __name__ == "__main__":
         exit()
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (法人級 RoMD 實戰進化版){C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (法人級 RoMD + 時間平方根折現版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
@@ -287,7 +295,7 @@ if __name__ == "__main__":
 
                 print(f"\n{C_YELLOW}🏆 【目前記憶庫中的最強聖杯紀錄】 | 最終資金效率: {best_trial.value:.2f}{C_RESET}")
                 print(f"   📊 [全市場平均] 勝率: {attrs.get('win_rate', 0):>5.2f}% | 期望值: {attrs.get('ev', 0):>5.2f}R | 風報比: {attrs.get('payoff', 0):>4.2f}")
-                print(f"   📈 [交易頻率]   總交易: {attrs.get('trades_total', 0)}次 | 單檔平均: {attrs.get('trades_avg', 0):.1f}次 | {penalty_str}")
+                print(f"   📈 [交易頻率]   總交易: {attrs.get('trades_total', 0)}次 | 單檔平均: {attrs.get('trades_avg', 0):.1f}次 | 平均抱牢: {attrs.get('hold_days', 0):.1f} 天 | {penalty_str}")
                 print(f"   💰 [獲利與風險] 平均純單利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs.get('mdd', 0):>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
                 print(f"   ⚙️ [核心參數] 突破: {p.get('high_len', 0):>3} 日新高 | ATR 週期: {p.get('atr_len', 0):>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
                 print(f"                 掛單: +{p.get('atr_buy_tol', 0):.1f} ATR | 停損: -{p.get('atr_times_init', 0):.1f} ATR | 追蹤停利: -{p.get('atr_times_trail', 0):.1f} ATR")
