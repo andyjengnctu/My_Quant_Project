@@ -71,8 +71,8 @@ def objective(trial):
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 5.0, step=0.1),
-        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 5.0, step=0.1), 
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 2.0, step=0.1),
+        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 3.0, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 150, step=5),
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
@@ -87,8 +87,8 @@ def objective(trial):
         kc_len = trial.suggest_int("kc_len", 10, 30, step=2) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
-        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,#orginal 1~10
-        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19 #changed
+        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
+        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19 
     )
 
     all_stats = []
@@ -123,18 +123,24 @@ def objective(trial):
     avg_winrate = sum(s['win_rate'] * s['trade_count'] for s in all_stats) / total_trades
     avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
+    
+    # 保留真實的 Total R 用於印出報表
     total_R_value = total_trades * avg_ev 
 
-    ideal_min_trades = len(TARGET_FILES) * 8
+    ideal_min_trades = len(TARGET_FILES) * 20
     trade_penalty = min(1.0, total_trades / ideal_min_trades)
 
+# 🌟 1. 拆除勝率的「硬懸崖」，只保留極端風險淘汰
     if avg_mdd > 35.0: return -9999.0
     if avg_ev <= 0: return -9999.0
     if avg_winrate < 35.0: return -9999.0
+
+    ai_eval_R = total_trades * avg_ev 
     
-    raw_score = total_R_value / (avg_mdd + 1.0)
+    raw_score = (ai_eval_R / (avg_mdd ** 2.0 + 1))  
     final_score = raw_score * trade_penalty 
 
+    # 寫入 Trial
     trial.set_user_attr("win_rate", avg_winrate)
     trial.set_user_attr("ev", avg_ev)
     trial.set_user_attr("trades_total", total_trades) 
@@ -198,9 +204,6 @@ def monitoring_callback(study, trial):
         print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}\n")
 
 if __name__ == "__main__":
-    # ==========================================
-    # 🌟 修正區：只需要檢查剛剛在全域宣告的路徑是否有效即可
-    # ==========================================
     if not os.path.exists(DATA_DIR):
         print("❌ 找不到資料夾，請確認路徑。")
         exit()
@@ -208,10 +211,9 @@ if __name__ == "__main__":
     if len(TARGET_FILES) == 0:
         print("📂 資料夾內無 CSV 檔案。")
         exit()
-    # ==========================================
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (平滑引導進化版){C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (原點回歸 + EV 三次方霸主版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
@@ -243,7 +245,8 @@ if __name__ == "__main__":
         storage=DB_NAME,                     
         load_if_exists=True,                 
         direction="maximize", 
-        sampler=optuna.samplers.TPESampler() 
+        sampler=optuna.samplers.TPESampler()        
+        # sampler=optuna.samplers.TPESampler(n_startup_trials=500)        
     )
     
     completed_trials = len(study.trials)
@@ -288,7 +291,6 @@ if __name__ == "__main__":
     
     start_time = time.time()
     
-    # 🌟 修改：攔截 Ctrl+C，印出提示後直接安全退出
     try:
         study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
     except KeyboardInterrupt:
