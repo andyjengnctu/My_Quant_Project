@@ -24,12 +24,12 @@ C_RESET = '\033[0m'
 C_GRAY = '\033[90m'
 
 # ==========================================
-# 🌟 AI 機器學習優化器核心設定 (方便隨時調整)
+# 🌟 AI 機器學習優化器核心設定
 # ==========================================
-TARGET_MDD_HALF_LIFE = 20.0       # 當 MDD 達到此數值(%)時，策略總分打對折 (數值越小，AI 越保守): defualt = 20.0
-EXPECTED_TRADES_PER_STOCK = 5.0   # 平均每檔股票預期最少交易次數 (未達標則分數按比例打折): defualt = 5.0
-MIN_TOTAL_TRADES = 50             # 全市場總交易次數底線 (低於此數值代表統計樣本數不足，直接淘汰): defualt = 50 
-MAX_ALLOWABLE_MDD = 60.0          # 單檔股票可容忍的極限回撤(%) (超過直接提早中止，節省算力): defual = 60.0
+TARGET_MDD_HALF_LIFE = 20.0       
+EXPECTED_TRADES_PER_STOCK = 5.0   
+MIN_TOTAL_TRADES = 50             
+MAX_ALLOWABLE_MDD = 60.0          
 # ==========================================
 
 WORKER_CACHE = {}
@@ -82,11 +82,16 @@ def objective(trial):
 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 5, 20),
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
-        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 5.0, step=0.1), 
+        
+        # 🌟 實戰派防線設定
+        atr_times_init = trial.suggest_float("atr_times_init", 1.5, 3.0, step=0.1),
+        atr_times_trail = trial.suggest_float("atr_times_trail", 2.5, 4.5, step=0.1), 
+        
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 120, step=5),
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
+        high_len = trial.suggest_int("high_len", 40, 150, step=5),
+        
+        # 🔥 終極殺手鐧：強迫 AI 必須提早停利！最少賣 30%，最多賣 60%！不准死抱！
+        tp_percent = trial.suggest_float("tp_percent", 0.3, 0.6, step=0.05), 
         
         use_bb = ai_use_bb,
         use_kc = ai_use_kc,
@@ -98,8 +103,8 @@ def objective(trial):
         kc_len = trial.suggest_int("kc_len", 10, 30, step=2) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.5, 3.0, step=0.1) if ai_use_kc else 2.0,
         
-        vol_short_len = trial.suggest_int("vol_short_len", 3, 10) if ai_use_vol else 5,
-        vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19 
+        vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
+        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19 
     )
 
     all_stats = []
@@ -113,7 +118,6 @@ def objective(trial):
                 all_stats.append(stats)
                 max_single_mdd = max(max_single_mdd, stats['max_drawdown'])
                 
-                # 🌟 使用置頂參數：極端回撤提早中止
                 if max_single_mdd > MAX_ALLOWABLE_MDD:
                     trial.set_user_attr("fail_reason", f"單檔極端回撤 ({max_single_mdd:.1f}%)")
                     for f in futures: f.cancel()
@@ -126,7 +130,6 @@ def objective(trial):
     valid_count = len(all_stats)
     total_trades = sum(s['trade_count'] for s in all_stats)
     
-    # 🌟 使用置頂參數：總交易樣本數防線
     if total_trades < MIN_TOTAL_TRADES:
         trial.set_user_attr("fail_reason", f"樣本數不足 (<{MIN_TOTAL_TRADES}次)")
         return -9999.0
@@ -137,34 +140,28 @@ def objective(trial):
     avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
 
-# =========================================================
-    # 🌟 混合動力計分模型 (Hybrid Reward System) - 破解局部卡死
+    # =========================================================
+    # 🌟 終極平衡計分模型 (高勝率強制引導版)
     # =========================================================
     
-    # 1. 機會因子：防止過度交易
     opportunity_factor = math.sqrt(total_trades)
-    
-    # 2. 回撤平滑懲罰：使用置頂的 TARGET_MDD_HALF_LIFE
     risk_penalty = TARGET_MDD_HALF_LIFE / (TARGET_MDD_HALF_LIFE + avg_mdd) 
     
-    # 3. 交易量過低懲罰
     ideal_min_trades = len(TARGET_FILES) * EXPECTED_TRADES_PER_STOCK
     frequency_penalty = min(1.0, total_trades / ideal_min_trades)
-    
-# 🌟 4. 加入「勝率」作為強制引導繩索
-    # 如果勝率低於 40%，分數直接開根號或嚴重縮水，逼 AI 放棄低勝率海龜戰法
-    if avg_winrate < 40.0:
-        win_rate_factor = (avg_winrate / 40.0) ** 3  # 三次方懲罰，極度打壓低勝率
-    else:
-        win_rate_factor = avg_winrate / 100.0 
 
-    # 🌟 5. 分開處理「正 EV」與「負 EV」的給分邏輯
     if avg_ev > 0:
-        raw_score = avg_ev * opportunity_factor * risk_penalty * win_rate_factor
+        # 🔥 解除 42% 錨定陷阱，改用「50% 基準指數獎勵」
+        # 如果勝率 60%，(60/50)^3 = 1.72 倍獎勵！
+        # 如果勝率 40%，(40/50)^3 = 0.51 倍懲罰！
+        # AI 將無崖可躲，只能乖乖提高勝率來獲取高分！
+        win_multiplier = (avg_winrate / 50.0) ** 3
+        
+        raw_score = avg_ev * win_multiplier * opportunity_factor * risk_penalty 
         final_score = raw_score * frequency_penalty
     else:
-        # 虧損時依然給予平滑引導
-        raw_score = avg_ev + (win_rate_factor * 0.5) - (avg_mdd / 100.0)
+        # 虧損時的平滑引導
+        raw_score = avg_ev + (avg_winrate / 200.0) - (avg_mdd / 100.0)
         final_score = raw_score
 
     trial.set_user_attr("win_rate", avg_winrate)
@@ -203,7 +200,6 @@ def monitoring_callback(study, trial):
     else:
         print(line_text)
 
-    # 🌟 只有「正期望值 (分數大於 0)」的破紀錄，才值得我們歡呼列印出來
     if study.best_trial.number == trial.number and trial.value and trial.value > 0:
         
         if DISPLAY_MODE == 1:
@@ -222,7 +218,7 @@ def monitoring_callback(study, trial):
         else:
             penalty_str = f"{C_GREEN}✅ 交易頻率達標 (無懲罰){C_RESET}"
 
-        print(f"\n{C_RED}🏆 破紀錄！發現更強的參數進化！ (累積第 {trial.number + 1} 次測試) | 最終資金效率(SQN): {trial.value:.2f}{C_RESET}")
+        print(f"\n{C_RED}🏆 破紀錄！發現更強的參數進化！ (累積第 {trial.number + 1} 次測試) | 最終實戰評分: {trial.value:.2f}{C_RESET}")
         print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 真實期望值(EV): {attrs['ev']:>5.2f} R | 盈虧比參考: {attrs['payoff']:>4.2f}")
         print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次 | {penalty_str}")
         print(f"   💰 [獲利與風險] 總累積獲利: {attrs['total_R']:>7.1f} R | 平均回撤: {attrs['mdd']:>5.2f}% ")
@@ -243,7 +239,7 @@ if __name__ == "__main__":
         exit()
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (SQN 平滑梯度引導版 + 樣本外測試){C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 全市場極速 AI 訓練引擎 (強制停利高勝率版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
@@ -309,7 +305,7 @@ if __name__ == "__main__":
     
     try:
         if study.best_value and study.best_value > 0:
-            print(f"✨ AI 記憶庫中目前的最強資金效率(SQN)分數: {study.best_value:.2f}")
+            print(f"✨ AI 記憶庫中目前的最強實戰評分: {study.best_value:.2f}")
             with open("v16_best_params.json", "w") as f:
                 json.dump(study.best_params, f, indent=4)
             print(f"{C_GREEN}💾 已成功將最強參數匯出至 'v16_best_params.json'！{C_RESET}")
