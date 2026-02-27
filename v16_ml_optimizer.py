@@ -136,7 +136,7 @@ def objective(trial):
     if avg_winrate < 35.0: return -9999.0
 
     ai_eval_R = total_trades * avg_ev 
-    
+     
     raw_score = (ai_eval_R / (avg_mdd ** 2.0 + 1))  
     final_score = raw_score * trade_penalty 
 
