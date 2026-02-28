@@ -24,7 +24,7 @@ class V16StrategyParams:
     vol_short_len: int = 5              # 短天期均量
     vol_long_len: int = 19              # 長天期均量
 
-    # 🌟 4. 新增：濾網開關 (讓 AI 決定要不要啟動這些條件)
+    # 4. 濾網開關 (讓 AI 決定要不要啟動這些條件)
     use_bb: bool = True                 # 是否啟用布林通道突破濾網
     use_kc: bool = True                 # 是否啟用阿肯那通道跌破出場
     use_vol: bool = True                # 是否啟用均量爆發濾網
@@ -34,3 +34,6 @@ class V16StrategyParams:
     sell_fee: float = 0.000855          # 賣出手續費率
     tax_rate: float = 0.003             # 證交稅率
     min_fee: int = 20                   # 最低手續費 (元)
+    
+    # 🌟 6. 核心環境開關：複利開關 (預設為 True，讓您的 Portfolio 模擬器能正常滾雪球)
+    use_compounding: bool = True
