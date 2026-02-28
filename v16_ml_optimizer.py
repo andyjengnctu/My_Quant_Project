@@ -154,7 +154,7 @@ def objective(trial):
 
     # trade_impact = total_trades ** 1.0
     # ev_impact = avg_ev ** 1.0
-    win_rate_impact = (avg_winrate / 50) ** 1.0 
+    # win_rate_impact = (avg_winrate / 50) ** 1.0 
     # growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
     # mmd_impact = avg_mdd ** 1.0
     # time_impact = avg_holding_days ** 0.5
