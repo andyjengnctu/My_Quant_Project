@@ -73,7 +73,7 @@ def objective(trial):
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 150, step=5),
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
         
         use_bb = ai_use_bb,
         use_kc = ai_use_kc,
