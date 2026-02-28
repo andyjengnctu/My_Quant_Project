@@ -73,7 +73,7 @@ def objective(trial):
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 150, step=5),
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.05), 
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         
         use_bb = ai_use_bb,
         use_kc = ai_use_kc,
@@ -154,19 +154,29 @@ def objective(trial):
 
     # trade_impact = total_trades ** 1.0
     # ev_impact = avg_ev ** 1.0
-    # win_rate_impact = (avg_winrate / 50) ** 1.0
+    win_rate_impact = (avg_winrate / 50) ** 1.0 
     # growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
     # mmd_impact = avg_mdd ** 1.0
     # time_impact = avg_holding_days ** 0.5
     #raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 1
     # final_score = raw_score * trade_penalty  
 
-    #time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
-    #raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0)    
-    #final_score = (raw_score / time_penalty_divisor) * trade_penalty * 10000
+    # time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
+    # raw_score = (avg_growth * avg_ev * win_rate_impact) / (avg_mdd + 1.0)    
+    # final_score = (raw_score / time_penalty_divisor) * trade_penalty * 10000
 
+    # ===========================================
+    # 原本最精簡的
+    # ==========================================
     raw_score = total_R_value / (avg_mdd + 1.0)
     final_score = raw_score * trade_penalty 
+
+    # ===========================================
+    # 換成用avg_growth, 考慮win_rate_impact避免都不考慮減
+    # ==========================================
+    # raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0) * 1000
+    # final_score = raw_score * trade_penalty 
+
 
     # 寫入 Trial 供顯示
     trial.set_user_attr("win_rate", avg_winrate)
