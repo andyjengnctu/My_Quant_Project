@@ -258,7 +258,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (10.0 if avgWin > 0 else 0)
+    payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
     # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
     # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
