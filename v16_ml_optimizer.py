@@ -155,10 +155,10 @@ def objective(trial):
     # trade_impact = total_trades ** 1.0
     # ev_impact = avg_ev ** 1.0
     # win_rate_impact = (avg_winrate / 50) ** 1.0 
-    # growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
+    growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
     # mmd_impact = avg_mdd ** 1.0
     # time_impact = avg_holding_days ** 0.5
-    #raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 1
+    # raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 1
     # final_score = raw_score * trade_penalty  
 
     # time_penalty_divisor = math.sqrt(avg_holding_days + 1.0)
@@ -168,15 +168,14 @@ def objective(trial):
     # ===========================================
     # 原本最精簡的
     # ==========================================
-    raw_score = total_R_value / (avg_mdd + 1.0)
-    final_score = raw_score * trade_penalty 
-
-    # ===========================================
-    # 換成用avg_growth, 考慮win_rate_impact避免都不考慮減
-    # ==========================================
-    # raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0) * 1000
+    # raw_score = total_R_value / (avg_mdd + 1.0)
     # final_score = raw_score * trade_penalty 
 
+    # ===========================================
+    # Testing
+    # ==========================================
+    raw_score = (total_R_value) / (avg_mdd ** 1.5 + 1.0) 
+    final_score = raw_score * trade_penalty 
 
     # 寫入 Trial 供顯示
     trial.set_user_attr("win_rate", avg_winrate)
