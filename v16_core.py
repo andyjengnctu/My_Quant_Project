@@ -258,8 +258,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    # payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
-    payoffRatio = min(99.9, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
+    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
     # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
     # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
@@ -290,5 +289,11 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, "is_in_buy_zone": is_in_buy_zone,
         "active_stop": active_stop_today, "target_half": sellPriceHalf, "current_position": positionSize,
-        "avg_bars_held": avg_bars_held  # 🌟 送出平均天數
+        "avg_bars_held": avg_bars_held,
+        "avg_win": avgWin,
+        "avg_loss": avgLoss,
+        # 🌟 新增：送出最原始的絕對數據，供優化器進行「全局聚合」
+        "full_wins": fullWins,
+        "total_profit": totalProfit,
+        "total_loss": totalLoss
     }
