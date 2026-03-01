@@ -126,7 +126,7 @@ def objective(trial):
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
     total_R_value = total_trades * avg_ev 
     avg_growth = sum(s['asset_growth'] for s in all_stats) / valid_count 
-    global_asset_growth = sum(s['asset_growth'] for s in all_stats) / len(TARGET_FILES)
+    global_asset_growth = sum(s['asset_growth'] for s in all_stats) / valid_count # orignal / len(TARGET_FILES)
     
     # 🌟 新增：計算全市場的「平均單筆持倉天數」
     avg_holding_days = sum(s['avg_bars_held'] * s['trade_count'] for s in all_stats) / total_trades
@@ -169,14 +169,20 @@ def objective(trial):
     # ===========================================
     # 原本最精簡的
     # ==========================================
-    # raw_score = total_R_value / (avg_mdd + 1.0)
+    raw_score = total_R_value / (avg_mdd + 1.0)
+    final_score = raw_score * trade_penalty 
+
+    # ===========================================
+    # Testing
+    # ==========================================
+    # raw_score = (global_asset_growth) / (avg_mdd ** 1.5 + 1.0) * 10000
     # final_score = raw_score * trade_penalty 
 
     # ===========================================
     # Testing
     # ==========================================
-    raw_score = (global_asset_growth) / (avg_mdd ** 2 + 1.0) * 10000
-    final_score = raw_score * trade_penalty 
+    # raw_score = 1 / (avg_mdd +1) * 10000
+    # final_score = raw_score * trade_penalty 
 
     # 寫入 Trial 供顯示
     trial.set_user_attr("win_rate", avg_winrate)
