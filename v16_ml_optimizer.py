@@ -119,37 +119,16 @@ def objective(trial):
         trial.set_user_attr("fail_reason", "交易次數為 0")
         return -9999.0
         
-    # =========================================================
-    # 🌟 數學正規化：全局期望值 (Global Expectancy) 計算
-    # 徹底消滅 Magic Numbers！將全市場所有交易視為一個大資金池
-    # =========================================================
-    global_wins = sum(s.get('full_wins', 0) for s in all_stats)
-    global_profit = sum(s.get('total_profit', 0.0) for s in all_stats)
-    global_loss = sum(s.get('total_loss', 0.0) for s in all_stats)
-
-    # 1. 全局真實勝率
-    avg_winrate = (global_wins / total_trades) * 100 if total_trades > 0 else 0
-
-    # 2. 全局真實盈虧比 (總獲利/贏單數 vs 總虧損/輸單數)
-    global_loss_count = total_trades - global_wins
-    global_avg_win = global_profit / global_wins if global_wins > 0 else 0
-    global_avg_loss = global_loss / global_loss_count if global_loss_count > 0 else 0
-
-    if global_avg_loss > 0:
-        avg_payoff = global_avg_win / global_avg_loss
-    else:
-        avg_payoff = 0.0 # 全市場幾千筆交易不可能 0 虧損，若發生代表參數無效
-
-    # 3. 全局真實期望值 (完全不受單檔股票極端值干擾)
-    avg_ev = (avg_winrate / 100 * avg_payoff) - (1 - avg_winrate / 100)
-    
-    # 4. 其他全市場平均指標
     avg_trades = total_trades / valid_count
+    avg_ev = sum(s['expected_value'] * s['trade_count'] for s in all_stats) / total_trades
+    avg_winrate = sum(s['win_rate'] * s['trade_count'] for s in all_stats) / total_trades
+    avg_payoff = sum(s['payoff_ratio'] * s['trade_count'] for s in all_stats) / total_trades
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
     total_R_value = total_trades * avg_ev 
     avg_growth = sum(s['asset_growth'] for s in all_stats) / valid_count 
+    
+    # 🌟 新增：計算全市場的「平均單筆持倉天數」
     avg_holding_days = sum(s['avg_bars_held'] * s['trade_count'] for s in all_stats) / total_trades
-    # =========================================================
 
     ideal_min_trades = len(TARGET_FILES) * 8
     trade_penalty = min(1.0, total_trades / ideal_min_trades)
@@ -191,12 +170,12 @@ def objective(trial):
     # ==========================================
     raw_score = total_R_value / (avg_mdd + 1.0)
     final_score = raw_score * trade_penalty 
-    
+
     # ===========================================
-    # 換成用avg_growth
+    # 換成用avg_growth, 考慮win_rate_impact避免都不考慮減
     # ==========================================
-    # raw_score = total_R_value / (avg_mdd + 1.0)
-    #final_score = raw_score * trade_penalty 
+    # raw_score = (avg_growth * avg_ev) / (avg_mdd + 1.0) * 1000
+    # final_score = raw_score * trade_penalty 
 
 
     # 寫入 Trial 供顯示
