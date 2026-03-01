@@ -89,7 +89,7 @@ def objective(trial):
         vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19,
         
         # 🌟 核心環境控制：強制關閉複利，讓 AI 跑出純淨無瑕的「單利真金白銀」
-        use_compounding = False
+        use_compounding = True # true為考慮複利、False是單利
     )
 
     all_stats = []
@@ -126,6 +126,7 @@ def objective(trial):
     avg_mdd = sum(s['max_drawdown'] for s in all_stats) / valid_count 
     total_R_value = total_trades * avg_ev 
     avg_growth = sum(s['asset_growth'] for s in all_stats) / valid_count 
+    global_asset_growth = sum(s['asset_growth'] for s in all_stats) / len(TARGET_FILES)
     
     # 🌟 新增：計算全市場的「平均單筆持倉天數」
     avg_holding_days = sum(s['avg_bars_held'] * s['trade_count'] for s in all_stats) / total_trades
@@ -155,7 +156,7 @@ def objective(trial):
     # trade_impact = total_trades ** 1.0
     # ev_impact = avg_ev ** 1.0
     # win_rate_impact = (avg_winrate / 50) ** 1.0 
-    growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
+    # growth_impact = min(1.0, (avg_growth / 10) ** 1.0)
     # mmd_impact = avg_mdd ** 1.0
     # time_impact = avg_holding_days ** 0.5
     # raw_score = (trade_impact * ev_impact * win_rate_impact * growth_impact) / ((mmd_impact + 1.0) * (time_impact+1)) * 1
@@ -174,7 +175,7 @@ def objective(trial):
     # ===========================================
     # Testing
     # ==========================================
-    raw_score = (total_R_value) / (avg_mdd ** 1.5 + 1.0) 
+    raw_score = (global_asset_growth) / (avg_mdd ** 2 + 1.0) * 10000
     final_score = raw_score * trade_penalty 
 
     # 寫入 Trial 供顯示
@@ -184,7 +185,7 @@ def objective(trial):
     trial.set_user_attr("trades_avg", avg_trades) 
     trial.set_user_attr("mdd", avg_mdd)
     trial.set_user_attr("total_R", total_R_value)
-    trial.set_user_attr("growth", avg_growth) 
+    trial.set_user_attr("growth", global_asset_growth) 
     trial.set_user_attr("payoff", avg_payoff)
     trial.set_user_attr("penalty", trade_penalty)
     trial.set_user_attr("raw_score", raw_score)
@@ -235,7 +236,7 @@ def monitoring_callback(study, trial):
         print(f"   📊 [全市場平均] 勝率: {attrs['win_rate']:>5.2f}% | 期望值: {attrs['ev']:>5.2f}R | 風報比: {attrs['payoff']:>4.2f}")
         # 🌟 印出平均持倉天數，讓您感受資金效率的變化
         print(f"   📈 [交易頻率]   總交易: {attrs['trades_total']}次 | 單檔平均: {attrs['trades_avg']:.1f}次 | 平均抱牢: {attrs.get('hold_days', 0):.1f} 天 | {penalty_str}")
-        print(f"   💰 [獲利與風險] 平均純單利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs['mdd']:>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
+        print(f"   💰 [獲利與風險] 全市場平均複利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs['mdd']:>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
         print(f"   ⚙️ [核心參數] 突破: {p['high_len']:>3} 日新高 | ATR 週期: {p['atr_len']:>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
         print(f"                 掛單: +{p['atr_buy_tol']:.1f} ATR | 停損: -{p['atr_times_init']:.1f} ATR | 追蹤停利: -{p['atr_times_trail']:.1f} ATR")
         print(f"   🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
@@ -311,7 +312,7 @@ if __name__ == "__main__":
                 print(f"\n{C_YELLOW}🏆 【目前記憶庫中的最強聖杯紀錄】 | 最終資金效率: {best_trial.value:.2f}{C_RESET}")
                 print(f"   📊 [全市場平均] 勝率: {attrs.get('win_rate', 0):>5.2f}% | 期望值: {attrs.get('ev', 0):>5.2f}R | 風報比: {attrs.get('payoff', 0):>4.2f}")
                 print(f"   📈 [交易頻率]   總交易: {attrs.get('trades_total', 0)}次 | 單檔平均: {attrs.get('trades_avg', 0):.1f}次 | 平均抱牢: {attrs.get('hold_days', 0):.1f} 天 | {penalty_str}")
-                print(f"   💰 [獲利與風險] 平均純單利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs.get('mdd', 0):>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
+                print(f"   💰 [獲利與風險] 全市場平均複利報酬: {attrs.get('growth', 0):>6.1f}% | 平均回撤: {attrs.get('mdd', 0):>5.2f}% | 總R: {attrs.get('total_R', 0):.1f}")
                 print(f"   ⚙️ [核心參數] 突破: {p.get('high_len', 0):>3} 日新高 | ATR 週期: {p.get('atr_len', 0):>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
                 print(f"                 掛單: +{p.get('atr_buy_tol', 0):.1f} ATR | 停損: -{p.get('atr_times_init', 0):.1f} ATR | 追蹤停利: -{p.get('atr_times_trail', 0):.1f} ATR")
                 print(f"   🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")

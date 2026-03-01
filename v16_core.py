@@ -262,10 +262,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
     # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
+    # 算法雖然最正確，但ai會傾向讓initial_risk盡可能大，不被停損洗卓，使得profitValue能長期盡可能大，導入win_rate小, mdd大
     # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
     
     # ✅ 換回這行 (舊版實際盈虧期望值 EV)
     # 恢復您原本在 TV 面板上的標準算法，這能真實反映「截斷虧損、讓利潤奔跑」的實力
+    # 雖然不是每預計風險R的獲利倍數，確是每單位實虧損的帶來的獲利倍數
     expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
