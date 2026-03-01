@@ -89,7 +89,7 @@ def objective(trial):
         vol_long_len = trial.suggest_int("vol_long_len", 10, 30) if ai_use_vol else 19,
         
         # 🌟 核心環境控制：強制關閉複利，讓 AI 跑出純淨無瑕的「單利真金白銀」
-        use_compounding = True # true為考慮複利、False是單利
+        use_compounding = False # true為考慮複利、False是單利
     )
 
     all_stats = []
