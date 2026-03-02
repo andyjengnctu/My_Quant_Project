@@ -1,3 +1,4 @@
+import sys
 import os
 import json
 import pandas as pd
@@ -5,6 +6,9 @@ import numpy as np
 import math
 import warnings
 from datetime import datetime
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
 # 引入您原本的設定與輔助數學函數 (不改動核心)
 from core.v16_config import V16StrategyParams
@@ -24,7 +28,7 @@ C_RESET = '\033[0m'
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 
-def load_params(json_file="v16_best_params.json"):
+def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
     if os.path.exists(json_file):
         try:
@@ -206,7 +210,7 @@ def run_debug_backtest(df, ticker, params):
     df_logs['單筆實質損益'] = df_logs['單筆實質損益'].round(2)
     df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
     
-    output_filename = f"Debug_TradeLog_{ticker}.xlsx"
+    output_filename = f"outputs/Debug_TradeLog_{ticker}.xlsx"
     df_logs.to_excel(output_filename, index=False)
     print(f"{C_GREEN}📁 交易明細已成功匯出至：{output_filename}{C_RESET}")
     

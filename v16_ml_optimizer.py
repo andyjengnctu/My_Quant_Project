@@ -267,7 +267,7 @@ if __name__ == "__main__":
     
     print(f"{C_GREEN}✅ 已找到 {len(TARGET_FILES)} 檔股票資料。{C_RESET}")
     
-    db_file_name = "v16_ai_memory.db"
+    db_file_name = "models/v16_ai_memory.db"
     DB_NAME = f"sqlite:///{db_file_name}"
     STUDY_NAME = "v16_global_optimization"
 

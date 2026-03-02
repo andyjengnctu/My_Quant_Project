@@ -1,8 +1,12 @@
 import pandas as pd
+import sys
 import os
 import json
 import warnings
-
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
+    
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
 
@@ -69,14 +73,14 @@ if __name__ == "__main__":
     print(f"{C_CYAN}🚀 v16 模組化獨立核心驗證工具啟動...{C_RESET}")
     print("請選擇要掛載的參數大腦：")
     print("1. v16_original_params.json (原始手動參數)")
-    print("2. v16_best_params.json (AI 訓練最佳參數)")
+    print("2. models/v16_best_params.json (AI 訓練最佳參數)")
     print("3. 使用 v16_config.py 系統預設值")
     
     choice = input("請輸入 1, 2, 或 3 (預設為 1): ").strip()
     
     if choice == '2':
-        params, success = load_params_from_json("v16_best_params.json")
-        param_source = "v16_best_params.json" if success else "找不到檔案，使用預設值"
+        params, success = load_params_from_json("models/v16_best_params.json")
+        param_source = "models/v16_best_params.json" if success else "找不到檔案，使用預設值"
     elif choice == '3':
         params = V16StrategyParams()
         param_source = "v16_config.py 系統預設"

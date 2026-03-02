@@ -1,8 +1,12 @@
+import sys
 import os
 import json
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
 # 🌟 依賴您的模組化架構：直接引入原本的參數檔與核心引擎
 from core.v16_config import V16StrategyParams
@@ -17,9 +21,9 @@ C_RESET = '\033[0m'
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
-OUTPUT_FILE = "V16_All_Stocks_Stats_Report.xlsx"
+OUTPUT_FILE = "outputs/V16_All_Stocks_Stats_Report.xlsx"
 
-def load_params(json_file="v16_best_params.json"):
+def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
     if os.path.exists(json_file):
         try:

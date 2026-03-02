@@ -492,7 +492,7 @@ if __name__ == "__main__":
     print(f"| 實戰期望值(EV)   | {pf_ev:>6.2f} R       | -               | -              |")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
-    with pd.ExcelWriter("V16_Portfolio_Report.xlsx") as writer:
+    with pd.ExcelWriter("outputs/V16_Portfolio_Report.xlsx") as writer:
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)
     print(f"{C_GREEN}📁 完整資產曲線與交易明細已匯出至: V16_Portfolio_Report.xlsx{C_RESET}")
@@ -547,7 +547,7 @@ if __name__ == "__main__":
         )
         
         # 存成 HTML 網頁檔
-        html_filename = "V16_Portfolio_Dashboard.html"
+        html_filename = "outputs/V16_Portfolio_Dashboard.html"
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
         
