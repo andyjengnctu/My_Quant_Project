@@ -5,7 +5,7 @@ import os
 # 0. 設定區
 # ==========================================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VIP_DATA_DIR = "tw_stock_data_vip"  # 你的下載路徑
+VIP_DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")  # 你的下載路徑
 TV_DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")        # 你的對帳基準路徑
 
 def verify_local_database():

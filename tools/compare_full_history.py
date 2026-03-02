@@ -96,8 +96,7 @@ if __name__ == "__main__":
             
         # 🌟 直接強制指定去 testing_csv 找檔案
         # 假設您從 TV 下載的檔名是 TV_Data_Full_2330.csv
-        target_csv_path = f"testing_csv/TV_Data_Full_{ticker_input}.csv"
-        
+        target_csv_path = os.path.join(BASE_DIR, "testing_csv", f"TV_Data_Full_{ticker_input}.csv")        
         # 如果您的檔名沒有 TV_Data_Full_ 前綴，只有 2330.csv，請把上一行改成下面這行：
         # target_csv_path = f"testing_csv/{ticker_input}.csv"
              
