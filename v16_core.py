@@ -271,6 +271,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
+    netProfitValue = currentCapital - params.initial_capital # 🌟 新增：實際賺到的真金白銀 (絕對金額)    
+    
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (positionSize == 0)
@@ -287,6 +289,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
+        "net_profit_value": netProfitValue, # 🌟 送出絕對金額
         "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
         "expected_value": expectedValue, 
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
