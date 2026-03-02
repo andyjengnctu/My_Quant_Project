@@ -5,8 +5,8 @@ import numpy as np
 from datetime import datetime
 import warnings
 
-from v16_config import V16StrategyParams
-from v16_core import (
+from core.v16_config import V16StrategyParams
+from core.v16_core import (
     tv_atr, tv_ema, tv_supertrend, adjust_to_tick,
     calc_entry_price, calc_net_sell_price, calc_position_size
 )
@@ -433,9 +433,9 @@ if __name__ == "__main__":
     ans_bm = input(f"👉 4. 請輸入大盤比較標的 (直接按 Enter 預設為 0050): ").strip()
     USER_BENCHMARK = ans_bm if ans_bm else "0050"
 
-    params, is_loaded = load_dynamic_params("v16_best_params.json")
+    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-    else: print(f"\n{C_YELLOW}⚠️ 找不到 v16_best_params.json，使用預設參數。{C_RESET}")
+    else: print(f"\n{C_YELLOW}⚠️ 找不到 models/v16_best_params.json，使用預設參數。{C_RESET}")
 
     start_time = time.time()
     

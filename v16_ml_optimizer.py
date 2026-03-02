@@ -10,8 +10,8 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
-from v16_config import V16StrategyParams
-from v16_core import run_v16_backtest
+from core.v16_config import V16StrategyParams
+from core.v16_core import run_v16_backtest
 
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -354,9 +354,9 @@ if __name__ == "__main__":
     try:
         if study.best_value and study.best_value > -9000:
             print(f"✨ AI 記憶庫中目前的最強資金效率分數: {study.best_value:.2f}")
-            with open("v16_best_params.json", "w") as f:
+            with open("models/v16_best_params.json", "w") as f:
                 json.dump(study.best_params, f, indent=4)
-            print(f"{C_GREEN}💾 已成功將最強參數匯出至 'v16_best_params.json'！{C_RESET}")
+            print(f"{C_GREEN}💾 已成功將最強參數匯出至 'models/v16_best_params.json'！{C_RESET}")
         else:
             print(f"{C_GRAY}⚠️ 目前記憶庫中尚無及格的參數，無法匯出 JSON。{C_RESET}")
     except ValueError:

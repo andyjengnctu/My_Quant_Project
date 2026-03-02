@@ -5,8 +5,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
 
 # 🌟 依賴您的模組化架構：直接引入原本的參數檔與核心引擎
-from v16_config import V16StrategyParams
-from v16_core import run_v16_backtest
+from core.v16_config import V16StrategyParams
+from core.v16_core import run_v16_backtest
 
 warnings.filterwarnings('ignore')
 
@@ -15,7 +15,8 @@ C_GREEN = '\033[92m'
 C_YELLOW = '\033[93m'
 C_RESET = '\033[0m'
 
-DATA_DIR = "tw_stock_data_vip"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 OUTPUT_FILE = "V16_All_Stocks_Stats_Report.xlsx"
 
 def load_params(json_file="v16_best_params.json"):

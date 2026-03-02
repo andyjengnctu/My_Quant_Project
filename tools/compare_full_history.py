@@ -3,8 +3,8 @@ import os
 import json
 import warnings
 
-from v16_config import V16StrategyParams
-from v16_core import run_v16_backtest
+from core.v16_config import V16StrategyParams
+from core.v16_core import run_v16_backtest
 
 warnings.filterwarnings('ignore')
 

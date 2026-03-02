@@ -7,8 +7,8 @@ import warnings
 from datetime import datetime
 
 # 引入您原本的設定與輔助數學函數 (不改動核心)
-from v16_config import V16StrategyParams
-from v16_core import (
+from core.v16_config import V16StrategyParams
+from core.v16_core import (
     tv_atr, tv_ema, tv_supertrend, adjust_to_tick,
     calc_entry_price, calc_net_sell_price, calc_position_size
 )
@@ -21,7 +21,8 @@ C_YELLOW = '\033[93m'
 C_RED = '\031[91m'
 C_RESET = '\033[0m'
 
-DATA_DIR = "tw_stock_data_vip"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 
 def load_params(json_file="v16_best_params.json"):
     params = V16StrategyParams()

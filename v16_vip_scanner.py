@@ -6,8 +6,8 @@ import time
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from v16_config import V16StrategyParams
-from v16_core import run_v16_backtest
+from core.v16_config import V16StrategyParams
+from core.v16_core import run_v16_backtest
 
 warnings.filterwarnings('ignore')
 
@@ -84,7 +84,7 @@ def run_daily_scanner(data_dir):
     if total_files == 0: return
 
     # 🧠 自動載入大腦 (優先讀取最佳訓練參數)
-    params, is_loaded = load_dynamic_params("v16_best_params.json")
+    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
     if is_loaded:
         print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
     else:

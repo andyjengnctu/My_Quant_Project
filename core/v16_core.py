@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import math
-from v16_config import V16StrategyParams
+from core.v16_config import V16StrategyParams
 
 # ==========================================
 # 0. 輔助函數
