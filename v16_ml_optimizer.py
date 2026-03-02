@@ -127,8 +127,8 @@ def objective(trial):
     total_R_value = total_trades * avg_ev 
     avg_growth = sum(s['asset_growth'] for s in all_stats) / valid_count 
     global_asset_growth = sum(s['asset_growth'] for s in all_stats) / valid_count # orignal / len(TARGET_FILES)
-    global_net_profit = sum(s['net_profit_value'] for s in all_stats)    
-    
+    global_net_profit = sum(s.get('net_profit_value', 0) for s in all_stats)    
+
     # 🌟 新增：計算全市場的「平均單筆持倉天數」
     avg_holding_days = sum(s['avg_bars_held'] * s['trade_count'] for s in all_stats) / total_trades
 
