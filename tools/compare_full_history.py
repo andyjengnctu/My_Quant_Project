@@ -79,7 +79,7 @@ if __name__ == "__main__":
     choice = input("請輸入 1, 2, 或 3 (預設為 1): ").strip()
     
     if choice == '2':
-        params, success = load_params_from_json("models/v16_best_params.json")
+        params, success = load_params_from_json(os.path.join(BASE_DIR, "models", "v16_best_params.json"))
         param_source = "models/v16_best_params.json" if success else "找不到檔案，使用預設值"
     elif choice == '3':
         params = V16StrategyParams()

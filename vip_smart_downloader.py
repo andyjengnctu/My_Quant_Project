@@ -17,7 +17,7 @@ warnings.filterwarnings('ignore')
 # 0. 參數與 API 設定
 # ==========================================
 API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMi0yMSAxMzozOToyMyIsInVzZXJfaWQiOiJhbmR5amVuZ25jdHUiLCJlbWFpbCI6ImFuZHlqZW5nbmN0dUBnbWFpbC5jb20iLCJpcCI6IjM2LjIyOC4xMTMuMTMxIn0.D97Qj43wskbRDXXbESCTO13wnijIhuClsPeobPhYy3s"
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 LIST_FILE = os.path.join(SAVE_DIR, "universe_list.txt")
 
