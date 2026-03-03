@@ -85,7 +85,6 @@ def objective(trial):
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
     
-    # 🌟 核心修正：明確標示 kwargs，確保 benchmark_data 不會跑錯位置！
     ret_pct, mdd, t_count, final_eq, avg_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params, 
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION, 
@@ -154,26 +153,78 @@ def monitoring_callback(study, trial):
         print(f"              阿肯那(KC)    : {kc_str}")
         print(f"              均量 (Vol)    : {vol_str}")
         print(f"{C_CYAN}================================================================================{C_RESET}\n")
-        os.makedirs("outputs", exist_ok=True)
-        with open("outputs/portfolio_breakthrough_log.txt", "a", encoding="utf-8") as f: f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🏆 第 {trial.number + 1} 次: 報酬 {attrs['pf_return']:.2f}% | RoMD {sys_romd_display:.2f} | 勝率 {attrs['win_rate']:.2f}%\n")
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    load_all_raw_data(); db_file = "models/v16_portfolio_ai_10pos_overnight.db"; log_file = "outputs/portfolio_breakthrough_log.txt"; DB_NAME = f"sqlite:///{db_file}"
+    load_all_raw_data(); db_file = "models/v16_portfolio_ai_10pos_overnight.db"; DB_NAME = f"sqlite:///{db_file}"
+    
     if os.path.exists(db_file):
         choice = input(f"\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
-        if choice == '2': os.remove(db_file); os.remove(log_file) if os.path.exists(log_file) else None; print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
+        if choice == '2': 
+            os.remove(db_file)
+            print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
+            
     N_TRIALS = int(input(f"👉 請輸入訓練次數 (預設 50000): ").strip() or 50000)
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
+    
     if len(study.trials) > 0:
         print(f"\n{C_GREEN}✅ 已累積 {len(study.trials)} 次經驗。{C_RESET}")
-        if os.path.exists(log_file):
-            with open(log_file, "r", encoding="utf-8") as f: lines = f.readlines(); print(f"\n{C_CYAN}📜 【歷史突破紀錄】{C_RESET}\n" + "".join(lines[-10:]))
+        
+        # 🌟 接續訓練時：完美重現最後一次突破的最強參數與完整戰情面板
+        try:
+            best_trial = study.best_trial
+            if best_trial.value and best_trial.value > -9000:
+                attrs, p = best_trial.user_attrs, best_trial.params
+                bb_str = f"啟用 ({p.get('bb_len', 20)} 日, 寬度 {p.get('bb_mult', 2.0):.1f} 倍)" if p.get('use_bb', False) else "[關閉]"
+                kc_str = f"啟用 ({p.get('kc_len', 20)} 日, 寬度 {p.get('kc_mult', 2.0):.1f} 倍)" if p.get('use_kc', False) else "[關閉]"
+                vol_str = f"啟用 (短 {p.get('vol_short_len', 5)} 日 > 長 {p.get('vol_long_len', 19)} 日)" if p.get('use_vol', False) else "[關閉]"
+                
+                sys_ret, bm_ret, sys_mdd, bm_mdd = attrs['pf_return'], attrs['bm_return'], attrs['pf_mdd'], attrs['bm_mdd']
+                alpha, mdd_diff = sys_ret - bm_ret, bm_mdd - sys_mdd 
+                sys_romd_display = (sys_ret / abs(sys_mdd)) if sys_mdd != 0 else 0.0
+                bm_romd_display = (bm_ret / abs(bm_mdd)) if bm_mdd != 0 else 0.0
+                romd_diff = sys_romd_display - bm_romd_display
+                
+                alpha_str, alpha_color = f"{'+' if alpha > 0 else ''}{alpha:.2f}%", C_GREEN if alpha > 0 else C_RED
+                sys_ret_str, sys_ret_color = f"+{sys_ret:.2f}%", C_GREEN if sys_ret > 0 else C_RED
+                bm_ret_str, sys_mdd_str, bm_mdd_str = f"+{bm_ret:.2f}%", f"-{sys_mdd:.2f}%", f"-{bm_mdd:.2f}%"
+                mdd_diff_str, mdd_diff_color = f"少跌 {mdd_diff:.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%", C_GREEN if mdd_diff > 0 else C_RED
+                romd_diff_str, romd_diff_color = f"{'+' if romd_diff > 0 else ''}{romd_diff:.2f}", C_GREEN if romd_diff > 0 else C_RED
+                
+                mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
+                
+                print(f"\n{C_CYAN}📜 【歷史突破紀錄還原】{C_RESET}")
+                print(f"{C_RED}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){C_RESET}")
+                print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
+                print(f"模式: {mode_display} | 最大持股: {TRAIN_MAX_POSITIONS} 檔")
+                print(f"總交易紀錄: {attrs['pf_trades']} 筆 | 最終資產: {attrs['final_equity']:,.0f} 元")
+                print(f"平均資金水位: {attrs['avg_exposure']:.2f} %")
+                print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
+                print(f"🏆 績效與風險對比表")
+                print(f"--------------------------------------------------------------------------------")
+                print(f"| 指標項目         | V16 尊爵系統   | 同期大盤 (0050) | 差異 (Alpha)   |")
+                print(f"|------------------|----------------|-----------------|----------------|")
+                print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
+                print(f"| 最大回撤 (MDD)   | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
+                print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd_display:.2f}{' ' * max(0, 14-len(f'{sys_romd_display:.2f}'))}{C_RESET} | {bm_romd_display:<15.2f} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
+                print(f"| 系統實戰勝率     | {attrs['win_rate']:>6.2f} %       | -               | -              |")
+                print(f"| 盈虧風報比       | {attrs['pf_payoff']:>6.2f}         | -               | -              |")
+                print(f"| 實戰期望值(EV)   | {attrs['pf_ev']:>6.2f} R       | -               | -              |")
+                print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
+                print(f"⚙️ [核心參數] 突破: {p['high_len']:>3} 日新高 | ATR 週期: {p['atr_len']:>2} 日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f} %")
+                print(f"              掛單: +{p.get('atr_buy_tol', 1.5):.1f} ATR | 停損: -{p['atr_times_init']:.1f} ATR | 追蹤停利: -{p['atr_times_trail']:.1f} ATR")
+                print(f"🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
+                print(f"              阿肯那(KC)    : {kc_str}")
+                print(f"              均量 (Vol)    : {vol_str}")
+                print(f"{C_CYAN}================================================================================{C_RESET}\n")
+        except ValueError:
+            pass
+
     print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
     try: study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
     except KeyboardInterrupt: pass
     if study.best_value and study.best_value > -9000:
         with open("models/v16_best_params.json", "w") as f: json.dump(study.best_params, f, indent=4)
-        print(f"{C_GREEN}💾 已匯出最強參數！{C_RESET}") 
+        print(f"{C_GREEN}💾 已匯出最強參數！{C_RESET}")
