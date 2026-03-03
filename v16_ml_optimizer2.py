@@ -176,4 +176,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt: pass
     if study.best_value and study.best_value > -9000:
         with open("models/v16_best_params.json", "w") as f: json.dump(study.best_params, f, indent=4)
-        print(f"{C_GREEN}💾 已匯出最強參數！{C_RESET}")
+        print(f"{C_GREEN}💾 已匯出最強參數！{C_RESET}") 
