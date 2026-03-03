@@ -59,7 +59,6 @@ def get_pit_stats(trade_logs, current_date):
     win_rate = len(wins) / trade_count
     
     if EV_CALC_METHOD == 'B':
-        # 嚴格對齊舊版 core 的選股 EV
         avg_win_pnl = sum(t['pnl'] for t in wins) / len(wins) if len(wins) > 0 else 0
         loss_count = trade_count - len(wins)
         avg_loss_pnl = abs(sum(t['pnl'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
@@ -276,7 +275,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             
             avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
             avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
-            # Optimizer 內部不需要對 payoff 進行防呆限制，僅忠實回報
+            # 報表結算不加 min(10) 天花板，如實反映
             pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else 0.0
 
             if EV_CALC_METHOD == 'B':
@@ -294,14 +293,14 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
         
-        closed_trades = df_trades[df_trades['PnL'] != 0] if not df_trades.empty else pd.DataFrame()
+        # 🌟 核心邊界值修復：確保過濾條件與 Training Mode 完全一致 (包含剛好不賺不賠的平倉)
+        closed_trades = df_trades[~df_trades['Type'].str.contains('買進|換入', regex=True, na=False)] if not df_trades.empty else pd.DataFrame()
         
         if len(closed_trades) > 0:
             win_rate = len(closed_trades[closed_trades['PnL'] > 0]) / len(closed_trades) * 100
             wins = closed_trades[closed_trades['R_Multiple'] > 0]
             losses = closed_trades[closed_trades['R_Multiple'] <= 0]
             
-            # 🌟 嚴格對齊原版：這裡僅計算數學結果，不加 min(10.0)
             avg_win_r = wins['R_Multiple'].mean() if len(wins) > 0 else 0
             avg_loss_r = abs(losses['R_Multiple'].mean()) if len(losses) > 0 else 0
             pf_payoff = avg_win_r / avg_loss_r if avg_loss_r > 0 else 0.0
