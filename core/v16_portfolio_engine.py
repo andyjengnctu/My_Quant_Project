@@ -10,7 +10,7 @@ MIN_HISTORY_WIN_RATE = 0.50
 # 🌟 期望值 (EV) 算法全域切換開關
 # 'A' = 嚴格 R_Multiple 期望值 (Mean R)
 # 'B' = 傳統實際盈虧期望值 (Win% * Payoff - Loss%)
-EV_CALC_METHOD = 'B'
+EV_CALC_METHOD = 'A'
 # ==========================================
 
 def prep_stock_data_and_trades(df, params):
