@@ -67,21 +67,21 @@ def objective(trial):
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
 
     ai_params = V16StrategyParams(
-        atr_len = trial.suggest_int("atr_len", 3, 20), # orginal 5~20
+        atr_len = trial.suggest_int("atr_len", 3, 20), 
         atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 200, step=1), # orginal 40~150, 5
+        high_len = trial.suggest_int("high_len", 40, 200, step=1), 
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         use_bb = ai_use_bb, 
         use_kc = ai_use_kc, 
         use_vol = ai_use_vol,
-        bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,#10~30, 2
+        bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
         bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
-        kc_len = trial.suggest_int("kc_len", 3, 30, step=1) if ai_use_kc else 20,# original 10~30, 2
-        kc_mult = trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0, # orginal 1.5 ~3.0
+        kc_len = trial.suggest_int("kc_len", 3, 30, step=1) if ai_use_kc else 20,
+        kc_mult = trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0, 
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
-        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, # orginal 10~30
+        vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
         use_compounding = True 
     )
 
@@ -89,7 +89,8 @@ def objective(trial):
     all_trade_logs = {}
     master_dates = set()
 
-    with ProcessPoolExecutor() as executor:
+    # 🌟 真正解開封印：內層呼叫 14 個執行緒，瞬間秒殺 500 檔股票的技術指標計算！
+    with ProcessPoolExecutor(max_workers=14) as executor:
         futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
         for future in as_completed(futures):
             ticker, fast_df, logs = future.result()
@@ -124,6 +125,11 @@ def objective(trial):
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
         held_yesterday = set(portfolio.keys())
+        
+        # 盤前資金快照
+        overnight_cash = cash
+        sizing_equity = cash + sum([pos['qty'] * pos.get('last_px', pos['entry']) for pos in portfolio.values()])
+
         candidates_today = []
         tickers_to_remove = []
 
@@ -180,18 +186,19 @@ def objective(trial):
                     buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
                     sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * ai_params.atr_times_init))
                     candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev})
-
-        current_equity_for_sizing = cash + sum([pos['qty'] * pos.get('last_px', pos['entry']) for pos in portfolio.values()])
         
         if candidates_today:
             candidates_today.sort(key=lambda x: x['ev'], reverse=True)
             for cand in candidates_today:
                 if len(portfolio) < TRAIN_MAX_POSITIONS:
-                    qty = calc_position_size(cand['buy_price'], cand['sl_price'], current_equity_for_sizing, ai_params.fixed_risk, ai_params)
+                    qty = calc_position_size(cand['buy_price'], cand['sl_price'], sizing_equity, ai_params.fixed_risk, ai_params)
                     if qty > 0:
                         entry_cost_per_share = calc_entry_price(cand['buy_price'], qty, ai_params)
-                        if (entry_cost_per_share * qty) <= cash:
-                            cash -= (entry_cost_per_share * qty)
+                        cost_total = entry_cost_per_share * qty
+                        
+                        if cost_total <= overnight_cash:
+                            overnight_cash -= cost_total
+                            cash -= cost_total           
                             net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, ai_params)
                             portfolio[cand['ticker']] = {
                                 'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 
@@ -199,6 +206,49 @@ def objective(trial):
                                 'tp_half': adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share)), 
                                 'sold_half': False, 'last_px': cand['buy_price']
                             }
+                            
+                elif len(portfolio) == TRAIN_MAX_POSITIONS and TRAIN_ENABLE_ROTATION:
+                    weakest_ticker, lowest_return = None, 0.0 
+                    for pt, pos in portfolio.items():
+                        if today not in all_dfs_fast[pt]: continue 
+                        ret = (all_dfs_fast[pt][today]['Close'] - pos['entry']) / pos['entry']
+                        if ret < lowest_return:
+                            _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], yesterday)
+                            if holding_ev < cand['ev']:
+                                lowest_return = ret
+                                weakest_ticker = pt
+                            
+                    if weakest_ticker: 
+                        pos = portfolio[weakest_ticker]
+                        sell_price = adjust_to_tick(all_dfs_fast[weakest_ticker][today]['Close'])
+                        net_price = calc_net_sell_price(sell_price, pos['qty'], ai_params)
+                        cash += (net_price * pos['qty'])
+                        
+                        overnight_cash += (net_price * pos['qty']) 
+                        
+                        risk_per_share = pos['entry'] - pos['initial_sl_net']
+                        if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
+                        r_mult = (net_price - pos['entry']) / risk_per_share
+                        closed_trades_stats.append({'pnl': net_price - pos['entry'], 'r_mult': r_mult})
+                        
+                        del portfolio[weakest_ticker]
+                        trade_count += 1
+                        
+                        sizing_equity = cash + sum([p['qty'] * p.get('last_px', p['entry']) for p in portfolio.values()])
+                        qty = calc_position_size(cand['buy_price'], cand['sl_price'], sizing_equity, ai_params.fixed_risk, ai_params)
+                        if qty > 0:
+                            entry_cost_per_share = calc_entry_price(cand['buy_price'], qty, ai_params)
+                            cost_total = entry_cost_per_share * qty
+                            if cost_total <= overnight_cash: 
+                                overnight_cash -= cost_total
+                                cash -= cost_total
+                                net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, ai_params)
+                                portfolio[cand['ticker']] = {
+                                    'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 
+                                    'initial_sl_net': net_sl_per_share,
+                                    'tp_half': adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share)), 
+                                    'sold_half': False, 'last_px': cand['buy_price']
+                                }
 
         today_equity = cash  
         invested_capital = 0.0
@@ -296,9 +346,9 @@ def monitoring_callback(study, trial):
         alpha = sys_ret - bm_ret
         mdd_diff = bm_mdd - sys_mdd 
         
-        sys_romd = trial.value
-        bm_romd = bm_ret / (bm_mdd + 0.1) if bm_mdd != 0 else 0.0
-        romd_diff = sys_romd - bm_romd
+        sys_romd_display = (sys_ret / abs(sys_mdd)) if sys_mdd != 0 else 0.0
+        bm_romd_display = (bm_ret / abs(bm_mdd)) if bm_mdd != 0 else 0.0
+        romd_diff = sys_romd_display - bm_romd_display
 
         alpha_str = f"{'+' if alpha > 0 else ''}{alpha:.2f}%"
         alpha_color = C_GREEN if alpha > 0 else C_RED
@@ -314,7 +364,6 @@ def monitoring_callback(study, trial):
         
         mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
 
-        # 🌟 印出華麗戰情面板
         print(f"\n{C_RED}🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試){C_RESET}")
         print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
         print(f"模式: {mode_display} | 最大持股: {TRAIN_MAX_POSITIONS} 檔")
@@ -326,7 +375,7 @@ def monitoring_callback(study, trial):
         print(f"|------------------|----------------|-----------------|----------------|")
         print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
         print(f"| 最大回撤 (MDD)   | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
-        print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd:.2f}{' ' * max(0, 14-len(f'{sys_romd:.2f}'))}{C_RESET} | {bm_romd:<15.2f} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
+        print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd_display:.2f}{' ' * max(0, 14-len(f'{sys_romd_display:.2f}'))}{C_RESET} | {bm_romd_display:<15.2f} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
         print(f"| 系統實戰勝率     | {attrs['win_rate']:>6.2f} %       | -               | -              |")
         print(f"| 盈虧風報比       | {attrs['pf_payoff']:>6.2f}         | -               | -              |")
         print(f"| 實戰期望值(EV)   | {attrs['pf_ev']:>6.2f} R       | -               | -              |")
@@ -338,11 +387,10 @@ def monitoring_callback(study, trial):
         print(f"                均量 (Vol) : {vol_str}")
         print(f"{C_CYAN}================================================================================{C_RESET}\n")
 
-        # 🌟 新增：將純文字結果寫入日誌檔 (outputs/portfolio_breakthrough_log.txt)
         os.makedirs("outputs", exist_ok=True)
         log_content = (
             f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🏆 破紀錄！ 累積第 {trial.number + 1} 次測試\n"
-            f"   📊 [投資組合表現] 最終總權益: {attrs['final_equity']:,.0f} 元 | 總報酬: {attrs['pf_return']:.2f}% | RoMD: {trial.value:.3f}\n"
+            f"   📊 [投資組合表現] 最終總權益: {attrs['final_equity']:,.0f} 元 | 總報酬: {attrs['pf_return']:.2f}% | RoMD: {sys_romd_display:.2f}\n"
             f"   🛡️ [風險與交易] 最大回撤: {attrs['pf_mdd']:.2f}% | 勝率: {attrs['win_rate']:.2f}% | EV: {attrs['pf_ev']:.2f}R | 總交易數: {attrs['pf_trades']} 次\n"
             f"   ⚙️ [核心參數] 突破: {p['high_len']:>3}日 | ATR: {p['atr_len']:>2}日 | 半倉停利: {p.get('tp_percent', 0.5)*100:>2.0f}%\n"
             f"                 掛單: +{p.get('atr_buy_tol', 1.5):.1f} ATR | 停損: -{p['atr_times_init']:.1f} ATR | 追蹤: -{p['atr_times_trail']:.1f} ATR\n"
@@ -354,7 +402,7 @@ def monitoring_callback(study, trial):
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎 (嚴格條件單對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     load_all_raw_data()
@@ -363,8 +411,7 @@ if __name__ == "__main__":
         print("❌ 快取失敗，沒有可用的股票資料。")
         sys.exit()
 
-    # 🌟 因為是 10 檔持倉環境，建議命名獨立的資料庫與日誌檔
-    db_file_name = "models/v16_portfolio_ai_10pos.db"  
+    db_file_name = "models/v16_portfolio_ai_10pos_overnight.db"  
     log_file_name = "outputs/portfolio_breakthrough_log.txt"
     DB_NAME = f"sqlite:///{db_file_name}"
 
@@ -372,7 +419,6 @@ if __name__ == "__main__":
         choice = input(f"\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
         if choice == '2':
             os.remove(db_file_name)
-            # 同步刪除舊日誌防呆
             if os.path.exists(log_file_name):
                 os.remove(log_file_name)
             print(f"{C_RED}🗑️ 已刪除舊記憶與歷史軌跡。{C_RESET}")
@@ -380,9 +426,8 @@ if __name__ == "__main__":
     trials_input = input(f"👉 請輸入訓練次數 (直接按 Enter 預設 50,000 次): ").strip()
     N_TRIALS = int(trials_input) if trials_input.isdigit() else 50000
     
-    study = optuna.create_study(study_name="v16_portfolio_optimization", storage=DB_NAME, load_if_exists=True, direction="maximize")
+    study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     
-    # 🌟 新增：接續訓練時，印出「歷史突破軌跡紀錄」
     completed_trials = len(study.trials)
     if completed_trials > 0:
         print(f"\n{C_GREEN}✅ 記憶庫載入成功！已累積 {completed_trials} 次經驗。{C_RESET}")
@@ -390,7 +435,6 @@ if __name__ == "__main__":
             print(f"\n{C_CYAN}📜 【歷史突破軌跡紀錄】 (來自 {log_file_name}){C_RESET}")
             with open(log_file_name, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-                # 顯示倒數約 3 次的破紀錄
                 if len(lines) > 21:
                     print(f"{C_GRAY}...(省略早期紀錄，僅顯示最近 3 次進化突破)...\n" + "".join(lines[-21:]) + f"{C_RESET}")
                 else:
@@ -400,7 +444,8 @@ if __name__ == "__main__":
 
     print(f"\n{C_CYAN}🚀 開始進行投資組合端到端優化...{C_RESET}\n")
     try:
-        study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
+        # 🌟 外層鎖定單線程 (1)：讓進度條乖乖排隊不閃爍，防記憶體爆炸
+        study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback]) 
     except KeyboardInterrupt:
         print(f"\n\n{C_YELLOW}⚠️ 手動中斷，進度已保留。{C_RESET}")
         sys.exit()

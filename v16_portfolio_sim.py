@@ -154,7 +154,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(data_dir, file))
-            if len(df) < params.high_len + 20: continue
+            # 🌟 修改 1: 嚴格對齊 Optimizer，固定用 150 根過濾
+            if len(df) < 150: continue
+            
             df.columns = [c.capitalize() for c in df.columns]
             df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
             date_col = 'Time' if 'Time' in df.columns else 'Date'
@@ -185,12 +187,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     bm_peak_price = None     
     bm_max_drawdown = 0.0    
     
-    if benchmark_data:
-        base_date = sorted_dates[start_idx - 1] if start_idx > 0 else sorted_dates[0]
-        if base_date in benchmark_data:
-            benchmark_start_price = benchmark_data[base_date]['Close']
-            bm_peak_price = benchmark_start_price
-
     initial_capital = params.initial_capital
     cash = initial_capital
 
@@ -205,6 +201,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         yesterday = sorted_dates[i-1]
         
         held_yesterday = set(portfolio.keys())
+        
+        # 🌟 修改 2: 盤前快照 (昨晚的可用現金)
+        overnight_cash = cash
         
         if i % 20 == 0:
             exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
@@ -281,7 +280,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                     if qty > 0:
                         entry_cost_per_share = calc_entry_price(cand['buy_price'], qty, params)
                         cost_total = entry_cost_per_share * qty
-                        if cost_total <= cash:
+                        # 🌟 修改 3: 條件單買進只看 overnight_cash
+                        if cost_total <= overnight_cash:
+                            overnight_cash -= cost_total
                             cash -= cost_total
                             net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, params)
                             tp_target = adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share))
@@ -315,6 +316,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                         net_price = calc_net_sell_price(sell_price, pos['qty'], params)
                         pnl = (net_price - pos['entry']) * pos['qty']
                         cash += (net_price * pos['qty'])
+                        # 🌟 修改 4: 汰弱換股時，賣出的錢可以補回 overnight_cash 供買進用
+                        overnight_cash += (net_price * pos['qty'])
                         
                         risk_per_share = pos['entry'] - pos['initial_sl_net']
                         if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
@@ -327,7 +330,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                         if qty > 0:
                             entry_cost_per_share = calc_entry_price(cand['buy_price'], qty, params)
                             cost_total = entry_cost_per_share * qty
-                            if cost_total <= cash:
+                            # 🌟 修改 5: 檢查 overnight_cash 是否足夠換股
+                            if cost_total <= overnight_cash:
+                                overnight_cash -= cost_total
                                 cash -= cost_total
                                 net_sl_per_share = calc_net_sell_price(cand['sl_price'], qty, params)
                                 tp_target = adjust_to_tick(cand['buy_price'] + (entry_cost_per_share - net_sl_per_share))
@@ -477,7 +482,8 @@ if __name__ == "__main__":
     print(f"⚙️ 基礎設定")
     print(f"--------------------------------------------------------------------------------")
     print(f"模式: {mode_display} | 最大持股: {USER_MAX_POS} 檔 | 回測總耗時: {end_time - start_time:.2f} 秒")
-    print(f"總交易紀錄: {len(df_tr)} 筆 | 最終資產: {final_eq:,.0f} 元")
+    closed_trades_count = len(df_tr[df_tr['PnL'] != 0]) if not df_tr.empty else 0
+    print(f"總交易紀錄: {closed_trades_count} 筆 (明細流水帳共 {len(df_tr)} 筆) | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
     print(f"--------------------------------------------------------------------------------")
     print(f"🏆 績效與風險對比表")
