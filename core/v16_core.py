@@ -3,9 +3,6 @@ import numpy as np
 import math
 from core.v16_config import V16StrategyParams
 
-# ==========================================
-# 0. 輔助函數
-# ==========================================
 def tv_round(number): return math.floor(number + 0.5)
 def get_tick_size(price):
     if price < 1: return 0.001
@@ -35,9 +32,6 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         return int(math.floor(min(cap * riskPct / riskPerUnit, maxQty)))
     return 0
 
-# ==========================================
-# 1. 100% 完美復刻 TradingView 核心數學
-# ==========================================
 def tv_rma(source, length):
     rma = np.full_like(source, np.nan)
     valid_idx = np.where(~np.isnan(source))[0]
@@ -102,11 +96,7 @@ def tv_supertrend(high, low, close, atr, multiplier):
         else: direction[i] = direction[i-1]
     return direction
 
-# ==========================================
-# 🌟 核心一：策略訊號中樞 (唯一化修改點)
-# ==========================================
 def generate_signals(df, params):
-    """未來修改策略 (例如加 MACD)，只要修改這裡即可！"""
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
 
@@ -126,6 +116,7 @@ def generate_signals(df, params):
         bbCondition = (C > BB_Upper)
     else:
         bbCondition = np.ones_like(C, dtype=bool) 
+        BB_Upper = np.ones_like(C) 
 
     if params.use_vol:
         VolS = pd.Series(V).rolling(params.vol_short_len).mean().values
@@ -154,14 +145,10 @@ def generate_signals(df, params):
 
     return ATR_main, buyCondition, sellCondition, buy_limits
 
-# ==========================================
-# 2. 回測核心引擎 (單利雙引擎 + 持倉天數紀錄)
-# ==========================================
 def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
 
-    # 🚀 一行呼叫核心大腦，不再重複寫落落長的指標邏輯
     ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
 
     positionSize = 0
@@ -172,7 +159,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     cumulativeProfit = 0.0
 
     currentCapital = params.initial_capital
-    
     tradeCount, fullWins = 0, 0
     totalProfit, totalLoss = 0.0, 0.0
     missedBuyCount = 0
@@ -186,7 +172,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         if np.isnan(ATR_main[j-1]): continue
         
         pos_start_of_current_bar = positionSize
-        
         if positionSize > 0:
             total_bars_held += 1
             
@@ -195,7 +180,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
-        buyLimitPrice = buy_limits[j-1] if isSetup_prev else np.nan
+        buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
         buyTriggered = isSetup_prev and L[j] <= buyLimitPrice
         
         if isSetup_prev and not buyTriggered: missedBuyCount += 1
@@ -275,13 +260,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
-    # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
-    # 算法雖然最正確，但ai會傾向讓initial_risk盡可能大，不被停損洗卓，使得profitValue能長期盡可能大，導入win_rate小, mdd大
-    # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
-    
-    # ✅ 換回這行 (舊版實際盈虧期望值 EV)
-    # 恢復您原本在 TV 面板上的標準算法，這能真實反映「截斷虧損、讓利潤奔跑」的實力
-    # 雖然不是每預計風險R的獲利倍數，確是每單位實虧損的帶來的獲利倍數
+    # 🌟 核心修正：將 core 的 EV 算法還原回 TV 盈虧比算法
     expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
@@ -290,7 +269,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (positionSize == 0)
-    buyLimit_today = buy_limits[-1] if isSetup_today else np.nan
+    buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
     isCandidate = (tradeCount >= 2) and (winRate >= 35) and (expectedValue > 0)

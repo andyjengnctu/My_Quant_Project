@@ -6,6 +6,13 @@ MIN_HISTORY_TRADES = 1
 MIN_HISTORY_EV = 0.0         
 MIN_HISTORY_WIN_RATE = 0.50  
 
+# ==========================================
+# 🌟 期望值 (EV) 算法全域切換開關
+# 'A' = 嚴格 R_Multiple 期望值 (Mean R)
+# 'B' = 傳統實際盈虧期望值 (Win% * Payoff - Loss%)
+EV_CALC_METHOD = 'B'
+# ==========================================
+
 def prep_stock_data_and_trades(df, params):
     df = df.copy()
     ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
@@ -25,7 +32,7 @@ def prep_stock_data_and_trades(df, params):
         if np.isnan(ATR_main[i-1]): continue
         if in_position:
             if sellCondition[i-1] or L[i] <= sl_price:
-                exit_price = adjust_to_tick(O[i] if sellCondition[i-1] else min(O[i], sl_price))
+                exit_price = O[i] if sellCondition[i-1] else min(O[i], sl_price)
                 initial_risk = entry_price - initial_sl_price
                 if initial_risk <= 0: initial_risk = entry_price * 0.01
                 r_multiple = (exit_price - entry_price) / initial_risk
@@ -33,13 +40,12 @@ def prep_stock_data_and_trades(df, params):
                 trade_logs.append({'exit_date': pd.to_datetime(dates[i]), 'pnl': (exit_price - entry_price) / entry_price, 'r_mult': r_multiple})
                 in_position = False
             else:
-                new_sl = adjust_to_tick(C[i] - (ATR_main[i] * params.atr_times_trail))
+                new_sl = C[i] - (ATR_main[i] * params.atr_times_trail)
                 if new_sl > sl_price: sl_price = new_sl
         else:
             if buyCondition[i-1] and L[i] <= buy_limits[i-1]:
-                # 🌟 修正點：將 O[j] 改回迴圈變數 O[i]
-                entry_price = adjust_to_tick(min(O[i], buy_limits[i-1]))
-                initial_sl_price = adjust_to_tick(entry_price - (ATR_main[i-1] * params.atr_times_init))
+                entry_price = min(O[i], buy_limits[i-1])
+                initial_sl_price = entry_price - (ATR_main[i-1] * params.atr_times_init)
                 sl_price = initial_sl_price
                 in_position = True
     return df, trade_logs
@@ -52,47 +58,48 @@ def get_pit_stats(trade_logs, current_date):
     wins = [t for t in past_trades if t['pnl'] > 0]
     win_rate = len(wins) / trade_count
     
-    # 🌟 選股排位算法切換 (必須與下方報表一致，才會改變回測結果)
-    # ✅ 方法 A: R 倍數平均 (目前的預設)
-    # ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
-    
-    # ✅ 方法 B: 傳統盈虧比算法 (如果要測試此法，請取消下方三行註解，並註解掉上面的 ev_to_sort)
-    avg_win_pnl = sum(t['pnl'] for t in wins) / len(wins) if wins else 0
-    avg_loss_pnl = abs(sum(t['pnl'] for t in past_trades if t['pnl'] <= 0) / (trade_count - len(wins))) if (trade_count - len(wins)) > 0 else 0
-    payoff_ratio = avg_win_pnl / avg_loss_pnl if avg_loss_pnl > 0 else 0
-    ev_to_sort = (win_rate * payoff_ratio) - (1 - win_rate)
+    if EV_CALC_METHOD == 'B':
+        # 嚴格對齊舊版 core 的選股 EV
+        avg_win_pnl = sum(t['pnl'] for t in wins) / len(wins) if len(wins) > 0 else 0
+        loss_count = trade_count - len(wins)
+        avg_loss_pnl = abs(sum(t['pnl'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_pnl / avg_loss_pnl)) if avg_loss_pnl > 0 else (99.9 if avg_win_pnl > 0 else 0.0)
+        ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
+    else:
+        ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
 
     is_candidate = (ev_to_sort > MIN_HISTORY_EV) and (win_rate >= MIN_HISTORY_WIN_RATE)
     return is_candidate, ev_to_sort, win_rate
 
-def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_data=None, is_training=True):
+def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
     start_dt = pd.to_datetime(f"{start_year}-01-01")
-    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), 1) if sorted_dates else 1
+    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), 1)
 
     initial_capital = params.initial_capital
     cash = initial_capital
-    today_equity = initial_capital 
-    portfolio, closed_trades_stats, trade_history, equity_curve = {}, [], [], [] 
-    peak_equity, max_drawdown, trade_count, sim_days, total_exposure = initial_capital, 0.0, 0, 0, 0.0
-    bm_start_px, bm_peak_px, last_bm_px, bm_mdd = None, None, None, 0.0
-    
-    if benchmark_data and sorted_dates:
-        base_date = sorted_dates[start_idx] if start_idx < len(sorted_dates) else sorted_dates[-1]
-        if base_date in benchmark_data:
-            bm_start_px = benchmark_data[base_date]['Close']
-            bm_peak_px = bm_start_px
+    portfolio = {} 
+    trade_history, equity_curve, closed_trades_stats = [], [], []
+    peak_equity = initial_capital
+    max_drawdown = 0.0
+    current_equity = initial_capital 
+    total_exposure = 0.0
+    sim_days = 0
+
+    benchmark_start_price = None
+    bm_peak_price = None     
+    bm_max_drawdown = 0.0    
+    bm_ret_pct = 0.0
 
     for i in range(start_idx, len(sorted_dates)):
         sim_days += 1
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
         held_yesterday = set(portfolio.keys())
-        
         overnight_cash = cash
+        
         sizing_equity = cash + sum([pos['qty'] * pos.get('last_px', pos['entry']) for pos in portfolio.values()])
         
         if not is_training and i % 20 == 0:
-            current_equity = sizing_equity
             exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
             print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
 
@@ -116,10 +123,11 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                 r_mult = (net_price - pos['entry']) / risk_per_share
                 
                 if is_training: closed_trades_stats.append({'pnl': pnl, 'r_mult': r_mult})
-                else: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "指標賣出" if is_ind_sell else "停損出場", "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
+                else: 
+                    t_type = "指標賣訊" if is_ind_sell else "停損出場"
+                    trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
                 
                 tickers_to_remove.append(ticker)
-                trade_count += 1
                 continue
                 
             if not pos['sold_half'] and row['High'] >= pos['tp_half']:
@@ -134,12 +142,10 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     if risk_per_share <= 0: risk_per_share = pos['entry'] * 0.01
                     r_mult = (net_price - pos['entry']) / risk_per_share
                     
-                    if is_training: closed_trades_stats.append({'pnl': pnl, 'r_mult': r_mult})
-                    else: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
-                    
                     pos['qty'] -= sell_qty
                     pos['sold_half'] = True
-                    trade_count += 1
+                    if is_training: closed_trades_stats.append({'pnl': pnl, 'r_mult': r_mult})
+                    else: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
             
             new_sl = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
             if new_sl > pos['sl']: pos['sl'] = new_sl
@@ -201,7 +207,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         else: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出", "Price": sell_price, "PnL": pnl, "R_Multiple": r_mult, "Risk": params.fixed_risk})
                         
                         del portfolio[weakest_ticker]
-                        trade_count += 1
                         
                         sizing_equity = cash + sum([p['qty'] * p.get('last_px', p['entry']) for p in portfolio.values()])
                         qty = calc_position_size(cand['buy_price'], cand['sl_price'], sizing_equity, params.fixed_risk, params)
@@ -217,72 +222,97 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                                 if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"汰弱換入 (EV:{cand['ev']:.2f}R)", "Price": cand['buy_price'], "PnL": 0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 
         today_equity = cash  
-        invested_capital = 0.0
         for pt, pos in portfolio.items():
-            px = all_dfs_fast[pt][today]['Close'] if today in all_dfs_fast[pt] else pos.get('last_px', pos['entry'])
-            pos['last_px'] = px 
-            val = pos['qty'] * px
-            today_equity += val
-            invested_capital += val
+            if today in all_dfs_fast[pt]:
+                px = all_dfs_fast[pt][today]['Close']
+                pos['last_px'] = px 
+            else:
+                px = pos.get('last_px', pos['entry']) 
+            today_equity += pos['qty'] * px
             
-        total_exposure += (invested_capital / today_equity * 100) if today_equity > 0 else 0.0
+        current_equity = today_equity 
+        invested_capital = today_equity - cash
+        exposure_pct = (invested_capital / today_equity) * 100 if today_equity > 0 else 0
+        total_exposure += exposure_pct
+
+        strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
+        
+        if benchmark_data and today in benchmark_data:
+            current_bm_px = benchmark_data[today]['Close']
+            if benchmark_start_price is None:
+                benchmark_start_price = current_bm_px
+                bm_peak_price = current_bm_px
+            if benchmark_start_price and benchmark_start_price > 0:
+                bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100
+            if bm_peak_price is not None:
+                if current_bm_px > bm_peak_price:
+                    bm_peak_price = current_bm_px
+                current_bm_drawdown = (bm_peak_price - current_bm_px) / bm_peak_price * 100
+                if current_bm_drawdown > bm_max_drawdown:
+                    bm_max_drawdown = current_bm_drawdown
+            
+        if not is_training:
+            equity_curve.append({
+                "Date": today.strftime('%Y-%m-%d'), 
+                "Equity": today_equity,
+                "Invested_Amount": invested_capital, 
+                "Exposure_Pct": exposure_pct,
+                "Strategy_Return_Pct": strategy_ret_pct,
+                f"Benchmark_{benchmark_ticker}_Pct": bm_ret_pct
+            })
             
         if today_equity > peak_equity: peak_equity = today_equity
         drawdown = (peak_equity - today_equity) / peak_equity * 100
         if drawdown > max_drawdown: max_drawdown = drawdown
-            
-        if benchmark_data and today in benchmark_data:
-            curr_bm_px = benchmark_data[today]['Close']
-            last_bm_px = curr_bm_px
-            if curr_bm_px > bm_peak_px: bm_peak_px = curr_bm_px
-            bm_drawdown = (bm_peak_px - curr_bm_px) / bm_peak_px * 100
-            if bm_drawdown > bm_mdd: bm_mdd = bm_drawdown
-            
-        if not is_training:
-            strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
-            bm_ret_pct = ((last_bm_px - bm_start_px) / bm_start_px * 100) if (bm_start_px and last_bm_px) else 0.0
-            exposure_pct = (invested_capital / today_equity) * 100 if today_equity > 0 else 0
-            equity_curve.append({"Date": today.strftime('%Y-%m-%d'), "Equity": today_equity, "Invested_Amount": invested_capital, "Exposure_Pct": exposure_pct, "Strategy_Return_Pct": strategy_ret_pct, "Benchmark_Pct": bm_ret_pct})
 
-    total_return_pct = ((today_equity - initial_capital) / initial_capital) * 100
-    avg_exposure = total_exposure / sim_days if sim_days > 0 else 0.0
-    bm_return_pct = ((last_bm_px - bm_start_px) / bm_start_px * 100) if (bm_start_px and last_bm_px) else 0.0
+    total_return = (today_equity - initial_capital) / initial_capital * 100
 
     if is_training:
-        if closed_trades_stats:
+        trade_count = len(closed_trades_stats)
+        if trade_count > 0:
             wins = [t for t in closed_trades_stats if t['pnl'] > 0]
             losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
-            win_rate = (len(wins) / len(closed_trades_stats)) * 100
-            avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if wins else 0
-            avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if losses else 0
-            pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0)
+            win_rate = (len(wins) / trade_count) * 100
+            
+            avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
+            avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
+            # Optimizer 內部不需要對 payoff 進行防呆限制，僅忠實回報
+            pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else 0.0
 
-            # 🌟 算法切換開關 (Training 模式)
-            # ✅ 方法 A: 嚴格 R_Multiple 期望值
-            # pf_ev = sum(t['r_mult'] for t in closed_trades_stats) / len(closed_trades_stats)
-            # ✅ 方法 B: 傳統實際盈虧期望值 (Unmark 以下兩行可切換)
-            pf_ev = (win_rate / 100 * pf_payoff) - (1 - win_rate / 100)
+            if EV_CALC_METHOD == 'B':
+                payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+                pf_ev = (win_rate / 100 * payoff_for_ev) - (1 - win_rate / 100)
+            else:
+                pf_ev = sum(t['r_mult'] for t in closed_trades_stats) / trade_count
         else:
             win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
-        return total_return_pct, max_drawdown, trade_count, today_equity, avg_exposure, bm_return_pct, bm_mdd, win_rate, pf_ev, pf_payoff
+            
+        avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff
 
     else:
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
-        closed_trades = df_trades[~df_trades['Type'].str.contains('買進|換入', regex=True, na=False)] if not df_trades.empty else pd.DataFrame()
+        
+        closed_trades = df_trades[df_trades['PnL'] != 0] if not df_trades.empty else pd.DataFrame()
+        
         if len(closed_trades) > 0:
             win_rate = len(closed_trades[closed_trades['PnL'] > 0]) / len(closed_trades) * 100
             wins = closed_trades[closed_trades['R_Multiple'] > 0]
             losses = closed_trades[closed_trades['R_Multiple'] <= 0]
+            
+            # 🌟 嚴格對齊原版：這裡僅計算數學結果，不加 min(10.0)
             avg_win_r = wins['R_Multiple'].mean() if len(wins) > 0 else 0
             avg_loss_r = abs(losses['R_Multiple'].mean()) if len(losses) > 0 else 0
             pf_payoff = avg_win_r / avg_loss_r if avg_loss_r > 0 else 0.0
 
-            # 🌟 算法切換開關 (Sim 報表模式)
-            # ✅ 方法 A: 嚴格 R_Multiple 期望值
-            # pf_ev = closed_trades['R_Multiple'].mean() 
-            # ✅ 方法 B: 傳統實際盈虧期望值 (Unmark 以下兩行可切換)
-            pf_ev = (win_rate / 100 * pf_payoff) - (1 - win_rate / 100)
+            if EV_CALC_METHOD == 'B':
+                payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+                pf_ev = (win_rate / 100 * payoff_for_ev) - (1 - win_rate / 100)
+            else:
+                pf_ev = closed_trades['R_Multiple'].mean() 
         else:
             win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
-        return df_equity, df_trades, total_return_pct, max_drawdown, win_rate, pf_ev, pf_payoff, today_equity, bm_return_pct, bm_mdd
+            
+        final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
+        return df_equity, df_trades, total_return, max_drawdown, win_rate, pf_ev, pf_payoff, today_equity, final_bm_return, bm_max_drawdown

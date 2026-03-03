@@ -60,8 +60,13 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
 
     print(" " * 120, end="\r") 
+    
+    # 🌟 核心修正：明確指定 kwargs，避免巨型字典轉字串拖慢效能！
     df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd = run_portfolio_timeline(
-        all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_data, is_training=False
+        all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
+        benchmark_ticker=benchmark_ticker, 
+        benchmark_data=benchmark_data, 
+        is_training=False
     )
     return df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd
 
@@ -111,7 +116,6 @@ if __name__ == "__main__":
     romd_diff_str = f"+{romd_diff:.2f}" if romd_diff > 0 else f"{romd_diff:.2f}"
     romd_diff_color = C_GREEN if romd_diff > 0 else C_RED
     
-    # 🌟 精準計算平倉次數
     closed_trades_count = len(df_tr[~df_tr['Type'].str.contains('買進|換入', regex=True, na=False)]) if not df_tr.empty else 0
 
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
@@ -147,7 +151,8 @@ if __name__ == "__main__":
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq['Strategy_Return_Pct'], mode='lines', name='V16 尊爵系統報酬 (%)', line=dict(color='#ff3333', width=3)))
         
-        bm_col = "Benchmark_Pct"
+        # 🌟 核心修正：還原 HTML 讀取正確的大盤欄位名稱
+        bm_col = f"Benchmark_{USER_BENCHMARK}_Pct"
         if bm_col in df_eq.columns:
             fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq[bm_col], mode='lines', name=f'同期大盤 {USER_BENCHMARK} (%)', line=dict(color='#4dabf5', width=2), opacity=0.8))
             
