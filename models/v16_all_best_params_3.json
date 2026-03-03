@@ -1,18 +1,13 @@
 {
     "use_bb": true,
-    "use_kc": true,
-    "use_vol": true,
-    "atr_len": 6,
-    "atr_times_init": 3.5,
-    "atr_times_trail": 3.7,
+    "use_kc": false,
+    "use_vol": false,
+    "atr_len": 8,
+    "atr_times_init": 1.9,
+    "atr_times_trail": 3.2,
     "atr_buy_tol": 1.3000000000000003,
-    "high_len": 145,
-    "tp_percent": 0.6,
-    "bb_len": 20,
-    "bb_mult": 2.2,
-    "kc_len": 28,
-    "kc_mult": 1.6,
-    "vol_short_len": 4,
-    "vol_long_len": 17
+    "high_len": 150,
+    "tp_percent": 0.37,
+    "bb_len": 22,
+    "bb_mult": 1.5
 }
-
