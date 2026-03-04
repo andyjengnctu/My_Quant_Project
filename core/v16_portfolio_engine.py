@@ -87,7 +87,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     current_equity = initial_capital 
     total_exposure = 0.0
     sim_days = 0
-
+    total_missed_buys = 0  # 🌟 新增：錯失買點計數器
+    
     benchmark_start_price = None
     bm_peak_price = None     
     bm_max_drawdown = 0.0    
@@ -164,13 +165,18 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             # 🌟 實戰防線：一字漲停死鎖過濾器
             is_locked_limit_up = (t_row['Open'] == t_row['High']) and (t_row['High'] == t_row['Low']) and (t_row['Low'] == t_row['Close']) and (t_row['Close'] > y_row['Close'])
             
-            if y_row['is_setup'] and t_row['Low'] <= y_row['buy_limit'] and not is_locked_limit_up:
-                is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday)
-                if is_candidate:
-                    buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
-                    sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * params.atr_times_init))
-                    candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev})
-
+            # 第一層：確保前一天「真的有」買進訊號
+            if y_row['is_setup']:
+                # 第二層：判斷今天有沒有成功跌到買價，且沒被一字漲停鎖死
+                if t_row['Low'] <= y_row['buy_limit'] and not is_locked_limit_up:
+                    is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday)
+                    if is_candidate:
+                        buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
+                        sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * params.atr_times_init))
+                        candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev})
+                else:
+                    # 只在「有訊號」卻「沒買到」時，才觸發錯失加 1
+                    total_missed_buys += 1
         if candidates_today:
             candidates_today.sort(key=lambda x: x['ev'], reverse=True)
             for cand in candidates_today:
@@ -295,8 +301,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
             
         avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff
-
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys
     else:
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
@@ -322,4 +327,4 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
             
         final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-        return df_equity, df_trades, total_return, max_drawdown, win_rate, pf_ev, pf_payoff, today_equity, final_bm_return, bm_max_drawdown
+        return df_equity, df_trades, total_return, max_drawdown, win_rate, pf_ev, pf_payoff, today_equity, final_bm_return, bm_max_drawdown, total_missed_buys

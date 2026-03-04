@@ -60,13 +60,13 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
 
     print(" " * 120, end="\r") 
-    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd = run_portfolio_timeline(
+    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
         benchmark_ticker=benchmark_ticker, 
         benchmark_data=benchmark_data, 
         is_training=False
     )
-    return df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd
+    return df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -82,7 +82,7 @@ if __name__ == "__main__":
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
@@ -122,7 +122,7 @@ if __name__ == "__main__":
     print(f"⚙️ 基礎設定")
     print(f"--------------------------------------------------------------------------------")
     print(f"模式: {mode_display} | 最大持股: {USER_MAX_POS} 檔 | 回測總耗時: {end_time - start_time:.2f} 秒")
-    print(f"總交易紀錄: {closed_trades_count} 筆 (明細流水帳 {len(df_tr)} 筆) | 最終資產: {final_eq:,.0f} 元")
+    print(f"總交易紀錄: {closed_trades_count} 筆 (錯失買點: {total_missed} 次) | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
     print(f"--------------------------------------------------------------------------------")
     print(f"🏆 績效與風險對比表")

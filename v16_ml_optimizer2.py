@@ -58,17 +58,17 @@ def objective(trial):
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
     ai_params = V16StrategyParams(
-        atr_len = trial.suggest_int("atr_len", 3, 25), 
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
-        atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
-        atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
+        atr_len = trial.suggest_int("atr_len", 1, 25), 
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 5.0, step=0.1),
+        atr_times_trail = trial.suggest_float("atr_times_trail", 1.0, 5.0, step=0.1), 
+        atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 5.0, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 250, step=1), 
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
-        bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
-        bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
-        kc_len = trial.suggest_int("kc_len", 3, 30, step=1) if ai_use_kc else 20,
-        kc_mult = trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0, 
+        bb_len = trial.suggest_int("bb_len", 1, 30, step=1) if ai_use_bb else 20,
+        bb_mult = trial.suggest_float("bb_mult", 1.0, 3.5, step=0.1) if ai_use_bb else 2.0,
+        kc_len = trial.suggest_int("kc_len", 1, 30, step=1) if ai_use_kc else 20,
+        kc_mult = trial.suggest_float("kc_mult", 1.0, 3.5, step=0.1) if ai_use_kc else 2.0, 
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
         use_compounding = True 
@@ -85,19 +85,17 @@ def objective(trial):
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
     
-    ret_pct, mdd, t_count, final_eq, avg_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff = run_portfolio_timeline(
+    ret_pct, mdd, t_count, final_eq, avg_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params, 
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION, 
-        benchmark_ticker="0050", 
-        benchmark_data=benchmark_data, 
-        is_training=True
+        benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True
     )
     
     if mdd > 45.0: trial.set_user_attr("fail_reason", f"回撤過大 ({mdd:.1f}%)"); return -9999.0
     if t_count < (len(sorted_dates) / 10): trial.set_user_attr("fail_reason", f"次數過低 ({t_count}次)"); return -9999.0
     if ret_pct <= 0: trial.set_user_attr("fail_reason", f"最終虧損 ({ret_pct:.1f}%)"); return -9999.0
     final_romd = ret_pct / (mdd + 0.1)
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed)
     return final_romd
 
 def monitoring_callback(study, trial):
@@ -133,7 +131,7 @@ def monitoring_callback(study, trial):
         print(f"\n{C_RED}🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試){C_RESET}")
         print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
         print(f"模式: {mode_display} | 最大持股: {TRAIN_MAX_POSITIONS} 檔")
-        print(f"總交易紀錄: {attrs['pf_trades']} 筆 | 最終資產: {attrs['final_equity']:,.0f} 元")
+        print(f"總交易紀錄: {attrs['pf_trades']} 筆 (錯失買點: {attrs.get('missed_buys', 0)} 次) | 最終資產: {attrs['final_equity']:,.0f} 元")
         print(f"平均資金水位: {attrs['avg_exposure']:.2f} %")
         print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
         print(f"🏆 績效與風險對比表")
@@ -199,7 +197,7 @@ if __name__ == "__main__":
                 print(f"{C_RED}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){C_RESET}")
                 print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
                 print(f"模式: {mode_display} | 最大持股: {TRAIN_MAX_POSITIONS} 檔")
-                print(f"總交易紀錄: {attrs['pf_trades']} 筆 | 最終資產: {attrs['final_equity']:,.0f} 元")
+                print(f"總交易紀錄: {attrs['pf_trades']} 筆 (錯失買點: {attrs.get('missed_buys', 0)} 次) | 最終資產: {attrs['final_equity']:,.0f} 元")
                 print(f"平均資金水位: {attrs['avg_exposure']:.2f} %")
                 print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
                 print(f"🏆 績效與風險對比表")
