@@ -58,11 +58,11 @@ def objective(trial):
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
     ai_params = V16StrategyParams(
-        atr_len = trial.suggest_int("atr_len", 3, 20), 
+        atr_len = trial.suggest_int("atr_len", 3, 25), 
         atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
-        atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 1.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 200, step=1), 
+        atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
+        high_len = trial.suggest_int("high_len", 40, 250, step=1), 
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
         bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,

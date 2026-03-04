@@ -22,7 +22,7 @@ def prep_stock_data_and_trades(df, params):
     df['ind_sell_signal'] = sellCondition
     df['buy_limit'] = buy_limits
 
-    O, L, C = df['Open'].values, df['Low'].values, df['Close'].values
+    O, H, L, C = df['Open'].values, df['High'].values, df['Low'].values, df['Close'].values
     trade_logs = []
     in_position = False
     entry_price, sl_price, initial_sl_price = 0.0, 0.0, 0.0
@@ -31,6 +31,7 @@ def prep_stock_data_and_trades(df, params):
     for i in range(1, len(df)):
         if np.isnan(ATR_main[i-1]): continue
         if in_position:
+            # ...(原本的平倉邏輯保持完全不變)
             if sellCondition[i-1] or L[i] <= sl_price:
                 exit_price = O[i] if sellCondition[i-1] else min(O[i], sl_price)
                 initial_risk = entry_price - initial_sl_price
@@ -43,8 +44,11 @@ def prep_stock_data_and_trades(df, params):
                 new_sl = C[i] - (ATR_main[i] * params.atr_times_trail)
                 if new_sl > sl_price: sl_price = new_sl
         else:
-            if buyCondition[i-1] and L[i] <= buy_limits[i-1]:
-                entry_price = min(O[i], buy_limits[i-1])
+            # 🌟 實戰防線：一字漲停死鎖過濾器
+            is_locked_limit_up = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] > C[i-1])
+            
+            if buyCondition[i-1] and L[i] <= buy_limits[i-1] and not is_locked_limit_up:
+                entry_price = min(O[i], buy_limits[i-1]) # 遵守守則4: 絕對不可加上 adjust_to_tick
                 initial_sl_price = entry_price - (ATR_main[i-1] * params.atr_times_init)
                 sl_price = initial_sl_price
                 in_position = True
@@ -156,7 +160,11 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             if today not in fast_df or yesterday not in fast_df: continue
             
             y_row, t_row = fast_df[yesterday], fast_df[today]
-            if y_row['is_setup'] and t_row['Low'] <= y_row['buy_limit']:
+            
+            # 🌟 實戰防線：一字漲停死鎖過濾器
+            is_locked_limit_up = (t_row['Open'] == t_row['High']) and (t_row['High'] == t_row['Low']) and (t_row['Low'] == t_row['Close']) and (t_row['Close'] > y_row['Close'])
+            
+            if y_row['is_setup'] and t_row['Low'] <= y_row['buy_limit'] and not is_locked_limit_up:
                 is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday)
                 if is_candidate:
                     buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))

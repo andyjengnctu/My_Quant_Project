@@ -181,6 +181,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
+
+        # 🌟 實戰防線：一字漲停死鎖過濾器 (開=高=低=收，且大於昨日收盤)
+        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
+
         buyTriggered = isSetup_prev and L[j] <= buyLimitPrice
         
         if isSetup_prev and not buyTriggered: missedBuyCount += 1

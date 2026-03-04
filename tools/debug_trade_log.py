@@ -106,8 +106,9 @@ def run_debug_backtest(df, ticker, params):
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
-        buyTriggered = isSetup_prev and L[j] <= buyLimitPrice
-            
+        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
+        buyTriggered = isSetup_prev and L[j] <= buyLimitPrice and not is_locked_limit_up            
+        
         if buyTriggered:
             buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
             initialStopLossPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_init)
