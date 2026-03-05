@@ -184,13 +184,19 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     if is_candidate:
                         buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
                         sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * params.atr_times_init))
-                        candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev})
+                        
+                        # 🌟 新增：預先計算「預估投入資金」，用於買入順序排序
+                        proj_qty = calc_position_size(buy_price, sl_price, sizing_equity, params.fixed_risk, params)
+                        proj_cost = calc_entry_price(buy_price, proj_qty, params) * proj_qty if proj_qty > 0 else 0.0
+                        
+                        candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev, 'proj_cost': proj_cost})
                 else:
                     # 只在「有訊號」卻「沒買到」時，才觸發錯失加 1
                     total_missed_buys += 1
                     
         if candidates_today:
-            candidates_today.sort(key=lambda x: x['ev'], reverse=True)
+            # 🌟 改變排序邏輯：從依照 EV 大小，改為依照「預估投入資產 (proj_cost)」由大到小排序
+            candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
                     qty = calc_position_size(cand['buy_price'], cand['sl_price'], sizing_equity, params.fixed_risk, params)
