@@ -2,12 +2,12 @@
     "use_bb": true,
     "use_kc": false,
     "use_vol": false,
-    "atr_len": 19,
-    "atr_times_init": 2.7,
+    "atr_len": 18,
+    "atr_times_init": 2.6,
     "atr_times_trail": 2.5,
-    "atr_buy_tol": 1.1,
-    "high_len": 169,
-    "tp_percent": 0.01,
-    "bb_len": 18,
-    "bb_mult": 2.4000000000000004
+    "atr_buy_tol": 2.5000000000000004,
+    "high_len": 242,
+    "tp_percent": 0.07,
+    "bb_len": 20,
+    "bb_mult": 2.3
 }
