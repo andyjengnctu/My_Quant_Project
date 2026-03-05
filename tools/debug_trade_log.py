@@ -174,31 +174,35 @@ def run_debug_backtest(df, ticker, params):
                     isTakeProfitHit = False
                 
             if isStopHit or isIndicatorSell:
-                sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
-                sellQty = positionSize
-                sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
-                pnl_final = (sellNetPrice - entryPrice) * sellQty
-                profitValue = cumulativeProfit + pnl_final
+                # 🌟 實戰防線：一字跌停死鎖過濾器
+                is_locked_limit_down = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] < C[j-1])
                 
-                action_str = "停損殺出" if isStopHit else "指標賣出"
-                
-                # 📝 寫入清倉明細
-                trade_logs.append({
-                    "日期": Dates[j].strftime('%Y-%m-%d'),
-                    "動作": action_str,
-                    "成交價": sellPrice,
-                    "含息成本價": sellNetPrice,
-                    "股數": sellQty,
-                    "投入總金額": sellNetPrice * sellQty,
-                    "設定停損價": activeStopPrice,
-                    "半倉停利價": np.nan,
-                    "ATR(前日)": ATR_main[j-1],
-                    "單筆實質損益": pnl_final
-                })
-                
-                currentCapital += profitValue
-                positionSize = 0
-                soldHalf = False
+                if not is_locked_limit_down:
+                    sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
+                    sellQty = positionSize
+                    sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
+                    pnl_final = (sellNetPrice - entryPrice) * sellQty
+                    profitValue = cumulativeProfit + pnl_final
+                    
+                    action_str = "停損殺出" if isStopHit else "指標賣出"
+                    
+                    # 📝 寫入清倉明細
+                    trade_logs.append({
+                        "日期": Dates[j].strftime('%Y-%m-%d'),
+                        "動作": action_str,
+                        "成交價": sellPrice,
+                        "含息成本價": sellNetPrice,
+                        "股數": sellQty,
+                        "投入總金額": sellNetPrice * sellQty,
+                        "設定停損價": activeStopPrice,
+                        "半倉停利價": np.nan,
+                        "ATR(前日)": ATR_main[j-1],
+                        "單筆實質損益": pnl_final
+                    })
+                    
+                    currentCapital += profitValue
+                    positionSize = 0
+                    soldHalf = False
 
     if not trade_logs:
         print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
