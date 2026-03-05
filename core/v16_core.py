@@ -162,6 +162,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     tradeCount, fullWins = 0, 0
     totalProfit, totalLoss = 0.0, 0.0
     missedBuyCount = 0
+    missedSellCount = 0 # 🌟 新增：錯失賣點計數器
     peakCapital, maxDrawdownPct = currentCapital, 0.0
 
     initial_risk_total = 0.0
@@ -229,24 +230,30 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                     isTakeProfitHit = False
                 
             if isStopHit or isIndicatorSell:
-                sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
-                sellQty = positionSize
-                sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
-                profitValue = cumulativeProfit + (sellNetPrice - entryPrice) * sellQty
+                # 🌟 實戰防線：一字跌停死鎖過濾器
+                is_locked_limit_down = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] < C[j-1])
                 
-                trade_r_mult = profitValue / initial_risk_total
-                total_r_multiple += trade_r_mult
-                
-                if profitValue > 0:
-                    fullWins += 1
-                    totalProfit += profitValue
+                if is_locked_limit_down:
+                    missedSellCount += 1  # 跌停鎖死，賣不掉只能繼續抱著
                 else:
-                    totalLoss += abs(profitValue)
+                    sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
+                    sellQty = positionSize
+                    sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
+                    profitValue = cumulativeProfit + (sellNetPrice - entryPrice) * sellQty
                     
-                currentCapital += profitValue
-                positionSize = 0
-                soldHalf = False
-                tradeCount += 1 
+                    trade_r_mult = profitValue / initial_risk_total
+                    total_r_multiple += trade_r_mult
+                    
+                    if profitValue > 0:
+                        fullWins += 1
+                        totalProfit += profitValue
+                    else:
+                        totalLoss += abs(profitValue)
+                        
+                    currentCapital += profitValue
+                    positionSize = 0
+                    soldHalf = False
+                    tradeCount += 1
                 
         currentEquity = currentCapital
         if positionSize > 0:
@@ -262,10 +269,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
+    #payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
+    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else 0.0    
     
     # 🌟 核心修正：將 core 的 EV 算法還原回 TV 盈虧比算法
-    expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
+    #expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
+    expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     netProfitValue = currentCapital - params.initial_capital  
@@ -285,7 +294,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "net_profit_value": netProfitValue, 
+        "missed_sells": missedSellCount, # 🌟 補上回傳        "net_profit_value": netProfitValue, 
         "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
         "expected_value": expectedValue, 
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
