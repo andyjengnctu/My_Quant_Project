@@ -3,9 +3,6 @@ import numpy as np
 import math
 from core.v16_config import V16StrategyParams
 
-# ==========================================
-# 0. 輔助函數
-# ==========================================
 def tv_round(number): return math.floor(number + 0.5)
 def get_tick_size(price):
     if price < 1: return 0.001
@@ -35,9 +32,6 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         return int(math.floor(min(cap * riskPct / riskPerUnit, maxQty)))
     return 0
 
-# ==========================================
-# 1. 100% 完美復刻 TradingView 核心數學
-# ==========================================
 def tv_rma(source, length):
     rma = np.full_like(source, np.nan)
     valid_idx = np.where(~np.isnan(source))[0]
@@ -102,10 +96,7 @@ def tv_supertrend(high, low, close, atr, multiplier):
         else: direction[i] = direction[i-1]
     return direction
 
-# ==========================================
-# 2. 回測核心引擎 (單利雙引擎 + 持倉天數紀錄)
-# ==========================================
-def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
+def generate_signals(df, params):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
 
@@ -147,6 +138,19 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
     sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
 
+    buy_limits = np.full_like(C, np.nan)
+    for i in range(len(C)):
+        if buyCondition[i]:
+            buy_limits[i] = adjust_to_tick(C[i] + ATR_main[i] * params.atr_buy_tol)
+
+    return ATR_main, buyCondition, sellCondition, buy_limits
+
+def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
+    H, L, C = df['High'].values, df['Low'].values, df['Close'].values
+    O, V = df['Open'].values, df['Volume'].values
+
+    ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
+
     positionSize = 0
     buyPrice, entryPrice = np.nan, np.nan
     initialStopLossPrice, trailingStopPrice = np.nan, np.nan
@@ -155,7 +159,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     cumulativeProfit = 0.0
 
     currentCapital = params.initial_capital
-    
     tradeCount, fullWins = 0, 0
     totalProfit, totalLoss = 0.0, 0.0
     missedBuyCount = 0
@@ -163,14 +166,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     initial_risk_total = 0.0
     total_r_multiple = 0.0
-    total_bars_held = 0  # 🌟 新增：總持倉天數計數器
+    total_bars_held = 0  
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
         
         pos_start_of_current_bar = positionSize
-        
-        # 🌟 新增：只要今天手上有股票，持倉天數就 +1
         if positionSize > 0:
             total_bars_held += 1
             
@@ -180,6 +181,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
+
+        # 🌟 實戰防線：一字漲停死鎖過濾器 (開=高=低=收，且大於昨日收盤)
+        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
+
         buyTriggered = isSetup_prev and L[j] <= buyLimitPrice
         
         if isSetup_prev and not buyTriggered: missedBuyCount += 1
@@ -190,7 +195,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             trailingStopPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_trail)
             soldHalf, cumulativeProfit = False, 0.0
             
-            # 單利/複利智慧切換
             sizing_capital = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyPrice, initialStopLossPrice, sizing_capital, params.fixed_risk, params)
             
@@ -258,20 +262,13 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    # payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
     
-    # ❌ 刪除這行 (新版嚴格 R 倍數 EV)
-    # 算法雖然最正確，但ai會傾向讓initial_risk盡可能大，不被停損洗卓，使得profitValue能長期盡可能大，導入win_rate小, mdd大
-    # expectedValue = total_r_multiple / tradeCount if tradeCount > 0 else 0.0
-    
-    # ✅ 換回這行 (舊版實際盈虧期望值 EV)
-    # 恢復您原本在 TV 面板上的標準算法，這能真實反映「截斷虧損、讓利潤奔跑」的實力
-    # 雖然不是每預計風險R的獲利倍數，確是每單位實虧損的帶來的獲利倍數
+    # 🌟 核心修正：將 core 的 EV 算法還原回 TV 盈虧比算法
     expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
-    netProfitValue = currentCapital - params.initial_capital # 🌟 新增：實際賺到的真金白銀 (絕對金額)    
+    netProfitValue = currentCapital - params.initial_capital  
     
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
@@ -284,16 +281,15 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     active_stop_today = max(initialStopLossPrice, trailingStopPrice) if positionSize > 0 else np.nan
     is_in_buy_zone = (positionSize > 0) and (not soldHalf) and (C[-1] > active_stop_today) and (C[-1] < sellPriceHalf)
 
-    # 🌟 新增：結算平均單筆持倉天數
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "net_profit_value": netProfitValue, # 🌟 送出絕對金額
+        "net_profit_value": netProfitValue, 
         "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
         "expected_value": expectedValue, 
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, "is_in_buy_zone": is_in_buy_zone,
         "active_stop": active_stop_today, "target_half": sellPriceHalf, "current_position": positionSize,
-        "avg_bars_held": avg_bars_held  # 🌟 送出平均天數
+        "avg_bars_held": avg_bars_held  
     }
