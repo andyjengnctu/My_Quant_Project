@@ -125,6 +125,7 @@ if __name__ == "__main__":
     print(f"總交易紀錄: {closed_trades_count} 筆 (錯失: 買 {total_missed} | 賣 {total_missed_sells}) | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
     print(f"--------------------------------------------------------------------------------")
+    
     print(f"| 指標項目         | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
     print(f"|------------------|----------------|-----------------|----------------|")
     print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
@@ -134,7 +135,19 @@ if __name__ == "__main__":
     print(f"| 盈虧風報比       | {pf_payoff:>6.2f}         | -               | -              |")
     print(f"| 實戰期望值(EV)   | {pf_ev:>6.2f} R       | -               | -              |")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    
+
+    # 🌟 新增：完美對接守則 8，將 AI 大腦的參數展現於報表面板上
+    print(f"🧠 AI 模型參數 (核心大腦)")
+    print(f"--------------------------------------------------------------------------------")
+    print(f"核心: 突破 {params.high_len} 日新高 | ATR {params.atr_len} 日 | 半倉停利 {getattr(params, 'tp_percent', 0.5)*100:.0f}%")
+    print(f"風控: 掛單 +{getattr(params, 'atr_buy_tol', 1.5):.1f} ATR | 停損 -{params.atr_times_init:.1f} ATR | 追蹤 -{params.atr_times_trail:.1f} ATR")
+    bb_str = f"啟用 ({getattr(params, 'bb_len', 20)}日, {getattr(params, 'bb_mult', 2.0):.1f}x)" if getattr(params, 'use_bb', False) else "關閉"
+    kc_str = f"啟用 ({getattr(params, 'kc_len', 20)}日, {getattr(params, 'kc_mult', 2.0):.1f}x)" if getattr(params, 'use_kc', False) else "關閉"
+    vol_str = f"啟用 (短{getattr(params, 'vol_short_len', 5)}>長{getattr(params, 'vol_long_len', 19)})" if getattr(params, 'use_vol', False) else "關閉"
+    print(f"濾網: 布林(BB) {bb_str} | 阿肯那(KC) {kc_str} | 均量 {vol_str}")
+    print(f"歷史: 交易 >= {getattr(params, 'min_history_trades', 1)} 次 | 勝率 >= {getattr(params, 'min_history_win_rate', 0.3)*100:.0f}% | EV >= {getattr(params, 'min_history_ev', 0.0):.2f} R")
+    print(f"--------------------------------------------------------------------------------")
+
     with pd.ExcelWriter("outputs/V16_Portfolio_Report.xlsx") as writer:
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)

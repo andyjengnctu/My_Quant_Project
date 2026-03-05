@@ -37,3 +37,8 @@ class V16StrategyParams:
     
     # 🌟 6. 核心環境開關：複利開關 (預設為 True，讓您的 Portfolio 模擬器能正常滾雪球)
     use_compounding: bool = True
+
+    # 7. 歷史績效濾網 (AI 將接管這些設定)
+    min_history_trades: int = 1         # 最少歷史交易次數
+    min_history_ev: float = 0.0         # 最低歷史期望值 (R)
+    min_history_win_rate: float = 0.30  # 最低歷史勝率 (0.0 ~ 1.0)

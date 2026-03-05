@@ -2,10 +2,6 @@ import pandas as pd
 import numpy as np
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price
 
-MIN_HISTORY_TRADES = 1       
-MIN_HISTORY_EV = 0.0         
-MIN_HISTORY_WIN_RATE = 0.50  
-
 # ==========================================
 # 🌟 期望值 (EV) 算法全域切換開關
 # 'A' = 嚴格 R_Multiple 期望值 (Mean R)
@@ -31,7 +27,6 @@ def prep_stock_data_and_trades(df, params):
     for i in range(1, len(df)):
         if np.isnan(ATR_main[i-1]): continue
         if in_position:
-            # 🌟 實戰防線：一字跌停死鎖過濾器
             is_locked_limit_down = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] < C[i-1])
             
             if sellCondition[i-1] or L[i] <= sl_price:
@@ -43,25 +38,26 @@ def prep_stock_data_and_trades(df, params):
                     
                     trade_logs.append({'exit_date': pd.to_datetime(dates[i]), 'pnl': (exit_price - entry_price) / entry_price, 'r_mult': r_multiple})
                     in_position = False
-                # else: 跌停鎖死，被迫繼續抱著，不動作
             else:
                 new_sl = C[i] - (ATR_main[i] * params.atr_times_trail)
                 if new_sl > sl_price: sl_price = new_sl
         else:
-            # 🌟 實戰防線：一字漲停死鎖過濾器
             is_locked_limit_up = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] > C[i-1])
             
             if buyCondition[i-1] and L[i] <= buy_limits[i-1] and not is_locked_limit_up:
-                entry_price = min(O[i], buy_limits[i-1]) # 遵守守則4: 絕對不可加上 adjust_to_tick
+                entry_price = min(O[i], buy_limits[i-1]) 
                 initial_sl_price = entry_price - (ATR_main[i-1] * params.atr_times_init)
                 sl_price = initial_sl_price
                 in_position = True
     return df, trade_logs
 
-def get_pit_stats(trade_logs, current_date):
+# 🌟 守則 8 對接：加入 params 參數，讓 AI 控制歷史門檻
+def get_pit_stats(trade_logs, current_date, params):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
-    if trade_count < MIN_HISTORY_TRADES: return False, 0.0, 0.0 
+    
+    # 🌟 完全改吃 params
+    if trade_count < getattr(params, 'min_history_trades', 1): return False, 0.0, 0.0 
     
     wins = [t for t in past_trades if t['pnl'] > 0]
     win_rate = len(wins) / trade_count
@@ -75,7 +71,8 @@ def get_pit_stats(trade_logs, current_date):
     else:
         ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
 
-    is_candidate = (ev_to_sort > MIN_HISTORY_EV) and (win_rate >= MIN_HISTORY_WIN_RATE)
+    # 🌟 完全改吃 params
+    is_candidate = (ev_to_sort > getattr(params, 'min_history_ev', 0.0)) and (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
     return is_candidate, ev_to_sort, win_rate
 
 def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
@@ -91,8 +88,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     current_equity = initial_capital 
     total_exposure = 0.0
     sim_days = 0
-    total_missed_buys = 0  # 🌟 新增：錯失買點計數器
-    total_missed_sells = 0 # 🌟 新增：錯失賣點計數器
+    total_missed_buys = 0  
+    total_missed_sells = 0 
     
     benchmark_start_price = None
     bm_peak_price = None     
@@ -121,7 +118,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             row, y_row = fast_df[today], fast_df[yesterday] if yesterday in fast_df else fast_df[today]
             is_ind_sell = y_row['ind_sell_signal']
             
-            # 🌟 實戰防線：一字跌停死鎖過濾器
             is_locked_limit_down = (row['Open'] == row['High']) and (row['High'] == row['Low']) and (row['Low'] == row['Close']) and (row['Close'] < y_row['Close'])
             
             if is_ind_sell or row['Low'] <= pos['sl']:
@@ -143,7 +139,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     tickers_to_remove.append(ticker)
                     continue
                 else:
-                    total_missed_sells += 1 # 跌停鎖死，紀錄一次錯失賣點
+                    total_missed_sells += 1 
                 
             if not pos['sold_half'] and row['High'] >= pos['tp_half']:
                 sell_qty = int(np.floor(pos['qty'] * params.tp_percent))
@@ -173,29 +169,24 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             
             y_row, t_row = fast_df[yesterday], fast_df[today]
             
-            # 🌟 實戰防線：一字漲停死鎖過濾器
             is_locked_limit_up = (t_row['Open'] == t_row['High']) and (t_row['High'] == t_row['Low']) and (t_row['Low'] == t_row['Close']) and (t_row['Close'] > y_row['Close'])
             
-            # 第一層：確保前一天「真的有」買進訊號
             if y_row['is_setup']:
-                # 第二層：判斷今天有沒有成功跌到買價，且沒被一字漲停鎖死
                 if t_row['Low'] <= y_row['buy_limit'] and not is_locked_limit_up:
-                    is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday)
+                    # 🌟 守則 8 對接：傳遞 params 進入 stats
+                    is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday, params)
                     if is_candidate:
                         buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
                         sl_price = adjust_to_tick(buy_price - (y_row['ATR'] * params.atr_times_init))
                         
-                        # 🌟 新增：預先計算「預估投入資金」，用於買入順序排序
                         proj_qty = calc_position_size(buy_price, sl_price, sizing_equity, params.fixed_risk, params)
                         proj_cost = calc_entry_price(buy_price, proj_qty, params) * proj_qty if proj_qty > 0 else 0.0
                         
                         candidates_today.append({'ticker': ticker, 'buy_price': buy_price, 'sl_price': sl_price, 'ev': ev, 'proj_cost': proj_cost})
                 else:
-                    # 只在「有訊號」卻「沒買到」時，才觸發錯失加 1
                     total_missed_buys += 1
                     
         if candidates_today:
-            # 🌟 改變排序邏輯：從依照 EV 大小，改為依照「預估投入資產 (proj_cost)」由大到小排序
             candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
@@ -217,7 +208,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         if today not in all_dfs_fast[pt]: continue 
                         ret = (all_dfs_fast[pt][today]['Close'] - pos['entry']) / pos['entry']
                         if ret < lowest_return:
-                            _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], yesterday)
+                            # 🌟 守則 8 對接：傳遞 params 進入 stats
+                            _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], yesterday, params)
                             if holding_ev < cand['ev']:
                                 lowest_return = ret
                                 weakest_ticker = pt
@@ -314,7 +306,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             
             avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
             avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
-            # 報表結算不加 min(10) 天花板，如實反映
             pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else 0.0
 
             if EV_CALC_METHOD == 'B':
@@ -331,7 +322,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
         
-        # 🌟 核心邊界值修復：確保過濾條件與 Training Mode 完全一致 (包含剛好不賺不賠的平倉)
         closed_trades = df_trades[~df_trades['Type'].str.contains('買進|換入', regex=True, na=False)] if not df_trades.empty else pd.DataFrame()
         
         if len(closed_trades) > 0:

@@ -59,7 +59,7 @@ def objective(trial):
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 3, 25), 
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 4.5, step=0.1),
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 250, step=1), 
@@ -71,6 +71,12 @@ def objective(trial):
         kc_mult = trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0, 
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
+        
+        # 🌟 守則 8 對接：讓 AI 自由探索及格線的極限
+        min_history_trades = trial.suggest_int("min_history_trades", 1, 10),
+        min_history_ev = trial.suggest_float("min_history_ev", -0.5, 0.7, step=0.05),
+        min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.7, step=0.05),
+        
         use_compounding = True 
     )
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
@@ -148,6 +154,7 @@ def monitoring_callback(study, trial):
         print(f"🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
         print(f"              阿肯那(KC)    : {kc_str}")
         print(f"              均量 (Vol)    : {vol_str}")
+        print(f"📜 [歷史濾網] 交易數 >= {p.get('min_history_trades', 1)} 次 | 勝率 >= {p.get('min_history_win_rate', 0.5)*100:.0f}% | EV >= {p.get('min_history_ev', 0.0):.2f} R")
         print(f"{C_CYAN}================================================================================{C_RESET}\n")
 
 if __name__ == "__main__":
@@ -168,7 +175,6 @@ if __name__ == "__main__":
     if len(study.trials) > 0:
         print(f"\n{C_GREEN}✅ 已累積 {len(study.trials)} 次經驗。{C_RESET}")
         
-        # 🌟 接續訓練時：完美重現最後一次突破的最強參數與完整戰情面板
         try:
             best_trial = study.best_trial
             if best_trial.value and best_trial.value > -9000:
@@ -212,6 +218,7 @@ if __name__ == "__main__":
                 print(f"🛡️ [濾網決策] 布林通道 (BB) : {bb_str}")
                 print(f"              阿肯那(KC)    : {kc_str}")
                 print(f"              均量 (Vol)    : {vol_str}")
+                print(f"📜 [歷史濾網] 交易數 >= {p.get('min_history_trades', 1)} 次 | 勝率 >= {p.get('min_history_win_rate', 0.5)*100:.0f}% | EV >= {p.get('min_history_ev', 0.0):.2f} R")
                 print(f"{C_CYAN}================================================================================{C_RESET}\n")
         except ValueError:
             pass
