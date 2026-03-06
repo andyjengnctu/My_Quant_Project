@@ -1,18 +1,16 @@
 {
     "use_bb": true,
-    "use_kc": true,
+    "use_kc": false,
     "use_vol": false,
-    "atr_len": 24,
-    "atr_times_init": 3.5,
+    "atr_len": 22,
+    "atr_times_init": 2.8,
     "atr_times_trail": 2.6,
-    "atr_buy_tol": 2.3000000000000003,
-    "high_len": 193,
-    "tp_percent": 0.14,
-    "bb_len": 21,
+    "atr_buy_tol": 2.9000000000000004,
+    "high_len": 241,
+    "tp_percent": 0.07,
+    "bb_len": 20,
     "bb_mult": 2.2,
-    "kc_len": 10,
-    "kc_mult": 2.5,
     "min_history_trades": 1,
-    "min_history_ev": -0.3,
-    "min_history_win_rate": 0.45
+    "min_history_ev": -0.5,
+    "min_history_win_rate": 0.5
 }

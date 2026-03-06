@@ -66,7 +66,7 @@ def objective(trial):
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
         min_history_trades = trial.suggest_int("min_history_trades", 1, 5),
-        min_history_ev = trial.suggest_float("min_history_ev", -0.5, 0.5, step=0.1),
+        min_history_ev = trial.suggest_float("min_history_ev", -1.5, 0.5, step=0.1),
         min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.05),
         use_compounding = True 
     )

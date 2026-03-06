@@ -79,6 +79,8 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     
     print(f"核心: 突破 {get_p(params, 'high_len', 201):>3} 日新高 | ATR {get_p(params, 'atr_len', 14):>2} 日 | 半倉停利 {get_p(params, 'tp_percent', 0.5)*100:>2.0f}%")
     print(f"風控: 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR | 停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR | 追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR")
-    print(f"濾網: 布林(BB) {bb_str} | 阿肯那(KC) {kc_str} | 均量 {vol_str}")
+    print(f"濾網: 布林(BB) {bb_str}")
+    print(f"      阿肯那(KC) {kc_str}")
+    print(f"      均量 {vol_str}")
     print(f"歷史: 交易 >= {get_p(params, 'min_history_trades', 1)} 次 | 勝率 >= {get_p(params, 'min_history_win_rate', 0.3)*100:.0f}% | EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R")
     print(f"{C_CYAN}================================================================================{C_RESET}\n")
