@@ -47,7 +47,6 @@ def prep_stock_data_and_trades(df, params):
             is_locked_down = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] < C[i-1])
             is_stop = sellCondition[i-1] or L[i] <= sl_price
             
-            # 🌟 修復 1：嚴格對齊正式引擎的事件順序 (Pessimistic Execution 停損優先)
             if is_stop:
                 if not is_locked_down:
                     exec_px = adjust_to_tick(O[i] if sellCondition[i-1] else min(O[i], sl_price))
@@ -57,7 +56,6 @@ def prep_stock_data_and_trades(df, params):
                     trade_logs.append({'exit_date': pd.to_datetime(dates[i]), 'pnl': realized_pnl, 'r_mult': total_r})
                     in_position = False
             
-            # 只有在「未被停損出場」的前提下，才去判定半倉停利與更新防守線
             if in_position:
                 if not sold_half and H[i] >= tp_half:
                     sell_qty = int(np.floor(qty * params.tp_percent))
@@ -137,15 +135,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     bm_max_drawdown = 0.0    
     bm_ret_pct = 0.0
 
-    def get_current_sizing_eq():
-        if not getattr(params, 'use_compounding', True):
-            return initial_capital
-        eq = cash
-        for pt, pos in portfolio.items():
-            y_px = all_dfs_fast[pt][yesterday]['Close'] if yesterday in all_dfs_fast[pt] else pos['entry']
-            eq += pos['qty'] * calc_net_sell_price(y_px, pos['qty'], params)
-        return eq
-
     for i in range(start_idx, len(sorted_dates)):
         sim_days += 1
         today = sorted_dates[i]
@@ -153,6 +142,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         held_yesterday = set(portfolio.keys())
         overnight_cash = cash
         
+        # 📌 維持您的設計哲學：每日初以當下總淨值算一次 Sizing Equity 基準
         if getattr(params, 'use_compounding', True):
             sizing_equity = current_equity
         else:
@@ -185,7 +175,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     
                     if not is_training: 
                         t_type = "全倉結算(指標)" if is_ind_sell else "全倉結算(停損)"
-                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "單筆損益": pnl, "累積總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+                        # 🌟 修復 2：正名為「該筆總損益」
+                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                     
                     tickers_to_remove.append(ticker)
                     continue
@@ -203,8 +194,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     pos['qty'] -= sell_qty
                     pos['sold_half'] = True
                     if not is_training: 
-                        # 🌟 修復 2：讓「累積總損益」成為即時反映的 Running Ledger
-                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "單筆損益": pnl, "累積總損益": pos['realized_pnl'], "R_Multiple": 0.0, "Risk": params.fixed_risk})
+                        # 🌟 修復 2：正名為「該筆總損益」
+                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "單筆損益": pnl, "該筆總損益": pos['realized_pnl'], "R_Multiple": 0.0, "Risk": params.fixed_risk})
             
             new_sl = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
             if new_sl > pos['sl']: pos['sl'] = new_sl
@@ -232,6 +223,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             for c in candidates_today:
                 c['exec_px'] = adjust_to_tick(min(c['t_row']['Open'], c['buy_limit']))
                 c['sl_price'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_init))
+                # 📌 預先用日初統一的 sizing_equity 算出數量與預估花費
                 c['qty'] = calc_position_size(c['exec_px'], c['sl_price'], sizing_equity, params.fixed_risk, params)
                 c['proj_cost'] = calc_entry_price(c['exec_px'], c['qty'], params) * c['qty'] if c['qty'] > 0 else 0.0
             
@@ -265,11 +257,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
                         test_cash = overnight_cash + est_cash_freed
                         
-                        test_sizing_eq = get_current_sizing_eq()
-                        cand_buy_px = best_cand['exec_px']
-                        cand_sl = best_cand['sl_price']
-                        cand_qty = calc_position_size(cand_buy_px, cand_sl, test_sizing_eq, params.fixed_risk, params)
-                        cand_cost = calc_entry_price(cand_buy_px, cand_qty, params) * cand_qty if cand_qty > 0 else 0.0
+                        # 🌟 修復 1：直接使用與實體下單 100% 完全相同的預算與股數進行試算！
+                        cand_qty = best_cand['qty']
+                        cand_cost = best_cand['proj_cost']
                         
                         if cand_qty > 0 and cand_cost <= test_cash:
                             exec_price = est_sell_px
@@ -281,14 +271,14 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                             closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
                             
-                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "Price": exec_price, "單筆損益": pnl, "累積總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                             del portfolio[weakest_ticker]
 
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
                     buy_price = cand['exec_px']
                     sl_price = cand['sl_price']
-                    qty = cand['qty'] 
+                    qty = cand['qty'] # 📌 使用日初統一算好的數量，與上面 Rotation 試算完全吻合
                     
                     if qty > 0:
                         entry_cost_per_share = calc_entry_price(buy_price, qty, params)
@@ -307,7 +297,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                                 'sold_half': False, 'last_px': buy_price,
                                 'realized_pnl': 0.0, 'initial_risk_total': initial_risk
                             }
-                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "累積總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
+                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 
         today_equity = cash  
         for pt, pos in portfolio.items():
@@ -371,7 +361,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
         
         if not is_training:
-            trade_history.append({"Date": last_date.strftime('%Y-%m-%d') if last_date else "", "Ticker": ticker, "Type": "期末強制結算", "Price": exec_price, "單筆損益": pnl, "累積總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+            trade_history.append({"Date": last_date.strftime('%Y-%m-%d') if last_date else "", "Ticker": ticker, "Type": "期末強制結算", "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
 
     today_equity = final_cash
     total_return = (today_equity - initial_capital) / initial_capital * 100
