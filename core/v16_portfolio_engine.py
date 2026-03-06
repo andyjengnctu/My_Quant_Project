@@ -1,13 +1,7 @@
 import pandas as pd
 import numpy as np
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price
-
-# ==========================================
-# 🌟 期望值 (EV) 算法全域切換開關
-# 'A' = 嚴格 R_Multiple 期望值 (Mean R)
-# 'B' = 傳統實際盈虧期望值 (Win% * Payoff - Loss%)
-EV_CALC_METHOD = 'A'
-# ==========================================
+from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 
 def prep_stock_data_and_trades(df, params):
     df = df.copy()
@@ -51,12 +45,10 @@ def prep_stock_data_and_trades(df, params):
                 in_position = True
     return df, trade_logs
 
-# 🌟 守則 8 對接：加入 params 參數，讓 AI 控制歷史門檻
 def get_pit_stats(trade_logs, current_date, params):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
     
-    # 🌟 完全改吃 params
     if trade_count < getattr(params, 'min_history_trades', 1): return False, 0.0, 0.0 
     
     wins = [t for t in past_trades if t['pnl'] > 0]
@@ -71,7 +63,6 @@ def get_pit_stats(trade_logs, current_date, params):
     else:
         ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
 
-    # 🌟 完全改吃 params
     is_candidate = (ev_to_sort > getattr(params, 'min_history_ev', 0.0)) and (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
     return is_candidate, ev_to_sort, win_rate
 
@@ -173,7 +164,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             
             if y_row['is_setup']:
                 if t_row['Low'] <= y_row['buy_limit'] and not is_locked_limit_up:
-                    # 🌟 守則 8 對接：傳遞 params 進入 stats
                     is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], yesterday, params)
                     if is_candidate:
                         buy_price = adjust_to_tick(min(t_row['Open'], y_row['buy_limit']))
@@ -187,7 +177,12 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     total_missed_buys += 1
                     
         if candidates_today:
-            candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
+            # 🌟 向 config 拿取全域買入排序方法
+            if BUY_SORT_METHOD == 'EV':
+                candidates_today.sort(key=lambda x: x['ev'], reverse=True)
+            else:
+                candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
+                
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
                     qty = calc_position_size(cand['buy_price'], cand['sl_price'], sizing_equity, params.fixed_risk, params)
@@ -208,7 +203,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         if today not in all_dfs_fast[pt]: continue 
                         ret = (all_dfs_fast[pt][today]['Close'] - pos['entry']) / pos['entry']
                         if ret < lowest_return:
-                            # 🌟 守則 8 對接：傳遞 params 進入 stats
                             _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], yesterday, params)
                             if holding_ev < cand['ev']:
                                 lowest_return = ret

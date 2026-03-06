@@ -6,7 +6,8 @@ import time
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.v16_config import V16StrategyParams
+# 🌟 守則 8 對接：向 config 請求全域戰略開關 (BUY_SORT_METHOD)
+from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
 
 warnings.filterwarnings('ignore')
@@ -63,7 +64,7 @@ def process_single_stock(file_path, ticker, params):
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
             
-            return ('buy', proj_cost, msg)
+            return ('buy', proj_cost, stats['expected_value'], msg)
             
         elif stats['is_in_buy_zone']:
             proj_qty = calc_position_size(latest_close, stats['active_stop'], DUMMY_CAPITAL, params.fixed_risk, params)
@@ -72,9 +73,9 @@ def process_single_stock(file_path, ticker, params):
             zone_str = f"最新收盤:{latest_close:>6.2f} | 停損:{stats['active_stop']:>6.2f} | 停利(半倉):{stats['target_half']:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
             msg = f"[⚠️ 買進區間] {ticker:<6} | {stat_str} | {zone_str}"
             
-            return ('zone', proj_cost, msg)
+            return ('zone', proj_cost, stats['expected_value'], msg)
             
-        return ('candidate', None, None)
+        return ('candidate', None, None, None)
     except Exception:
         return None
 
@@ -99,7 +100,6 @@ def run_daily_scanner(data_dir):
         
     print(f"   ➤ 創高:{params.high_len}日 | ATR:{params.atr_len} | 追買:{params.atr_buy_tol}倍")
     print(f"   ➤ 初始停損:{params.atr_times_init}倍 | 追蹤:{params.atr_times_trail}倍 | 停利:{params.tp_percent*100}%")
-    # 🌟 守則 8 對接：終端機顯示 AI 給出的歷史門檻標準
     print(f"   ➤ [歷史濾網] 交易數 >= {getattr(params, 'min_history_trades', 1)} 次 | 勝率 >= {getattr(params, 'min_history_win_rate', 0.30)*100:.0f}% | 期望值 >= {getattr(params, 'min_history_ev', 0.0):.2f}R")
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
@@ -115,34 +115,41 @@ def run_daily_scanner(data_dir):
             print(f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}]{C_RESET}", end="\r", flush=True)
             
             result = future.result()
-            if result:
-                status, proj_cost, msg = result
+            if result and len(result) == 4:
+                status, proj_cost, ev, msg = result
                 count_candidates += 1
                 if status == 'buy':
                     print(" " * 120, end="\r")
                     print(f"{C_RED}{msg}{C_RESET}")
-                    buy_list.append({'proj_cost': proj_cost, 'text': msg})
+                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
                 elif status == 'zone':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
-                    in_zone_list.append({'proj_cost': proj_cost, 'text': msg})
+                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
 
     elapsed_time = time.time() - start_time
     
-    buy_list.sort(key=lambda x: x['proj_cost'], reverse=True)
-    in_zone_list.sort(key=lambda x: x['proj_cost'], reverse=True)
+    # 🌟 從 config 讀取置頂參數，動態決定排序邏輯與標題文字
+    if BUY_SORT_METHOD == 'EV':
+        buy_list.sort(key=lambda x: x['ev'], reverse=True)
+        in_zone_list.sort(key=lambda x: x['ev'], reverse=True)
+        sort_title = "按期望值 (EV) 由大到小排序"
+    else:
+        buy_list.sort(key=lambda x: x['proj_cost'], reverse=True)
+        in_zone_list.sort(key=lambda x: x['proj_cost'], reverse=True)
+        sort_title = "按預估投入資金由大到小排序"
 
     print(" " * 120, end="\r") 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。歷史及格: {count_candidates} 檔")
     
     if buy_list or in_zone_list:
-        print(f"\n{C_RED}🔥 【第一優先：明日掛單清單 (最新買訊)】 按預估投入資金由大到小排序 🔥{C_RESET}")
+        print(f"\n{C_RED}🔥 【第一優先：明日掛單清單 (最新買訊)】 {sort_title} 🔥{C_RESET}")
         if buy_list:
             for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_RED}無最新買訊。{C_RESET}")
 
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：仍在買進區間 (錯過可補上車)】 按預估投入資金由大到小排序 ⚠️{C_RESET}")
+        print(f"\n{C_YELLOW}⚠️ 【第二優先：仍在買進區間 (錯過可補上車)】 {sort_title} ⚠️{C_RESET}")
         if in_zone_list:
             for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_YELLOW}無買進區間標的。{C_RESET}")
