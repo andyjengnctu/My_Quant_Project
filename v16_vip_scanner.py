@@ -6,18 +6,11 @@ import time
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# 🌟 守則 8 對接：向 config 請求全域戰略開關 (BUY_SORT_METHOD)
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
+from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
-
-C_RED = '\033[91m'
-C_YELLOW = '\033[93m'
-C_CYAN = '\033[96m'
-C_GREEN = '\033[92m'
-C_GRAY = '\033[90m'
-C_RESET = '\033[0m'
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
@@ -26,11 +19,11 @@ def load_dynamic_params(json_file):
             with open(json_file, 'r') as f:
                 data = json.load(f)
             for key, value in data.items():
-                if hasattr(params, key):
-                    setattr(params, key, value)
+                if hasattr(params, key): setattr(params, key, value)
             return params, True
-        except Exception as e:
-            print(f"{C_YELLOW}⚠️ 讀取 {json_file} 失敗: {e}{C_RESET}")
+        # 🌟 修復 10：拔除裸 except，明確捕捉並顯示參數讀取錯誤
+        except Exception as e: 
+            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {e}{C_RESET}")
     return params, False
 
 def process_single_stock(file_path, ticker, params):
@@ -47,13 +40,11 @@ def process_single_stock(file_path, ticker, params):
             df.set_index('Date', inplace=True)
             
         latest_close = df['Close'].iloc[-1]
-        
         stats = run_v16_backtest(df, params)
         
         if not stats or not stats['is_candidate']: return None
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        
         DUMMY_CAPITAL = 1000000
         
         if stats['is_setup_today']:
@@ -76,8 +67,10 @@ def process_single_stock(file_path, ticker, params):
             return ('zone', proj_cost, stats['expected_value'], msg)
             
         return ('candidate', None, None, None)
-    except Exception:
-        return None
+        
+    # 🌟 修復 10：拔除裸 except，資料若有異常，回傳給主程式印出警告
+    except Exception as e:
+        return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}")
 
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -93,14 +86,10 @@ def run_daily_scanner(data_dir):
     if total_files == 0: return
 
     params, is_loaded = load_dynamic_params("models/v16_best_params.json")
-    if is_loaded:
-        print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
-    else:
-        print(f"{C_YELLOW}⚠️ 找不到最佳參數，使用系統內建預設值。{C_RESET}")
+    if is_loaded: print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
+    else: print(f"{C_YELLOW}⚠️ 找不到最佳參數，使用系統內建預設值。{C_RESET}")
         
-    print(f"   ➤ 創高:{params.high_len}日 | ATR:{params.atr_len} | 追買:{params.atr_buy_tol}倍")
-    print(f"   ➤ 初始停損:{params.atr_times_init}倍 | 追蹤:{params.atr_times_trail}倍 | 停利:{params.tp_percent*100}%")
-    print(f"   ➤ [歷史濾網] 交易數 >= {getattr(params, 'min_history_trades', 1)} 次 | 勝率 >= {getattr(params, 'min_history_win_rate', 0.30)*100:.0f}% | 期望值 >= {getattr(params, 'min_history_ev', 0.0):.2f}R")
+    print_scanner_header(params)
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
     count_scanned, count_candidates = 0, 0
@@ -117,19 +106,23 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 4:
                 status, proj_cost, ev, msg = result
-                count_candidates += 1
                 if status == 'buy':
+                    count_candidates += 1
                     print(" " * 120, end="\r")
                     print(f"{C_RED}{msg}{C_RESET}")
                     buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
                 elif status == 'zone':
+                    count_candidates += 1
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
+                # 🌟 修復 10：捕捉到損壞的股票資料時，安全印出警告，不干擾主畫面
+                elif status == 'error':
+                    print(" " * 120, end="\r")
+                    print(f"{C_YELLOW}{msg}{C_RESET}")
 
     elapsed_time = time.time() - start_time
     
-    # 🌟 從 config 讀取置頂參數，動態決定排序邏輯與標題文字
     if BUY_SORT_METHOD == 'EV':
         buy_list.sort(key=lambda x: x['ev'], reverse=True)
         in_zone_list.sort(key=lambda x: x['ev'], reverse=True)

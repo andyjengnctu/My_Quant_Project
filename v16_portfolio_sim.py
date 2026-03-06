@@ -8,7 +8,6 @@ import time
 
 from core.v16_config import V16StrategyParams
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
-# 🌟 守則 8 對接：引入全域面板 UI
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
@@ -22,7 +21,8 @@ def load_dynamic_params(json_file):
             for k, v in data.items():
                 if hasattr(params, k): setattr(params, k, v)
             return params, True
-        except: pass
+        except Exception as e: 
+            print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {e}{C_RESET}")
     return params, False
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
@@ -45,6 +45,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             all_dfs[ticker], all_trade_logs[ticker] = df, logs
             master_dates.update(df.index)
         except Exception as e:
+            print(f"{C_YELLOW}\n[警告] 股票 {ticker} 處理失敗: {e}{C_RESET}")
             continue
             
         if count % 50 == 0: print(f"{C_GRAY}   進度: 已處理 {count} 檔股票...{C_RESET}", end="\r")
@@ -60,11 +61,12 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
 
     print(" " * 120, end="\r") 
-    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells = run_portfolio_timeline(
+    
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False
     )
-    return df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -80,7 +82,7 @@ if __name__ == "__main__":
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
@@ -88,20 +90,19 @@ if __name__ == "__main__":
     avg_exposure = df_eq['Exposure_Pct'].mean() if not df_eq.empty else 0.0
     max_exposure = df_eq['Exposure_Pct'].max() if not df_eq.empty else 0.0
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
-    closed_trades_count = len(df_tr[~df_tr['Type'].str.contains('買進|換入', regex=True, na=False)]) if not df_tr.empty else 0
-
+    
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"回測總耗時: {end_time - start_time:.2f} 秒")
     
-    # 🌟 呼叫全域 UI 引擎
     print_strategy_dashboard(
         params=params, title="績效與風險對比表", mode_display=mode_display, max_pos=USER_MAX_POS,
-        trades=closed_trades_count, missed_b=total_missed, missed_s=total_missed_sells,
+        trades=trade_count, missed_b=total_missed, missed_s=total_missed_sells,
         final_eq=final_eq, avg_exp=avg_exposure, sys_ret=tot_ret, bm_ret=bm_ret,
         sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,
-        benchmark_ticker=USER_BENCHMARK, max_exp=max_exposure
+        benchmark_ticker=USER_BENCHMARK, max_exp=max_exposure,
+        r_sq=r_sq, m_win_rate=m_win_rate, bm_r_sq=bm_r_sq, bm_m_win_rate=bm_m_win_rate
     )
     
     with pd.ExcelWriter("outputs/V16_Portfolio_Report.xlsx") as writer:
@@ -112,19 +113,14 @@ if __name__ == "__main__":
     try:
         import plotly.graph_objects as go
         import webbrowser
-        
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq['Strategy_Return_Pct'], mode='lines', name='V16 尊爵系統報酬 (%)', line=dict(color='#ff3333', width=3)))
-        
         bm_col = f"Benchmark_{USER_BENCHMARK}_Pct"
         if bm_col in df_eq.columns:
             fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq[bm_col], mode='lines', name=f'同期大盤 {USER_BENCHMARK} (%)', line=dict(color='#4dabf5', width=2), opacity=0.8))
-            
         fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {USER_BENCHMARK} 大盤</b> ({USER_START_YEAR} 至今)', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
-        
         html_filename = "outputs/V16_Portfolio_Dashboard.html"
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
         webbrowser.open('file://' + os.path.realpath(html_filename))
-    except ImportError: print(f"{C_RED}⚠️ 無法產生動態網頁。請先執行: pip install plotly{C_RESET}")
-    except Exception as e: pass
+    except Exception: pass
