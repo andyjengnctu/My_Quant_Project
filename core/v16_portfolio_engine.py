@@ -140,9 +140,10 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
         held_yesterday = set(portfolio.keys())
-        overnight_cash = cash
         
-        # 📌 維持您的設計哲學：每日初以當下總淨值算一次 Sizing Equity 基準
+        # 🌟 修復 1：正名為 available_cash (當日可用購買力)
+        available_cash = cash
+        
         if getattr(params, 'use_compounding', True):
             sizing_equity = current_equity
         else:
@@ -169,13 +170,15 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     pnl = (net_price - pos['entry']) * pos['qty']
                     cash += (net_price * pos['qty'])
                     
+                    # 🌟 修復 1：一般停損/指標賣出釋放的現金，立刻加入當日購買力！
+                    available_cash += (net_price * pos['qty'])
+                    
                     total_pnl = pos['realized_pnl'] + pnl
                     total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                     closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
                     
                     if not is_training: 
                         t_type = "全倉結算(指標)" if is_ind_sell else "全倉結算(停損)"
-                        # 🌟 修復 2：正名為「該筆總損益」
                         trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                     
                     tickers_to_remove.append(ticker)
@@ -190,11 +193,14 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     net_price = calc_net_sell_price(exec_price, sell_qty, params)
                     pnl = (net_price - pos['entry']) * sell_qty
                     cash += (net_price * sell_qty)
+                    
+                    # 🌟 修復 1：半倉停利釋放的現金，也立刻加入當日購買力！
+                    available_cash += (net_price * sell_qty)
+                    
                     pos['realized_pnl'] += pnl
                     pos['qty'] -= sell_qty
                     pos['sold_half'] = True
                     if not is_training: 
-                        # 🌟 修復 2：正名為「該筆總損益」
                         trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "單筆損益": pnl, "該筆總損益": pos['realized_pnl'], "R_Multiple": 0.0, "Risk": params.fixed_risk})
             
             new_sl = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
@@ -223,7 +229,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             for c in candidates_today:
                 c['exec_px'] = adjust_to_tick(min(c['t_row']['Open'], c['buy_limit']))
                 c['sl_price'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_init))
-                # 📌 預先用日初統一的 sizing_equity 算出數量與預估花費
                 c['qty'] = calc_position_size(c['exec_px'], c['sl_price'], sizing_equity, params.fixed_risk, params)
                 c['proj_cost'] = calc_entry_price(c['exec_px'], c['qty'], params) * c['qty'] if c['qty'] > 0 else 0.0
             
@@ -255,9 +260,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         pos = portfolio[weakest_ticker]
                         est_sell_px = adjust_to_tick(w_row['Open'])
                         est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
-                        test_cash = overnight_cash + est_cash_freed
                         
-                        # 🌟 修復 1：直接使用與實體下單 100% 完全相同的預算與股數進行試算！
+                        # 試算可行性：當日所有可用現金 (包含稍早停損收回的) + 這次賣出弱股可得現金
+                        test_cash = available_cash + est_cash_freed
                         cand_qty = best_cand['qty']
                         cand_cost = best_cand['proj_cost']
                         
@@ -265,7 +270,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             exec_price = est_sell_px
                             pnl = est_cash_freed - (pos['entry'] * pos['qty'])
                             cash += est_cash_freed
-                            overnight_cash += est_cash_freed
+                            available_cash += est_cash_freed
                             
                             total_pnl = pos['realized_pnl'] + pnl
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
@@ -278,13 +283,15 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                 if len(portfolio) < max_positions:
                     buy_price = cand['exec_px']
                     sl_price = cand['sl_price']
-                    qty = cand['qty'] # 📌 使用日初統一算好的數量，與上面 Rotation 試算完全吻合
+                    qty = cand['qty'] 
                     
                     if qty > 0:
                         entry_cost_per_share = calc_entry_price(buy_price, qty, params)
                         cost_total = entry_cost_per_share * qty
-                        if cost_total <= overnight_cash:
-                            overnight_cash -= cost_total
+                        
+                        # 🌟 修復 1：全面使用 available_cash (當日可用購買力) 進行把關
+                        if cost_total <= available_cash:
+                            available_cash -= cost_total
                             cash -= cost_total
                             net_sl_per_share = calc_net_sell_price(sl_price, qty, params)
                             tp_target = adjust_to_tick(buy_price + (entry_cost_per_share - net_sl_per_share))

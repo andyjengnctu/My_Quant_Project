@@ -64,7 +64,8 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     exp_str = f" (最高 {max_exp:>.2f} %)" if max_exp is not None else ""
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 系統評分: {C_CYAN}{final_score:.2f}{C_RESET}")
+    # 🌟 修改：在此處加入「評分模型」的顯示標籤
+    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score:.2f}{C_RESET}")
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易紀錄: {trades} 筆 (錯失: 買 {missed_b} | 賣 {missed_s}) | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exp:.2f} %{exp_str}")
@@ -74,7 +75,6 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
     print(f"| 最大回撤 (MDD)   | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<12}{C_RESET} |")
     print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd_str:<14}{C_RESET} | {bm_romd_str:<15} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
-    # 🌟 修正 3：正名為 Log R²，與實作及命名 100% 吻合
     print(f"| 平滑度(Log R²)   | {sys_rsq_str:<14} | {bm_rsq_str:<15} | {rsq_color}{rsq_diff_str:<14}{C_RESET} |")
     print(f"| 月度獲利勝率     | {sys_mwin_str:<14} | {bm_mwin_str:<15} | {mwin_color}{mwin_diff_str:<14}{C_RESET} |")
     print(f"| 系統實戰勝率     | {win_rate:>6.2f} %       | -               | -              |")
