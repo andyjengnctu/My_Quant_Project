@@ -162,7 +162,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     tradeCount, fullWins = 0, 0
     totalProfit, totalLoss = 0.0, 0.0
     missedBuyCount = 0
-    missedSellCount = 0 # 🌟 新增：錯失賣點計數器
+    missedSellCount = 0 
     peakCapital, maxDrawdownPct = currentCapital, 0.0
 
     initial_risk_total = 0.0
@@ -183,10 +183,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
 
-        # 🌟 實戰防線：一字漲停死鎖過濾器 (開=高=低=收，且大於昨日收盤)
         is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
 
-        buyTriggered = isSetup_prev and L[j] <= buyLimitPrice
+        buyTriggered = isSetup_prev and L[j] <= buyLimitPrice and not is_locked_limit_up
         
         if isSetup_prev and not buyTriggered: missedBuyCount += 1
             
@@ -230,11 +229,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                     isTakeProfitHit = False
                 
             if isStopHit or isIndicatorSell:
-                # 🌟 實戰防線：一字跌停死鎖過濾器
                 is_locked_limit_down = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] < C[j-1])
                 
                 if is_locked_limit_down:
-                    missedSellCount += 1  # 跌停鎖死，賣不掉只能繼續抱著
+                    missedSellCount += 1  
                 else:
                     sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
                     sellQty = positionSize
@@ -269,11 +267,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    #payoffRatio = min(10.0, (avgWin / avgLoss)) if avgLoss > 0 else (99.9 if avgWin > 0 else 0)
-    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else 0.0    
     
-    # 🌟 核心修正：將 core 的 EV 算法還原回 TV 盈虧比算法
-    #expectedValue = (winRate / 100 * payoffRatio) - (1 - winRate / 100)
+    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else 0.0
     expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
@@ -285,7 +280,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-    isCandidate = (tradeCount >= 2) and (winRate >= 35) and (expectedValue > 0)
+    # 🌟 守則 8 對接：讓 Scanner 完全套用 AI 訓練出來的歷史及格門檻
+    min_trades = getattr(params, 'min_history_trades', 1)
+    min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
+    min_ev = getattr(params, 'min_history_ev', 0.0)
+
+    isCandidate = (tradeCount >= min_trades) and (winRate >= min_win_rate) and (expectedValue > min_ev)
 
     active_stop_today = max(initialStopLossPrice, trailingStopPrice) if positionSize > 0 else np.nan
     is_in_buy_zone = (positionSize > 0) and (not soldHalf) and (C[-1] > active_stop_today) and (C[-1] < sellPriceHalf)
@@ -294,7 +294,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     return {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "missed_sells": missedSellCount, # 🌟 補上回傳        "net_profit_value": netProfitValue, 
+        "missed_sells": missedSellCount, "net_profit_value": netProfitValue, 
         "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
         "expected_value": expectedValue, 
         "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, "is_setup_today": isSetup_today,

@@ -1,5 +1,19 @@
 from dataclasses import dataclass
 
+# ==========================================
+# 🌟 全域戰略切換開關 (System-Wide Strategy Switches)
+# ==========================================
+# 1. 期望值 (EV) 算法切換
+# 'A' = 嚴格 R_Multiple 期望值 (Mean R)
+# 'B' = 傳統實際盈虧期望值 (Win% * Payoff - Loss%)
+EV_CALC_METHOD = 'A'
+
+# 2. 買入優先序切換開關
+# 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
+# 'EV'        = 優先買入期望值最高的標的 (單筆質量極大化)
+BUY_SORT_METHOD = 'EV'
+# ==========================================
+
 @dataclass
 class V16StrategyParams:
     """v16 策略的核心參數設定檔 (完美對應 TradingView 的 Inputs)"""
@@ -37,3 +51,8 @@ class V16StrategyParams:
     
     # 🌟 6. 核心環境開關：複利開關 (預設為 True，讓您的 Portfolio 模擬器能正常滾雪球)
     use_compounding: bool = True
+
+    # 7. 歷史績效濾網 (AI 將接管這些設定)
+    min_history_trades: int = 1         # 最少歷史交易次數
+    min_history_ev: float = 0.0         # 最低歷史期望值 (R)
+    min_history_win_rate: float = 0.30  # 最低歷史勝率 (0.0 ~ 1.0)

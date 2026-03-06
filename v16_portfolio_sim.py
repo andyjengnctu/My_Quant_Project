@@ -8,9 +8,10 @@ import time
 
 from core.v16_config import V16StrategyParams
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+# 🌟 守則 8 對接：引入全域面板 UI
+from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
-C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET = '\033[91m', '\033[93m', '\033[96m', '\033[92m', '\033[90m', '\033[0m'
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
@@ -44,7 +45,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             all_dfs[ticker], all_trade_logs[ticker] = df, logs
             master_dates.update(df.index)
         except Exception as e:
-            print(f"{C_RED}載入 {ticker} 發生錯誤: {e}{C_RESET}")
             continue
             
         if count % 50 == 0: print(f"{C_GRAY}   進度: 已處理 {count} 檔股票...{C_RESET}", end="\r")
@@ -62,9 +62,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(" " * 120, end="\r") 
     df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
-        benchmark_ticker=benchmark_ticker, 
-        benchmark_data=benchmark_data, 
-        is_training=False
+        benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False
     )
     return df_eq, df_tr, tot_ret, mdd, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells
 
@@ -90,50 +88,21 @@ if __name__ == "__main__":
     avg_exposure = df_eq['Exposure_Pct'].mean() if not df_eq.empty else 0.0
     max_exposure = df_eq['Exposure_Pct'].max() if not df_eq.empty else 0.0
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
-    alpha = tot_ret - bm_ret
-    mdd_diff = bm_mdd - mdd
-    
-    sys_ret_str = f"+{tot_ret:.2f}%" if tot_ret > 0 else f"{tot_ret:.2f}%"
-    bm_ret_str  = f"+{bm_ret:.2f}%" if bm_ret > 0 else f"{bm_ret:.2f}%"
-    alpha_str   = f"+{alpha:.2f}%" if alpha > 0 else f"{alpha:.2f}%"
-    
-    sys_mdd_str = f"-{mdd:.2f}%"
-    bm_mdd_str  = f"-{bm_mdd:.2f}%"
-    mdd_diff_str = f"少跌 {mdd_diff:.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
-    
-    alpha_color = C_GREEN if alpha > 0 else C_RED
-    sys_ret_color = C_GREEN if tot_ret > 0 else C_RED
-    mdd_diff_color = C_GREEN if mdd_diff > 0 else C_RED
-    
-    sys_romd = (tot_ret / abs(mdd)) if mdd != 0 else 0.0
-    bm_romd = (bm_ret / abs(bm_mdd)) if bm_mdd != 0 else 0.0
-    romd_diff = sys_romd - bm_romd
-
-    sys_romd_str = f"{sys_romd:.2f}"
-    bm_romd_str = f"{bm_romd:.2f}"
-    romd_diff_str = f"+{romd_diff:.2f}" if romd_diff > 0 else f"{romd_diff:.2f}"
-    romd_diff_color = C_GREEN if romd_diff > 0 else C_RED
-    
     closed_trades_count = len(df_tr[~df_tr['Type'].str.contains('買進|換入', regex=True, na=False)]) if not df_tr.empty else 0
 
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ 基礎設定")
-    print(f"--------------------------------------------------------------------------------")
-    print(f"模式: {mode_display} | 最大持股: {USER_MAX_POS} 檔 | 回測總耗時: {end_time - start_time:.2f} 秒")
-    print(f"總交易紀錄: {closed_trades_count} 筆 (錯失: 買 {total_missed} | 賣 {total_missed_sells}) | 最終資產: {final_eq:,.0f} 元")
-    print(f"平均資金水位: {avg_exposure:>.2f} % (最高 {max_exposure:>.2f} %)")
-    print(f"--------------------------------------------------------------------------------")
-    print(f"| 指標項目         | V16 尊爵系統   | 同期大盤 ({USER_BENCHMARK:<4}) | 差異 (Alpha)   |")
-    print(f"|------------------|----------------|-----------------|----------------|")
-    print(f"| 總資產報酬率     | {sys_ret_color}{sys_ret_str:<14}{C_RESET} | {bm_ret_str:<15} | {alpha_color}{alpha_str:<14}{C_RESET} |")
-    print(f"| 最大回撤 (MDD)   | {C_YELLOW}{sys_mdd_str:<14}{C_RESET} | {bm_mdd_str:<15} | {mdd_diff_color}{mdd_diff_str:<14}{C_RESET} |")
-    print(f"| 報酬回撤比(RoMD) | {C_CYAN}{sys_romd_str:<14}{C_RESET} | {bm_romd_str:<15} | {romd_diff_color}{romd_diff_str:<14}{C_RESET} |")
-    print(f"| 系統實戰勝率     | {win_rate:>6.2f} %       | -               | -              |")
-    print(f"| 盈虧風報比       | {pf_payoff:>6.2f}         | -               | -              |")
-    print(f"| 實戰期望值(EV)   | {pf_ev:>6.2f} R       | -               | -              |")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"回測總耗時: {end_time - start_time:.2f} 秒")
+    
+    # 🌟 呼叫全域 UI 引擎
+    print_strategy_dashboard(
+        params=params, title="績效與風險對比表", mode_display=mode_display, max_pos=USER_MAX_POS,
+        trades=closed_trades_count, missed_b=total_missed, missed_s=total_missed_sells,
+        final_eq=final_eq, avg_exp=avg_exposure, sys_ret=tot_ret, bm_ret=bm_ret,
+        sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,
+        benchmark_ticker=USER_BENCHMARK, max_exp=max_exposure
+    )
     
     with pd.ExcelWriter("outputs/V16_Portfolio_Report.xlsx") as writer:
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
@@ -157,6 +126,5 @@ if __name__ == "__main__":
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
         webbrowser.open('file://' + os.path.realpath(html_filename))
-        
     except ImportError: print(f"{C_RED}⚠️ 無法產生動態網頁。請先執行: pip install plotly{C_RESET}")
-    except Exception as e: print(f"{C_RED}⚠️ 圖表產生失敗: {e}{C_RESET}")
+    except Exception as e: pass

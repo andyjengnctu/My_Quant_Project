@@ -2,12 +2,15 @@
     "use_bb": true,
     "use_kc": false,
     "use_vol": false,
-    "atr_len": 21,
-    "atr_times_init": 3.2,
-    "atr_times_trail": 3.3,
-    "atr_buy_tol": 2.8000000000000003,
-    "high_len": 245,
-    "tp_percent": 0.39,
+    "atr_len": 22,
+    "atr_times_init": 2.8,
+    "atr_times_trail": 2.6,
+    "atr_buy_tol": 2.9000000000000004,
+    "high_len": 241,
+    "tp_percent": 0.07,
     "bb_len": 20,
-    "bb_mult": 2.2
+    "bb_mult": 2.2,
+    "min_history_trades": 1,
+    "min_history_ev": -0.5,
+    "min_history_win_rate": 0.5
 }
