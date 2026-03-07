@@ -200,6 +200,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         candidates_today = []
         tickers_to_remove = []
 
+        # 1. 既有持倉賣出邏輯 (強制排序確保一致性)
         for ticker in sorted(portfolio.keys()):
             pos = portfolio[ticker]
             fast_df = all_dfs_fast[ticker]
@@ -266,6 +267,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
 
         for t in tickers_to_remove: del portfolio[t]
 
+        # 2. 獲取當日候選標的 (強制排序)
         for ticker in sorted(all_dfs_fast.keys()):
             fast_df = all_dfs_fast[ticker]
             if ticker in portfolio or ticker in held_yesterday: continue 
@@ -295,29 +297,28 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         if candidates_today:
             for c in candidates_today:
                 c['exec_px'] = adjust_to_tick(min(c['t_row']['Open'], c['buy_limit']))
-                
                 c['init_sl'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_init))
                 c['init_trail'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_trail))
                 c['sl_price'] = max(c['init_sl'], c['init_trail'])
-                
                 c['qty'] = calc_position_size(c['exec_px'], c['init_sl'], sizing_equity, params.fixed_risk, params)
                 c['proj_cost'] = calc_entry_price(c['exec_px'], c['qty'], params) * c['qty'] if c['qty'] > 0 else 0.0
             
             if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: x['ev'], reverse=True)
             else: candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
 
-            # 3. 汰弱換強邏輯 (🚀 修復 1：原子操作，避免錯位買進)
+            # 3. 汰弱換強邏輯 (結合原子操作與資金隔離)
             if len(portfolio) == max_positions and enable_rotation:
                 rotated_this_turn = False
-                for cand in list(candidates_today): # 複製清單以安全移除
+                for cand in list(candidates_today): 
                     if rotated_this_turn: break 
+                    # 嚴格守住盤前閒置現金，買不起直接跳過找下一個 candidate
                     if cand['qty'] <= 0 or cand['proj_cost'] > available_cash: continue 
                         
                     weakest_ticker, lowest_ret = None, 0.0
                     
                     for pt in sorted(portfolio.keys()):
                         pos = portfolio[pt]
-                        if today not in all_dfs_fast[pt]: continue
+                        if today not in all_dfs_fast[pt]: continue # 防呆 KeyError
 
                         if yesterday in all_dfs_fast[pt]:
                             pt_y_row = all_dfs_fast[pt][yesterday]
@@ -329,6 +330,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
                         if ret < lowest_ret:
                             _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], today, params)
+                            # 確保該可負擔候選人的 EV 真的大於弱勢股
                             if cand['ev'] > holding_ev:
                                 lowest_ret = ret
                                 weakest_ticker = pt
@@ -348,7 +350,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             total_missed_sells += 1
                             continue 
                         else:
-                            # [賣出弱勢股]
+                            # 1. 賣出弱勢股
                             pos = portfolio[weakest_ticker]
                             est_sell_px = adjust_to_tick(w_row['Open'])
                             est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
@@ -356,6 +358,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             exec_price = est_sell_px
                             pnl = est_cash_freed - (pos['entry'] * pos['qty'])
                             
+                            # 注意：僅入帳 cash，絕不灌回 available_cash
                             cash += est_cash_freed
                             
                             total_pnl = pos['realized_pnl'] + pnl
@@ -365,7 +368,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                             del portfolio[weakest_ticker]
                             
-                            # [立刻綁定買進觸發者，保證不會錯位]
+                            # 2. 立刻買進該 Candidate (原子操作)
                             buy_price = cand['exec_px']
                             qty = cand['qty']
                             entry_cost_per_share = calc_entry_price(buy_price, qty, params)
@@ -387,11 +390,12 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             }
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
                             
-                            # 剔除已被買進的候選股，跳出尋找
+                            # 3. 將成功買入的候選人移除，並跳出換股檢查
                             candidates_today.remove(cand)
                             rotated_this_turn = True
                             break
 
+            # 4. 一般買進邏輯 (處理剩餘可買進的候選股)
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
                     buy_price = cand['exec_px']
@@ -497,7 +501,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     if not is_training and len(equity_curve) > 0:
         equity_curve[-1]['Equity'] = today_equity
         equity_curve[-1]['Strategy_Return_Pct'] = total_return
-        # 🚀 修復 2：安全加回結算後的歸零 (不影響平均，但確保清單最後一天乾淨)
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
 

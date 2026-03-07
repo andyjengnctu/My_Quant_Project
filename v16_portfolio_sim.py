@@ -35,7 +35,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs, all_trade_logs, master_dates = {}, {}, set()
     
-    csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+    # 確保作業系統層級的檔案讀取順序絕對一致
+    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
     for count, file in enumerate(csv_files):
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
@@ -69,7 +70,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     print(" " * 120, end="\r") 
     
-    # 🚀 修復 3：同步接收所有 19 個回傳值 (含 max_exp)
+    # 精準 19 個變數解包，支援 max_exp
     df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False

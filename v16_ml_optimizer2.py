@@ -31,7 +31,8 @@ def load_all_raw_data():
         sys.exit(1)
         
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
-    files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+    # 確保作業系統層級的檔案讀取順序絕對一致
+    files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
     for count, file in enumerate(files):
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
@@ -94,7 +95,7 @@ def objective(trial):
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
     
-    # 🚀 修復 3：同步接收所有 17 個回傳值 (含 max_exp)
+    # 精準 17 個變數解包，支援 max_exp
     ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params, 
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION, 
