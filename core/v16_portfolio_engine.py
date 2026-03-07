@@ -36,6 +36,7 @@ def prep_stock_data_and_trades(df, params):
     df['ind_sell_signal'] = sellCondition
     df['buy_limit'] = buy_limits
     
+    # # (AI註: 問題1修復 - 強制調用核心引擎，取得真正的 Standalone Trade Logs，拯救 PIT 失真)
     _, standalone_logs = run_v16_backtest(df, params, return_logs=True)
     return df, standalone_logs
 
@@ -139,8 +140,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             y_row = fast_df[d_list[idx - 1]]
             
             if y_row['is_setup']:
+                # 使用 all_standalone_logs
                 is_candidate, ev, win_rate = get_pit_stats(all_standalone_logs[ticker], today, params)
                 if is_candidate:
+                    # 嚴守盤前定錨
                     est_init_sl = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_init)
                     est_init_trail = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_trail)
                     est_qty = calc_position_size(y_row['buy_limit'], est_init_sl, sizing_equity, params.fixed_risk, params)
@@ -168,7 +171,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
         else: candidates_today.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
 
-        # 3. 汰弱換強邏輯 (問題3修復 - T/T+1 隔離交割，且絕對綁定 Candidate)
+        # 3. 汰弱換強邏輯 (問題3修復 - 逐一檢查 candidate 並強制綁定)
         if len(portfolio) == max_positions and enable_rotation and candidates_today:
             for i in range(len(candidates_today)):
                 cand = candidates_today[i]
@@ -196,12 +199,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         est_sell_px = adjust_to_tick(w_row['Open'])
                         est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
                         
-                        # 確認: 賣出弱股後的總現金，明日真的買得起這個 Candidate 嗎？
-                        if cand['proj_cost'] <= cash + est_freed_cash:
+                        # 確保賣掉弱股後的現金 + 剩餘資金，真的買得起此 Candidate
+                        if cand['proj_cost'] <= available_cash + est_freed_cash:
                             exec_price = est_sell_px
                             pnl = est_freed_cash - (pos['entry'] * pos['qty'])
-                            
-                            # 賣出弱股。資金進 cash，但不進 available_cash，確保今天無法挪用。
                             cash += est_freed_cash 
                             total_pnl = pos['realized_pnl'] + pnl
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
@@ -209,13 +210,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                             del portfolio[weakest_ticker]
                             
-                            # # (AI註: 絕對綁定 - 我們為 Cand 賣了股，今天就只處理 Cand 的明日入隊準備。清除買進清單防 Stealing)
-                            candidates_today = [cand]
+                            # 關鍵綁定: 剔除因資格不符未觸發 rotation 的前序 Candidate
+                            candidates_today = candidates_today[i:]
                             break
 
-        # 4. 嘗試買進
+        # 4. 嘗試買進 (嚴守 11d 資金定錨與 11b 不挪用找零)
         for cand in candidates_today:
-            # 嚴守 11b: 這裡只能用 available_cash (盤前已可用現金)。若是 Rotation，這裡必然不夠錢。
             if len(portfolio) < max_positions and cand['proj_cost'] <= available_cash:
                 available_cash -= cand['proj_cost'] # 圈存資金
                 
@@ -233,6 +233,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         actual_cost_per_share = calc_entry_price(buy_price, qty, params)
                         actual_total_cost = actual_cost_per_share * qty
                         
+                        # 問題2修復 - 找零不放回 available_cash
                         cash -= actual_total_cost
                         
                         net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params) 
@@ -254,6 +255,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
                 if not buyTriggered:
                     total_missed_buys += 1
+                    # 統一續追邏輯
                     if cand['type'] == 'normal':
                         chase_res = evaluate_chase_condition(t_row['Close'], cand['limit_px'], cand['y_atr'], sizing_equity, params)
                         if chase_res:
@@ -267,23 +269,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             chase_res['orig_atr'] = cand['y_atr']
                             pending_chases[cand['ticker']] = chase_res
                         else: del pending_chases[cand['ticker']]
-            else:
-                # # (AI註: 若因資金不足(例如 Rotation 剛賣股)，或者槽位滿，直接評估明日追車狀態)
-                t_row = cand['t_row']
-                if cand['type'] == 'normal':
-                    chase_res = evaluate_chase_condition(t_row['Close'], cand['limit_px'], cand['y_atr'], sizing_equity, params)
-                    if chase_res:
-                        chase_res['orig_limit'] = cand['limit_px']
-                        chase_res['orig_atr'] = cand['y_atr']
-                        pending_chases[cand['ticker']] = chase_res
-                elif cand['type'] == 'chase':
-                    chase_res = evaluate_chase_condition(t_row['Close'], cand['orig_limit'], cand['y_atr'], sizing_equity, params)
-                    if chase_res:
-                        chase_res['orig_limit'] = cand['orig_limit']
-                        chase_res['orig_atr'] = cand['y_atr']
-                        pending_chases[cand['ticker']] = chase_res
-                    else:
-                        if cand['ticker'] in pending_chases: del pending_chases[cand['ticker']]
 
         today_equity = cash  
         for pt in sorted(portfolio.keys()):
@@ -337,6 +322,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     final_cash = cash
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
     
+    # 問題6修復 - 期末強制結算不再使用買價，改用最新一日的收盤價 MTM
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
         exec_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
