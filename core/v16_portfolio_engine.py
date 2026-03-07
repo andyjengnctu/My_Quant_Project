@@ -90,6 +90,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
         
+        sold_today = set() # # (AI註: 修復 Bug 2 - 每日重置，記錄今日賣出的標的)
+        
         if not is_training and i % 20 == 0:
             exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
             print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
@@ -125,12 +127,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 tickers_to_remove.append(ticker)
             elif 'LOCKED_DOWN' in events: total_missed_sells += 1 
 
-        for t in tickers_to_remove: del portfolio[t]
+        for t in tickers_to_remove: 
+            del portfolio[t]
+            sold_today.add(t) # # (AI註: 修復 Bug 2 - 將常規賣出的股票加入今日已賣名單)
 
         # 2. 獲取當日候選標的
         candidates_today = []
         for ticker in sorted(all_dfs_fast.keys()):
-            if ticker in portfolio: continue 
+            # # (AI註: 修復 Bug 2 - 排除現在持有與今天剛賣掉的股票，嚴禁同日買回)
+            if ticker in portfolio or ticker in sold_today: continue 
             fast_df = all_dfs_fast[ticker]
             if today not in fast_df: continue
             
@@ -208,15 +213,20 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                             closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+                            
                             del portfolio[weakest_ticker]
+                            sold_today.add(weakest_ticker) # # (AI註: 修復 Bug 1/2 - 記錄汰弱賣出的股票)
                             
                             # 關鍵綁定: 剔除因資格不符未觸發 rotation 的前序 Candidate
                             candidates_today = candidates_today[i:]
                             break
 
         # 4. 嘗試買進 (嚴守 11d 資金定錨與 11b 不挪用找零)
+        # # (AI註: 修復 Bug 1 - 計算盤前佔用的額度，嚴守「盤前掛單」。今日賣出所空出的額度，要等到明日迴圈才能用)
+        pre_market_occupied = len(portfolio) + len(sold_today)
+
         for cand in candidates_today:
-            if len(portfolio) < max_positions and cand['proj_cost'] <= available_cash:
+            if pre_market_occupied < max_positions and cand['proj_cost'] <= available_cash:
                 available_cash -= cand['proj_cost'] # 圈存資金
                 
                 t_row = cand['t_row']
@@ -250,6 +260,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             'realized_pnl': 0.0, 'initial_risk_total': initial_risk
                         }
                         buyTriggered = True
+                        pre_market_occupied += 1 # # (AI註: 修復 Bug 1 - 成功買入，盤前預估額度被扣一檔)
+                        
                         if cand['ticker'] in pending_chases: del pending_chases[cand['ticker']]
                         if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 
