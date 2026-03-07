@@ -9,6 +9,7 @@ testing_csv/
 # 忽略產出的回測報表
 *.xlsx
 *.html
+*.7z
 
 # 忽略 Python 運行暫存檔
 __pycache__/

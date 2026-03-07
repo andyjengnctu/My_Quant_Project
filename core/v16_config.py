@@ -1,3 +1,4 @@
+# core/v16_config.py
 from dataclasses import dataclass
 
 # ==========================================
@@ -12,47 +13,48 @@ EV_CALC_METHOD = 'A'
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'EV'        = 優先買入期望值最高的標的 (單筆質量極大化)
 BUY_SORT_METHOD = 'EV'
+
+# 3. 系統評分 (Score) 算法切換
+# 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
+# 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
+SCORE_CALC_METHOD = 'LOG_R2'
 # ==========================================
 
 @dataclass
 class V16StrategyParams:
-    """v16 策略的核心參數設定檔 (完美對應 TradingView 的 Inputs)"""
+    # 1. 核心指標參數
+    high_len: int = 201              
+    atr_len: int = 14                
     
-    # 1. 資金與風險控管
-    initial_capital: float = 4000000.0
-    fixed_risk: float = 0.01            # 單筆固定風險限制 (嚴格鎖定 1%)
-    tp_percent: float = 0.5             # 半平倉停利比例 (50%)s
-    
-    # 2. 停損與追價參數 (ATR)
-    atr_len: int = 6                    # ATR 週期
-    atr_times_init: float = 3.5         # 初始停損 (ATR倍數)
-    atr_times_trail: float = 4.0        # 移動停損 (ATR倍數)
-    atr_buy_tol: float = 1.5            # 買入追價容忍度 (ATR倍數)
-    
-    # 3. 技術指標參數
-    high_len: int = 100                 # 創N日新高週期
-    bb_len: int = 20                    # 布林通道週期
-    bb_mult: float = 2.0                # 布林通道標準差
-    kc_len: int = 20                    # 阿肯那通道週期
-    kc_mult: float = 2.0                # 阿肯那通道倍數
-    vol_short_len: int = 5              # 短天期均量
-    vol_long_len: int = 19              # 長天期均量
+    # 2. 停損停利與進場風控
+    atr_buy_tol: float = 1.5         
+    atr_times_init: float = 2.0      
+    atr_times_trail: float = 3.5     
+    tp_percent: float = 0.5          
 
-    # 4. 濾網開關 (讓 AI 決定要不要啟動這些條件)
-    use_bb: bool = True                 # 是否啟用布林通道突破濾網
-    use_kc: bool = True                 # 是否啟用阿肯那通道跌破出場
-    use_vol: bool = True                # 是否啟用均量爆發濾網
+    # 3. 三大濾網開關與參數
+    use_bb: bool = True
+    bb_len: int = 20
+    bb_mult: float = 2.0
     
-    # 5. 交易成本設定 (台股標準)
-    buy_fee: float = 0.000855           # 買入手續費率
-    sell_fee: float = 0.000855          # 賣出手續費率
-    tax_rate: float = 0.003             # 證交稅率
-    min_fee: int = 20                   # 最低手續費 (元)
+    use_kc: bool = False
+    kc_len: int = 20
+    kc_mult: float = 2.0
     
-    # 🌟 6. 核心環境開關：複利開關 (預設為 True，讓您的 Portfolio 模擬器能正常滾雪球)
-    use_compounding: bool = True
+    use_vol: bool = True
+    vol_short_len: int = 5
+    vol_long_len: int = 19
 
-    # 7. 歷史績效濾網 (AI 將接管這些設定)
-    min_history_trades: int = 1         # 最少歷史交易次數
-    min_history_ev: float = 0.0         # 最低歷史期望值 (R)
-    min_history_win_rate: float = 0.30  # 最低歷史勝率 (0.0 ~ 1.0)
+    # 4. 資金管理參數
+    initial_capital: float = 1000000    
+    fixed_risk: float = 0.01            
+    buy_fee: float = 0.001425 * 0.28    
+    sell_fee: float = 0.001425 * 0.28   
+    tax_rate: float = 0.003             
+    min_fee: float = 20                 
+    use_compounding: bool = True        
+
+    # 5. 歷史績效濾網 (AI 將接管這些設定)
+    min_history_trades: int = 0         
+    min_history_ev: float = 0.0         
+    min_history_win_rate: float = 0.30

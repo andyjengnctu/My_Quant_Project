@@ -1,9 +1,11 @@
 import pandas as pd
 import numpy as np
 import math
-from core.v16_config import V16StrategyParams
+# # (AI註: 修復 3 - 引入全域 EV_CALC_METHOD 確保口徑一致)
+from core.v16_config import V16StrategyParams, EV_CALC_METHOD
 
 def tv_round(number): return math.floor(number + 0.5)
+
 def get_tick_size(price):
     if price < 1: return 0.001
     elif price < 10: return 0.01
@@ -12,24 +14,47 @@ def get_tick_size(price):
     elif price < 500: return 0.5
     elif price < 1000: return 1.0
     else: return 5.0
+
 def adjust_to_tick(price):
     if pd.isna(price): return np.nan
     tick = get_tick_size(price)
     return tv_round(price / tick) * tick
+
 def calc_entry_price(bPrice, bQty, params):
     fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
     return bPrice + (fee / bQty)
+
 def calc_net_sell_price(sPrice, sQty, params):
     fee = max(sPrice * sQty * params.sell_fee, params.min_fee)
     tax = sPrice * sQty * params.tax_rate
     return sPrice - ((fee + tax) / sQty)
+
 def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
-    maxQty = cap / (bPrice * (1 + params.buy_fee))
-    estEntryCost = bPrice * (1 + params.buy_fee)
-    estExitNet = stopPrice * (1 - params.sell_fee - params.tax_rate)
-    riskPerUnit = estEntryCost - estExitNet
-    if riskPerUnit > 0:
-        return int(math.floor(min(cap * riskPct / riskPerUnit, maxQty)))
+    max_risk_amount = cap * riskPct
+    
+    estEntryCost_unit = bPrice * (1 + params.buy_fee)
+    estExitNet_unit = stopPrice * (1 - params.sell_fee - params.tax_rate)
+    riskPerUnit = estEntryCost_unit - estExitNet_unit
+    
+    if riskPerUnit <= 0: return 0
+    
+    maxQty_by_cap = cap / estEntryCost_unit
+    qty = int(math.floor(min(max_risk_amount / riskPerUnit, maxQty_by_cap)))
+    
+    while qty > 0:
+        entry_fee = max(bPrice * qty * params.buy_fee, params.min_fee)
+        exact_entry_cost = bPrice * qty + entry_fee
+        
+        sell_fee = max(stopPrice * qty * params.sell_fee, params.min_fee)
+        tax = stopPrice * qty * params.tax_rate
+        exact_exit_net = stopPrice * qty - sell_fee - tax
+        
+        actual_risk = exact_entry_cost - exact_exit_net
+        
+        if exact_entry_cost <= cap and actual_risk <= max_risk_amount:
+            return qty
+        qty -= 1
+        
     return 0
 
 def tv_rma(source, length):
@@ -167,6 +192,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     initial_risk_total = 0.0
     total_r_multiple = 0.0
+    # # (AI註: 修復 3 - 增加變數記錄贏錢/輸錢的 R 值，對齊 B 模式 EV 計算)
+    total_r_win = 0.0
+    total_r_loss = 0.0
     total_bars_held = 0  
 
     for j in range(1, len(C)):
@@ -176,8 +204,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         if positionSize > 0:
             total_bars_held += 1
             
-        if positionSize > 0 and C[j] > buyPrice + (ATR_main[j] * params.atr_times_trail):
-            new_trail = C[j] - (ATR_main[j] * params.atr_times_trail)
+        # # (AI註: 修復盤中未來函數 - T日防線只能用 T-1日的收盤價計算)
+        if positionSize > 0 and C[j-1] > buyPrice + (ATR_main[j-1] * params.atr_times_trail):
+            new_trail = C[j-1] - (ATR_main[j-1] * params.atr_times_trail)
             trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
@@ -245,8 +274,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                     if profitValue > 0:
                         fullWins += 1
                         totalProfit += profitValue
+                        total_r_win += trade_r_mult # # (AI註: 修復 3 - 記錄勝利 R 值)
                     else:
                         totalLoss += abs(profitValue)
+                        total_r_loss += abs(trade_r_mult) # # (AI註: 修復 3 - 記錄虧損 R 值)
                         
                     currentCapital += profitValue
                     positionSize = 0
@@ -268,8 +299,17 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     
-    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else 0.0
-    expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
+    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
+    
+    # # (AI註: 修復 3 - 單股回測的 EV 算法完美對齊全域開關，杜絕統計口徑分裂)
+    if EV_CALC_METHOD == 'B':
+        win_rate_dec = fullWins / tradeCount if tradeCount > 0 else 0
+        avg_win_r = total_r_win / fullWins if fullWins > 0 else 0
+        avg_loss_r = total_r_loss / lossCount if lossCount > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+        expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
+    else:
+        expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     netProfitValue = currentCapital - params.initial_capital  
@@ -280,12 +320,16 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-    # 🌟 守則 8 對接：讓 Scanner 完全套用 AI 訓練出來的歷史及格門檻
-    min_trades = getattr(params, 'min_history_trades', 1)
+    min_trades = getattr(params, 'min_history_trades', 0)
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
-    isCandidate = (tradeCount >= min_trades) and (winRate >= min_win_rate) and (expectedValue > min_ev)
+    if tradeCount < min_trades:
+        isCandidate = False
+    elif tradeCount == 0 and min_trades == 0:
+        isCandidate = True
+    else:
+        isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
     active_stop_today = max(initialStopLossPrice, trailingStopPrice) if positionSize > 0 else np.nan
     is_in_buy_zone = (positionSize > 0) and (not soldHalf) and (C[-1] > active_stop_today) and (C[-1] < sellPriceHalf)

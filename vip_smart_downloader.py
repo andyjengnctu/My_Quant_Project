@@ -6,17 +6,8 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from io import StringIO
 from FinMind.data import DataLoader
-import urllib3
-import warnings
 
-# 關閉警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-warnings.filterwarnings('ignore')
-
-# ==========================================
-# 0. 參數與 API 設定
-# ==========================================
-API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMi0yMSAxMzozOToyMyIsInVzZXJfaWQiOiJhbmR5amVuZ25jdHUiLCJlbWFpbCI6ImFuZHlqZW5nbmN0dUBnbWFpbC5jb20iLCJpcCI6IjM2LjIyOC4xMTMuMTMxIn0.D97Qj43wskbRDXXbESCTO13wnijIhuClsPeobPhYy3s"
+API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 LIST_FILE = os.path.join(SAVE_DIR, "universe_list.txt")
@@ -29,25 +20,44 @@ if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 
 dl = DataLoader()
-dl.login_by_token(api_token=API_TOKEN)
+if API_TOKEN:
+    dl.login_by_token(api_token=API_TOKEN)
 
-# ==========================================
-# 1. 取得台股「真實最後交易日」 (破解假日陷阱)
-# ==========================================
 def get_market_last_date():
-    print("🕵️‍♂️ 正在向證交所確認最新交易日...")
-    search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
-    df = dl.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
-    if df is not None and not df.empty:
-        df.columns = [c.lower() for c in df.columns]
-        actual_date = str(df['date'].max()).split(' ')[0]
-        print(f"📅 台股最新交易日為: {actual_date}")
-        return actual_date
-    return datetime.today().strftime("%Y-%m-%d")
+    print("🕵️‍♂️ 正在確認最新交易日...")
+    try:
+        search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+        df = dl.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
+        if df is not None and not df.empty:
+            df.columns = [c.lower() for c in df.columns]
+            actual_date = str(df['date'].max()).split(' ')[0]
+            print(f"📅 台股最新交易日 (FinMind) 為: {actual_date}")
+            return actual_date
+    except Exception as e:
+        print(f"⚠️ FinMind 日期獲取異常: {e}")
 
-# ==========================================
-# 2. 智慧海選 (YF 掃描 + CE/ES 精準過濾)
-# ==========================================
+    print("🔄 啟動備援方案 (YFinance) 獲取交易日...")
+    try:
+        ticker = yf.Ticker("0050.TW")
+        hist = ticker.history(period="5d")
+        if not hist.empty:
+            actual_date = hist.index[-1].strftime("%Y-%m-%d")
+            print(f"📅 台股最新交易日 (YF備援) 為: {actual_date}")
+            return actual_date
+    except Exception as e:
+        print(f"⚠️ YFinance 備援失敗: {e}")
+        
+    fallback_date = datetime.now()
+    if fallback_date.hour < 14:
+        fallback_date -= timedelta(days=1)
+        
+    while fallback_date.weekday() >= 5:
+        fallback_date -= timedelta(days=1)
+        
+    fallback_str = fallback_date.strftime("%Y-%m-%d")
+    print(f"⚠️ 無法取得精準日期，使用智能推算平日備用日期: {fallback_str}")
+    return fallback_str
+
 def get_or_update_universe():
     if os.path.exists(LIST_FILE):
         file_mod_time = datetime.fromtimestamp(os.path.getmtime(LIST_FILE))
@@ -66,12 +76,11 @@ def get_or_update_universe():
     tickers_info = []
     for url in urls:
         try:
-            res = requests.get(url, verify=False) 
+            res = requests.get(url, timeout=10) 
             df = pd.read_html(StringIO(res.text))[0] 
             df.columns = df.iloc[0]
             df = df.iloc[2:]
             
-            # 🔥 精準過濾：ES=普通股, CE=ETF。徹底排除幾萬檔權證！
             mask = df['CFICode'].str.startswith('ES', na=False) | df['CFICode'].str.startswith('CE', na=False)
             df = df[mask]
             
@@ -83,7 +92,7 @@ def get_or_update_universe():
                     is_etf = str(row['CFICode']).startswith('CE')
                     tickers_info.append({"yf_ticker": f"{sid}{suffix}", "sid": sid, "is_etf": is_etf})
         except Exception as e:
-            pass
+            print(f"⚠️ 抓取清單時發生錯誤: {e}")
 
     qualified_tickers = []
     total_check = len(tickers_info)
@@ -109,9 +118,6 @@ def get_or_update_universe():
     print(f"\n🎉 海選完畢！共 {len(qualified_tickers)} 檔入選。")
     return qualified_tickers
 
-# ==========================================
-# 3. 尊爵下載 (三重防禦跳過)
-# ==========================================
 def smart_download_vip_data(tickers, market_last_date):
     total = len(tickers)
     today_date = datetime.today().date()
@@ -121,23 +127,16 @@ def smart_download_vip_data(tickers, market_last_date):
     for i, sid in enumerate(tickers, 1):
         file_path = os.path.join(SAVE_DIR, f"{sid}.csv")
         
-        # 🛡️ 防禦 1 & 2：檢查修改日期 或 CSV 內部日期
         if os.path.exists(file_path):
-            file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path)).date()
-            if file_mtime == today_date:
-                print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 檔案今日已更新，跳過。{' '*15}", end="", flush=True)
-                continue
-                
             try:
-                # 讀取最後一行檢查日期，破除假日陷阱！
+                # # (AI註: 修復 1 - 移除檔案修改時間判斷，嚴格依賴 CSV 內最後一筆日期，避免假更新跳過)
                 last_date_in_csv = str(pd.read_csv(file_path, index_col=0).tail(1).index[0]).split(' ')[0]
                 if last_date_in_csv == market_last_date:
                     print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)
                     continue
             except:
-                pass # 若檔案損毀則不跳過，重新下載
+                pass 
 
-        # 📥 執行下載
         print(f"\r⚡ [{i:03d}/{total:03d}] 正在下載 {sid:<6} ...{' '*15}", end="", flush=True)
         try:
             df = dl.get_data(dataset='TaiwanStockPriceAdj', data_id=sid, start_date="1990-01-01")
@@ -156,18 +155,9 @@ def smart_download_vip_data(tickers, market_last_date):
     print("\n" + "-" * 65)
     print(f"🏆 本地尊爵資料庫更新完畢！")
 
-# ==========================================
-# 4. 主執行區
-# ==========================================
 if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-    
-    # 抓取大盤最後日期
     market_date = get_market_last_date()
-    
-    # 執行快篩海選
     target_tickers = get_or_update_universe()
-    
-    # 執行官方還原資料下載
     if target_tickers:
         smart_download_vip_data(target_tickers, market_date)
