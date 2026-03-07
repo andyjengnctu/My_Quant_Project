@@ -203,8 +203,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         if positionSize > 0:
             total_bars_held += 1
             
-        if positionSize > 0 and C[j] > buyPrice + (ATR_main[j] * params.atr_times_trail):
-            new_trail = C[j] - (ATR_main[j] * params.atr_times_trail)
+        if positionSize > 0 and C[j-1] > buyPrice + (ATR_main[j-1] * params.atr_times_trail):
+            new_trail = C[j-1] - (ATR_main[j-1] * params.atr_times_trail)
             trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)

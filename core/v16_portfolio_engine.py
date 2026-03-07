@@ -57,8 +57,8 @@ def prep_stock_data_and_trades(df, params):
         
         pos_start_of_current_bar = qty if in_position else 0
         
-        if in_position and C[i] > buy_price + (ATR_main[i] * params.atr_times_trail):
-            new_trail = C[i] - (ATR_main[i] * params.atr_times_trail)
+        if in_position and C[i-1] > buy_price + (ATR_main[i-1] * params.atr_times_trail):
+            new_trail = C[i-1] - (ATR_main[i-1] * params.atr_times_trail)
             trailing_stop = adjust_to_tick(max(trailing_stop, new_trail))
             sl_price = max(initial_stop, trailing_stop)
             
@@ -205,11 +205,11 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             if today not in fast_df: continue 
             row, y_row = fast_df[today], fast_df[yesterday] if yesterday in fast_df else fast_df[today]
             
-            if row['Close'] > pos['pure_buy_price'] + (row['ATR'] * params.atr_times_trail):
-                new_trail = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
+            if y_row['Close'] > pos['pure_buy_price'] + (y_row['ATR'] * params.atr_times_trail):
+                new_trail = adjust_to_tick(y_row['Close'] - (y_row['ATR'] * params.atr_times_trail))
                 pos['trailing_stop'] = max(pos.get('trailing_stop', 0.0), new_trail)
                 pos['sl'] = max(pos['initial_stop'], pos['trailing_stop'])
-            
+
             is_stop_hit = row['Low'] <= pos['sl']
             is_tp_hit = row['High'] >= pos['tp_half'] and not pos['sold_half']
             is_ind_sell = y_row['ind_sell_signal']
