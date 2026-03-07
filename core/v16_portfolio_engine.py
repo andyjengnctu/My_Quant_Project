@@ -84,7 +84,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     for i in range(start_idx, len(sorted_dates)):
         sim_days += 1
         today = sorted_dates[i]
-        yesterday = sorted_dates[i-1]
+        yesterday = sorted_dates[i-1] 
         
         available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
