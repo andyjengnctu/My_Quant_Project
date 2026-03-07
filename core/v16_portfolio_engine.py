@@ -178,9 +178,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         # 3. 汰弱換強邏輯 (問題3修復 - 逐一檢查 candidate 並強制綁定)
         if len(portfolio) == max_positions and enable_rotation and candidates_today:
-            for i in range(len(candidates_today)):
-                cand = candidates_today[i]
-                weakest_ticker = None; lowest_ret = float('inf')
+            # # (AI註: 將索引命名為 cand_idx，絕不與外層日期的 i 衝突)
+            for cand_idx in range(len(candidates_today)):
+                cand = candidates_today[cand_idx]
+                weakest_ticker = None
+                lowest_ret = float('inf')
                 
                 for pt in sorted(portfolio.keys()):
                     pos = portfolio[pt]
@@ -190,9 +192,19 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     pt_y_row = all_dfs_fast[pt][d_list[idx - 1]]
                     
                     ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
-                    _, holding_ev, _ = get_pit_stats(all_standalone_logs[pt], today, params)
-                    if cand['ev'] > holding_ev and ret < lowest_ret:
-                        lowest_ret = ret; weakest_ticker = pt
+                    
+                    # 讓汰弱換強的比較基準嚴格跟隨全域 BUY_SORT_METHOD
+                    is_strategically_better = False
+                    if BUY_SORT_METHOD == 'EV':
+                        _, holding_ev, _ = get_pit_stats(all_standalone_logs[pt], today, params)
+                        is_strategically_better = cand['ev'] > holding_ev
+                    else: # 'PROJ_COST'
+                        holding_cost = pos['entry'] * pos['qty']
+                        is_strategically_better = cand['proj_cost'] > holding_cost
+                    
+                    if is_strategically_better and ret < lowest_ret:
+                        lowest_ret = ret
+                        weakest_ticker = pt
 
                 if weakest_ticker:
                     w_row = all_dfs_fast[weakest_ticker][today]
@@ -200,25 +212,28 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
                     
                     if not is_locked_down:
-                        pos = portfolio[weakest_ticker]
-                        est_sell_px = adjust_to_tick(w_row['Open'])
-                        est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
-                        
-                        # # (AI註: 修復資金不一致 Bug - 嚴守「當天賣出的資金不可當天再投入」，換股僅憑盤前既有 available_cash 判斷)
+                        # 嚴守盤前既有資金
                         if cand['proj_cost'] <= available_cash:
+                            pos = portfolio[weakest_ticker]
+                            est_sell_px = adjust_to_tick(w_row['Open'])
+                            est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
+                            
                             exec_price = est_sell_px
                             pnl = est_freed_cash - (pos['entry'] * pos['qty'])
                             cash += est_freed_cash 
                             total_pnl = pos['realized_pnl'] + pnl
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                             closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
-                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+                            
+                            if not is_training: 
+                                trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                             
                             del portfolio[weakest_ticker]
-                            sold_today.add(weakest_ticker) # # (AI註: 修復 Bug 1/2 - 記錄汰弱賣出的股票)
+                            sold_today.add(weakest_ticker) 
                             
                             # 關鍵綁定: 剔除因資格不符未觸發 rotation 的前序 Candidate
-                            candidates_today = candidates_today[i:]
+                            # 正確使用 cand_idx 進行切片
+                            candidates_today = candidates_today[cand_idx:]
                             break
 
         # 4. 嘗試買進 (嚴守 11d 資金定錨與 11b 不挪用找零)
