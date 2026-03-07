@@ -4,6 +4,23 @@ import math
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 
+# (AI註: ==========================================)
+# (AI註: 🌟 全域統一：投資組合系統評分公式 (單一真理來源))
+# (AI註: ==========================================)
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq):
+    from core.v16_config import SCORE_CALC_METHOD
+    
+    # (AI註: 計算 RoMD，加上 0.0001 避免除以零的數學錯誤)
+    romd = sys_ret / (abs(sys_mdd) + 0.0001)
+    
+    if SCORE_CALC_METHOD == 'LOG_R2':
+        # (AI註: 這裡的公式一旦修改，AI 訓練與終端機面板將 100% 同步連動！)
+        raw_score = romd * (m_win_rate / 100.0) * r_sq
+    else:
+        raw_score = romd
+        
+    return raw_score 
+
 def calc_curve_stats(eq_list):
     r_squared, monthly_win_rate = 0.0, 0.0
     if len(eq_list) > 2:
@@ -35,11 +52,14 @@ def prep_stock_data_and_trades(df, params):
     trade_logs = []
     in_position = False
     entry_price, sl_price, tp_half = 0.0, 0.0, 0.0
+    buy_price = 0.0 # (AI註: 修復 1: 新增記錄原始買進觸發價，以對齊 core 單股回測的追蹤停損邏輯)
     qty = 0
     realized_pnl, initial_risk = 0.0, 0.0
     sold_half = False
     dates = df.index.values
-    dummy_cap = 100000  
+    
+    # (AI註: 修復 5: 將 dummy_cap 對齊設定檔的初始本金，避免 min_fee 導致 R 倍數在不同資金規模下失真)
+    dummy_cap = params.initial_capital  
     
     for i in range(1, len(df)):
         if np.isnan(ATR_main[i-1]): continue
@@ -66,13 +86,16 @@ def prep_stock_data_and_trades(df, params):
                         qty -= sell_qty
                         sold_half = True
                         
-                new_sl = adjust_to_tick(C[i] - (ATR_main[i] * params.atr_times_trail))
-                if new_sl > sl_price: sl_price = new_sl
+                # (AI註: 修復 1: 追蹤停損邏輯完全對齊 v16_core.py，只有當收盤價大於「買進價+ATR*倍數」時才上移)
+                if C[i] > buy_price + (ATR_main[i] * params.atr_times_trail):
+                    new_sl = adjust_to_tick(C[i] - (ATR_main[i] * params.atr_times_trail))
+                    if new_sl > sl_price: sl_price = new_sl
                 
         else:
             is_locked_up = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] > C[i-1])
             if buyCondition[i-1] and L[i] <= buy_limits[i-1] and not is_locked_up:
                 exec_px = adjust_to_tick(min(O[i], buy_limits[i-1]))
+                buy_price = exec_px # (AI註: 記錄原始買進觸發價)
                 init_sl = adjust_to_tick(exec_px - (ATR_main[i-1] * params.atr_times_init))
                 qty = calc_position_size(exec_px, init_sl, dummy_cap, params.fixed_risk, params)
                 if qty > 0:
@@ -109,7 +132,8 @@ def get_pit_stats(trade_logs, current_date, params):
 
 def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
     start_dt = pd.to_datetime(f"{start_year}-01-01")
-    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), 1)
+    # (AI註: 修復 4: 找不到對應日期時，回傳 len(sorted_dates) 直接終止迴圈，而非從索引 1 錯誤開跑)
+    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
 
     initial_capital = params.initial_capital
     cash = initial_capital
@@ -141,7 +165,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         yesterday = sorted_dates[i-1]
         held_yesterday = set(portfolio.keys())
         
-        # 🌟 修復 1：正名為 available_cash (當日可用購買力)
         available_cash = cash
         
         if getattr(params, 'use_compounding', True):
@@ -170,7 +193,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     pnl = (net_price - pos['entry']) * pos['qty']
                     cash += (net_price * pos['qty'])
                     
-                    # 🌟 修復 1：一般停損/指標賣出釋放的現金，立刻加入當日購買力！
                     available_cash += (net_price * pos['qty'])
                     
                     total_pnl = pos['realized_pnl'] + pnl
@@ -194,7 +216,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                     pnl = (net_price - pos['entry']) * sell_qty
                     cash += (net_price * sell_qty)
                     
-                    # 🌟 修復 1：半倉停利釋放的現金，也立刻加入當日購買力！
                     available_cash += (net_price * sell_qty)
                     
                     pos['realized_pnl'] += pnl
@@ -261,7 +282,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         est_sell_px = adjust_to_tick(w_row['Open'])
                         est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
                         
-                        # 試算可行性：當日所有可用現金 (包含稍早停損收回的) + 這次賣出弱股可得現金
                         test_cash = available_cash + est_cash_freed
                         cand_qty = best_cand['qty']
                         cand_cost = best_cand['proj_cost']
@@ -289,7 +309,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         entry_cost_per_share = calc_entry_price(buy_price, qty, params)
                         cost_total = entry_cost_per_share * qty
                         
-                        # 🌟 修復 1：全面使用 available_cash (當日可用購買力) 進行把關
                         if cost_total <= available_cash:
                             available_cash -= cost_total
                             cash -= cost_total

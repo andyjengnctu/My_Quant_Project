@@ -1,6 +1,7 @@
 import os
 import json
 import pandas as pd
+import numpy as np # (AI註: 修復 2 引入 numpy 處理缺失值)
 import warnings
 import time
 from datetime import datetime
@@ -12,6 +13,10 @@ from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GR
 
 warnings.filterwarnings('ignore')
 
+# (AI註: 修復 3: 確保相關資料夾存在，防止 I/O 錯誤直接炸裂)
+os.makedirs("outputs", exist_ok=True)
+os.makedirs("models", exist_ok=True)
+
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
     if os.path.exists(json_file):
@@ -21,7 +26,6 @@ def load_dynamic_params(json_file):
             for key, value in data.items():
                 if hasattr(params, key): setattr(params, key, value)
             return params, True
-        # 🌟 修復 10：拔除裸 except，明確捕捉並顯示參數讀取錯誤
         except Exception as e: 
             print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {e}{C_RESET}")
     return params, False
@@ -32,6 +36,10 @@ def process_single_stock(file_path, ticker, params):
         if len(df) < params.high_len + 10: return None
             
         df.columns = [c.capitalize() for c in df.columns]
+        
+        # (AI註: 修復 2: 加入 OHLC 的 0 -> NaN -> ffill 清理，確保與投組/AI訓練完全一致)
+        df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
+        
         if 'Time' in df.columns:
             df['Time'] = pd.to_datetime(df['Time'])
             df.set_index('Time', inplace=True)
@@ -45,7 +53,9 @@ def process_single_stock(file_path, ticker, params):
         if not stats or not stats['is_candidate']: return None
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        DUMMY_CAPITAL = 1000000
+        
+        # (AI註: 修復 5: 將 DUMMY_CAPITAL 對齊 config 中的 initial_capital)
+        DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
@@ -68,7 +78,6 @@ def process_single_stock(file_path, ticker, params):
             
         return ('candidate', None, None, None)
         
-    # 🌟 修復 10：拔除裸 except，資料若有異常，回傳給主程式印出警告
     except Exception as e:
         return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}")
 
@@ -116,7 +125,9 @@ def run_daily_scanner(data_dir):
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
-                # 🌟 修復 10：捕捉到損壞的股票資料時，安全印出警告，不干擾主畫面
+                elif status == 'candidate':
+                    # (AI註: 修復 6: 若歷史及格但今日無動作，仍需計入及格檔數)
+                    count_candidates += 1
                 elif status == 'error':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")

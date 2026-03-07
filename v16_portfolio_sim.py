@@ -12,6 +12,10 @@ from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, 
 
 warnings.filterwarnings('ignore')
 
+# (AI註: 修復 3: 執行前確認/建立輸出資料夾，避免寫入 Excel 或 HTML 時拋出 OSError)
+os.makedirs("outputs", exist_ok=True)
+os.makedirs("models", exist_ok=True)
+
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
     if os.path.exists(json_file):

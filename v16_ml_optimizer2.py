@@ -9,11 +9,15 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
-from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+# (AI註: 修復 3: 執行前確認/建立輸出與模型資料夾，避免儲存 json/db 時拋出 FileNotFoundError)
+os.makedirs("outputs", exist_ok=True)
+os.makedirs("models", exist_ok=True)
 
 TRAIN_MAX_POSITIONS = 10         
 TRAIN_START_YEAR = 2015         
@@ -68,7 +72,7 @@ def objective(trial):
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
         min_history_trades = trial.suggest_int("min_history_trades", 1, 5),
-        min_history_ev = trial.suggest_float("min_history_ev", -0.5, 0.5, step=0.1),
+        min_history_ev = trial.suggest_float("min_history_ev", -1.0, 0.5, step=0.1),
         min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.05),
         use_compounding = True 
     )
@@ -96,13 +100,7 @@ def objective(trial):
     if m_win_rate < 45.0: trial.set_user_attr("fail_reason", f"月勝率偏低 ({m_win_rate:.0f}%)"); return -9999.0
     if r_sq < 0.40: trial.set_user_attr("fail_reason", f"曲線過度震盪 (R²={r_sq:.2f})"); return -9999.0
 
-    global_romd = ret_pct / (mdd + 0.1)
-    
-    # 🌟 修復 1：讓 Optimizer 真正使用與面板完全一致的「包含 R² 的綜合公式」
-    if SCORE_CALC_METHOD == 'LOG_R2':
-        final_score = global_romd * (m_win_rate / 100.0) * r_sq
-    else:
-        final_score = global_romd
+    final_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
     
     trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells)
     trial.set_user_attr("r_squared", r_sq)

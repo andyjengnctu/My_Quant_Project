@@ -1,6 +1,7 @@
 # core/v16_display.py
 import os
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD
+from core.v16_portfolio_engine import calc_portfolio_score  # (AI註: 匯入統一評分函數)
 
 C_RED = '\033[91m'
 C_YELLOW = '\033[93m'
@@ -38,10 +39,8 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     bm_romd_str = f"{bm_romd:.2f}"
     romd_diff_str = f"+{romd_diff:.2f}" if romd_diff > 0 else f"{romd_diff:.2f}"
     
-    if SCORE_CALC_METHOD == 'LOG_R2':
-        final_score = sys_romd * (m_win_rate / 100.0) * r_sq
-    else:
-        final_score = sys_romd
+    # (AI註: 修改：拔除重複計算，直接呼叫統一引擎)
+    final_score = calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq)
 
     rsq_diff = r_sq - bm_r_sq
     mwin_diff = m_win_rate - bm_m_win_rate
@@ -64,7 +63,6 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     exp_str = f" (最高 {max_exp:>.2f} %)" if max_exp is not None else ""
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    # 🌟 修改：在此處加入「評分模型」的顯示標籤
     print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score:.2f}{C_RESET}")
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易紀錄: {trades} 筆 (錯失: 買 {missed_b} | 賣 {missed_s}) | 最終資產: {final_eq:,.0f} 元")
