@@ -280,16 +280,14 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-# 🌟 守則 8 對接：讓 Scanner 完全套用 AI 訓練出來的歷史及格門檻
     min_trades = getattr(params, 'min_history_trades', 1)
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
-    # (AI註: 語義修復：精準處理允許 0 交易的「白紙」狀態，對齊 PIT 引擎)
+    # (AI註: 修復 Edge Case: 精準處理允許 0 交易的「白紙」狀態，對齊 PIT 引擎)
     if tradeCount < min_trades:
         isCandidate = False
     elif tradeCount == 0:
-        # min_trades 是 0，且 tradeCount 也是 0，直接視為及格
         isCandidate = True
     else:
         isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)

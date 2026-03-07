@@ -32,7 +32,7 @@ def load_all_raw_data():
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(DATA_DIR, file))
-            # (AI註: 修復 4 - 這裡用 50 只是為了過濾極端無效資料減輕記憶體，真正的 params.high_len + 10 動態篩選在 worker_prep_data 處理)
+            # 這裡用 50 是為了攔截全空檔案，嚴格動態篩選在下方 worker 處理
             if len(df) < 50: continue
             df.columns = [c.capitalize() for c in df.columns]
             df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
@@ -48,7 +48,7 @@ def load_all_raw_data():
 
 def worker_prep_data(ticker, df, params):
     try:
-        # (AI註: 修復 4 - AI 動態生成 high_len 後，嚴格執行與 Scanner 一致的股票濾網)
+        # 🌟 根目錄版本修復：動態對齊 params.high_len + 10 的篩選
         if len(df) < params.high_len + 10:
             return ticker, None, None
             

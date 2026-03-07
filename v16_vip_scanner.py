@@ -36,7 +36,7 @@ def process_single_stock(file_path, ticker, params):
             
         df.columns = [c.capitalize() for c in df.columns]
         
-        # (AI註: 修復 5: 執行 OHLC ffill)
+        # 🌟 根目錄版本修復：加入 OHLC 清洗
         df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
         
         if 'Time' in df.columns:
@@ -53,7 +53,7 @@ def process_single_stock(file_path, ticker, params):
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
         
-        # (AI註: 修復 5: 直接使用 params.initial_capital)
+        # 🌟 根目錄版本修復：同步使用設定檔的本金
         DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
@@ -82,7 +82,7 @@ def process_single_stock(file_path, ticker, params):
 
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"{C_CYAN}🚀 啟初【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
+    print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     if not os.path.exists(data_dir):
@@ -114,7 +114,7 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 4:
                 status, proj_cost, ev, msg = result
-                # (AI註: 修復 5: 正確計入所有通過歷史門檻的 candidate)
+                # 🌟 根目錄版本修復：將純 candidate 列入及格計數
                 if status in ['buy', 'zone', 'candidate']:
                     count_candidates += 1
                     
