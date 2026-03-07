@@ -58,8 +58,6 @@ def worker_prep_data(ticker, df, params):
         df_prepared, logs = prep_stock_data_and_trades(df, params)
         return ticker, df_prepared.to_dict('index'), logs
     except Exception as e: 
-        # # (AI註: 明確列印錯誤，確保 AI 在缺失資料時不會盲目訓練)
-        print(f"{C_YELLOW}⚠️ [訓練資料異常] {ticker} 資料準備失敗: {e}{C_RESET}")
         return ticker, None, None
 
 def objective(trial):

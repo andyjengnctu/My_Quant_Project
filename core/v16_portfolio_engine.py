@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import bisect
-from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price, execute_bar_step, evaluate_chase_condition, run_v16_backtest, calc_expected_value
+from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price, execute_bar_step, evaluate_chase_condition, run_v16_backtest
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq):
@@ -48,18 +48,17 @@ def get_pit_stats(trade_logs, current_date, params):
     if trade_count == 0: return True, 0.0, 0.0
     
     wins = [t for t in past_trades if t['pnl'] > 0]
-    
-    # # (AI註: 消除重複代碼，強制使用 Core 的共用 EV 引擎)
-    total_r_win = sum(t['r_mult'] for t in wins)
-    total_r_loss = sum(t['r_mult'] for t in past_trades if t['pnl'] <= 0)
-    total_r_mult = sum(t['r_mult'] for t in past_trades)
-    
-    win_rate_dec, ev_to_sort, _ = calc_expected_value(
-        trade_count, len(wins), total_r_win, total_r_loss, total_r_mult, EV_CALC_METHOD
-    )
+    win_rate = len(wins) / trade_count
+    if EV_CALC_METHOD == 'B':
+        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
+        loss_count = trade_count - len(wins)
+        avg_loss_r = abs(sum(t['r_mult'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+        ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
+    else: ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
 
-    is_candidate = (ev_to_sort > getattr(params, 'min_history_ev', 0.0)) and (win_rate_dec >= getattr(params, 'min_history_win_rate', 0.30))
-    return is_candidate, ev_to_sort, win_rate_dec
+    is_candidate = (ev_to_sort > getattr(params, 'min_history_ev', 0.0)) and (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
+    return is_candidate, ev_to_sort, win_rate
 
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
     start_dt = pd.to_datetime(f"{start_year}-01-01")
@@ -85,6 +84,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     for i in range(start_idx, len(sorted_dates)):
         sim_days += 1
         today = sorted_dates[i]
+        yesterday = sorted_dates[i-1]
         
         available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
@@ -268,8 +268,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         else: tp_px = cand['chase_data']['tp']
                             
                         initial_risk = (actual_cost_per_share - net_sl_per_share) * qty
-                        # # (AI註: 消除 Magic Number)
-                        if initial_risk <= 0: initial_risk = actual_total_cost * params.fixed_risk
+                        if initial_risk <= 0: initial_risk = actual_total_cost * 0.01
                         
                         portfolio[cand['ticker']] = {
                             'qty': qty, 'entry': actual_cost_per_share, 'sl': max(cand['init_sl'], cand['init_trail']), 
@@ -389,16 +388,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     if trade_count > 0:
         wins = [t for t in closed_trades_stats if t['pnl'] > 0]
         losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
-        
-        total_r_win = sum(t['r_mult'] for t in wins)
-        total_r_loss = sum(t['r_mult'] for t in losses)
-        total_r_mult = sum(t['r_mult'] for t in closed_trades_stats)
+        win_rate = (len(wins) / trade_count) * 100
+        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
+        avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
+        pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
 
-        # # (AI註: 確保結算時的 PnL 與 EV 統計口徑 100% 吻合)
-        win_rate_dec, pf_ev, pf_payoff = calc_expected_value(
-            trade_count, len(wins), total_r_win, total_r_loss, total_r_mult, EV_CALC_METHOD
-        )
-        win_rate = win_rate_dec * 100
+        if EV_CALC_METHOD == 'B':
+            payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+            pf_ev = (win_rate / 100 * payoff_for_ev) - (1 - win_rate / 100)
+        else: pf_ev = sum(t['r_mult'] for t in closed_trades_stats) / trade_count
     else: win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
         
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
