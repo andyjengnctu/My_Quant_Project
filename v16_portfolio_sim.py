@@ -40,7 +40,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(data_dir, file))
-            # 🌟 根目錄版本修復：統一長度門檻
             if len(df) < params.high_len + 10: continue
             
             df.columns = [c.capitalize() for c in df.columns]
@@ -70,11 +69,12 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     print(" " * 120, end="\r") 
     
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+    # 🚀 修復 3：同步接收所有 19 個回傳值 (含 max_exp)
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False
     )
-    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -90,13 +90,11 @@ if __name__ == "__main__":
     if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
     
-    avg_exposure = df_eq['Exposure_Pct'].mean() if not df_eq.empty else 0.0
-    max_exposure = df_eq['Exposure_Pct'].max() if not df_eq.empty else 0.0
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
     
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
@@ -107,9 +105,9 @@ if __name__ == "__main__":
     print_strategy_dashboard(
         params=params, title="績效與風險對比表", mode_display=mode_display, max_pos=USER_MAX_POS,
         trades=trade_count, missed_b=total_missed, missed_s=total_missed_sells,
-        final_eq=final_eq, avg_exp=avg_exposure, sys_ret=tot_ret, bm_ret=bm_ret,
+        final_eq=final_eq, avg_exp=avg_exp, sys_ret=tot_ret, bm_ret=bm_ret,
         sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,
-        benchmark_ticker=USER_BENCHMARK, max_exp=max_exposure,
+        benchmark_ticker=USER_BENCHMARK, max_exp=max_exp,
         r_sq=r_sq, m_win_rate=m_win_rate, bm_r_sq=bm_r_sq, bm_m_win_rate=bm_m_win_rate
     )
     

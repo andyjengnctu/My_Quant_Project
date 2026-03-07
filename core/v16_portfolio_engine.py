@@ -161,6 +161,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     sim_days = 0
     total_missed_buys = 0  
     total_missed_sells = 0 
+    max_exp = 0.0  
     
     monthly_equities = []
     bm_monthly_equities = []
@@ -199,7 +200,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         candidates_today = []
         tickers_to_remove = []
 
-        for ticker, pos in portfolio.items():
+        for ticker in sorted(portfolio.keys()):
+            pos = portfolio[ticker]
             fast_df = all_dfs_fast[ticker]
             if today not in fast_df: continue 
             
@@ -264,7 +266,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
 
         for t in tickers_to_remove: del portfolio[t]
 
-        for ticker, fast_df in all_dfs_fast.items():
+        for ticker in sorted(all_dfs_fast.keys()):
+            fast_df = all_dfs_fast[ticker]
             if ticker in portfolio or ticker in held_yesterday: continue 
             if today not in fast_df: continue
             
@@ -303,57 +306,57 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: x['ev'], reverse=True)
             else: candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
 
+            # 3. 汰弱換強邏輯 (🚀 修復 1：原子操作，避免錯位買進)
             if len(portfolio) == max_positions and enable_rotation:
-                best_cand = candidates_today[0]
-                weakest_ticker, lowest_ret, weakest_ev = None, 0.0, 0.0
-                
-                for pt, pos in portfolio.items():
-                    if today not in all_dfs_fast[pt]: continue
-
-                    if yesterday in all_dfs_fast[pt]:
-                        pt_y_row = all_dfs_fast[pt][yesterday]
-                    else:
-                        past_dates = [d for d in all_dfs_fast[pt].keys() if d < today]
-                        if not past_dates: continue
-                        pt_y_row = all_dfs_fast[pt][max(past_dates)]
-
-                    ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
-                    if ret < lowest_ret:
-                        _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], today, params)
-                        if holding_ev < best_cand['ev']:
-                            lowest_ret = ret
-                            weakest_ticker = pt
-                            weakest_ev = holding_ev
-                
-                if weakest_ticker:
-                    w_row = all_dfs_fast[weakest_ticker][today] 
-                    
-                    if yesterday in all_dfs_fast[weakest_ticker]:
-                        w_y_row = all_dfs_fast[weakest_ticker][yesterday]
-                    else:
-                        past_dates = [d for d in all_dfs_fast[weakest_ticker].keys() if d < today]
-                        w_y_row = all_dfs_fast[weakest_ticker][max(past_dates)]
-
-                    is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
-                    
-                    if is_locked_down: 
-                        total_missed_sells += 1
-                    else:
-                        pos = portfolio[weakest_ticker]
-                        est_sell_px = adjust_to_tick(w_row['Open'])
-                        est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
+                rotated_this_turn = False
+                for cand in list(candidates_today): # 複製清單以安全移除
+                    if rotated_this_turn: break 
+                    if cand['qty'] <= 0 or cand['proj_cost'] > available_cash: continue 
                         
-                        # 🚀 終極修復：拿掉 est_cash_freed，嚴格守住 T-1 盤後現金額度
-                        test_cash = available_cash 
-                        cand_qty = best_cand['qty']
-                        cand_cost = best_cand['proj_cost']
+                    weakest_ticker, lowest_ret = None, 0.0
+                    
+                    for pt in sorted(portfolio.keys()):
+                        pos = portfolio[pt]
+                        if today not in all_dfs_fast[pt]: continue
+
+                        if yesterday in all_dfs_fast[pt]:
+                            pt_y_row = all_dfs_fast[pt][yesterday]
+                        else:
+                            past_dates = [d for d in all_dfs_fast[pt].keys() if d < today]
+                            if not past_dates: continue
+                            pt_y_row = all_dfs_fast[pt][max(past_dates)]
+
+                        ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
+                        if ret < lowest_ret:
+                            _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], today, params)
+                            if cand['ev'] > holding_ev:
+                                lowest_ret = ret
+                                weakest_ticker = pt
+                    
+                    if weakest_ticker:
+                        w_row = all_dfs_fast[weakest_ticker][today] 
                         
-                        if cand_qty > 0 and cand_cost <= test_cash:
+                        if yesterday in all_dfs_fast[weakest_ticker]:
+                            w_y_row = all_dfs_fast[weakest_ticker][yesterday]
+                        else:
+                            past_dates = [d for d in all_dfs_fast[weakest_ticker].keys() if d < today]
+                            w_y_row = all_dfs_fast[weakest_ticker][max(past_dates)]
+
+                        is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
+                        
+                        if is_locked_down: 
+                            total_missed_sells += 1
+                            continue 
+                        else:
+                            # [賣出弱勢股]
+                            pos = portfolio[weakest_ticker]
+                            est_sell_px = adjust_to_tick(w_row['Open'])
+                            est_cash_freed = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
+                            
                             exec_price = est_sell_px
                             pnl = est_cash_freed - (pos['entry'] * pos['qty'])
                             
                             cash += est_cash_freed
-                            # ❌ (AI註: 拿掉 available_cash += est_cash_freed，確保今天賣出的錢明天才能用)
                             
                             total_pnl = pos['realized_pnl'] + pnl
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
@@ -361,6 +364,33 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                             del portfolio[weakest_ticker]
+                            
+                            # [立刻綁定買進觸發者，保證不會錯位]
+                            buy_price = cand['exec_px']
+                            qty = cand['qty']
+                            entry_cost_per_share = calc_entry_price(buy_price, qty, params)
+                            cost_total = entry_cost_per_share * qty
+                            
+                            available_cash -= cost_total
+                            cash -= cost_total
+                            net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params) 
+                            tp_target = adjust_to_tick(buy_price + (entry_cost_per_share - net_sl_per_share))
+                            initial_risk = (entry_cost_per_share - net_sl_per_share) * qty
+                            if initial_risk <= 0: initial_risk = cost_total * 0.01
+                            
+                            portfolio[cand['ticker']] = {
+                                'qty': qty, 'entry': entry_cost_per_share, 'sl': cand['sl_price'], 
+                                'initial_stop': cand['init_sl'], 'trailing_stop': cand['init_trail'],
+                                'tp_half': tp_target, 'sold_half': False, 'last_px': buy_price,
+                                'realized_pnl': 0.0, 'initial_risk_total': initial_risk,
+                                'pure_buy_price': buy_price
+                            }
+                            if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
+                            
+                            # 剔除已被買進的候選股，跳出尋找
+                            candidates_today.remove(cand)
+                            rotated_this_turn = True
+                            break
 
             for cand in candidates_today:
                 if len(portfolio) < max_positions:
@@ -392,7 +422,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 
         today_equity = cash  
-        for pt, pos in portfolio.items():
+        for pt in sorted(portfolio.keys()):
+            pos = portfolio[pt]
             px = all_dfs_fast[pt][today]['Close'] if today in all_dfs_fast[pt] else pos.get('last_px', pos['entry'])
             pos['last_px'] = px
             net_px = calc_net_sell_price(px, pos['qty'], params) 
@@ -402,6 +433,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         invested_capital = today_equity - cash
         exposure_pct = (invested_capital / today_equity) * 100 if today_equity > 0 else 0
         total_exposure += exposure_pct
+        if exposure_pct > max_exp: max_exp = exposure_pct 
 
         strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
         
@@ -442,7 +474,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
 
     final_cash = cash
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
-    for ticker, pos in list(portfolio.items()):
+    
+    for ticker in sorted(list(portfolio.keys())):
+        pos = portfolio[ticker]
         exec_price = pos.get('last_px', pos['entry'])
         net_price = calc_net_sell_price(exec_price, pos['qty'], params)
         final_cash += net_price * pos['qty']
@@ -454,6 +488,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         
         if not is_training:
             trade_history.append({"Date": last_date.strftime('%Y-%m-%d') if last_date else "", "Ticker": ticker, "Type": "期末強制結算", "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+        
+        del portfolio[ticker] 
 
     today_equity = final_cash
     total_return = (today_equity - initial_capital) / initial_capital * 100
@@ -461,6 +497,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     if not is_training and len(equity_curve) > 0:
         equity_curve[-1]['Equity'] = today_equity
         equity_curve[-1]['Strategy_Return_Pct'] = total_return
+        # 🚀 修復 2：安全加回結算後的歸零 (不影響平均，但確保清單最後一天乾淨)
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
 
@@ -488,9 +525,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
 
     if is_training:
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
     else:
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
         final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
+        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
