@@ -176,7 +176,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
         else: candidates_today.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
 
-        # 3. 汰弱換強邏輯 (問題3修復 - 逐一檢查 candidate 並強制綁定)
+        # # (AI註: 盤前配額快照 - 提早到 Rotation 之前計算)
+        # 嚴守 Rule 11d: 盤前已佔用的額度 = 昨日留倉數 + 今日因常規停損停利賣出 (不可回補)
+        pre_market_occupied = len(portfolio) + len(sold_today)
+
+        # 3. 汰弱換強邏輯 (單一真理來源，絕不重複)
         if len(portfolio) == max_positions and enable_rotation and candidates_today:
             # # (AI註: 將索引命名為 cand_idx，絕不與外層日期的 i 衝突)
             for cand_idx in range(len(candidates_today)):
@@ -231,18 +235,20 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             del portfolio[weakest_ticker]
                             sold_today.add(weakest_ticker) 
                             
+                            # # (AI註: 🚨 副作用修復 - 既然是盤前決定換股，這個空缺就是專屬讓給新標的的，必須把配額吐出來！)
+                            pre_market_occupied -= 1
+                            
                             # 關鍵綁定: 剔除因資格不符未觸發 rotation 的前序 Candidate
-                            # 正確使用 cand_idx 進行切片
                             candidates_today = candidates_today[cand_idx:]
                             break
 
         # 4. 嘗試買進 (嚴守 11d 資金定錨與 11b 不挪用找零)
-        # # (AI註: 修復 Bug 1 - 計算盤前佔用的額度，嚴守「盤前掛單」。今日賣出所空出的額度，要等到明日迴圈才能用)
-        pre_market_occupied = len(portfolio) + len(sold_today)
-
         for cand in candidates_today:
             if pre_market_occupied < max_positions and cand['proj_cost'] <= available_cash:
+                
+                # # (AI註: 嚴守 Rule 11c - 只要盤前決定對此檔掛單，就同步扣除「預扣資金」與「掛單檔數配額」，絕對禁止盤中候補買進下一檔)
                 available_cash -= cand['proj_cost'] # 圈存資金
+                pre_market_occupied += 1            # 消耗掛單配額
                 
                 t_row = cand['t_row']
                 y_row = cand['y_row']
@@ -275,7 +281,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             'realized_pnl': 0.0, 'initial_risk_total': initial_risk
                         }
                         buyTriggered = True
-                        pre_market_occupied += 1 # # (AI註: 修復 Bug 1 - 成功買入，盤前預估額度被扣一檔)
                         
                         if cand['ticker'] in pending_chases: del pending_chases[cand['ticker']]
                         if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
