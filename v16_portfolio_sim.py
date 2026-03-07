@@ -12,7 +12,6 @@ from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, 
 
 warnings.filterwarnings('ignore')
 
-# (AI註: 修復 3: 執行前確認/建立輸出資料夾，避免寫入 Excel 或 HTML 時拋出 OSError)
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
@@ -38,7 +37,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(data_dir, file))
-            if len(df) < 150: continue
+            # (AI註: 修復 4: 將寫死的 150 改為 params.high_len + 10，完全對齊 Scanner 過濾門檻)
+            if len(df) < params.high_len + 10: continue
+            
             df.columns = [c.capitalize() for c in df.columns]
             df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
             date_col = 'Time' if 'Time' in df.columns else 'Date'

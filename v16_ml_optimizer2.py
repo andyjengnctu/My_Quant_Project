@@ -15,7 +15,6 @@ from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, 
 warnings.filterwarnings('ignore')
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-# (AI註: 修復 3: 執行前確認/建立輸出與模型資料夾，避免儲存 json/db 時拋出 FileNotFoundError)
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
@@ -33,7 +32,8 @@ def load_all_raw_data():
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(DATA_DIR, file))
-            if len(df) < 150: continue
+            # (AI註: 修復 4 - 第一階段: 快取時放寬過濾條件到 50，將嚴格篩選交給 Worker 動態處理)
+            if len(df) < 50: continue
             df.columns = [c.capitalize() for c in df.columns]
             df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
             date_col = 'Time' if 'Time' in df.columns else 'Date'
@@ -48,6 +48,10 @@ def load_all_raw_data():
 
 def worker_prep_data(ticker, df, params):
     try:
+        # (AI註: 修復 4 - 第二階段: AI 動態生成 high_len 後，嚴格執行與 Scanner 一致的股票濾網)
+        if len(df) < params.high_len + 10:
+            return ticker, None, None
+            
         df_prepared, logs = prep_stock_data_and_trades(df, params)
         return ticker, df_prepared.to_dict('index'), logs
     except Exception as e: 
