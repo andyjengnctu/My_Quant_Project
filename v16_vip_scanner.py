@@ -49,33 +49,30 @@ def process_single_stock(file_path, ticker, params):
         if not stats or not stats['is_candidate']: return None
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        
         DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            if proj_qty == 0:
-                return ('candidate', None, None, None)
+            if proj_qty == 0: return ('candidate', None, None, None)
                 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
             est_target = stats['buy_limit'] + (stats['buy_limit'] - stats['stop_loss'])
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
+            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 預計投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
             
             return ('buy', proj_cost, stats['expected_value'], msg)
             
+        # # (AI註: 單一真理來源判定，杜絕 is_in_buy_zone)
         elif stats.get('chase_today') is not None:
             chase = stats['chase_today']
             chase_qty = calc_position_size(chase['chase_price'], chase['sl'], DUMMY_CAPITAL, params.fixed_risk, params)
-            
-            if chase_qty == 0:
-                return ('candidate', None, None, None)
+            if chase_qty == 0: return ('candidate', None, None, None)
                 
             proj_cost = calc_entry_price(chase['chase_price'], chase_qty, params) * chase_qty
             days = chase.get('days_since_setup', 1)
             
             zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 遲到補車 (已發動 {days} 天)] {ticker:<5} | {stat_str} | {zone_str} (股數已縮減)"
+            msg = f"[⚠️ 遲到補車 (發動 {days} 天)] {ticker:<5} | {stat_str} | {zone_str} (已縮倉)"
             
             return ('zone', proj_cost, stats['expected_value'], msg)
             
@@ -93,7 +90,7 @@ def run_daily_scanner(data_dir):
         print(f"❌ 找不到資料夾 {data_dir}。")
         return
 
-    csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
     total_files = len(csv_files)
     if total_files == 0: return
 
@@ -118,8 +115,7 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 4:
                 status, proj_cost, ev, msg = result
-                if status in ['buy', 'zone', 'candidate']:
-                    count_candidates += 1
+                if status in ['buy', 'zone', 'candidate']: count_candidates += 1
                     
                 if status == 'buy':
                     print(" " * 120, end="\r")
@@ -129,9 +125,6 @@ def run_daily_scanner(data_dir):
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
-                elif status == 'error':
-                    print(" " * 120, end="\r")
-                    print(f"{C_YELLOW}{msg}{C_RESET}")
 
     elapsed_time = time.time() - start_time
     
