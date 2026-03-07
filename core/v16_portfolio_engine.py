@@ -29,7 +29,6 @@ def calc_curve_stats(eq_list):
     return r_squared, monthly_win_rate
 
 def prep_stock_data_and_trades(df, params):
-    # 單純預處理 DataFrame，不回測，統一交給 portfolio_timeline
     df = df.copy()
     ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
     df['ATR'] = ATR_main
@@ -39,7 +38,6 @@ def prep_stock_data_and_trades(df, params):
     return df, []
 
 def get_pit_stats(trade_logs, current_date, params):
-    # current_date 在推進時已經是 today，因此 < today 剛好對齊 T-1 的收盤後視角
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
     min_trades_req = getattr(params, 'min_history_trades', 0)
@@ -49,7 +47,6 @@ def get_pit_stats(trade_logs, current_date, params):
     
     wins = [t for t in past_trades if t['pnl'] > 0]
     win_rate = len(wins) / trade_count
-    
     if EV_CALC_METHOD == 'B':
         avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
         loss_count = trade_count - len(wins)
@@ -88,7 +85,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs_dummy, sorted_dates, sta
         today = sorted_dates[i]
         yesterday = sorted_dates[i-1]
         
-        # # (AI註: 每日盤前重置 available_cash。嚴守 11b 規定)
         available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
         
@@ -113,8 +109,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs_dummy, sorted_dates, sta
                 pos, y_row['ATR'], y_row['ind_sell_signal'], y_row['Close'], 
                 t_row['Open'], t_row['High'], t_row['Low'], t_row['Close'], params
             )
-            
-            # # (AI註: 賣出資金僅入帳 cash，不灌回 available_cash，當天無法買新股)
             cash += freed_cash
             
             if 'TP_HALF' in events and not is_training:
@@ -132,7 +126,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs_dummy, sorted_dates, sta
 
         for t in tickers_to_remove: del portfolio[t]
 
-        # 2. 獲取當日候選標的 (完全基於 T-1 視角，杜絕未來函數)
+        # 2. 獲取當日候選標的 (完全基於 T-1 視角)
         candidates_today = []
         for ticker in sorted(all_dfs_fast.keys()):
             if ticker in portfolio: continue 
@@ -147,13 +141,16 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs_dummy, sorted_dates, sta
             if y_row['is_setup']:
                 is_candidate, ev, win_rate = get_pit_stats(real_trade_logs[ticker], today, params)
                 if is_candidate:
-                    # # (AI註: 預估股數嚴格使用 y_row 資訊)
-                    est_qty = calc_position_size(y_row['buy_limit'], y_row['buy_limit'] - y_row['ATR'] * params.atr_times_init, sizing_equity, params.fixed_risk, params)
+                    # # (AI註: 嚴格利用 T-1 buy_limit 鎖定盤前計畫)
+                    est_init_sl = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_init)
+                    est_init_trail = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_trail)
+                    est_qty = calc_position_size(y_row['buy_limit'], est_init_sl, sizing_equity, params.fixed_risk, params)
                     if est_qty > 0:
                         est_cost = calc_entry_price(y_row['buy_limit'], est_qty, params) * est_qty
                         candidates_today.append({
                             'ticker': ticker, 'type': 'normal', 'limit_px': y_row['buy_limit'], 'ev': ev, 
-                            'y_atr': y_row['ATR'], 't_row': fast_df[today], 'y_row': y_row, 'qty': est_qty, 'proj_cost': est_cost
+                            'y_atr': y_row['ATR'], 't_row': fast_df[today], 'y_row': y_row, 'qty': est_qty, 'proj_cost': est_cost,
+                            'init_sl': est_init_sl, 'init_trail': est_init_trail
                         })
             
             elif ticker in pending_chases:
@@ -165,99 +162,106 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs_dummy, sorted_dates, sta
                         est_cost = calc_entry_price(chase['chase_price'], est_qty, params) * est_qty
                         candidates_today.append({
                             'ticker': ticker, 'type': 'chase', 'limit_px': chase['chase_price'], 'ev': ev, 
-                            'y_atr': y_row['ATR'], 't_row': fast_df[today], 'y_row': y_row, 'qty': est_qty, 'proj_cost': est_cost, 'chase_data': chase
+                            'y_atr': y_row['ATR'], 't_row': fast_df[today], 'y_row': y_row, 'qty': est_qty, 'proj_cost': est_cost, 
+                            'chase_data': chase, 'init_sl': chase['sl'], 'init_trail': chase['sl']
                         })
         
-        if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: x['ev'], reverse=True)
-        else: candidates_today.sort(key=lambda x: x['proj_cost'], reverse=True)
+        # 排序加入 ticker 確保 tie-break 決定性
+        if BUY_SORT_METHOD == 'EV': candidates_today.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
+        else: candidates_today.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
 
-        # 3. 汰弱換強邏輯 (盤前評估，T日執行賣出，資金無法同日重用)
+        # 3. 汰弱換強邏輯 (盤前評估，逐一比對 candidate)
         if len(portfolio) == max_positions and enable_rotation and candidates_today:
-            best_cand = candidates_today[0]
-            weakest_ticker = None; lowest_ret = 0.0
-            
-            for pt in sorted(portfolio.keys()):
-                pos = portfolio[pt]
-                d_list = ticker_dates[pt]
-                idx = bisect.bisect_left(d_list, today)
-                if idx == 0: continue
-                pt_y_row = all_dfs_fast[pt][d_list[idx - 1]]
-                
-                ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
-                if ret < lowest_ret:
-                    _, holding_ev, _ = get_pit_stats(real_trade_logs[pt], today, params)
-                    if best_cand['ev'] > holding_ev:
-                        lowest_ret = ret; weakest_ticker = pt
+            for cand in candidates_today:
+                weakest_ticker = None; lowest_ret = 0.0
+                for pt in sorted(portfolio.keys()):
+                    pos = portfolio[pt]
+                    d_list = ticker_dates[pt]
+                    idx = bisect.bisect_left(d_list, today)
+                    if idx == 0: continue
+                    pt_y_row = all_dfs_fast[pt][d_list[idx - 1]]
+                    
+                    ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
+                    if ret < lowest_ret:
+                        _, holding_ev, _ = get_pit_stats(real_trade_logs[pt], today, params)
+                        if cand['ev'] > holding_ev:
+                            lowest_ret = ret; weakest_ticker = pt
 
-            if weakest_ticker:
-                w_row = all_dfs_fast[weakest_ticker][today]
-                w_y_row = all_dfs_fast[weakest_ticker][ticker_dates[weakest_ticker][bisect.bisect_left(ticker_dates[weakest_ticker], today) - 1]]
-                is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
-                if not is_locked_down:
-                    pos = portfolio[weakest_ticker]
-                    exec_price = adjust_to_tick(w_row['Open'])
-                    net_price = calc_net_sell_price(exec_price, pos['qty'], params)
-                    freed_cash = net_price * pos['qty']
-                    pnl = freed_cash - (pos['entry'] * pos['qty'])
-                    cash += freed_cash # 釋放進 cash
-                    total_pnl = pos['realized_pnl'] + pnl
-                    total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                    closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
-                    real_trade_logs[weakest_ticker].append({'exit_date': today, 'pnl': total_pnl, 'r_mult': total_r})
-                    if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
-                    del portfolio[weakest_ticker]
+                if weakest_ticker:
+                    w_row = all_dfs_fast[weakest_ticker][today]
+                    w_y_row = all_dfs_fast[weakest_ticker][ticker_dates[weakest_ticker][bisect.bisect_left(ticker_dates[weakest_ticker], today) - 1]]
+                    is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
+                    if not is_locked_down:
+                        pos = portfolio[weakest_ticker]
+                        exec_price = adjust_to_tick(w_row['Open'])
+                        net_price = calc_net_sell_price(exec_price, pos['qty'], params)
+                        freed_cash = net_price * pos['qty']
+                        pnl = freed_cash - (pos['entry'] * pos['qty'])
+                        # # (AI註: 賣出的錢只進 cash，不進 available_cash。新股今天無法成交)
+                        cash += freed_cash 
+                        total_pnl = pos['realized_pnl'] + pnl
+                        total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+                        real_trade_logs[weakest_ticker].append({'exit_date': today, 'pnl': total_pnl, 'r_mult': total_r})
+                        if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": weakest_ticker, "Type": "汰弱賣出(Open)", "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
+                        del portfolio[weakest_ticker]
+                        break # 一天只換一檔
 
-        # 4. 嘗試買進 (嚴守 11c 資金掛單鎖定機制)
+        # 4. 嘗試買進 (嚴守 11c, 11d 資金不挪用原則)
         for cand in candidates_today:
             if len(portfolio) < max_positions and cand['proj_cost'] <= available_cash:
-                available_cash -= cand['proj_cost'] # 盤前圈存資金，即使沒買到今天也不能挪用
+                available_cash -= cand['proj_cost'] # 盤前圈存資金，若盤中沒買到，今天也不能挪用給別人
+                
                 t_row = cand['t_row']
                 y_row = cand['y_row']
                 is_locked_up = (t_row['Open'] == t_row['High']) and (t_row['High'] == t_row['Low']) and (t_row['Low'] == t_row['Close']) and (t_row['Close'] > y_row['Close'])
+                buyTriggered = False
                 
                 if t_row['Low'] <= cand['limit_px'] and not is_locked_up: 
                     buy_price = adjust_to_tick(min(t_row['Open'], cand['limit_px']))
                     
-                    if cand['type'] == 'normal':
-                        init_sl = adjust_to_tick(buy_price - cand['y_atr'] * params.atr_times_init)
-                        init_trail = adjust_to_tick(buy_price - cand['y_atr'] * params.atr_times_trail)
-                        tp_px = np.nan 
-                    else:
-                        init_sl = cand['chase_data']['sl']
-                        init_trail = cand['chase_data']['sl']
-                        tp_px = cand['chase_data']['tp']
+                    # 確保不會跳空暴跌擊穿盤前定好的停損
+                    if buy_price > cand['init_sl']:
+                        qty = cand['qty'] # 嚴格使用盤前設定好的股數
+                        actual_cost_per_share = calc_entry_price(buy_price, qty, params)
+                        actual_total_cost = actual_cost_per_share * qty
                         
-                    qty = cand['qty'] # 嚴守 11d: 股數不可因盤中價更低而變多
-                    actual_cost_per_share = calc_entry_price(buy_price, qty, params)
-                    actual_total_cost = actual_cost_per_share * qty
-                    
-                    # 多扣的找零退回帳戶 (當天依然無法使用)
-                    change = cand['proj_cost'] - actual_total_cost
-                    available_cash += change
-                    cash -= actual_total_cost
-                    
-                    net_sl_per_share = calc_net_sell_price(init_sl, qty, params) 
-                    if np.isnan(tp_px): tp_px = adjust_to_tick(buy_price + (actual_cost_per_share - net_sl_per_share))
-                    initial_risk = (actual_cost_per_share - net_sl_per_share) * qty
-                    if initial_risk <= 0: initial_risk = actual_total_cost * 0.01
-                    
-                    portfolio[cand['ticker']] = {
-                        'qty': qty, 'entry': actual_cost_per_share, 'sl': max(init_sl, init_trail), 
-                        'initial_stop': init_sl, 'trailing_stop': init_trail,
-                        'tp_half': tp_px, 'sold_half': False, 'pure_buy_price': buy_price,
-                        'realized_pnl': 0.0, 'initial_risk_total': initial_risk
-                    }
-                    if cand['ticker'] in pending_chases: del pending_chases[cand['ticker']]
-                    if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
-                else:
+                        # 實際花費從 cash 扣除。找零 (change) 留在帳上，當天不會灌回 available_cash
+                        cash -= actual_total_cost
+                        
+                        net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params) 
+                        if cand['type'] == 'normal': tp_px = adjust_to_tick(buy_price + (actual_cost_per_share - net_sl_per_share))
+                        else: tp_px = cand['chase_data']['tp']
+                            
+                        initial_risk = (actual_cost_per_share - net_sl_per_share) * qty
+                        if initial_risk <= 0: initial_risk = actual_total_cost * 0.01
+                        
+                        portfolio[cand['ticker']] = {
+                            'qty': qty, 'entry': actual_cost_per_share, 'sl': max(cand['init_sl'], cand['init_trail']), 
+                            'initial_stop': cand['init_sl'], 'trailing_stop': cand['init_trail'],
+                            'tp_half': tp_px, 'sold_half': False, 'pure_buy_price': buy_price,
+                            'realized_pnl': 0.0, 'initial_risk_total': initial_risk
+                        }
+                        buyTriggered = True
+                        if cand['ticker'] in pending_chases: del pending_chases[cand['ticker']]
+                        if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
+
+                # 沒買到 (或跳空暴跌放棄)，則進入追車評估
+                if not buyTriggered:
                     total_missed_buys += 1
+                    # # (AI註: 統一 Chase 續追邏輯)
                     if cand['type'] == 'normal':
                         chase_res = evaluate_chase_condition(t_row['Close'], cand['limit_px'], cand['y_atr'], params)
                         if chase_res: pending_chases[cand['ticker']] = chase_res
                     elif cand['type'] == 'chase':
                         chase = cand['chase_data']
-                        chase_res = evaluate_chase_condition(t_row['Close'], chase['sl'] + (cand['limit_px'] - chase['sl']), cand['y_atr'], params) 
-                        if chase_res: pending_chases[cand['ticker']]['chase_price'] = t_row['Close']
+                        if chase['sl'] < t_row['Close'] < chase['tp']:
+                            risk = t_row['Close'] - chase['sl']
+                            reward = chase['tp'] - t_row['Close']
+                            rr_threshold = getattr(params, 'min_chase_rr', 0.5)
+                            if risk > 0 and (reward / risk) >= rr_threshold:
+                                pending_chases[cand['ticker']]['chase_price'] = t_row['Close']
+                            else: del pending_chases[cand['ticker']]
                         else: del pending_chases[cand['ticker']]
 
         today_equity = cash  
