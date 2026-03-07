@@ -10,6 +10,7 @@ testing_csv/
 *.xlsx
 *.html
 *.7z
+*.zip
 
 # 忽略 Python 運行暫存檔
 __pycache__/
