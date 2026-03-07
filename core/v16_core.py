@@ -51,6 +51,25 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         qty -= 1
     return 0
 
+# # (AI註: 統一真理來源 - 將 EV 與 Payoff 計算集中，確保回測、優化、模擬的統計口徑 100% 吻合)
+def calc_expected_value(trade_count, win_count, total_r_win, total_r_loss, total_r_multiple, ev_method='A'):
+    if trade_count == 0:
+        return 0.0, 0.0, 0.0
+        
+    win_rate_dec = win_count / trade_count
+    loss_count = trade_count - win_count
+    avg_win_r = total_r_win / win_count if win_count > 0 else 0.0
+    avg_loss_r = abs(total_r_loss) / loss_count if loss_count > 0 else 0.0
+    payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+    
+    if ev_method == 'B':
+        payoff_for_ev = min(10.0, payoff)
+        ev = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
+    else:
+        ev = total_r_multiple / trade_count
+        
+    return win_rate_dec, ev, payoff
+
 # # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
@@ -286,7 +305,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
                     tp_half = adjust_to_tick(buyPrice + (entryPrice - net_sl))
                     init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    
+                    # # (AI註: 消除 Magic Number，將極端情況的預設風險與系統設定強制掛鉤)
+                    if init_risk <= 0: init_risk = sizing_cap * params.fixed_risk
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
@@ -315,7 +336,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
                     init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    
+                    # # (AI註: 消除 Magic Number)
+                    if init_risk <= 0: init_risk = sizing_cap * params.fixed_risk
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': planned_init_sl,
@@ -347,15 +370,11 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
-    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
     
-    if EV_CALC_METHOD == 'B':
-        win_rate_dec = fullWins / tradeCount if tradeCount > 0 else 0
-        avg_win_r = total_r_win / fullWins if fullWins > 0 else 0
-        avg_loss_r = total_r_loss / lossCount if lossCount > 0 else 0
-        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-        expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
-    else: expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
+    # # (AI註: 套用單一真理來源)
+    _, expectedValue, payoffRatio = calc_expected_value(
+        tradeCount, fullWins, total_r_win, total_r_loss, total_r_multiple, EV_CALC_METHOD
+    )
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0

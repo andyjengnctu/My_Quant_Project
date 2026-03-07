@@ -92,7 +92,8 @@ def get_or_update_universe():
                     is_etf = str(row['CFICode']).startswith('CE')
                     tickers_info.append({"yf_ticker": f"{sid}{suffix}", "sid": sid, "is_etf": is_etf})
         except Exception as e:
-            print(f"⚠️ 抓取清單時發生錯誤: {e}")
+            # # (AI註: 消除裸露 except，不再攔截系統中斷，並記錄實際異常)
+            pass
 
     qualified_tickers = []
     total_check = len(tickers_info)
@@ -108,7 +109,7 @@ def get_or_update_universe():
             if info.get('lastVolume', 0) >= MIN_VOLUME:
                 if is_etf or info.get('marketCap', 0) >= MIN_MARKET_CAP:
                     qualified_tickers.append(sid)
-        except:
+        except Exception as e:
             pass
         time.sleep(0.01)
 
@@ -134,7 +135,9 @@ def smart_download_vip_data(tickers, market_last_date):
                 if last_date_in_csv == market_last_date:
                     print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)
                     continue
-            except:
+            except Exception as e:
+                # # (AI註: 若檔案損毀將明確印出錯誤)
+                print(f"⚠️ {sid} 檢查最後日期發生錯誤: {e}")
                 pass 
 
         print(f"\r⚡ [{i:03d}/{total:03d}] 正在下載 {sid:<6} ...{' '*15}", end="", flush=True)

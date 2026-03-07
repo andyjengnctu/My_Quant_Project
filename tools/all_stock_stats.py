@@ -77,7 +77,9 @@ def process_single_stock_for_export(file_name, params):
             "總資產報酬率 (%)": stats.get("asset_growth", 0.0),
             "最大回撤 MDD (%)": stats.get("max_drawdown", 0.0)
         }
-    except Exception:
+    except Exception as e:
+        # # (AI註: 補捉具體錯誤，避免運算失敗被無聲忽略)
+        print(f"{C_YELLOW}⚠️ 處理 {ticker} 時發生錯誤: {e}{C_RESET}")
         return None
 
 def main():
