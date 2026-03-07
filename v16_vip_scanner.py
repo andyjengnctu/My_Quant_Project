@@ -8,7 +8,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
+from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
@@ -53,20 +53,23 @@ def process_single_stock(file_path, ticker, params):
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            if proj_qty == 0: return ('candidate', None, None, None)
+            if proj_qty == 0: return ('candidate', None, None, None, ticker)
                 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
-            est_target = stats['buy_limit'] + (stats['buy_limit'] - stats['stop_loss'])
+            
+            actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
+            net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
+            est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
+            
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 預計投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
             
             return ('buy', proj_cost, stats['expected_value'], msg, ticker)
             
-        # 完全不再自作主張判斷，直接讀取大腦最新的 chase_today 狀態
         elif stats.get('chase_today') is not None:
             chase = stats['chase_today']
             proj_qty = chase['qty'] 
-            if proj_qty == 0: return ('candidate', None, None, None)
+            if proj_qty == 0: return ('candidate', None, None, None, ticker)
                 
             proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
             
@@ -75,7 +78,7 @@ def process_single_stock(file_path, ticker, params):
             
             return ('zone', proj_cost, stats['expected_value'], msg, ticker)
             
-        return ('candidate', None, None, None)
+        return ('candidate', None, None, None, ticker)
         
     except Exception as e:
         return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}", ticker)
@@ -124,6 +127,10 @@ def run_daily_scanner(data_dir):
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
+                # # (AI註: 修復低嚴重度問題 - 將異常檔案造成的錯誤印出，避免安靜地被吞掉)
+                elif status == 'error':
+                    print(" " * 120, end="\r")
+                    print(f"{C_YELLOW}{msg}{C_RESET}")
 
     elapsed_time = time.time() - start_time
     

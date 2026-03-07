@@ -1,16 +1,14 @@
 import os
+import sys
 import json
 import pandas as pd
-import numpy as np 
+import numpy as np
 import warnings
 import time
-from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
-# # (AI註: 修正低嚴重度問題 1 - 補上 adjust_to_tick 與 calc_net_sell_price 引入，以計算精準雙邊成本停利)
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
-from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
+from core.v16_config import V16StrategyParams
+from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
 
@@ -23,143 +21,113 @@ def load_dynamic_params(json_file):
         try:
             with open(json_file, 'r') as f:
                 data = json.load(f)
-            for key, value in data.items():
-                if hasattr(params, key): setattr(params, key, value)
+            for k, v in data.items():
+                if hasattr(params, k): setattr(params, k, v)
             return params, True
         except Exception as e: 
-            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {e}{C_RESET}")
+            print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {e}{C_RESET}")
     return params, False
 
-def process_single_stock(file_path, ticker, params):
-    try:
-        df = pd.read_csv(file_path)
-        if len(df) < params.high_len + 10: return None
-            
-        df.columns = [c.capitalize() for c in df.columns]
-        df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
-        
-        if 'Time' in df.columns:
-            df['Time'] = pd.to_datetime(df['Time'])
-            df.set_index('Time', inplace=True)
-        elif 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            
-        stats = run_v16_backtest(df, params)
-        
-        if not stats or not stats['is_candidate']: return None
-            
-        stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        DUMMY_CAPITAL = params.initial_capital
-        
-        if stats['is_setup_today']:
-            proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            # # (AI註: 修正回傳長度 - 確保回傳 5 個元素，對齊外層拆解邏輯)
-            if proj_qty == 0: return ('candidate', None, None, None, ticker)
-                
-            proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
-            
-            # # (AI註: 修正低嚴重度問題 1 - 將 Scanner 顯示的停利與 Portfolio 引擎的雙邊成本校正 1R 邏輯 100% 對齊)
-            actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
-            net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
-            est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
-            
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 預計投入:{proj_cost:>7,.0f}"
-            msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
-            
-            return ('buy', proj_cost, stats['expected_value'], msg, ticker)
-            
-        # 完全不再自作主張判斷，直接讀取大腦最新的 chase_today 狀態
-        elif stats.get('chase_today') is not None:
-            chase = stats['chase_today']
-            proj_qty = chase['qty'] 
-            if proj_qty == 0: return ('candidate', None, None, None, ticker)
-                
-            proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
-            
-            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
-            
-            return ('zone', proj_cost, stats['expected_value'], msg, ticker)
-            
-        return ('candidate', None, None, None, ticker)
-        
-    except Exception as e:
-        return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}", ticker)
-
-def run_daily_scanner(data_dir):
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    
+def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
     if not os.path.exists(data_dir):
-        print(f"❌ 找不到資料夾 {data_dir}。")
-        return
-
-    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
-    total_files = len(csv_files)
-    if total_files == 0: return
-
-    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
-    if is_loaded: print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
-    else: print(f"{C_YELLOW}⚠️ 找不到最佳參數，使用系統內建預設值。{C_RESET}")
-        
-    print_scanner_header(params)
-    print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
-
-    count_scanned, count_candidates = 0, 0
-    buy_list, in_zone_list = [], []
-    start_time = time.time()
-
-    with ProcessPoolExecutor() as executor:
-        futures = {executor.submit(process_single_stock, os.path.join(data_dir, f), f.replace('.csv', '').replace('TV_Data_Full_', ''), params): f for f in csv_files}
-
-        for future in as_completed(futures):
-            count_scanned += 1
-            print(f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}]{C_RESET}", end="\r", flush=True)
-            
-            result = future.result()
-            if result and len(result) == 5:
-                status, proj_cost, ev, msg, ticker = result
-                if status in ['buy', 'zone', 'candidate']: count_candidates += 1
-                    
-                if status == 'buy':
-                    print(" " * 120, end="\r")
-                    print(f"{C_RED}{msg}{C_RESET}")
-                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
-                elif status == 'zone':
-                    print(" " * 120, end="\r")
-                    print(f"{C_YELLOW}{msg}{C_RESET}")
-                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
-
-    elapsed_time = time.time() - start_time
+        print(f"\n{C_RED}❌ 嚴重錯誤：找不到資料夾 {data_dir}，請確認路徑或先下載資料！{C_RESET}")
+        sys.exit(1)
+    print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
+    all_dfs, all_trade_logs, master_dates = {}, {}, set()
     
-    if BUY_SORT_METHOD == 'EV':
-        buy_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
-        in_zone_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
-        sort_title = "按期望值 (EV) 由大到小排序"
-    else:
-        buy_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
-        in_zone_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
-        sort_title = "按預估投入資金由大到小排序"
+    # 確保作業系統層級的檔案讀取順序絕對一致
+    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
+    for count, file in enumerate(csv_files):
+        ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
+        try:
+            df = pd.read_csv(os.path.join(data_dir, file))
+            if len(df) < params.high_len + 10: continue
+            
+            df.columns = [c.capitalize() for c in df.columns]
+            df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
+            date_col = 'Time' if 'Time' in df.columns else 'Date'
+            df[date_col] = pd.to_datetime(df[date_col])
+            df.set_index(date_col, inplace=True)
+            
+            df, logs = prep_stock_data_and_trades(df, params)
+            all_dfs[ticker], all_trade_logs[ticker] = df, logs
+            master_dates.update(df.index)
+        except Exception as e:
+            print(f"{C_YELLOW}\n[警告] 股票 {ticker} 處理失敗: {e}{C_RESET}")
+            continue
+            
+        if count % 50 == 0: print(f"{C_GRAY}   進度: 已處理 {count} 檔股票...{C_RESET}", end="\r")
+
+    if not all_dfs:
+        print(f"\n{C_RED}❌ 嚴重錯誤：未能成功載入任何股票資料！{C_RESET}")
+        sys.exit()
+
+    sorted_dates = sorted(list(master_dates))
+    all_dfs_fast = {t: d.to_dict('index') for t, d in all_dfs.items()}
+    print(f"\n{C_GREEN}✅ 預處理完成！自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n")
+
+    benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
 
     print(" " * 120, end="\r") 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。歷史及格: {count_candidates} 檔")
     
-    if buy_list or in_zone_list:
-        print(f"\n{C_RED}🔥 【第一優先：明日掛單清單 (最新買訊)】 {sort_title} 🔥{C_RESET}")
-        if buy_list:
-            for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_RED}無最新買訊。{C_RESET}")
-
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已精準還原1R且縮倉)】 {sort_title} ⚠️{C_RESET}")
-        if in_zone_list:
-            for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")
-    else:
-        print(f"\n{C_GREEN}💤 今日無符合實戰買點的標的，保留現金，明日再戰！{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
+    # 精準 19 個變數解包，支援 max_exp
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+        all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, 
+        benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False
+    )
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate
 
 if __name__ == "__main__":
-    run_daily_scanner("tw_stock_data_vip")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    
+    USER_ROTATION = input(f"👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ").strip().upper() == 'Y'
+    USER_MAX_POS = int(input(f"👉 2. 最大持倉數量 (預設 10): ").strip() or 10)
+    USER_START_YEAR = int(input(f"👉 3. 開始回測年份 (預設 2015): ").strip() or 2015)
+    USER_BENCHMARK = input(f"👉 4. 大盤比較標的 (預設 0050): ").strip() or "0050"
+
+    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
+    if is_loaded: print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+
+    start_time = time.time()
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_simulation(
+        "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
+    )
+    end_time = time.time()
+    
+    mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
+    
+    print(f"\n{C_CYAN}================================================================================{C_RESET}")
+    print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"回測總耗時: {end_time - start_time:.2f} 秒")
+    
+    print_strategy_dashboard(
+        params=params, title="績效與風險對比表", mode_display=mode_display, max_pos=USER_MAX_POS,
+        trades=trade_count, missed_b=total_missed, missed_s=total_missed_sells,
+        final_eq=final_eq, avg_exp=avg_exp, sys_ret=tot_ret, bm_ret=bm_ret,
+        sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,
+        benchmark_ticker=USER_BENCHMARK, max_exp=max_exp,
+        r_sq=r_sq, m_win_rate=m_win_rate, bm_r_sq=bm_r_sq, bm_m_win_rate=bm_m_win_rate
+    )
+    
+    with pd.ExcelWriter("outputs/V16_Portfolio_Report.xlsx") as writer:
+        df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
+        df_tr.to_excel(writer, sheet_name="Trade History", index=False)
+    print(f"{C_GREEN}📁 完整資產曲線與交易明細已匯出至: V16_Portfolio_Report.xlsx{C_RESET}")
+
+    try:
+        import plotly.graph_objects as go
+        import webbrowser
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq['Strategy_Return_Pct'], mode='lines', name='V16 尊爵系統報酬 (%)', line=dict(color='#ff3333', width=3)))
+        bm_col = f"Benchmark_{USER_BENCHMARK}_Pct"
+        if bm_col in df_eq.columns:
+            fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq[bm_col], mode='lines', name=f'同期大盤 {USER_BENCHMARK} (%)', line=dict(color='#4dabf5', width=2), opacity=0.8))
+        fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {USER_BENCHMARK} 大盤</b> ({USER_START_YEAR} 至今)', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
+        html_filename = "outputs/V16_Portfolio_Dashboard.html"
+        fig.write_html(html_filename)
+        print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
+        webbrowser.open('file://' + os.path.realpath(html_filename))
+    except Exception: pass
