@@ -44,7 +44,6 @@ def process_single_stock(file_path, ticker, params):
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
             
-        latest_close = df['Close'].iloc[-1]
         stats = run_v16_backtest(df, params)
         
         if not stats or not stats['is_candidate']: return None
@@ -55,7 +54,6 @@ def process_single_stock(file_path, ticker, params):
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            # (AI註: 修復實戰假訊號：股數為 0 時代表風險過大買不起，降級為歷史及格標的)
             if proj_qty == 0:
                 return ('candidate', None, None, None)
                 
@@ -66,15 +64,18 @@ def process_single_stock(file_path, ticker, params):
             
             return ('buy', proj_cost, stats['expected_value'], msg)
             
-        elif stats['is_in_buy_zone']:
-            proj_qty = calc_position_size(latest_close, stats['active_stop'], DUMMY_CAPITAL, params.fixed_risk, params)
-            # (AI註: 修復實戰假訊號：股數為 0 時攔截)
-            if proj_qty == 0:
+        elif stats.get('chase_today') is not None:
+            chase = stats['chase_today']
+            chase_qty = calc_position_size(chase['chase_price'], chase['sl'], DUMMY_CAPITAL, params.fixed_risk, params)
+            
+            if chase_qty == 0:
                 return ('candidate', None, None, None)
                 
-            proj_cost = calc_entry_price(latest_close, proj_qty, params) * proj_qty
-            zone_str = f"最新收盤:{latest_close:>6.2f} | 停損:{stats['active_stop']:>6.2f} | 停利(半倉):{stats['target_half']:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 買進區間] {ticker:<6} | {stat_str} | {zone_str}"
+            proj_cost = calc_entry_price(chase['chase_price'], chase_qty, params) * chase_qty
+            days = chase.get('days_since_setup', 1)
+            
+            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
+            msg = f"[⚠️ 遲到補車 (已發動 {days} 天)] {ticker:<5} | {stat_str} | {zone_str} (股數已縮減)"
             
             return ('zone', proj_cost, stats['expected_value'], msg)
             
@@ -153,10 +154,10 @@ def run_daily_scanner(data_dir):
             for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_RED}無最新買訊。{C_RESET}")
 
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：仍在買進區間 (錯過可補上車)】 {sort_title} ⚠️{C_RESET}")
+        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已縮減股數控制 1R)】 {sort_title} ⚠️{C_RESET}")
         if in_zone_list:
             for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_YELLOW}無買進區間標的。{C_RESET}")
+        else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")
     else:
         print(f"\n{C_GREEN}💤 今日無符合實戰買點的標的，保留現金，明日再戰！{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
