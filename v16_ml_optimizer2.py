@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import traceback
 import optuna
 import numpy as np
 import pandas as pd
@@ -12,7 +13,22 @@ from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
-warnings.filterwarnings('ignore')
+# # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
+warnings.simplefilter("default")
+
+# # (AI註: 第三方套件的重複性 FutureWarning 只顯示一次，避免訓練輸出被洗版)
+warnings.filterwarnings(
+    "once",
+    category=FutureWarning,
+    module=r"optuna(\..*)?$"
+)
+
+# # (AI註: 相同 RuntimeWarning 只顯示一次；保留可見性，但避免大量重複輸出)
+warnings.filterwarnings(
+    "once",
+    category=RuntimeWarning
+)
+
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 os.makedirs("outputs", exist_ok=True)
@@ -24,41 +40,145 @@ TRAIN_ENABLE_ROTATION = False
 DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
+DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
+LOAD_DATA_MIN_ROWS = 50
+LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
+
+# # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
+def write_issue_log(prefix, lines):
+    if not lines:
+        return None
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_path = os.path.join("outputs", f"{prefix}_{timestamp}.log")
+    with open(log_path, "w", encoding="utf-8") as f:
+        for line in lines:
+            f.write(f"{line}\n")
+    return log_path
+
+# # (AI註: 防止 magic number 散落；平行度預設沿用原本上限 14，但允許由 params 覆蓋)
+def resolve_optimizer_max_workers(params):
+    configured = getattr(params, 'optimizer_max_workers', DEFAULT_OPTIMIZER_MAX_WORKERS)
+    try:
+        configured = int(configured)
+    except (TypeError, ValueError):
+        configured = DEFAULT_OPTIMIZER_MAX_WORKERS
+    return max(1, configured)
+
+# # (AI註: 嚴格資料清洗 - 禁止以前值填補 OHLC，壞列直接剔除並回報)
+def sanitize_ohlcv_dataframe(df, ticker):
+    working = df.copy()
+    working.columns = [c.capitalize() for c in working.columns]
+
+    date_col = 'Time' if 'Time' in working.columns else 'Date'
+    if date_col not in working.columns:
+        raise KeyError("缺少 Time / Date 欄位")
+
+    missing_cols = [c for c in LOAD_DATA_REQUIRED_COLS if c not in working.columns]
+    if missing_cols:
+        raise KeyError(f"缺少必要欄位: {missing_cols}")
+
+    for col in LOAD_DATA_REQUIRED_COLS:
+        working[col] = pd.to_numeric(working[col], errors='coerce')
+
+    working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
+
+    invalid_mask = (
+        working[date_col].isna() |
+        working['Open'].isna() |
+        working['High'].isna() |
+        working['Low'].isna() |
+        working['Close'].isna() |
+        working['Volume'].isna() |
+        (working['Open'] <= 0) |
+        (working['High'] <= 0) |
+        (working['Low'] <= 0) |
+        (working['Close'] <= 0) |
+        (working['Volume'] < 0) |
+        (working['High'] < working[['Open', 'Low', 'Close']].max(axis=1)) |
+        (working['Low'] > working[['Open', 'High', 'Close']].min(axis=1))
+    )
+
+    dropped_rows = int(invalid_mask.sum())
+    if dropped_rows > 0:
+        working = working.loc[~invalid_mask].copy()
+
+    working.set_index(date_col, inplace=True)
+    working.sort_index(inplace=True)
+    working = working[~working.index.duplicated(keep='last')]
+
+    if len(working) < LOAD_DATA_MIN_ROWS:
+        raise ValueError(f"有效資料不足: 清洗後僅剩 {len(working)} 列")
+
+    return working, dropped_rows
 
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
         print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
         sys.exit(1)
-        
+
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
-    # 確保作業系統層級的檔案讀取順序絕對一致
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
-    for count, file in enumerate(files):
+    load_issues = []
+    total_dropped_rows = 0
+
+    for count, file in enumerate(files, start=1):
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
-            df = pd.read_csv(os.path.join(DATA_DIR, file))
-            if len(df) < 50: continue
-            df.columns = [c.capitalize() for c in df.columns]
-            df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
-            date_col = 'Time' if 'Time' in df.columns else 'Date'
-            df[date_col] = pd.to_datetime(df[date_col])
-            df.set_index(date_col, inplace=True)
-            RAW_DATA_CACHE[ticker] = df
+            raw_df = pd.read_csv(os.path.join(DATA_DIR, file))
+            if len(raw_df) < LOAD_DATA_MIN_ROWS:
+                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})")
+                continue
+
+            clean_df, dropped_rows = sanitize_ohlcv_dataframe(raw_df, ticker)
+            RAW_DATA_CACHE[ticker] = clean_df
+            total_dropped_rows += dropped_rows
+
+            if dropped_rows > 0:
+                load_issues.append(f"{ticker}: 清洗時移除 {dropped_rows} 列異常 OHLCV 資料")
+
         except Exception as e:
-            print(f"{C_YELLOW}\n[警告] 載入 {ticker} 發生錯誤: {e}{C_RESET}")
+            load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
             continue
-        if count % 50 == 0: print(f"{C_GRAY}   進度: 已快取 {count} 檔股票...{C_RESET}", end="\r")
-    print(f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的。{C_RESET}\n")
+
+        if count % 50 == 0:
+            print(f"{C_GRAY}   進度: 已掃描 {count} 檔股票...{C_RESET}", end="\r")
+
+    print(f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，移除 {total_dropped_rows} 列異常資料。{C_RESET}\n")
+
+    if load_issues:
+        issue_path = write_issue_log("optimizer_load_issues", load_issues)
+        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入: {issue_path}{C_RESET}")
 
 def worker_prep_data(ticker, df, params):
     try:
         if len(df) < params.high_len + 10:
-            return ticker, None, None
-            
+            return {
+                "ticker": ticker,
+                "ok": False,
+                "reason": f"資料長度不足: len(df)={len(df)}, 至少需要 {params.high_len + 10}",
+                "data": None,
+                "logs": None,
+            }
+
         df_prepared, logs = prep_stock_data_and_trades(df, params)
-        return ticker, df_prepared.to_dict('index'), logs
-    except Exception as e: 
-        return ticker, None, None
+        return {
+            "ticker": ticker,
+            "ok": True,
+            "reason": "",
+            "data": df_prepared.to_dict('index'),
+            "logs": logs,
+        }
+    except Exception as e:
+        tb_lines = traceback.format_exc().strip().splitlines()
+        tb_tail = " | ".join(tb_lines[-3:]) if tb_lines else ""
+        return {
+            "ticker": ticker,
+            "ok": False,
+            "reason": f"{type(e).__name__}: {e}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
+            "data": None,
+            "logs": None,
+        }
 
 def objective(trial):
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
@@ -84,13 +204,25 @@ def objective(trial):
         use_compounding = True 
     )
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
-    with ProcessPoolExecutor(max_workers=14) as executor:
+    prep_failures = []
+    max_workers = resolve_optimizer_max_workers(ai_params)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
         for future in as_completed(futures):
-            ticker, fast_df, logs = future.result()
-            if fast_df:
-                all_dfs_fast[ticker], all_trade_logs[ticker] = fast_df, logs
-                master_dates.update(fast_df.keys())
+            result = future.result()
+            ticker = result["ticker"]
+            if result["ok"]:
+                all_dfs_fast[ticker] = result["data"]
+                all_trade_logs[ticker] = result["logs"]
+                master_dates.update(result["data"].keys())
+            else:
+                prep_failures.append((ticker, result["reason"]))
+    if prep_failures:
+        print(f"{C_YELLOW}⚠️ 預處理失敗共 {len(prep_failures)} 檔，前 30 筆如下：{C_RESET}")
+        for ticker, reason in prep_failures[:30]:
+            print(f"{C_YELLOW}   - {ticker}: {reason}{C_RESET}")
+        prep_log_path = write_issue_log("optimizer_prep_failures", [f"{ticker}: {reason}" for ticker, reason in prep_failures])
+        print(f"{C_YELLOW}⚠️ 預處理失敗摘要已寫入: {prep_log_path}{C_RESET}")
     if not master_dates: return -9999.0
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
@@ -179,7 +311,8 @@ if __name__ == "__main__":
                     win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
                     r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0)
                 )
-        except ValueError: pass
+        except ValueError as e:
+            print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
 
     if N_TRIALS == 0:
         try:
@@ -191,5 +324,6 @@ if __name__ == "__main__":
     else:
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         try: study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
-        except KeyboardInterrupt: pass
+        except KeyboardInterrupt:
+            print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
         print(f"\n\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")

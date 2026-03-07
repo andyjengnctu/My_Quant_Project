@@ -63,6 +63,7 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     actual_total_cost = entry_price * qty
     return max(actual_total_cost * params.fixed_risk, 0.0)
 
+
 # # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
