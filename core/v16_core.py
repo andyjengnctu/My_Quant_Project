@@ -4,6 +4,7 @@ import math
 from core.v16_config import V16StrategyParams
 
 def tv_round(number): return math.floor(number + 0.5)
+
 def get_tick_size(price):
     if price < 1: return 0.001
     elif price < 10: return 0.01
@@ -12,24 +13,50 @@ def get_tick_size(price):
     elif price < 500: return 0.5
     elif price < 1000: return 1.0
     else: return 5.0
+
 def adjust_to_tick(price):
     if pd.isna(price): return np.nan
     tick = get_tick_size(price)
     return tv_round(price / tick) * tick
+
 def calc_entry_price(bPrice, bQty, params):
     fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
     return bPrice + (fee / bQty)
+
 def calc_net_sell_price(sPrice, sQty, params):
     fee = max(sPrice * sQty * params.sell_fee, params.min_fee)
     tax = sPrice * sQty * params.tax_rate
     return sPrice - ((fee + tax) / sQty)
+
+# 🌟 精確計算：將 min_fee 列入考量，確保真實成本與風險不會超標
 def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
-    maxQty = cap / (bPrice * (1 + params.buy_fee))
-    estEntryCost = bPrice * (1 + params.buy_fee)
-    estExitNet = stopPrice * (1 - params.sell_fee - params.tax_rate)
-    riskPerUnit = estEntryCost - estExitNet
-    if riskPerUnit > 0:
-        return int(math.floor(min(cap * riskPct / riskPerUnit, maxQty)))
+    max_risk_amount = cap * riskPct
+    
+    # 初步粗估 (忽略 min_fee 帶來的膨脹)
+    estEntryCost_unit = bPrice * (1 + params.buy_fee)
+    estExitNet_unit = stopPrice * (1 - params.sell_fee - params.tax_rate)
+    riskPerUnit = estEntryCost_unit - estExitNet_unit
+    
+    if riskPerUnit <= 0: return 0
+    
+    maxQty_by_cap = cap / estEntryCost_unit
+    qty = int(math.floor(min(max_risk_amount / riskPerUnit, maxQty_by_cap)))
+    
+    # 精確校正：遞減直到滿足【資金上限】與【風險上限】(考量真實最低手續費)
+    while qty > 0:
+        entry_fee = max(bPrice * qty * params.buy_fee, params.min_fee)
+        exact_entry_cost = bPrice * qty + entry_fee
+        
+        sell_fee = max(stopPrice * qty * params.sell_fee, params.min_fee)
+        tax = stopPrice * qty * params.tax_rate
+        exact_exit_net = stopPrice * qty - sell_fee - tax
+        
+        actual_risk = exact_entry_cost - exact_exit_net
+        
+        if exact_entry_cost <= cap and actual_risk <= max_risk_amount:
+            return qty
+        qty -= 1
+        
     return 0
 
 def tv_rma(source, length):
@@ -268,6 +295,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     
+    # 🌟 邏輯修復：0 虧損時賦予 99.9 評分，避免全勝策略風報比失真
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
     expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
@@ -280,7 +308,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-    min_trades = getattr(params, 'min_history_trades', 1)
+    # 🌟 邏輯修復：精確對齊「0 歷史交易次數」的白紙放行語義
+    min_trades = getattr(params, 'min_history_trades', 0)
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
