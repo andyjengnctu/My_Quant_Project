@@ -29,6 +29,9 @@ def load_dynamic_params(json_file):
     return params, False
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
+    if not os.path.exists(data_dir):
+        print(f"\n{C_RED}❌ 嚴重錯誤：找不到資料夾 {data_dir}，請確認路徑或先下載資料！{C_RESET}")
+        sys.exit(1)
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs, all_trade_logs, master_dates = {}, {}, set()
     

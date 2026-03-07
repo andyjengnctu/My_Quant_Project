@@ -6,17 +6,13 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from io import StringIO
 from FinMind.data import DataLoader
-import urllib3
-import warnings
-
-# 關閉警告
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-warnings.filterwarnings('ignore')
+# (AI註: 修復 3: 移除 urllib3 警告壓制，不再忽視資安風險)
 
 # ==========================================
 # 0. 參數與 API 設定
 # ==========================================
-API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNi0wMi0yMSAxMzozOToyMyIsInVzZXJfaWQiOiJhbmR5amVuZ25jdHUiLCJlbWFpbCI6ImFuZHlqZW5nbmN0dUBnbWFpbC5jb20iLCJpcCI6IjM2LjIyOC4xMTMuMTMxIn0.D97Qj43wskbRDXXbESCTO13wnijIhuClsPeobPhYy3s"
+# (AI註: 修復 2: 絕對禁止在原始碼中 Hardcode Token。請透過環境變數 FINMIND_API_TOKEN 傳入)
+API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 LIST_FILE = os.path.join(SAVE_DIR, "universe_list.txt")
@@ -29,11 +25,11 @@ if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 
 dl = DataLoader()
-dl.login_by_token(api_token=API_TOKEN)
+if API_TOKEN:
+    dl.login_by_token(api_token=API_TOKEN)
+else:
+    print("⚠️ 未偵測到 FINMIND_API_TOKEN 環境變數，將以訪客身份或受限速率下載。")
 
-# ==========================================
-# 1. 取得台股「真實最後交易日」 (破解假日陷阱)
-# ==========================================
 def get_market_last_date():
     print("🕵️‍♂️ 正在向證交所確認最新交易日...")
     search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
@@ -45,9 +41,6 @@ def get_market_last_date():
         return actual_date
     return datetime.today().strftime("%Y-%m-%d")
 
-# ==========================================
-# 2. 智慧海選 (YF 掃描 + CE/ES 精準過濾)
-# ==========================================
 def get_or_update_universe():
     if os.path.exists(LIST_FILE):
         file_mod_time = datetime.fromtimestamp(os.path.getmtime(LIST_FILE))
@@ -66,12 +59,12 @@ def get_or_update_universe():
     tickers_info = []
     for url in urls:
         try:
-            res = requests.get(url, verify=False) 
+            # (AI註: 修復 3: 移除 verify=False，嚴格執行 TLS 憑證驗證)
+            res = requests.get(url, timeout=10) 
             df = pd.read_html(StringIO(res.text))[0] 
             df.columns = df.iloc[0]
             df = df.iloc[2:]
             
-            # 🔥 精準過濾：ES=普通股, CE=ETF。徹底排除幾萬檔權證！
             mask = df['CFICode'].str.startswith('ES', na=False) | df['CFICode'].str.startswith('CE', na=False)
             df = df[mask]
             
@@ -83,7 +76,7 @@ def get_or_update_universe():
                     is_etf = str(row['CFICode']).startswith('CE')
                     tickers_info.append({"yf_ticker": f"{sid}{suffix}", "sid": sid, "is_etf": is_etf})
         except Exception as e:
-            pass
+            print(f"⚠️ 抓取清單時發生錯誤: {e}")
 
     qualified_tickers = []
     total_check = len(tickers_info)
@@ -109,9 +102,6 @@ def get_or_update_universe():
     print(f"\n🎉 海選完畢！共 {len(qualified_tickers)} 檔入選。")
     return qualified_tickers
 
-# ==========================================
-# 3. 尊爵下載 (三重防禦跳過)
-# ==========================================
 def smart_download_vip_data(tickers, market_last_date):
     total = len(tickers)
     today_date = datetime.today().date()
@@ -121,7 +111,6 @@ def smart_download_vip_data(tickers, market_last_date):
     for i, sid in enumerate(tickers, 1):
         file_path = os.path.join(SAVE_DIR, f"{sid}.csv")
         
-        # 🛡️ 防禦 1 & 2：檢查修改日期 或 CSV 內部日期
         if os.path.exists(file_path):
             file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path)).date()
             if file_mtime == today_date:
@@ -129,15 +118,13 @@ def smart_download_vip_data(tickers, market_last_date):
                 continue
                 
             try:
-                # 讀取最後一行檢查日期，破除假日陷阱！
                 last_date_in_csv = str(pd.read_csv(file_path, index_col=0).tail(1).index[0]).split(' ')[0]
                 if last_date_in_csv == market_last_date:
                     print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)
                     continue
             except:
-                pass # 若檔案損毀則不跳過，重新下載
+                pass 
 
-        # 📥 執行下載
         print(f"\r⚡ [{i:03d}/{total:03d}] 正在下載 {sid:<6} ...{' '*15}", end="", flush=True)
         try:
             df = dl.get_data(dataset='TaiwanStockPriceAdj', data_id=sid, start_date="1990-01-01")
@@ -156,18 +143,9 @@ def smart_download_vip_data(tickers, market_last_date):
     print("\n" + "-" * 65)
     print(f"🏆 本地尊爵資料庫更新完畢！")
 
-# ==========================================
-# 4. 主執行區
-# ==========================================
 if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
-    
-    # 抓取大盤最後日期
     market_date = get_market_last_date()
-    
-    # 執行快篩海選
     target_tickers = get_or_update_universe()
-    
-    # 執行官方還原資料下載
     if target_tickers:
         smart_download_vip_data(target_tickers, market_date)

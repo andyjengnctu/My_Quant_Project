@@ -268,7 +268,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     
-    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else 0.0
+    payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
     expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100

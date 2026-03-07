@@ -55,6 +55,6 @@ class V16StrategyParams:
     use_compounding: bool = True        
 
     # 5. 歷史績效濾網 (AI 將接管這些設定)
-    min_history_trades: int = 1         
+    min_history_trades: int = 0         
     min_history_ev: float = 0.0         
     min_history_win_rate: float = 0.30
