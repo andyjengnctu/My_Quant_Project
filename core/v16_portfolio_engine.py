@@ -57,7 +57,6 @@ def prep_stock_data_and_trades(df, params):
         
         pos_start_of_current_bar = qty if in_position else 0
         
-        # 嚴守 T 日防線僅能以 T-1 日資料計算
         if in_position and C[i-1] > buy_price + (ATR_main[i-1] * params.atr_times_trail):
             new_trail = C[i-1] - (ATR_main[i-1] * params.atr_times_trail)
             trailing_stop = adjust_to_tick(max(trailing_stop, new_trail))
@@ -121,10 +120,10 @@ def prep_stock_data_and_trades(df, params):
     return df, trade_logs
 
 def get_pit_stats(trade_logs, current_date, params):
-    # 確保結算在昨日(含)以前的交易都被納入，呼叫端傳入 today 即可無縫接軌
+    # 確保結算在昨日(含)以前的交易都被納入，呼叫端傳入 today
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
-    min_trades_req = getattr(params, 'min_history_trades', 0) # 對齊 0 預設值
+    min_trades_req = getattr(params, 'min_history_trades', 0) # 修正為 0
     
     if trade_count < min_trades_req: 
         return False, 0.0, 0.0 
@@ -136,11 +135,10 @@ def get_pit_stats(trade_logs, current_date, params):
     win_rate = len(wins) / trade_count
     
     if EV_CALC_METHOD == 'B':
-        # 統一使用 R Multiple 計算，口徑絕對一致
-        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
+        avg_win_pnl = sum(t['pnl'] for t in wins) / len(wins) if len(wins) > 0 else 0
         loss_count = trade_count - len(wins)
-        avg_loss_r = abs(sum(t['r_mult'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
-        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+        avg_loss_pnl = abs(sum(t['pnl'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_pnl / avg_loss_pnl)) if avg_loss_pnl > 0 else (99.9 if avg_win_pnl > 0 else 0.0)
         ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
     else:
         ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
@@ -202,19 +200,18 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         candidates_today = []
         tickers_to_remove = []
 
-        # 1. 處理昨日既有持倉的賣出判定
+        # 1. 既有持倉賣出邏輯
         for ticker, pos in portfolio.items():
             fast_df = all_dfs_fast[ticker]
             if today not in fast_df: continue 
             
-            # 動態找尋真正的昨日 (防禦停牌/缺資料)
+            # 安全獲取前一日數據防護
             if yesterday in fast_df:
                 y_row = fast_df[yesterday]
             else:
                 past_dates = [d for d in fast_df.keys() if d < today]
                 if not past_dates: continue
-                real_yesterday = max(past_dates)
-                y_row = fast_df[real_yesterday]
+                y_row = fast_df[max(past_dates)]
                 
             row = fast_df[today]
             
@@ -270,25 +267,25 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
 
         for t in tickers_to_remove: del portfolio[t]
 
-        # 2. 尋找今日新進場候選標的
+        # 2. 新進場候選邏輯
         for ticker, fast_df in all_dfs_fast.items():
             if ticker in portfolio or ticker in held_yesterday: continue 
             if today not in fast_df: continue
             
+            # 正確回推歷史最近交易日，防禦缺資料
             if yesterday in fast_df:
                 y_row = fast_df[yesterday]
             else:
                 past_dates = [d for d in fast_df.keys() if d < today]
                 if not past_dates: continue
-                real_yesterday = max(past_dates)
-                y_row = fast_df[real_yesterday]
+                y_row = fast_df[max(past_dates)]
                 
             t_row = fast_df[today]
             
             if y_row['is_setup']:
                 is_locked_up = (t_row['Open'] == t_row['High']) and (t_row['High'] == t_row['Low']) and (t_row['Low'] == t_row['Close']) and (t_row['Close'] > y_row['Close'])
                 if t_row['Low'] <= y_row['buy_limit'] and not is_locked_up:
-                    # 🚀 FIX: PIT 傳入 today，無縫接軌昨日盤後已知的平倉交易
+                    # 🚀 FIX 1: 傳入 today 以包含昨天收盤的平倉紀錄，真正解決延遲
                     is_candidate, ev, win_rate = get_pit_stats(all_trade_logs[ticker], today, params)
                     if is_candidate:
                         candidates_today.append({
@@ -318,9 +315,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                 weakest_ticker, lowest_ret, weakest_ev = None, 0.0, 0.0
                 
                 for pt, pos in portfolio.items():
-                    # 🚀 FIX: 杜絕 KeyError 炸彈，今天沒資料的持股根本不能賣，直接跳過評估
+                    # 🚀 FIX 2: 這裡必須確保 today 存在，否則後續強制賣出必定 Crash
                     if today not in all_dfs_fast[pt]: continue
-                    
+
                     if yesterday in all_dfs_fast[pt]:
                         pt_y_row = all_dfs_fast[pt][yesterday]
                     else:
@@ -330,7 +327,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
 
                     ret = (pt_y_row['Close'] - pos['entry']) / pos['entry']
                     if ret < lowest_ret:
-                        # 🚀 FIX: PIT 同步傳入 today
+                        # 🚀 FIX 1: 傳入 today 確保與新標的比較時在相同的 PIT 基準線上
                         _, holding_ev, _ = get_pit_stats(all_trade_logs[pt], today, params)
                         if holding_ev < best_cand['ev']:
                             lowest_ret = ret
@@ -338,12 +335,13 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                             weakest_ev = holding_ev
                 
                 if weakest_ticker:
-                    w_row = all_dfs_fast[weakest_ticker][today]
+                    w_row = all_dfs_fast[weakest_ticker][today] # 已被上面的 today 檢查保護
+                    
                     if yesterday in all_dfs_fast[weakest_ticker]:
                         w_y_row = all_dfs_fast[weakest_ticker][yesterday]
                     else:
                         past_dates = [d for d in all_dfs_fast[weakest_ticker].keys() if d < today]
-                        w_y_row = all_dfs_fast[weakest_ticker][max(past_dates)] if past_dates else w_row
+                        w_y_row = all_dfs_fast[weakest_ticker][max(past_dates)]
 
                     is_locked_down = (w_row['Open'] == w_row['High']) and (w_row['High'] == w_row['Low']) and (w_row['Low'] == w_row['Close']) and (w_row['Close'] < w_y_row['Close'])
                     

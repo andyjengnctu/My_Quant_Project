@@ -18,7 +18,7 @@ def print_scanner_header(params):
     print(f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]")
     print(f"   ➤ 核心風控: 創高 {get_p(params, 'high_len', 201)}日 | ATR {get_p(params, 'atr_len', 14)}日 | 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍")
     print(f"   ➤ 停損停利: 初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | 追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f}倍 | 半倉 {get_p(params, 'tp_percent', 0.5)*100:.0f}%")
-    # 🚀 FIX: 對齊 v16_config 預設值，改為 0
+    # 🚀 FIX: 對齊 0 預設值
     print(f"   ➤ 歷史濾網: 交易 >= {get_p(params, 'min_history_trades', 0)} 次 | 勝率 >= {get_p(params, 'min_history_win_rate', 0.30)*100:.0f}% | 期望值 >= {get_p(params, 'min_history_ev', 0.0):.2f}R")
 
 def print_strategy_dashboard(params, title, mode_display, max_pos, trades, missed_b, missed_s, final_eq, avg_exp, sys_ret, bm_ret, sys_mdd, bm_mdd, win_rate, payoff, ev, benchmark_ticker="0050", max_exp=None, r_sq=0.0, m_win_rate=0.0, bm_r_sq=0.0, bm_m_win_rate=0.0):
@@ -82,6 +82,6 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     print(f"核心: 突破 {get_p(params, 'high_len', 201):>3} 日新高 | ATR {get_p(params, 'atr_len', 14):>2} 日 | 半倉停利 {get_p(params, 'tp_percent', 0.5)*100:>2.0f}%")
     print(f"風控: 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR | 停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR | 追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR")
     print(f"濾網: 布林(BB) {bb_str} | 阿肯那(KC) {kc_str} | 均量 {vol_str}")
-    # 🚀 FIX: 對齊 v16_config 預設值，改為 0
+    # 🚀 FIX: 對齊 0 預設值
     print(f"歷史: 交易 >= {get_p(params, 'min_history_trades', 0)} 次 | 勝率 >= {get_p(params, 'min_history_win_rate', 0.3)*100:.0f}% | EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R")
     print(f"{C_CYAN}================================================================================{C_RESET}\n")
