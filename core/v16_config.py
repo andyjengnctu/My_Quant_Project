@@ -30,7 +30,8 @@ class V16StrategyParams:
     atr_buy_tol: float = 1.5         
     atr_times_init: float = 2.0      
     atr_times_trail: float = 3.5     
-    tp_percent: float = 0.5          
+    tp_percent: float = 0.5
+    min_chase_rr: float = 0.5        # <--- (AI註: 新增：遲到追車的最低盈虧比門檻)          
 
     # 3. 三大濾網開關與參數
     use_bb: bool = True

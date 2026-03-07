@@ -8,7 +8,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
+from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
 warnings.filterwarnings('ignore')
@@ -44,44 +44,44 @@ def process_single_stock(file_path, ticker, params):
             df['Date'] = pd.to_datetime(df['Date'])
             df.set_index('Date', inplace=True)
             
-        latest_close = df['Close'].iloc[-1]
         stats = run_v16_backtest(df, params)
         
         if not stats or not stats['is_candidate']: return None
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        
         DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            # (AI註: 修復實戰假訊號：股數為 0 時代表風險過大買不起，降級為歷史及格標的)
-            if proj_qty == 0:
-                return ('candidate', None, None, None)
+            if proj_qty == 0: return ('candidate', None, None, None, ticker)
                 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
-            est_target = stats['buy_limit'] + (stats['buy_limit'] - stats['stop_loss'])
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
+            
+            actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
+            net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
+            est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
+            
+            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 預計投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
             
-            return ('buy', proj_cost, stats['expected_value'], msg)
+            return ('buy', proj_cost, stats['expected_value'], msg, ticker)
             
-        elif stats['is_in_buy_zone']:
-            proj_qty = calc_position_size(latest_close, stats['active_stop'], DUMMY_CAPITAL, params.fixed_risk, params)
-            # (AI註: 修復實戰假訊號：股數為 0 時攔截)
-            if proj_qty == 0:
-                return ('candidate', None, None, None)
+        elif stats.get('chase_today') is not None:
+            chase = stats['chase_today']
+            proj_qty = chase['qty'] 
+            if proj_qty == 0: return ('candidate', None, None, None, ticker)
                 
-            proj_cost = calc_entry_price(latest_close, proj_qty, params) * proj_qty
-            zone_str = f"最新收盤:{latest_close:>6.2f} | 停損:{stats['active_stop']:>6.2f} | 停利(半倉):{stats['target_half']:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 買進區間] {ticker:<6} | {stat_str} | {zone_str}"
+            proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
             
-            return ('zone', proj_cost, stats['expected_value'], msg)
+            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
+            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
             
-        return ('candidate', None, None, None)
+            return ('zone', proj_cost, stats['expected_value'], msg, ticker)
+            
+        return ('candidate', None, None, None, ticker)
         
     except Exception as e:
-        return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}")
+        return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}", ticker)
 
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -92,7 +92,7 @@ def run_daily_scanner(data_dir):
         print(f"❌ 找不到資料夾 {data_dir}。")
         return
 
-    csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
     total_files = len(csv_files)
     if total_files == 0: return
 
@@ -115,19 +115,19 @@ def run_daily_scanner(data_dir):
             print(f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}]{C_RESET}", end="\r", flush=True)
             
             result = future.result()
-            if result and len(result) == 4:
-                status, proj_cost, ev, msg = result
-                if status in ['buy', 'zone', 'candidate']:
-                    count_candidates += 1
+            if result and len(result) == 5:
+                status, proj_cost, ev, msg, ticker = result
+                if status in ['buy', 'zone', 'candidate']: count_candidates += 1
                     
                 if status == 'buy':
                     print(" " * 120, end="\r")
                     print(f"{C_RED}{msg}{C_RESET}")
-                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
+                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
                 elif status == 'zone':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
-                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
+                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
+                # # (AI註: 修復低嚴重度問題 - 將異常檔案造成的錯誤印出，避免安靜地被吞掉)
                 elif status == 'error':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
@@ -135,12 +135,12 @@ def run_daily_scanner(data_dir):
     elapsed_time = time.time() - start_time
     
     if BUY_SORT_METHOD == 'EV':
-        buy_list.sort(key=lambda x: x['ev'], reverse=True)
-        in_zone_list.sort(key=lambda x: x['ev'], reverse=True)
+        buy_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
+        in_zone_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
         sort_title = "按期望值 (EV) 由大到小排序"
     else:
-        buy_list.sort(key=lambda x: x['proj_cost'], reverse=True)
-        in_zone_list.sort(key=lambda x: x['proj_cost'], reverse=True)
+        buy_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
+        in_zone_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
         sort_title = "按預估投入資金由大到小排序"
 
     print(" " * 120, end="\r") 
@@ -153,10 +153,10 @@ def run_daily_scanner(data_dir):
             for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_RED}無最新買訊。{C_RESET}")
 
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：仍在買進區間 (錯過可補上車)】 {sort_title} ⚠️{C_RESET}")
+        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已精準還原1R且縮倉)】 {sort_title} ⚠️{C_RESET}")
         if in_zone_list:
             for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_YELLOW}無買進區間標的。{C_RESET}")
+        else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")
     else:
         print(f"\n{C_GREEN}💤 今日無符合實戰買點的標的，保留現金，明日再戰！{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
