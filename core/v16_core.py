@@ -51,6 +51,18 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         qty -= 1
     return 0
 
+# # (AI註: 單一真理來源 - 統一 initial_risk_total 的計算與 fallback 口徑，禁止散落 magic number)
+def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
+    if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:
+        return 0.0
+
+    init_risk = (entry_price - net_stop_price) * qty
+    if init_risk > 0:
+        return init_risk
+
+    actual_total_cost = entry_price * qty
+    return max(actual_total_cost * params.fixed_risk, 0.0)
+
 # # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
@@ -320,8 +332,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
                     tp_half = adjust_to_tick(buyPrice + (entryPrice - net_sl))
-                    init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
@@ -349,8 +360,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': planned_init_sl,
