@@ -199,8 +199,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         est_sell_px = adjust_to_tick(w_row['Open'])
                         est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
                         
-                        # 確保賣掉弱股後的現金 + 剩餘資金，真的買得起此 Candidate
-                        if cand['proj_cost'] <= available_cash + est_freed_cash:
+                        # # (AI註: 修復資金不一致 Bug - 嚴守「當天賣出的資金不可當天再投入」，換股僅憑盤前既有 available_cash 判斷)
+                        if cand['proj_cost'] <= available_cash:
                             exec_price = est_sell_px
                             pnl = est_freed_cash - (pos['entry'] * pos['qty'])
                             cash += est_freed_cash 
