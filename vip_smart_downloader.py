@@ -47,13 +47,10 @@ def get_market_last_date():
     except Exception as e:
         print(f"⚠️ YFinance 備援失敗: {e}")
         
-    # 🌟 修復 3：智能推算最近平日，杜絕假日被當成交易日的 Bug
     fallback_date = datetime.now()
-    # 若現在早於下午兩點，盤後資料可能還沒出，保守往前退一天
     if fallback_date.hour < 14:
         fallback_date -= timedelta(days=1)
         
-    # 自動避開週六(5)與週日(6)，往前尋找最近的平日
     while fallback_date.weekday() >= 5:
         fallback_date -= timedelta(days=1)
         
@@ -131,12 +128,8 @@ def smart_download_vip_data(tickers, market_last_date):
         file_path = os.path.join(SAVE_DIR, f"{sid}.csv")
         
         if os.path.exists(file_path):
-            file_mtime = datetime.fromtimestamp(os.path.getmtime(file_path)).date()
-            if file_mtime == today_date:
-                print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 檔案今日已更新，跳過。{' '*15}", end="", flush=True)
-                continue
-                
             try:
+                # # (AI註: 修復 1 - 移除檔案修改時間判斷，嚴格依賴 CSV 內最後一筆日期，避免假更新跳過)
                 last_date_in_csv = str(pd.read_csv(file_path, index_col=0).tail(1).index[0]).split(' ')[0]
                 if last_date_in_csv == market_last_date:
                     print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)

@@ -100,8 +100,9 @@ def run_debug_backtest(df, ticker, params):
         if np.isnan(ATR_main[j-1]): continue
         pos_start_of_current_bar = positionSize
             
-        if positionSize > 0 and C[j] > buyPrice + (ATR_main[j] * params.atr_times_trail):
-            new_trail = C[j] - (ATR_main[j] * params.atr_times_trail)
+        if positionSize > 0 and C[j] > buyPrice + (ATR_main[j-1] * params.atr_times_trail):
+            new_trail = C[j] - (ATR_main[j-1] * params.atr_times_trail)
+            
             trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
             
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)

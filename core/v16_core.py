@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 import math
-from core.v16_config import V16StrategyParams
+# # (AI註: 修復 3 - 引入全域 EV_CALC_METHOD 確保口徑一致)
+from core.v16_config import V16StrategyParams, EV_CALC_METHOD
 
 def tv_round(number): return math.floor(number + 0.5)
 
@@ -28,11 +29,9 @@ def calc_net_sell_price(sPrice, sQty, params):
     tax = sPrice * sQty * params.tax_rate
     return sPrice - ((fee + tax) / sQty)
 
-# 🌟 精確計算：將 min_fee 列入考量，確保真實成本與風險不會超標
 def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     max_risk_amount = cap * riskPct
     
-    # 初步粗估 (忽略 min_fee 帶來的膨脹)
     estEntryCost_unit = bPrice * (1 + params.buy_fee)
     estExitNet_unit = stopPrice * (1 - params.sell_fee - params.tax_rate)
     riskPerUnit = estEntryCost_unit - estExitNet_unit
@@ -42,7 +41,6 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     maxQty_by_cap = cap / estEntryCost_unit
     qty = int(math.floor(min(max_risk_amount / riskPerUnit, maxQty_by_cap)))
     
-    # 精確校正：遞減直到滿足【資金上限】與【風險上限】(考量真實最低手續費)
     while qty > 0:
         entry_fee = max(bPrice * qty * params.buy_fee, params.min_fee)
         exact_entry_cost = bPrice * qty + entry_fee
@@ -194,6 +192,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
 
     initial_risk_total = 0.0
     total_r_multiple = 0.0
+    # # (AI註: 修復 3 - 增加變數記錄贏錢/輸錢的 R 值，對齊 B 模式 EV 計算)
+    total_r_win = 0.0
+    total_r_loss = 0.0
     total_bars_held = 0  
 
     for j in range(1, len(C)):
@@ -203,6 +204,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         if positionSize > 0:
             total_bars_held += 1
             
+        # # (AI註: 修復盤中未來函數 - T日防線只能用 T-1日的收盤價計算)
         if positionSize > 0 and C[j-1] > buyPrice + (ATR_main[j-1] * params.atr_times_trail):
             new_trail = C[j-1] - (ATR_main[j-1] * params.atr_times_trail)
             trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
@@ -272,8 +274,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                     if profitValue > 0:
                         fullWins += 1
                         totalProfit += profitValue
+                        total_r_win += trade_r_mult # # (AI註: 修復 3 - 記錄勝利 R 值)
                     else:
                         totalLoss += abs(profitValue)
+                        total_r_loss += abs(trade_r_mult) # # (AI註: 修復 3 - 記錄虧損 R 值)
                         
                     currentCapital += profitValue
                     positionSize = 0
@@ -295,9 +299,17 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     
-    # 🌟 邏輯修復：0 虧損時賦予 99.9 評分，避免全勝策略風報比失真
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
-    expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
+    
+    # # (AI註: 修復 3 - 單股回測的 EV 算法完美對齊全域開關，杜絕統計口徑分裂)
+    if EV_CALC_METHOD == 'B':
+        win_rate_dec = fullWins / tradeCount if tradeCount > 0 else 0
+        avg_win_r = total_r_win / fullWins if fullWins > 0 else 0
+        avg_loss_r = total_r_loss / lossCount if lossCount > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+        expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
+    else:
+        expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
     netProfitValue = currentCapital - params.initial_capital  
@@ -308,7 +320,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
     
-    # 🌟 邏輯修復：精確對齊「0 歷史交易次數」的白紙放行語義
     min_trades = getattr(params, 'min_history_trades', 0)
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
