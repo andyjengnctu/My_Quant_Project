@@ -62,16 +62,16 @@ def process_single_stock(file_path, ticker, params):
             
             return ('buy', proj_cost, stats['expected_value'], msg, ticker)
             
+        # 完全不再自作主張判斷，直接讀取大腦最新的 chase_today 狀態
         elif stats.get('chase_today') is not None:
             chase = stats['chase_today']
-            chase_qty = calc_position_size(chase['chase_price'], chase['sl'], DUMMY_CAPITAL, params.fixed_risk, params)
-            if chase_qty == 0: return ('candidate', None, None, None)
+            proj_qty = chase['qty'] 
+            if proj_qty == 0: return ('candidate', None, None, None)
                 
-            proj_cost = calc_entry_price(chase['chase_price'], chase_qty, params) * chase_qty
-            days = chase.get('days_since_setup', 1)
+            proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
             
             zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 遲到補車 (發動 {days} 天)] {ticker:<5} | {stat_str} | {zone_str} (已縮倉)"
+            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
             
             return ('zone', proj_cost, stats['expected_value'], msg, ticker)
             
@@ -146,7 +146,7 @@ def run_daily_scanner(data_dir):
             for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_RED}無最新買訊。{C_RESET}")
 
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已縮減股數控制 1R)】 {sort_title} ⚠️{C_RESET}")
+        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已精準還原1R且縮倉)】 {sort_title} ⚠️{C_RESET}")
         if in_zone_list:
             for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")

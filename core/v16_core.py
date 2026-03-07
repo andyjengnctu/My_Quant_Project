@@ -51,24 +51,43 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         qty -= 1
     return 0
 
-# # (AI註: 單一真理來源 - 精準 1R 數學空間推算)
-def evaluate_chase_condition(close_price, original_limit, atr, params):
+# # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
+def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
-    original_sl = adjust_to_tick(original_limit - atr * params.atr_times_init)
     
-    risk_price_dist = original_limit - original_sl
-    if risk_price_dist <= 0: return None
-    original_tp = adjust_to_tick(original_limit + risk_price_dist)
+    planned_init_sl = adjust_to_tick(original_limit - atr * params.atr_times_init)
     
-    if original_sl < close_price < original_tp:
-        current_risk = close_price - original_sl
-        current_reward = original_tp - close_price
+    # 1. 精準還原原始策略 1R 目標價
+    orig_qty = calc_position_size(original_limit, planned_init_sl, sizing_capital, params.fixed_risk, params)
+    if orig_qty <= 0: return None
+    orig_entry_price = calc_entry_price(original_limit, orig_qty, params)
+    orig_net_sl = calc_net_sell_price(planned_init_sl, orig_qty, params)
+    orig_risk_per_share = orig_entry_price - orig_net_sl
+    original_tp = adjust_to_tick(original_limit + orig_risk_per_share)
+    
+    if planned_init_sl < close_price < original_tp:
+        # 2. 確切計算追車縮減股數與實際成本盈虧比
+        chase_qty = calc_position_size(close_price, planned_init_sl, sizing_capital, params.fixed_risk, params)
+        if chase_qty <= 0: return None
+        
+        chase_entry_price = calc_entry_price(close_price, chase_qty, params)
+        chase_net_sl = calc_net_sell_price(planned_init_sl, chase_qty, params)
+        chase_risk_total = (chase_entry_price - chase_net_sl) * chase_qty
+        if chase_risk_total <= 0: return None
+        
+        chase_net_tp = calc_net_sell_price(original_tp, chase_qty, params)
+        chase_reward_total = (chase_net_tp - chase_entry_price) * chase_qty
+        
         rr_threshold = getattr(params, 'min_chase_rr', 0.5) 
-        if current_risk > 0 and (current_reward / current_risk) >= rr_threshold:
-            return {'chase_price': close_price, 'sl': original_sl, 'tp': original_tp, 'rr': current_reward/current_risk}
+        if chase_reward_total > 0 and (chase_reward_total / chase_risk_total) >= rr_threshold:
+            return {
+                'chase_price': close_price, 'sl': planned_init_sl, 'tp': original_tp, 
+                'rr': chase_reward_total / chase_risk_total, 'qty': chase_qty,
+                'orig_limit': original_limit, 'orig_atr': atr 
+            }
     return None
 
-# # (AI註: 單一真理來源 - K棒推進與結算，杜絕 Portfolio 與 Backtest 分歧)
+# # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, params):
     freed_cash, pnl_realized = 0.0, 0.0
     events = []
@@ -202,9 +221,10 @@ def generate_signals(df, params):
         if buyCondition[i]: buy_limits[i] = adjust_to_tick(C[i] + ATR_main[i] * params.atr_buy_tol)
     return ATR_main, buyCondition, sellCondition, buy_limits
 
-def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
+def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
+    Dates = df.index
     ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
 
     position = {'qty': 0}
@@ -214,6 +234,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     totalProfit, totalLoss = 0.0, 0.0
     peakCapital, maxDrawdownPct = currentCapital, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
+    trade_logs = []
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
@@ -231,6 +252,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                 trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0
                 total_r_multiple += trade_r_mult
                 tradeCount += 1
+                if return_logs:
+                    trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
                 if total_pnl > 0:
                     fullWins += 1
                     totalProfit += total_pnl
@@ -248,17 +271,16 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
         buyTriggered = False
         
         if isSetup_prev:
-            # # (AI註: 嚴守盤前資金定錨，用 T-1 算死 Stop Loss 與 Qty)
+            # # (AI註: 問題1修復 - 嚴格盤前定錨，qty與sl鎖死在 T-1 buyLimitPrice)
             buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol)
             planned_init_sl = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_init)
             planned_init_trail = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_trail)
-            
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
             
             if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
-                # 確保跳空暴跌沒有擊穿盤前設定的停損防線才進場
+                # 確保跳空暴跌沒擊穿盤前停損死線
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
@@ -275,17 +297,17 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
                     buyTriggered = True
                     pending_chase = None
                 else:
-                    missedBuyCount += 1
+                    missedBuyCount += 1 # 放棄交易
             else:
                 missedBuyCount += 1
-                chase_res = evaluate_chase_condition(C[j], buyLimitPrice, ATR_main[j-1], params)
+                chase_res = evaluate_chase_condition(C[j], buyLimitPrice, ATR_main[j-1], sizing_cap, params)
                 pending_chase = chase_res if chase_res else None
 
         elif pending_chase is not None and pos_start_of_current_bar == 0:
             chase_limit = pending_chase['chase_price']
             planned_init_sl = pending_chase['sl']
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            buyQty = calc_position_size(chase_limit, planned_init_sl, sizing_cap, params.fixed_risk, params)
+            buyQty = pending_chase['qty']
             
             if L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_to_tick(min(O[j], chase_limit))
@@ -307,12 +329,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
             # # (AI註: 統一續追邏輯)
             if not buyTriggered:
                 if pending_chase['sl'] < C[j] < pending_chase['tp']:
-                    risk = C[j] - pending_chase['sl']
-                    reward = pending_chase['tp'] - C[j]
-                    rr_threshold = getattr(params, 'min_chase_rr', 0.5)
-                    if risk > 0 and (reward / risk) >= rr_threshold:
-                        pending_chase['chase_price'] = C[j]
-                    else: pending_chase = None
+                    chase_res = evaluate_chase_condition(C[j], pending_chase['orig_limit'], pending_chase['orig_atr'], sizing_cap, params)
+                    pending_chase = chase_res if chase_res else None
                 else: pending_chase = None
 
         currentEquity = currentCapital
@@ -354,22 +372,17 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     elif tradeCount == 0 and min_trades == 0: isCandidate = True
     else: isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
-    chase_today = None
-    last_setup_idx = np.where(buyCondition)[0]
-    if len(last_setup_idx) > 0 and position['qty'] == 0:
-        last_idx = last_setup_idx[-1]
-        days_since_setup = (len(C) - 1) - last_idx
-        if 0 < days_since_setup <= 3: 
-            last_limit = adjust_to_tick(C[last_idx] + ATR_main[last_idx] * params.atr_buy_tol)
-            chase_today = evaluate_chase_condition(C[-1], last_limit, ATR_main[last_idx], params)
-            if chase_today: chase_today['days_since_setup'] = days_since_setup 
-
+    # # (AI註: 解除 Scanner 分歧 - 回測內部 pending_chase 活著，就直接回傳給 Scanner)
+    chase_today = pending_chase if position['qty'] == 0 else None
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
-    return {
+    stats_dict = {
         "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
         "missed_sells": missedSellCount, "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
         "expected_value": expectedValue, "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, 
         "is_setup_today": isSetup_today, "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, 
         "chase_today": chase_today, "current_position": position['qty'], "avg_bars_held": avg_bars_held  
     }
+    
+    if return_logs: return stats_dict, trade_logs
+    return stats_dict
