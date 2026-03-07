@@ -62,7 +62,6 @@ def process_single_stock(file_path, ticker, params):
             
             return ('buy', proj_cost, stats['expected_value'], msg, ticker)
             
-        # 完全不再自作主張判斷，直接讀取大腦最新的 chase_today 狀態
         elif stats.get('chase_today') is not None:
             chase = stats['chase_today']
             proj_qty = chase['qty'] 
