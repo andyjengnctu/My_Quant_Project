@@ -4,19 +4,16 @@ import math
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 
-# (AI註: ==========================================)
-# (AI註: 🌟 全域統一：投資組合系統評分公式 (單一真理來源))
-# (AI註: ==========================================)
+# ==========================================
+# 🌟 全域統一：投資組合系統評分公式 (單一真理來源)
+# ==========================================
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq):
     from core.v16_config import SCORE_CALC_METHOD
-    
     romd = sys_ret / (abs(sys_mdd) + 0.0001)
-    
     if SCORE_CALC_METHOD == 'LOG_R2':
         raw_score = romd * (m_win_rate / 100.0) * r_sq
     else:
         raw_score = romd
-        
     return raw_score 
 
 def calc_curve_stats(eq_list):
@@ -51,79 +48,98 @@ def prep_stock_data_and_trades(df, params):
     in_position = False
     entry_price, sl_price, tp_half = 0.0, 0.0, 0.0
     buy_price = 0.0 
+    initial_stop = 0.0
+    trailing_stop = 0.0
     qty = 0
     realized_pnl, initial_risk = 0.0, 0.0
     sold_half = False
     dates = df.index.values
     
-    current_cap = params.initial_capital  # (AI註: 修復 3 建立滾動資金池)
+    # 🌟 語義對齊修復：拔除固定 10 萬 dummy_cap，採用滾動資金池對齊 core 複利
+    current_cap = params.initial_capital  
     
     for i in range(1, len(df)):
         if np.isnan(ATR_main[i-1]): continue
-        if in_position:
-            is_locked_down = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] < C[i-1])
-            is_stop_hit = L[i] <= sl_price # (AI註: 修復 2 拆分停損與指標賣出)
+        pos_start_of_current_bar = qty if in_position else 0
+        
+        # 🌟 語義對齊修復：完美對齊 core，依據當日 Close 推進 trailing stop 後再判斷出場
+        if in_position and C[i] > buy_price + (ATR_main[i] * params.atr_times_trail):
+            new_trail = C[i] - (ATR_main[i] * params.atr_times_trail)
+            trailing_stop = adjust_to_tick(max(trailing_stop, new_trail))
+            sl_price = max(initial_stop, trailing_stop)
+            
+        is_setup_prev = buyCondition[i-1] and (pos_start_of_current_bar == 0)
+        buy_limit_price = adjust_to_tick(C[i-1] + ATR_main[i-1] * params.atr_buy_tol) if is_setup_prev else np.nan
+        is_locked_limit_up = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] > C[i-1])
+        buy_triggered = is_setup_prev and L[i] <= buy_limit_price and not is_locked_limit_up
+        
+        if buy_triggered:
+            buy_price = adjust_to_tick(min(O[i], buy_limit_price))
+            # 🌟 語義對齊修復：進場同時建立 initial_stop 與 trailing_stop 取高者
+            initial_stop = adjust_to_tick(buy_price - ATR_main[i-1] * params.atr_times_init)
+            trailing_stop = adjust_to_tick(buy_price - ATR_main[i-1] * params.atr_times_trail)
+            sl_price = max(initial_stop, trailing_stop)
+            sold_half, realized_pnl = False, 0.0
+            
+            sizing_capital = current_cap if getattr(params, 'use_compounding', True) else params.initial_capital
+            qty = calc_position_size(buy_price, initial_stop, sizing_capital, params.fixed_risk, params)
+            
+            if qty > 0:
+                entry_price = calc_entry_price(buy_price, qty, params)
+                net_sl = calc_net_sell_price(initial_stop, qty, params)
+                tp_half = adjust_to_tick(buy_price + (entry_price - net_sl))
+                initial_risk = (entry_price - net_sl) * qty
+                if initial_risk <= 0: initial_risk = sizing_capital * 0.01
+                in_position = True
+
+        is_holding_from_yesterday = (pos_start_of_current_bar > 0) and not buy_triggered
+        
+        if is_holding_from_yesterday:
+            is_stop_hit = L[i] <= sl_price
+            is_tp_hit = H[i] >= tp_half and not sold_half
             is_ind_sell = sellCondition[i-1]
             
+            if is_stop_hit and is_tp_hit: is_tp_hit = False
+                
+            if is_tp_hit:
+                exec_px = adjust_to_tick(max(tp_half, O[i]))
+                sell_qty = int(np.floor(qty * params.tp_percent))
+                if sell_qty > 0 and qty > sell_qty:
+                    net_px = calc_net_sell_price(exec_px, sell_qty, params)
+                    realized_pnl += (net_px - entry_price) * sell_qty
+                    qty -= sell_qty
+                    sold_half = True
+                else:
+                    is_tp_hit = False
+                    
             if is_stop_hit or is_ind_sell:
+                is_locked_down = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] < C[i-1])
                 if not is_locked_down:
-                    # (AI註: 修復 2 同根 K 若都觸發，強制 Stop Hit 優先以最差價格結算)
+                    # 🌟 語義對齊修復：Stop Hit 發生時，強制走停損賣價 (不再讓指標賣出的 Open 搶佔優先權)
                     exec_px = adjust_to_tick(min(sl_price, O[i]) if is_stop_hit else O[i])
                     net_px = calc_net_sell_price(exec_px, qty, params)
                     realized_pnl += (net_px - entry_price) * qty
                     total_r = realized_pnl / initial_risk if initial_risk > 0 else 0
                     trade_logs.append({'exit_date': pd.to_datetime(dates[i]), 'pnl': realized_pnl, 'r_mult': total_r})
-                    
-                    current_cap += realized_pnl # (AI註: 修復 3 結算後更新複利資金池)
+                    current_cap += realized_pnl
                     in_position = False
-            
-            if in_position:
-                if not sold_half and H[i] >= tp_half:
-                    sell_qty = int(np.floor(qty * params.tp_percent))
-                    if sell_qty > 0:
-                        exec_px = adjust_to_tick(max(O[i], tp_half))
-                        net_px = calc_net_sell_price(exec_px, sell_qty, params)
-                        pnl_half = (net_px - entry_price) * sell_qty
-                        realized_pnl += pnl_half # (AI註: 修復 3 先累加，等全平倉才進 current_cap)
-                        qty -= sell_qty
-                        sold_half = True
-                        
-                if C[i] > buy_price + (ATR_main[i] * params.atr_times_trail):
-                    new_sl = adjust_to_tick(C[i] - (ATR_main[i] * params.atr_times_trail))
-                    if new_sl > sl_price: sl_price = new_sl
-                
-        else:
-            is_locked_up = (O[i] == H[i]) and (H[i] == L[i]) and (L[i] == C[i]) and (C[i] > C[i-1])
-            if buyCondition[i-1] and L[i] <= buy_limits[i-1] and not is_locked_up:
-                exec_px = adjust_to_tick(min(O[i], buy_limits[i-1]))
-                buy_price = exec_px 
-                
-                # (AI註: 修復 1 同時建立 init_sl 與 init_trail，完美對齊 v16_core)
-                init_sl = adjust_to_tick(exec_px - (ATR_main[i-1] * params.atr_times_init))
-                init_trail = adjust_to_tick(exec_px - (ATR_main[i-1] * params.atr_times_trail))
-                
-                # (AI註: 修復 3 動態吃 current_cap 計算資金水位)
-                sizing_capital = current_cap if getattr(params, 'use_compounding', True) else params.initial_capital
-                
-                qty = calc_position_size(exec_px, init_sl, sizing_capital, params.fixed_risk, params)
-                if qty > 0:
-                    entry_price = calc_entry_price(exec_px, qty, params)
-                    sl_price = max(init_sl, init_trail) # (AI註: 修復 1 兩者取高作為實際停損線)
-                    net_sl = calc_net_sell_price(init_sl, qty, params) # (AI註: 風險計算依舊綁定 init_sl)
-                    tp_half = adjust_to_tick(exec_px + (entry_price - net_sl))
-                    initial_risk = (entry_price - net_sl) * qty
-                    if initial_risk <= 0: initial_risk = sizing_capital * 0.01
-                    realized_pnl = 0.0
-                    sold_half = False
-                    in_position = True
+                    qty = 0
+                    
     return df, trade_logs
 
 def get_pit_stats(trade_logs, current_date, params):
     past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
     trade_count = len(past_trades)
+    min_trades_req = getattr(params, 'min_history_trades', 1)
     
-    if trade_count == 0 or trade_count < getattr(params, 'min_history_trades', 1): 
+    # 如果連最低交易次數門檻都沒達到，直接淘汰
+    if trade_count < min_trades_req: 
         return False, 0.0, 0.0 
+        
+    # (AI註: 語義修復：如果門檻是 0，且確實是 0 筆交易，代表這是一張「及格的白紙」。
+    # 必須直接回傳 True 避開後面的勝率/EV計算與濾網淘汰，並賦予中性的 0.0 分)
+    if trade_count == 0:
+        return True, 0.0, 0.0
     
     wins = [t for t in past_trades if t['pnl'] > 0]
     win_rate = len(wins) / trade_count
@@ -143,6 +159,9 @@ def get_pit_stats(trade_logs, current_date, params):
 def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
     start_dt = pd.to_datetime(f"{start_year}-01-01")
     start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
+    
+    # 🌟 邏輯除錯 2：防止 start_year 太早導致 start_idx 為 0，進而第一圈抓到 sorted_dates[-1] (未來函數)
+    start_idx = max(1, start_idx)
 
     initial_capital = params.initial_capital
     cash = initial_capital
@@ -160,6 +179,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
     bm_monthly_equities = []
     yesterday_equity = initial_capital
     
+    # 防護 IndexError：若 start_year 太晚找不到資料
     if start_idx < len(sorted_dates):
         current_month = sorted_dates[start_idx].month
         current_bm_px = benchmark_data[sorted_dates[start_idx]]['Close'] if benchmark_data and sorted_dates[start_idx] in benchmark_data else None
@@ -168,7 +188,6 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         current_bm_px = None
         
     yesterday_bm_px = current_bm_px
-    
     benchmark_start_price = None
     bm_peak_price = None     
     bm_max_drawdown = 0.0    
@@ -180,6 +199,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         yesterday = sorted_dates[i-1]
         held_yesterday = set(portfolio.keys())
         
+        # 今天的可用購買力，凍結在開盤前的瞬間
         available_cash = cash
         
         if getattr(params, 'use_compounding', True):
@@ -199,20 +219,47 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             if today not in fast_df: continue 
             row, y_row = fast_df[today], fast_df[yesterday] if yesterday in fast_df else fast_df[today]
             
-            # (AI註: 修復 2 在投組時間軸中拆分 Stop 與 Indicator)
+            # 🌟 語義對齊修復：更新 trailing stop，對齊 core 必須突破才推進
+            if row['Close'] > pos['pure_buy_price'] + (row['ATR'] * params.atr_times_trail):
+                new_trail = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
+                pos['trailing_stop'] = max(pos.get('trailing_stop', 0.0), new_trail)
+                pos['sl'] = max(pos['initial_stop'], pos['trailing_stop'])
+            
             is_stop_hit = row['Low'] <= pos['sl']
+            is_tp_hit = row['High'] >= pos['tp_half'] and not pos['sold_half']
             is_ind_sell = y_row['ind_sell_signal']
-            is_locked_down = (row['Open'] == row['High']) and (row['High'] == row['Low']) and (row['Low'] == row['Close']) and (row['Close'] < y_row['Close'])
+            
+            if is_stop_hit and is_tp_hit: is_tp_hit = False
+            
+            if is_tp_hit:
+                sell_qty = int(np.floor(pos['qty'] * params.tp_percent))
+                if sell_qty > 0 and pos['qty'] > sell_qty:
+                    exec_price = adjust_to_tick(max(pos['tp_half'], row['Open']))
+                    net_price = calc_net_sell_price(exec_price, sell_qty, params)
+                    pnl = (net_price - pos['entry']) * sell_qty
+                    
+                    # 🌟 邏輯除錯 1 (同日資金穿越)：賣出的錢加入 cash，但【絕對不可】加入 available_cash 資助今日買單
+                    cash += (net_price * sell_qty) 
+                    
+                    pos['realized_pnl'] += pnl
+                    pos['qty'] -= sell_qty
+                    pos['sold_half'] = True
+                    if not is_training: 
+                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "單筆損益": pnl, "該筆總損益": pos['realized_pnl'], "R_Multiple": 0.0, "Risk": params.fixed_risk})
+                else:
+                    is_tp_hit = False
             
             if is_stop_hit or is_ind_sell:
+                is_locked_down = (row['Open'] == row['High']) and (row['High'] == row['Low']) and (row['Low'] == row['Close']) and (row['Close'] < y_row['Close'])
+                
                 if not is_locked_down:
-                    # (AI註: 修復 2 強制 Stop Hit 優先結算防線)
+                    # 🌟 語義對齊修復：Stop Hit 優先結算防線
                     exec_price = adjust_to_tick(min(pos['sl'], row['Open']) if is_stop_hit else row['Open'])
                     net_price = calc_net_sell_price(exec_price, pos['qty'], params)
                     pnl = (net_price - pos['entry']) * pos['qty']
-                    cash += (net_price * pos['qty'])
                     
-                    available_cash += (net_price * pos['qty'])
+                    # 🌟 邏輯除錯 1 (同日資金穿越)：賣出的錢加入 cash，但【絕對不可】加入 available_cash 資助今日買單
+                    cash += (net_price * pos['qty']) 
                     
                     total_pnl = pos['realized_pnl'] + pnl
                     total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
@@ -223,29 +270,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": t_type, "Price": exec_price, "單筆損益": pnl, "該筆總損益": total_pnl, "R_Multiple": total_r, "Risk": params.fixed_risk})
                     
                     tickers_to_remove.append(ticker)
-                    continue
                 else:
                     total_missed_sells += 1 
-                
-            if not pos['sold_half'] and row['High'] >= pos['tp_half']:
-                sell_qty = int(np.floor(pos['qty'] * params.tp_percent))
-                if sell_qty > 0:
-                    exec_price = adjust_to_tick(max(row['Open'], pos['tp_half']))
-                    net_price = calc_net_sell_price(exec_price, sell_qty, params)
-                    pnl = (net_price - pos['entry']) * sell_qty
-                    cash += (net_price * sell_qty)
-                    
-                    available_cash += (net_price * sell_qty)
-                    
-                    pos['realized_pnl'] += pnl
-                    pos['qty'] -= sell_qty
-                    pos['sold_half'] = True
-                    if not is_training: 
-                        trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": ticker, "Type": "半倉停利", "Price": exec_price, "單筆損益": pnl, "該筆總損益": pos['realized_pnl'], "R_Multiple": 0.0, "Risk": params.fixed_risk})
-            
-            if row['Close'] > pos['pure_buy_price'] + (row['ATR'] * params.atr_times_trail):
-                new_sl = adjust_to_tick(row['Close'] - (row['ATR'] * params.atr_times_trail))
-                if new_sl > pos['sl']: pos['sl'] = new_sl
 
         for t in tickers_to_remove: del portfolio[t]
 
@@ -270,7 +296,7 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
             for c in candidates_today:
                 c['exec_px'] = adjust_to_tick(min(c['t_row']['Open'], c['buy_limit']))
                 
-                # (AI註: 修復 1 在投組買單準備區同時建立 init_sl 與 init_trail)
+                # 🌟 語義對齊修復：投組買單同時建立 init_sl 與 init_trail
                 c['init_sl'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_init))
                 c['init_trail'] = adjust_to_tick(c['exec_px'] - (c['y_atr'] * params.atr_times_trail))
                 c['sl_price'] = max(c['init_sl'], c['init_trail'])
@@ -314,8 +340,9 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         if cand_qty > 0 and cand_cost <= test_cash:
                             exec_price = est_sell_px
                             pnl = est_cash_freed - (pos['entry'] * pos['qty'])
+                            
                             cash += est_cash_freed
-                            available_cash += est_cash_freed
+                            available_cash += est_cash_freed # Rotation 允許 Open 換 Open
                             
                             total_pnl = pos['realized_pnl'] + pnl
                             total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
@@ -328,7 +355,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                 if len(portfolio) < max_positions:
                     buy_price = cand['exec_px']
                     sl_price = cand['sl_price']
-                    init_sl = cand['init_sl'] # (AI註: 修復 1 取得原味 init_sl 計算 TP)
+                    init_sl = cand['init_sl'] 
+                    init_trail = cand['init_trail']
                     qty = cand['qty'] 
                     
                     if qty > 0:
@@ -338,17 +366,17 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
                         if cost_total <= available_cash:
                             available_cash -= cost_total
                             cash -= cost_total
-                            net_sl_per_share = calc_net_sell_price(init_sl, qty, params) # (AI註: 修復 1 強制使用 init_sl 算風險與半倉)
+                            net_sl_per_share = calc_net_sell_price(init_sl, qty, params) 
                             tp_target = adjust_to_tick(buy_price + (entry_cost_per_share - net_sl_per_share))
                             initial_risk = (entry_cost_per_share - net_sl_per_share) * qty
                             if initial_risk <= 0: initial_risk = cost_total * 0.01
                             
                             portfolio[cand['ticker']] = {
                                 'qty': qty, 'entry': entry_cost_per_share, 'sl': sl_price, 
-                                'initial_sl_net': net_sl_per_share, 'tp_half': tp_target, 
-                                'sold_half': False, 'last_px': buy_price,
+                                'initial_stop': init_sl, 'trailing_stop': init_trail,
+                                'tp_half': tp_target, 'sold_half': False, 'last_px': buy_price,
                                 'realized_pnl': 0.0, 'initial_risk_total': initial_risk,
-                                'pure_buy_price': buy_price
+                                'pure_buy_price': buy_price # 🌟 語義對齊修復：紀錄 pure_buy_price 供追蹤停損依據
                             }
                             if not is_training: trade_history.append({"Date": today.strftime('%Y-%m-%d'), "Ticker": cand['ticker'], "Type": f"買進 (EV:{cand['ev']:.2f}R)", "Price": buy_price, "單筆損益": 0.0, "該筆總損益": 0.0, "R_Multiple": 0.0, "Risk": params.fixed_risk})
 

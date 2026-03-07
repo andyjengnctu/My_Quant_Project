@@ -1,7 +1,7 @@
 import os
 import json
 import pandas as pd
-import numpy as np # (AI註: 修復 2 引入 numpy 處理缺失值)
+import numpy as np 
 import warnings
 import time
 from datetime import datetime
@@ -13,7 +13,6 @@ from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GR
 
 warnings.filterwarnings('ignore')
 
-# (AI註: 修復 3: 確保相關資料夾存在，防止 I/O 錯誤直接炸裂)
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
@@ -37,7 +36,7 @@ def process_single_stock(file_path, ticker, params):
             
         df.columns = [c.capitalize() for c in df.columns]
         
-        # (AI註: 修復 2: 加入 OHLC 的 0 -> NaN -> ffill 清理，確保與投組/AI訓練完全一致)
+        # (AI註: 修復 5: 執行 OHLC ffill)
         df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
         
         if 'Time' in df.columns:
@@ -54,7 +53,7 @@ def process_single_stock(file_path, ticker, params):
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
         
-        # (AI註: 修復 5: 將 DUMMY_CAPITAL 對齊 config 中的 initial_capital)
+        # (AI註: 修復 5: 直接使用 params.initial_capital)
         DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
@@ -83,7 +82,7 @@ def process_single_stock(file_path, ticker, params):
 
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
+    print(f"{C_CYAN}🚀 啟初【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     if not os.path.exists(data_dir):
@@ -115,19 +114,18 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 4:
                 status, proj_cost, ev, msg = result
-                if status == 'buy':
+                # (AI註: 修復 5: 正確計入所有通過歷史門檻的 candidate)
+                if status in ['buy', 'zone', 'candidate']:
                     count_candidates += 1
+                    
+                if status == 'buy':
                     print(" " * 120, end="\r")
                     print(f"{C_RED}{msg}{C_RESET}")
                     buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
                 elif status == 'zone':
-                    count_candidates += 1
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg})
-                elif status == 'candidate':
-                    # (AI註: 修復 6: 若歷史及格但今日無動作，仍需計入及格檔數)
-                    count_candidates += 1
                 elif status == 'error':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")

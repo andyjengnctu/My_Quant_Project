@@ -37,7 +37,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             df = pd.read_csv(os.path.join(data_dir, file))
-            # (AI註: 修復 4: 將寫死的 150 改為 params.high_len + 10，完全對齊 Scanner 過濾門檻)
+            # (AI註: 修復 6: 全面統一長度門檻)
             if len(df) < params.high_len + 10: continue
             
             df.columns = [c.capitalize() for c in df.columns]
