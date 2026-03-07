@@ -35,8 +35,6 @@ def process_single_stock(file_path, ticker, params):
         if len(df) < params.high_len + 10: return None
             
         df.columns = [c.capitalize() for c in df.columns]
-        
-        # 🌟 根目錄版本修復：加入 OHLC 清洗
         df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
         
         if 'Time' in df.columns:
@@ -53,13 +51,15 @@ def process_single_stock(file_path, ticker, params):
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
         
-        # 🌟 根目錄版本修復：同步使用設定檔的本金
         DUMMY_CAPITAL = params.initial_capital
         
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
-            proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty if proj_qty > 0 else 0.0
-            
+            # (AI註: 修復實戰假訊號：股數為 0 時代表風險過大買不起，降級為歷史及格標的)
+            if proj_qty == 0:
+                return ('candidate', None, None, None)
+                
+            proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
             est_target = stats['buy_limit'] + (stats['buy_limit'] - stats['stop_loss'])
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
@@ -68,8 +68,11 @@ def process_single_stock(file_path, ticker, params):
             
         elif stats['is_in_buy_zone']:
             proj_qty = calc_position_size(latest_close, stats['active_stop'], DUMMY_CAPITAL, params.fixed_risk, params)
-            proj_cost = calc_entry_price(latest_close, proj_qty, params) * proj_qty if proj_qty > 0 else 0.0
-            
+            # (AI註: 修復實戰假訊號：股數為 0 時攔截)
+            if proj_qty == 0:
+                return ('candidate', None, None, None)
+                
+            proj_cost = calc_entry_price(latest_close, proj_qty, params) * proj_qty
             zone_str = f"最新收盤:{latest_close:>6.2f} | 停損:{stats['active_stop']:>6.2f} | 停利(半倉):{stats['target_half']:>6.2f} | 投入資金:{proj_cost:>7,.0f}"
             msg = f"[⚠️ 買進區間] {ticker:<6} | {stat_str} | {zone_str}"
             
@@ -114,7 +117,6 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 4:
                 status, proj_cost, ev, msg = result
-                # 🌟 根目錄版本修復：將純 candidate 列入及格計數
                 if status in ['buy', 'zone', 'candidate']:
                     count_candidates += 1
                     

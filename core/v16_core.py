@@ -284,10 +284,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams()):
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
-    # (AI註: 修復 Edge Case: 精準處理允許 0 交易的「白紙」狀態，對齊 PIT 引擎)
     if tradeCount < min_trades:
         isCandidate = False
-    elif tradeCount == 0:
+    elif tradeCount == 0 and min_trades == 0:
         isCandidate = True
     else:
         isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)

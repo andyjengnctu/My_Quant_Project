@@ -6,12 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from io import StringIO
 from FinMind.data import DataLoader
-# (AI註: 修復 3: 移除 urllib3 警告壓制，不再忽視資安風險)
 
-# ==========================================
-# 0. 參數與 API 設定
-# ==========================================
-# (AI註: 修復 2: 絕對禁止在原始碼中 Hardcode Token。請透過環境變數 FINMIND_API_TOKEN 傳入)
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
@@ -27,19 +22,35 @@ if not os.path.exists(SAVE_DIR):
 dl = DataLoader()
 if API_TOKEN:
     dl.login_by_token(api_token=API_TOKEN)
-else:
-    print("⚠️ 未偵測到 FINMIND_API_TOKEN 環境變數，將以訪客身份或受限速率下載。")
 
 def get_market_last_date():
-    print("🕵️‍♂️ 正在向證交所確認最新交易日...")
-    search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
-    df = dl.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
-    if df is not None and not df.empty:
-        df.columns = [c.lower() for c in df.columns]
-        actual_date = str(df['date'].max()).split(' ')[0]
-        print(f"📅 台股最新交易日為: {actual_date}")
-        return actual_date
-    return datetime.today().strftime("%Y-%m-%d")
+    print("🕵️‍♂️ 正在確認最新交易日...")
+    try:
+        search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+        df = dl.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
+        if df is not None and not df.empty:
+            df.columns = [c.lower() for c in df.columns]
+            actual_date = str(df['date'].max()).split(' ')[0]
+            print(f"📅 台股最新交易日 (FinMind) 為: {actual_date}")
+            return actual_date
+    except Exception as e:
+        print(f"⚠️ FinMind 日期獲取異常: {e}")
+
+    # (AI註: 修復 Fallback：若 FinMind 掛了，改用 YF 查詢大盤作為備援，杜絕假日誤判)
+    print("🔄 啟動備援方案 (YFinance) 獲取交易日...")
+    try:
+        ticker = yf.Ticker("0050.TW")
+        hist = ticker.history(period="5d")
+        if not hist.empty:
+            actual_date = hist.index[-1].strftime("%Y-%m-%d")
+            print(f"📅 台股最新交易日 (YF備援) 為: {actual_date}")
+            return actual_date
+    except Exception as e:
+        print(f"⚠️ YFinance 備援失敗: {e}")
+        
+    fallback_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    print(f"⚠️ 無法取得精準日期，使用保守備用日期: {fallback_date}")
+    return fallback_date
 
 def get_or_update_universe():
     if os.path.exists(LIST_FILE):
@@ -59,7 +70,6 @@ def get_or_update_universe():
     tickers_info = []
     for url in urls:
         try:
-            # (AI註: 修復 3: 移除 verify=False，嚴格執行 TLS 憑證驗證)
             res = requests.get(url, timeout=10) 
             df = pd.read_html(StringIO(res.text))[0] 
             df.columns = df.iloc[0]

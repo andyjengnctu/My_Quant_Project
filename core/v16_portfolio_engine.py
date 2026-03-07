@@ -444,6 +444,8 @@ def run_portfolio_timeline(all_dfs_fast, all_trade_logs, sorted_dates, start_yea
         win_rate = (len(wins) / trade_count) * 100
         avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
         avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
+        
+        # (AI註: 修復 3: 0 虧損時賦予 99.9 評分)
         pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
 
         if EV_CALC_METHOD == 'B':

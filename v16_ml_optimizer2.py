@@ -22,13 +22,15 @@ TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2015         
 TRAIN_ENABLE_ROTATION = False   
 DATA_DIR = "tw_stock_data_vip"
-if not os.path.exists(DATA_DIR):
-    print(f"\033[91m❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！\033[0m")
-    sys.exit(1)
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
 
 def load_all_raw_data():
+    # (AI註: 修復 4 - 目錄防呆檢查)
+    if not os.path.exists(DATA_DIR):
+        print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
+        sys.exit(1)
+        
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
     for count, file in enumerate(files):
@@ -64,19 +66,19 @@ def objective(trial):
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
     ai_params = V16StrategyParams(
         atr_len = trial.suggest_int("atr_len", 3, 25), 
-        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 4.5, step=0.1),
+        atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
         high_len = trial.suggest_int("high_len", 40, 250, step=1), 
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
-        bb_len = trial.suggest_int("bb_len", 3, 30, step=1) if ai_use_bb else 20,
-        bb_mult = trial.suggest_float("bb_mult", 1.0, 3.0, step=0.1) if ai_use_bb else 2.0,
+        bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
+        bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
         kc_len = trial.suggest_int("kc_len", 3, 30, step=1) if ai_use_kc else 20,
         kc_mult = trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0, 
         vol_short_len = trial.suggest_int("vol_short_len", 1, 10) if ai_use_vol else 5,
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
-        min_history_trades = trial.suggest_int("min_history_trades", 0, 5),
+        min_history_trades = trial.suggest_int("min_history_trades", 1, 5),
         min_history_ev = trial.suggest_float("min_history_ev", -1.0, 0.5, step=0.1),
         min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.05),
         use_compounding = True 
