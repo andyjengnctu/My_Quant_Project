@@ -91,16 +91,43 @@ def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, p
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, params):
     freed_cash, pnl_realized = 0.0, 0.0
     events = []
-    if position['qty'] <= 0: return position, freed_cash, pnl_realized, events
-        
+    if position['qty'] <= 0:
+        return position, freed_cash, pnl_realized, events
+
     if y_close > position['pure_buy_price'] + (y_atr * params.atr_times_trail):
         new_trail = adjust_to_tick(y_close - (y_atr * params.atr_times_trail))
         position['trailing_stop'] = max(position.get('trailing_stop', 0.0), new_trail)
         position['sl'] = max(position['initial_stop'], position['trailing_stop'])
 
+    # # (AI註: y_ind_sell 是 T-1 收盤後已知、T 日盤前就能決定的賣出指令，
+    # #         時序上必須優先於 T 日盤中的停利 / 停損事件)
+    if y_ind_sell:
+        is_locked_down = (
+            (t_open == t_high) and
+            (t_high == t_low) and
+            (t_low == t_close) and
+            (t_close < y_close)
+        )
+        if not is_locked_down:
+            exec_price = adjust_to_tick(t_open)
+            net_price = calc_net_sell_price(exec_price, position['qty'], params)
+            freed_cash += net_price * position['qty']
+            pnl = (net_price - position['entry']) * position['qty']
+            pnl_realized += pnl
+            position['realized_pnl'] += pnl
+            position['qty'] = 0
+            events.append('IND_SELL')
+        else:
+            events.append('LOCKED_DOWN')
+
+        return position, freed_cash, pnl_realized, events
+
     is_stop_hit = t_low <= position['sl']
     is_tp_hit = t_high >= position['tp_half'] and not position['sold_half']
-    if is_stop_hit and is_tp_hit: is_tp_hit = False
+
+    # # (AI註: 同棒同時碰停損與半倉停利，維持最壞情境，優先視為停損)
+    if is_stop_hit and is_tp_hit:
+        is_tp_hit = False
 
     if is_tp_hit:
         exec_price = adjust_to_tick(max(position['tp_half'], t_open))
@@ -114,21 +141,26 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             position['qty'] -= sell_qty
             position['sold_half'] = True
             events.append('TP_HALF')
-            
-    if is_stop_hit or y_ind_sell:
-        is_locked_down = (t_open == t_high) and (t_high == t_low) and (t_low == t_close) and (t_close < y_close)
+
+    if is_stop_hit:
+        is_locked_down = (
+            (t_open == t_high) and
+            (t_high == t_low) and
+            (t_low == t_close) and
+            (t_close < y_close)
+        )
         if not is_locked_down:
-            exec_price = adjust_to_tick(min(position['sl'], t_open) if is_stop_hit else t_open)
+            exec_price = adjust_to_tick(min(position['sl'], t_open))
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
             freed_cash += net_price * position['qty']
             pnl = (net_price - position['entry']) * position['qty']
             pnl_realized += pnl
             position['realized_pnl'] += pnl
             position['qty'] = 0
-            events.append('STOP' if is_stop_hit else 'IND_SELL')
+            events.append('STOP')
         else:
             events.append('LOCKED_DOWN')
-            
+
     return position, freed_cash, pnl_realized, events
 
 def tv_rma(source, length):
