@@ -135,10 +135,11 @@ def get_pit_stats(trade_logs, current_date, params):
     win_rate = len(wins) / trade_count
     
     if EV_CALC_METHOD == 'B':
-        avg_win_pnl = sum(t['pnl'] for t in wins) / len(wins) if len(wins) > 0 else 0
+        # (AI註: 終極修復 - 統一使用 r_mult 計算 B 模式，消滅口徑分裂)
+        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
         loss_count = trade_count - len(wins)
-        avg_loss_pnl = abs(sum(t['pnl'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
-        payoff_for_ev = min(10.0, (avg_win_pnl / avg_loss_pnl)) if avg_loss_pnl > 0 else (99.9 if avg_win_pnl > 0 else 0.0)
+        avg_loss_r = abs(sum(t['r_mult'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
+        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
         ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
     else:
         ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
