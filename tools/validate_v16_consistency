@@ -12,7 +12,12 @@ if PROJECT_ROOT not in sys.path:
 
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
-from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+from core.v16_portfolio_engine import (
+    prep_stock_data_and_trades,
+    pack_prepared_stock_data,
+    get_fast_dates,
+    run_portfolio_timeline,
+)
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 
 
@@ -199,10 +204,16 @@ def run_single_backtest_check(ticker, df, params):
 
 def run_single_ticker_portfolio_check(ticker, df, params):
     prep_df, standalone_logs = prep_stock_data_and_trades(df.copy(), params)
-    all_dfs_fast = {ticker: prep_df.to_dict("index")}
+
+    fast_data = pack_prepared_stock_data(prep_df)
+    all_dfs_fast = {ticker: fast_data}
     all_standalone_logs = {ticker: standalone_logs}
-    sorted_dates = sorted(prep_df.index)
-    start_year = int(sorted_dates[0].year)
+
+    sorted_dates = sorted(get_fast_dates(fast_data))
+    if not sorted_dates:
+        raise ValueError(f"{ticker}: pack_prepared_stock_data 後沒有任何有效日期")
+
+    start_year = int(pd.Timestamp(sorted_dates[0]).year)
 
     result = run_portfolio_timeline(
         all_dfs_fast=all_dfs_fast,
@@ -213,9 +224,54 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         max_positions=1,
         enable_rotation=False,
         benchmark_ticker=ticker,
-        benchmark_data=all_dfs_fast[ticker],
+        benchmark_data=fast_data,
         is_training=True
     )
+
+    if len(result) != 17:
+        raise ValueError(f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}")
+
+    (
+        total_return,
+        mdd,
+        trade_count,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+    ) = result
+
+    return {
+        "total_return": total_return,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "standalone_logs": standalone_logs,
+        "prep_df": prep_df,
+    }
 
     if len(result) != 17:
         raise ValueError(f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}")

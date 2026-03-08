@@ -62,6 +62,7 @@ OPTIMIZER_PREP_OTHER_SEEN = set()
 
 # # (AI註: profiling 版預設開啟 objective 分段計時；只量測，不改交易邏輯)
 ENABLE_OPTIMIZER_PROFILING = True
+ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
 PROFILE_CSV_PATH = os.path.join("outputs", f"optimizer_profile_{OPTIMIZER_SESSION_TS}.csv")
 PROFILE_SUMMARY_PATH = os.path.join("outputs", f"optimizer_profile_summary_{OPTIMIZER_SESSION_TS}.json")
@@ -525,7 +526,7 @@ def monitoring_callback(study, trial):
         status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value:.3f}"
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
-    if ENABLE_OPTIMIZER_PROFILING and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
+    if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
         profile = trial.user_attrs.get("profile_row", {})
         print()
         print(
