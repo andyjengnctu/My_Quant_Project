@@ -1,0 +1,650 @@
+import os
+import sys
+import copy
+import time
+import json
+import importlib.util
+import pandas as pd
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from core.v16_config import V16StrategyParams
+from core.v16_core import run_v16_backtest
+from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+
+
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "v16_best_params.json")
+
+FLOAT_TOL = 1e-6
+VALIDATE_PROGRESS_EVERY = 25
+MAX_CONSOLE_FAIL_PREVIEW = 20
+
+
+def load_module_from_candidates(module_name, relative_paths, required_attrs=None):
+    if required_attrs is None:
+        required_attrs = []
+
+    checked_paths = []
+    rejected_paths = []
+
+    for rel_path in relative_paths:
+        abs_path = os.path.join(PROJECT_ROOT, rel_path)
+        checked_paths.append(abs_path)
+
+        if not os.path.exists(abs_path):
+            continue
+
+        spec = importlib.util.spec_from_file_location(module_name, abs_path)
+        if spec is None or spec.loader is None:
+            rejected_paths.append(f"{abs_path} -> 無法建立 spec/loader")
+            continue
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
+        if missing_attrs:
+            rejected_paths.append(f"{abs_path} -> 缺少必要屬性: {missing_attrs}")
+            continue
+
+        return module, abs_path
+
+    detail_msg = "；".join(rejected_paths) if rejected_paths else "沒有任何可用候選檔"
+    raise FileNotFoundError(
+        f"找不到符合條件的模組。檢查路徑: {checked_paths}。原因: {detail_msg}"
+    )
+
+
+def load_params():
+    params = V16StrategyParams()
+    if os.path.exists(PARAMS_FILE):
+        try:
+            with open(PARAMS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k, v in data.items():
+                if hasattr(params, k):
+                    setattr(params, k, v)
+            print(f"✅ 已載入參數檔: {PARAMS_FILE}")
+        except Exception as e:
+            print(f"⚠️ 讀取參數檔失敗，改用預設值。({type(e).__name__}: {e})")
+    else:
+        print(f"⚠️ 找不到參數檔，改用預設值。({PARAMS_FILE})")
+    return params
+
+
+def normalize_ticker_text(value):
+    if pd.isna(value):
+        return ""
+
+    text = str(value).strip()
+
+    if text.endswith(".0"):
+        try:
+            text = str(int(float(text)))
+        except ValueError:
+            pass
+
+    if text.isdigit() and len(text) < 4:
+        text = text.zfill(4)
+
+    return text
+
+def is_insufficient_data_error(exc):
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
+def make_consistency_params(base_params):
+    params = copy.deepcopy(base_params)
+    params.min_history_trades = 0
+    params.min_history_ev = -1e9
+    params.min_history_win_rate = 0.0
+    return params
+
+
+def discover_available_tickers():
+    if not os.path.exists(DATA_DIR):
+        raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
+
+    tickers = []
+    for file_name in sorted(os.listdir(DATA_DIR)):
+        if not file_name.endswith(".csv"):
+            continue
+
+        ticker = file_name.replace(".csv", "").replace("TV_Data_Full_", "").strip()
+        if ticker:
+            tickers.append(ticker)
+
+    return tickers
+
+
+def resolve_csv_path(ticker):
+    candidates = [
+        os.path.join(DATA_DIR, f"TV_Data_Full_{ticker}.csv"),
+        os.path.join(DATA_DIR, f"{ticker}.csv"),
+        os.path.join(PROJECT_ROOT, f"TV_Data_Full_{ticker}.csv"),
+        os.path.join(PROJECT_ROOT, f"{ticker}.csv"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f"找不到 {ticker} 的 CSV。已檢查: {candidates}")
+
+
+def load_clean_df(ticker, params):
+    file_path = resolve_csv_path(ticker)
+    raw_df = pd.read_csv(file_path)
+    min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+    df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+    return file_path, df, sanitize_stats
+
+
+def add_check(results, module_name, ticker, metric, expected, actual, tol=FLOAT_TOL, note=""):
+    if isinstance(expected, (int, float)) and isinstance(actual, (int, float)):
+        diff = abs(float(expected) - float(actual))
+        passed = diff <= tol
+    else:
+        diff = None
+        passed = expected == actual
+
+    status = "PASS" if passed else "FAIL"
+
+    results.append({
+        "ticker": ticker,
+        "module": module_name,
+        "metric": metric,
+        "expected": expected,
+        "actual": actual,
+        "abs_diff": diff,
+        "passed": passed,
+        "status": status,
+        "note": note
+    })
+
+def add_skip_result(results, module_name, ticker, metric, note):
+    results.append({
+        "ticker": ticker,
+        "module": module_name,
+        "metric": metric,
+        "expected": "SKIP",
+        "actual": "SKIP",
+        "abs_diff": None,
+        "passed": True,
+        "status": "SKIP",
+        "note": note
+    })
+
+
+def add_fail_result(results, module_name, ticker, metric, expected, actual, note):
+    results.append({
+        "ticker": ticker,
+        "module": module_name,
+        "metric": metric,
+        "expected": expected,
+        "actual": actual,
+        "abs_diff": None,
+        "passed": False,
+        "status": "FAIL",
+        "note": note
+    })
+
+
+def run_single_backtest_check(ticker, df, params):
+    stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True)
+    return stats, standalone_logs
+
+
+def run_single_ticker_portfolio_check(ticker, df, params):
+    prep_df, standalone_logs = prep_stock_data_and_trades(df.copy(), params)
+    all_dfs_fast = {ticker: prep_df.to_dict("index")}
+    all_standalone_logs = {ticker: standalone_logs}
+    sorted_dates = sorted(prep_df.index)
+    start_year = int(sorted_dates[0].year)
+
+    result = run_portfolio_timeline(
+        all_dfs_fast=all_dfs_fast,
+        all_standalone_logs=all_standalone_logs,
+        sorted_dates=sorted_dates,
+        start_year=start_year,
+        params=params,
+        max_positions=1,
+        enable_rotation=False,
+        benchmark_ticker=ticker,
+        benchmark_data=all_dfs_fast[ticker],
+        is_training=True
+    )
+
+    if len(result) != 17:
+        raise ValueError(f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}")
+
+    (
+        total_return,
+        mdd,
+        trade_count,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate
+    ) = result
+
+    return {
+        "total_return": total_return,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "standalone_logs": standalone_logs
+    }
+
+
+def run_all_stock_stats_check(ticker, params):
+    module, module_path = load_module_from_candidates(
+        "all_stock_stats_module",
+        ["tools/all_stock_stats.py", "all_stock_stats.py"],
+        required_attrs=["process_single_stock_for_export"]
+    )
+
+    file_name = os.path.basename(resolve_csv_path(ticker))
+    export_row = module.process_single_stock_for_export(file_name, params)
+    return export_row, module_path
+
+
+def run_debug_trade_log_check(ticker, df, params):
+    module, module_path = load_module_from_candidates(
+        "debug_trade_log_module",
+        ["tools/debug_trade_log.py", "debug_trade_log.py"],
+        required_attrs=["run_debug_backtest"]
+    )
+    debug_df = module.run_debug_backtest(
+        df.copy(),
+        ticker,
+        params,
+        export_excel=False,
+        verbose=False
+    )
+    return debug_df, module_path
+
+
+def validate_one_ticker(ticker, base_params):
+    params = make_consistency_params(base_params)
+    file_path, df, sanitize_stats = load_clean_df(ticker, params)
+
+    results = []
+    summary = {
+        "ticker": ticker,
+        "file_path": file_path,
+        "sanitize_dropped": sanitize_stats["dropped_row_count"],
+        "sanitize_invalid": sanitize_stats["invalid_row_count"],
+        "sanitize_duplicate": sanitize_stats["duplicate_date_count"],
+    }
+
+    single_stats, standalone_logs = run_single_backtest_check(ticker, df, params)
+    portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
+    export_row, export_module_path = run_all_stock_stats_check(ticker, params)
+    debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
+
+    summary["export_module_path"] = export_module_path
+    summary["debug_module_path"] = debug_module_path
+    summary["single_trade_count"] = single_stats["trade_count"]
+    summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
+    summary["open_position_exists"] = bool(single_stats["current_position"] > 0)
+
+    add_check(results, "single_vs_portfolio", ticker, "asset_growth_vs_total_return",
+              single_stats["asset_growth"], portfolio_stats["total_return"])
+
+    add_check(results, "single_vs_portfolio", ticker, "max_drawdown_vs_mdd",
+              single_stats["max_drawdown"], portfolio_stats["mdd"])
+
+    add_check(results, "single_vs_portfolio", ticker, "missed_buys",
+              single_stats["missed_buys"], portfolio_stats["total_missed"])
+
+    add_check(results, "single_vs_portfolio", ticker, "missed_sells",
+              single_stats["missed_sells"], portfolio_stats["total_missed_sells"])
+
+    open_position_exists = single_stats["current_position"] > 0
+    expected_pf_trade_count = single_stats["trade_count"] + (1 if open_position_exists else 0)
+
+    add_check(
+        results,
+        "single_vs_portfolio",
+        ticker,
+        "trade_count",
+        expected_pf_trade_count,
+        portfolio_stats["trade_count"],
+        note="若期末仍有持倉，投組模擬會多 1 筆期末強制結算。"
+    )
+
+    if not open_position_exists:
+        add_check(results, "single_vs_portfolio", ticker, "win_rate",
+                  single_stats["win_rate"], portfolio_stats["win_rate"])
+        add_check(results, "single_vs_portfolio", ticker, "payoff_ratio",
+                  single_stats["payoff_ratio"], portfolio_stats["pf_payoff"])
+        add_check(results, "single_vs_portfolio", ticker, "expected_value",
+                  single_stats["expected_value"], portfolio_stats["pf_ev"])
+    else:
+        add_skip_result(
+            results,
+            "single_vs_portfolio",
+            ticker,
+            "trade_stats_after_forced_close",
+            "期末未平倉，投組模擬多一筆強制結算，故 win_rate / payoff / EV 不逐值比對。"
+        )
+
+    if export_row is None:
+        if single_stats["trade_count"] == 0:
+            add_skip_result(
+                results,
+                "all_stock_stats",
+                ticker,
+                "export_row_exists",
+                "無 completed trades，匯出工具回傳 None 屬設計行為。"
+            )
+        else:
+            add_fail_result(
+                results,
+                "all_stock_stats",
+                ticker,
+                "export_row_exists",
+                "非空",
+                "None",
+                "有 completed trades，但匯出工具卻回傳 None。"
+            )
+    else:
+        add_check(results, "all_stock_stats", ticker, "交易次數",
+                  single_stats["trade_count"], export_row["交易次數"])
+        add_check(results, "all_stock_stats", ticker, "勝率 (Win Rate %)",
+                  single_stats["win_rate"], export_row["勝率 (Win Rate %)"])
+        add_check(results, "all_stock_stats", ticker, "平均獲利金額 (avgWin)",
+                  single_stats["avg_win"], export_row["平均獲利金額 (avgWin)"])
+        add_check(results, "all_stock_stats", ticker, "平均虧損金額 (avgLoss)",
+                  single_stats["avg_loss"], export_row["平均虧損金額 (avgLoss)"])
+        add_check(results, "all_stock_stats", ticker, "盈虧比 (payoffRatio)",
+                  single_stats["payoff_ratio"], export_row["盈虧比 (payoffRatio)"])
+        add_check(results, "all_stock_stats", ticker, "期望值 (expectedValue)",
+                  single_stats["expected_value"], export_row["期望值 (expectedValue)"])
+        add_check(results, "all_stock_stats", ticker, "平均持倉天數",
+                  single_stats["avg_bars_held"], export_row["平均持倉天數"])
+        add_check(results, "all_stock_stats", ticker, "總資產報酬率 (%)",
+                  single_stats["asset_growth"], export_row["總資產報酬率 (%)"])
+        add_check(results, "all_stock_stats", ticker, "最大回撤 MDD (%)",
+                  single_stats["max_drawdown"], export_row["最大回撤 MDD (%)"])
+
+    expected_buy_rows = len(standalone_logs) + (1 if open_position_exists else 0)
+
+    if debug_df is None or len(debug_df) == 0:
+        if expected_buy_rows == 0:
+            add_skip_result(
+                results,
+                "debug_trade_log",
+                ticker,
+                "debug_df_exists",
+                "無交易紀錄時，debug 工具回傳 None 屬設計行為。"
+            )
+        else:
+            add_fail_result(
+                results,
+                "debug_trade_log",
+                ticker,
+                "debug_df_exists",
+                "非空",
+                "None/Empty",
+                "理應有交易明細，但 debug 工具回傳空值。"
+            )
+    else:
+        buy_rows = int((debug_df["動作"] == "買進").sum())
+        exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出"]).sum())
+        half_rows = int((debug_df["動作"] == "半倉停利").sum())
+
+        expected_exit_rows = len(standalone_logs)
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "buy_rows",
+            expected_buy_rows,
+            buy_rows,
+            note="若期末仍有未平倉，debug 會多 1 筆買進但不做期末強制結算。"
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "full_exit_rows",
+            expected_exit_rows,
+            exit_rows
+        )
+
+        results.append({
+            "ticker": ticker,
+            "module": "debug_trade_log",
+            "metric": "half_take_profit_rows",
+            "expected": "資訊欄位",
+            "actual": half_rows,
+            "abs_diff": None,
+            "passed": True,
+            "status": "PASS",
+            "note": "半倉停利筆數只供人工檢查，不直接對應 completed trades。"
+        })
+
+    return results, summary
+
+
+def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp):
+    from openpyxl.styles import numbers
+
+    if df_failed.empty:
+        return None
+
+    report_path = os.path.join(OUTPUT_DIR, f"v16_consistency_issues_{timestamp}.xlsx")
+
+    with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
+        df_failed.to_excel(writer, sheet_name="failed_only", index=False)
+        df_failed_summary.to_excel(writer, sheet_name="failed_tickers", index=False)
+        df_failed_module.to_excel(writer, sheet_name="failed_modules", index=False)
+
+        for sheet_name in ["failed_only", "failed_tickers"]:
+            ws = writer.book[sheet_name]
+            header_map = {cell.value: idx + 1 for idx, cell in enumerate(ws[1])}
+            if "ticker" in header_map:
+                col_idx = header_map["ticker"]
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.number_format = numbers.FORMAT_TEXT
+                    cell.value = normalize_ticker_text(cell.value)
+
+    return report_path
+
+
+def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time):
+    total_tickers = len(df_summary)
+    failed_tickers = int(df_failed["ticker"].nunique()) if not df_failed.empty else 0
+    pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
+    skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
+    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
+
+    print("\n================================================================================")
+    print("一致性回歸摘要")
+    print("================================================================================")
+    print(f"耗時: {elapsed_time:.2f} 秒")
+    print(f"成功進入 summary 的股票數: {total_tickers}")
+    print(f"總檢查數: {len(df_results)}")
+    print(f"PASS 數: {pass_count}")
+    print(f"SKIP 數: {skip_count}")
+    print(f"FAIL 數: {fail_count}")
+    print(f"有問題股票數: {failed_tickers}")
+    print(f"完整 CSV: {csv_path}")
+    print(f"問題 Excel: {xlsx_path if xlsx_path else '無，因為沒有 failed 項'}")
+
+    if df_failed.empty:
+        print("\n失敗項摘要：無")
+        return
+
+    print("\n失敗項前覽：")
+    show_cols = ["ticker", "module", "metric", "expected", "actual", "note"]
+    preview_df = df_failed[show_cols].head(MAX_CONSOLE_FAIL_PREVIEW).copy()
+    print(preview_df.to_string(index=False))
+
+    remain_count = len(df_failed) - len(preview_df)
+    if remain_count > 0:
+        print(f"\n... 尚有 {remain_count} 筆 FAIL 未顯示，請直接查看 CSV / Excel。")
+
+    failed_summary = (
+        df_failed.groupby("ticker", dropna=False)
+        .agg(failed_checks=("passed", "size"))
+        .reset_index()
+        .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        .head(MAX_CONSOLE_FAIL_PREVIEW)
+    )
+
+    if not failed_summary.empty:
+        print("\n失敗股票前覽：")
+        print(failed_summary.to_string(index=False))
+
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    base_params = load_params()
+    selected_tickers = discover_available_tickers()
+
+    all_results = []
+    summaries = []
+
+    ticker_pass_count = 0
+    ticker_skip_count = 0
+    ticker_fail_count = 0
+
+    total_tickers = len(selected_tickers)
+    start_time = time.time()
+
+    print(f"開始自動掃描 {total_tickers} 檔股票...")
+
+    for idx, ticker in enumerate(selected_tickers, start=1):
+        ticker_results_before = len(all_results)
+
+        try:
+            results, summary = validate_one_ticker(ticker, base_params)
+            all_results.extend(results)
+            summaries.append(summary)
+        except Exception as e:
+            if is_insufficient_data_error(e):
+                add_skip_result(
+                    all_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    f"資料不足，跳過驗證。({type(e).__name__}: {e})"
+                )
+            else:
+                add_fail_result(
+                    all_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    "成功執行",
+                    f"{type(e).__name__}: {e}",
+                    "壓力測試執行失一致性驗證執行失敗，先處理這個錯誤。"
+                )
+
+        ticker_results = all_results[ticker_results_before:]
+        ticker_statuses = {row["status"] for row in ticker_results}
+
+        if "FAIL" in ticker_statuses:
+            ticker_fail_count += 1
+        elif "PASS" in ticker_statuses:
+            ticker_pass_count += 1
+        else:
+            ticker_skip_count += 1
+
+        if idx % VALIDATE_PROGRESS_EVERY == 0 or idx == total_tickers:
+            print(
+                f"\r進度: [{idx}/{total_tickers}] "
+                f"PASS股票:{ticker_pass_count} | SKIP股票:{ticker_skip_count} | FAIL股票:{ticker_fail_count}",
+                end="",
+                flush=True
+            )
+
+    print(" " * 160, end="\r")
+
+    df_results = pd.DataFrame(all_results)
+    df_summary = pd.DataFrame(summaries)
+    df_failed = df_results[df_results["status"] == "FAIL"].copy() if not df_results.empty else pd.DataFrame()
+
+    for df_obj in [df_results, df_summary, df_failed]:
+        if not df_obj.empty and "ticker" in df_obj.columns:
+            df_obj["ticker"] = df_obj["ticker"].map(normalize_ticker_text)
+
+    if not df_failed.empty:
+        df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    csv_path = os.path.join(OUTPUT_DIR, f"v16_consistency_full_scan_{timestamp}.csv")
+    df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+    if df_failed.empty:
+        df_failed_summary = pd.DataFrame(columns=["ticker", "failed_checks"])
+        df_failed_module = pd.DataFrame(columns=["module", "failed_checks"])
+    else:
+        df_failed_summary = (
+            df_failed.groupby("ticker", dropna=False)
+            .agg(failed_checks=("passed", "size"))
+            .reset_index()
+            .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        )
+        df_failed_module = (
+            df_failed.groupby("module", dropna=False)
+            .agg(failed_checks=("passed", "size"))
+            .reset_index()
+            .sort_values(by=["failed_checks", "module"], ascending=[False, True])
+        )
+
+    xlsx_path = write_issue_excel_report(
+        df_failed=df_failed,
+        df_failed_summary=df_failed_summary,
+        df_failed_module=df_failed_module,
+        timestamp=timestamp
+    )
+
+    elapsed_time = time.time() - start_time
+
+    print_console_summary(
+        df_results=df_results,
+        df_failed=df_failed,
+        df_summary=df_summary,
+        csv_path=csv_path,
+        xlsx_path=xlsx_path,
+        elapsed_time=elapsed_time
+    )
+
+    return 1 if not df_failed.empty else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -51,6 +51,19 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         qty -= 1
     return 0
 
+# # (AI註: 單一真理來源 - 統一 initial_risk_total 的計算與 fallback 口徑，禁止散落 magic number)
+def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
+    if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:
+        return 0.0
+
+    init_risk = (entry_price - net_stop_price) * qty
+    if init_risk > 0:
+        return init_risk
+
+    actual_total_cost = entry_price * qty
+    return max(actual_total_cost * params.fixed_risk, 0.0)
+
+
 # # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
@@ -91,6 +104,7 @@ def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, p
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, params):
     freed_cash, pnl_realized = 0.0, 0.0
     events = []
+
     if position['qty'] <= 0:
         return position, freed_cash, pnl_realized, events
 
@@ -99,8 +113,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         position['trailing_stop'] = max(position.get('trailing_stop', 0.0), new_trail)
         position['sl'] = max(position['initial_stop'], position['trailing_stop'])
 
-    # # (AI註: y_ind_sell 是 T-1 收盤後已知、T 日盤前就能決定的賣出指令，
-    # #         時序上必須優先於 T 日盤中的停利 / 停損事件)
+    # # (AI註: y_ind_sell 是 T-1 收盤後已知、T 日盤前即可決定的賣出指令，
+    # # (AI註: 必須優先於 T 日盤中的 TP_HALF / STOP 判斷，避免出現不可能的事件序列)
     if y_ind_sell:
         is_locked_down = (
             (t_open == t_high) and
@@ -108,6 +122,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             (t_low == t_close) and
             (t_close < y_close)
         )
+
         if not is_locked_down:
             exec_price = adjust_to_tick(t_open)
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
@@ -125,7 +140,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     is_stop_hit = t_low <= position['sl']
     is_tp_hit = t_high >= position['tp_half'] and not position['sold_half']
 
-    # # (AI註: 同棒同時碰停損與半倉停利，維持最壞情境，優先視為停損)
+    # # (AI註: 同棒同時碰停損與半倉停利時，維持最壞情境，優先視為停損)
     if is_stop_hit and is_tp_hit:
         is_tp_hit = False
 
@@ -149,6 +164,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             (t_low == t_close) and
             (t_close < y_close)
         )
+
         if not is_locked_down:
             exec_price = adjust_to_tick(min(position['sl'], t_open))
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
@@ -267,6 +283,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     peakCapital, maxDrawdownPct = currentCapital, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
+    currentEquity = currentCapital
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
@@ -317,8 +334,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
                     tp_half = adjust_to_tick(buyPrice + (entryPrice - net_sl))
-                    init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
@@ -346,8 +362,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    init_risk = (entryPrice - net_sl) * buyQty
-                    if init_risk <= 0: init_risk = sizing_cap * 0.01
+                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
                     
                     position = {
                         'qty': buyQty, 'entry': entryPrice, 'sl': planned_init_sl,
@@ -367,8 +382,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
 
         currentEquity = currentCapital
         if position['qty'] > 0:
+            # # (AI註: currentCapital 已經包含歷次已實現損益，
+            # # (AI註: 這裡只能再加「剩餘部位的未實現損益」，避免半倉獲利重複入帳)
             floatingSellNet = calc_net_sell_price(C[j], position['qty'], params)
-            floatingPnL = position['realized_pnl'] + (floatingSellNet - position['entry']) * position['qty']
+            floatingPnL = (floatingSellNet - position['entry']) * position['qty']
             currentEquity = currentCapital + floatingPnL
 
         peakCapital = max(peakCapital, currentEquity)
@@ -389,7 +406,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
     else: expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
-    totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
+    finalEquity = currentEquity
+    totalNetProfitPct = ((finalEquity - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (position['qty'] == 0)
@@ -409,11 +427,24 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     stats_dict = {
-        "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "missed_sells": missedSellCount, "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
-        "expected_value": expectedValue, "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, 
-        "is_setup_today": isSetup_today, "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, 
-        "chase_today": chase_today, "current_position": position['qty'], "avg_bars_held": avg_bars_held  
+        "asset_growth": totalNetProfitPct,
+        "trade_count": tradeCount,
+        "missed_buys": missedBuyCount,
+        "missed_sells": missedSellCount,
+        "score": score,
+        "win_rate": winRate,
+        "avg_win": avgWin,
+        "avg_loss": avgLoss,
+        "payoff_ratio": payoffRatio,
+        "expected_value": expectedValue,
+        "max_drawdown": maxDrawdownPct,
+        "is_candidate": isCandidate,
+        "is_setup_today": isSetup_today,
+        "buy_limit": buyLimit_today,
+        "stop_loss": stopLoss_today,
+        "chase_today": chase_today,
+        "current_position": position['qty'],
+        "avg_bars_held": avg_bars_held
     }
     
     if return_logs: return stats_dict, trade_logs

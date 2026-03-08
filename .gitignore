@@ -1,6 +1,7 @@
 # 忽略所有 CSV 數據 (這是那 586 個檔案的主因)
 tw_stock_data_vip/
 testing_csv/
+output/
 *.csv
 
 # 忽略 AI 記憶資料庫
@@ -10,6 +11,8 @@ testing_csv/
 *.xlsx
 *.html
 *.7z
+*.zip
+*.log
 
 # 忽略 Python 運行暫存檔
 __pycache__/

@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import traceback
 import optuna
 import numpy as np
 import pandas as pd
@@ -11,8 +12,25 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path
 
-warnings.filterwarnings('ignore')
+# # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
+warnings.simplefilter("default")
+
+# # (AI註: 第三方套件的重複性 FutureWarning 只顯示一次，避免訓練輸出被洗版)
+warnings.filterwarnings(
+    "once",
+    category=FutureWarning,
+    module=r"optuna(\..*)?$"
+)
+
+# # (AI註: 相同 RuntimeWarning 只顯示一次；保留可見性，但避免大量重複輸出)
+warnings.filterwarnings(
+    "once",
+    category=RuntimeWarning
+)
+
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 os.makedirs("outputs", exist_ok=True)
@@ -24,41 +42,169 @@ TRAIN_ENABLE_ROTATION = False
 DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
+DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
+
+# # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
+OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
+OPTIMIZER_PREP_OTHER_LOG_PATH = build_timestamped_log_path(
+    "optimizer_prep_other_failures",
+    timestamp=OPTIMIZER_SESSION_TS
+)
+OPTIMIZER_PREP_SUMMARY = {
+    "trials_with_insufficient": 0,
+    "trials_with_other": 0,
+    "insufficient_count_total": 0,
+    "other_count_total": 0,
+    "unique_other_count": 0,
+}
+OPTIMIZER_PREP_OTHER_SEEN = set()
+
+
+# # (AI註: optimizer 的預處理異常改成 session 級彙總：
+# # 1. 資料不足不逐 trial 洗板
+# # 2. 其他異常寫入單一 log 檔
+# # 3. 相同異常去重，避免長時間訓練下 log 爆量)
+def record_optimizer_prep_failures(trial_number, insufficient_failures, other_failures):
+    insufficient_count = len(insufficient_failures)
+    other_count = len(other_failures)
+
+    if insufficient_count > 0:
+        OPTIMIZER_PREP_SUMMARY["trials_with_insufficient"] += 1
+        OPTIMIZER_PREP_SUMMARY["insufficient_count_total"] += insufficient_count
+
+    if other_count > 0:
+        OPTIMIZER_PREP_SUMMARY["trials_with_other"] += 1
+        OPTIMIZER_PREP_SUMMARY["other_count_total"] += other_count
+
+        new_lines = []
+        for ticker, reason in other_failures:
+            signature = (ticker, reason)
+            if signature in OPTIMIZER_PREP_OTHER_SEEN:
+                continue
+            OPTIMIZER_PREP_OTHER_SEEN.add(signature)
+            new_lines.append(f"trial={trial_number + 1} | {ticker}: {reason}")
+
+        if new_lines:
+            append_issue_log(OPTIMIZER_PREP_OTHER_LOG_PATH, new_lines)
+
+        OPTIMIZER_PREP_SUMMARY["unique_other_count"] = len(OPTIMIZER_PREP_OTHER_SEEN)
+
+
+# # (AI註: 訓練結束時再印一次摘要，避免訓練過程被黃色警示干擾)
+def print_optimizer_prep_summary():
+    insufficient_total = OPTIMIZER_PREP_SUMMARY["insufficient_count_total"]
+    other_total = OPTIMIZER_PREP_SUMMARY["other_count_total"]
+
+    if insufficient_total == 0 and other_total == 0:
+        return
+
+    print(
+        f"{C_YELLOW}⚠️ 本輪預處理摘要："
+        f"資料不足 trial={OPTIMIZER_PREP_SUMMARY['trials_with_insufficient']} 次 / 累計 {insufficient_total} 檔；"
+        f"其他異常 trial={OPTIMIZER_PREP_SUMMARY['trials_with_other']} 次 / 累計 {other_total} 檔 / "
+        f"唯一 {OPTIMIZER_PREP_SUMMARY['unique_other_count']} 筆。{C_RESET}"
+    )
+
+    if OPTIMIZER_PREP_SUMMARY["unique_other_count"] > 0:
+        print(f"{C_YELLOW}⚠️ 其他異常詳細已寫入: {OPTIMIZER_PREP_OTHER_LOG_PATH}{C_RESET}")
+
+# # (AI註: 防止 magic number 散落；平行度預設沿用原本上限 14，但允許由 params 覆蓋)
+def resolve_optimizer_max_workers(params):
+    configured = getattr(params, 'optimizer_max_workers', DEFAULT_OPTIMIZER_MAX_WORKERS)
+    try:
+        configured = int(configured)
+    except (TypeError, ValueError):
+        configured = DEFAULT_OPTIMIZER_MAX_WORKERS
+    return max(1, configured)
+
+
+# # (AI註: 將 trial 內的「有效資料不足」與真正異常分流，避免 optimizer 在高 high_len 區域反覆洗板)
+def is_insufficient_data_message(msg):
+    return isinstance(msg, str) and ("有效資料不足" in msg)
 
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
         print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
         sys.exit(1)
-        
+
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
-    # 確保作業系統層級的檔案讀取順序絕對一致
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
-    for count, file in enumerate(files):
+    load_issues = []
+    total_invalid_rows = 0
+    total_duplicate_dates = 0
+    total_dropped_rows = 0
+
+    for count, file in enumerate(files, start=1):
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
-            df = pd.read_csv(os.path.join(DATA_DIR, file))
-            if len(df) < 50: continue
-            df.columns = [c.capitalize() for c in df.columns]
-            df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
-            date_col = 'Time' if 'Time' in df.columns else 'Date'
-            df[date_col] = pd.to_datetime(df[date_col])
-            df.set_index(date_col, inplace=True)
-            RAW_DATA_CACHE[ticker] = df
+            raw_df = pd.read_csv(os.path.join(DATA_DIR, file))
+            if len(raw_df) < LOAD_DATA_MIN_ROWS:
+                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})")
+                continue
+
+            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker)
+            RAW_DATA_CACHE[ticker] = clean_df
+
+            invalid_row_count = sanitize_stats['invalid_row_count']
+            duplicate_date_count = sanitize_stats['duplicate_date_count']
+            dropped_row_count = sanitize_stats['dropped_row_count']
+
+            total_invalid_rows += invalid_row_count
+            total_duplicate_dates += duplicate_date_count
+            total_dropped_rows += dropped_row_count
+
+            if dropped_row_count > 0:
+                load_issues.append(
+                    f"{ticker}: 清洗移除 {dropped_row_count} 列 "
+                    f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
+                )
+
         except Exception as e:
-            print(f"{C_YELLOW}\n[警告] 載入 {ticker} 發生錯誤: {e}{C_RESET}")
+            load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
             continue
-        if count % 50 == 0: print(f"{C_GRAY}   進度: 已快取 {count} 檔股票...{C_RESET}", end="\r")
-    print(f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的。{C_RESET}\n")
+
+        if count % 50 == 0:
+            print(f"{C_GRAY}   進度: 已掃描 {count} 檔股票...{C_RESET}", end="\r")
+
+    print(
+        f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，"
+        f"移除 {total_dropped_rows} 列資料 "
+        f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})。{C_RESET}\n"
+    )
+
+    if load_issues:
+        issue_path = write_issue_log("optimizer_load_issues", load_issues)
+        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入: {issue_path}{C_RESET}")
 
 def worker_prep_data(ticker, df, params):
     try:
         if len(df) < params.high_len + 10:
-            return ticker, None, None
-            
+            return {
+                "ticker": ticker,
+                "ok": False,
+                "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {params.high_len + 10} 列",
+                "data": None,
+                "logs": None,
+            }
+
         df_prepared, logs = prep_stock_data_and_trades(df, params)
-        return ticker, df_prepared.to_dict('index'), logs
-    except Exception as e: 
-        return ticker, None, None
+        return {
+            "ticker": ticker,
+            "ok": True,
+            "reason": "",
+            "data": df_prepared.to_dict('index'),
+            "logs": logs,
+        }
+    except Exception as e:
+        tb_lines = traceback.format_exc().strip().splitlines()
+        tb_tail = " | ".join(tb_lines[-3:]) if tb_lines else ""
+        return {
+            "ticker": ticker,
+            "ok": False,
+            "reason": f"{type(e).__name__}: {e}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
+            "data": None,
+            "logs": None,
+        }
 
 def objective(trial):
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
@@ -84,13 +230,31 @@ def objective(trial):
         use_compounding = True 
     )
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
-    with ProcessPoolExecutor(max_workers=14) as executor:
+    prep_failures = []
+    max_workers = resolve_optimizer_max_workers(ai_params)
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
         for future in as_completed(futures):
-            ticker, fast_df, logs = future.result()
-            if fast_df:
-                all_dfs_fast[ticker], all_trade_logs[ticker] = fast_df, logs
-                master_dates.update(fast_df.keys())
+            result = future.result()
+            ticker = result["ticker"]
+            if result["ok"]:
+                all_dfs_fast[ticker] = result["data"]
+                all_trade_logs[ticker] = result["logs"]
+                master_dates.update(result["data"].keys())
+            else:
+                prep_failures.append((ticker, result["reason"]))
+    if prep_failures:
+        insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
+        other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
+
+        record_optimizer_prep_failures(
+            trial_number=trial.number,
+            insufficient_failures=insufficient_failures,
+            other_failures=other_failures
+        )
+
+        if other_failures:
+            trial.set_user_attr("prep_other_failures", len(other_failures))
     if not master_dates: return -9999.0
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
@@ -179,7 +343,8 @@ if __name__ == "__main__":
                     win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
                     r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0)
                 )
-        except ValueError: pass
+        except ValueError as e:
+            print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
 
     if N_TRIALS == 0:
         try:
@@ -190,6 +355,11 @@ if __name__ == "__main__":
         except ValueError: print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
     else:
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
-        try: study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
-        except KeyboardInterrupt: pass
-        print(f"\n\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
+        try:
+            study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
+        except KeyboardInterrupt:
+            print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
+
+        print()
+        print_optimizer_prep_summary()
+        print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
