@@ -10,121 +10,160 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-# 引入您原本的設定與輔助數學函數 (不改動核心)
 from core.v16_config import V16StrategyParams
 from core.v16_core import (
-    tv_atr, tv_ema, tv_supertrend, adjust_to_tick,
-    calc_entry_price, calc_net_sell_price, calc_position_size
+    generate_signals,
+    execute_bar_step,
+    adjust_to_tick,
+    calc_entry_price,
+    calc_net_sell_price,
+    calc_position_size
 )
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 
 warnings.filterwarnings('ignore')
 
 C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
 C_YELLOW = '\033[93m'
-C_RED = '\031[91m'
+C_RED = '\033[91m'
 C_RESET = '\033[0m'
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
     if os.path.exists(json_file):
         try:
-            with open(json_file, 'r') as f:
+            with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             for k, v in data.items():
                 if hasattr(params, k):
                     setattr(params, k, v)
             print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，改用系統預設值。({type(e).__name__}: {e}){C_RESET}")
+    else:
+        print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
     return params
 
 def run_debug_backtest(df, ticker, params):
-    """擁有 100% 核心邏輯，但加入了詳細明細追蹤的除錯引擎"""
+    """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
-    O, V = df['Open'].values, df['Volume'].values
-    Dates = df.index # 抓取日期供除錯
+    O = df['Open'].values
+    Dates = df.index
 
-    ATR_main = tv_atr(H, L, C, params.atr_len)
-    HighN = pd.Series(H).shift(1).rolling(params.high_len, min_periods=1).max().values
-    
-    SuperTrend_Dir = tv_supertrend(H, L, C, ATR_main, params.atr_times_trail)
-    isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (np.roll(SuperTrend_Dir, 1) == -1)
-    isSupertrend_Bearish_Flip[0] = False
-    
-    isPriceCrossover = (C > HighN) & (np.roll(C, 1) <= np.roll(HighN, 1))
-    isPriceCrossover[0] = False
-    
-    if getattr(params, 'use_bb', True):
-        BB_Mid = pd.Series(C).rolling(params.bb_len).mean().values
-        BB_Upper = BB_Mid + params.bb_mult * pd.Series(C).rolling(params.bb_len).std(ddof=0).values
-        bbCondition = (C > BB_Upper)
-    else:
-        bbCondition = np.ones_like(C, dtype=bool) 
+    ATR_main, buyCondition, sellCondition, _ = generate_signals(df, params)
 
-    if getattr(params, 'use_vol', True):
-        VolS = pd.Series(V).rolling(params.vol_short_len).mean().values
-        VolL = pd.Series(V).rolling(params.vol_long_len).mean().values
-        volCondition = np.isnan(V) | (VolS > VolL)
-    else:
-        volCondition = np.ones_like(C, dtype=bool)
-
-    if getattr(params, 'use_kc', True):
-        ATR_kc = tv_atr(H, L, C, params.kc_len)
-        KC_Mid = tv_ema(C, params.kc_len)
-        KC_Lower = KC_Mid - ATR_kc * params.kc_mult
-        isKcCrossunder = (C < KC_Lower) & (np.roll(C, 1) >= np.roll(KC_Lower, 1))
-        isKcCrossunder[0] = False
-        kcSellCondition = (isKcCrossunder & (C < O))
-    else:
-        kcSellCondition = np.zeros_like(C, dtype=bool) 
-
-    buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
-    sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
-
-    positionSize = 0
-    buyPrice, entryPrice = np.nan, np.nan
-    initialStopLossPrice, trailingStopPrice = np.nan, np.nan
-    sellPriceHalf = np.nan
-    soldHalf = False
-    cumulativeProfit = 0.0
+    position = {'qty': 0}
     currentCapital = params.initial_capital
-
-    # 🌟 交易明細清單
+    currentEquity = currentCapital
     trade_logs = []
 
     for j in range(1, len(C)):
-        if np.isnan(ATR_main[j-1]): continue
-        pos_start_of_current_bar = positionSize
-            
-        if positionSize > 0 and C[j] > buyPrice + (ATR_main[j-1] * params.atr_times_trail):
-            new_trail = C[j] - (ATR_main[j-1] * params.atr_times_trail)
-            
-            trailingStopPrice = adjust_to_tick(max(trailingStopPrice, new_trail))
-            
-        isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
-        buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol) if isSetup_prev else np.nan
-        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
-        buyTriggered = isSetup_prev and L[j] <= buyLimitPrice and not is_locked_limit_up            
-        
-        if buyTriggered:
-            buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
-            initialStopLossPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_init)
-            trailingStopPrice = adjust_to_tick(buyPrice - ATR_main[j-1] * params.atr_times_trail)
-            soldHalf, cumulativeProfit = False, 0.0
-            
-            sizing_capital = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            buyQty = calc_position_size(buyPrice, initialStopLossPrice, sizing_capital, params.fixed_risk, params)
-            
-            if buyQty > 0:
-                entryPrice = calc_entry_price(buyPrice, buyQty, params)
-                sellPriceHalf = adjust_to_tick(buyPrice + (entryPrice - calc_net_sell_price(initialStopLossPrice, buyQty, params)))
-                positionSize = buyQty
+        if np.isnan(ATR_main[j - 1]):
+            continue
+
+        pos_start_of_current_bar = position['qty']
+
+        # 1. 執行 T 日持倉結算（與正式核心共用 execute_bar_step）
+        if pos_start_of_current_bar > 0:
+            prev_qty = position['qty']
+            prev_realized = position.get('realized_pnl', 0.0)
+            prev_tp_half = position.get('tp_half', np.nan)
+            prev_stop = max(position.get('initial_stop', np.nan), position.get('trailing_stop', np.nan))
+
+            position, freed_cash, pnl_realized, events = execute_bar_step(
+                position,
+                ATR_main[j - 1],
+                sellCondition[j - 1],
+                C[j - 1],
+                O[j],
+                H[j],
+                L[j],
+                C[j],
+                params
+            )
+
+            realized_delta = position.get('realized_pnl', 0.0) - prev_realized
+
+            if 'TP_HALF' in events and realized_delta != 0:
+                sold_qty = prev_qty - position['qty']
+                exec_sell_price_half = adjust_to_tick(max(prev_tp_half, O[j]))
+                sell_net_price_half = calc_net_sell_price(exec_sell_price_half, sold_qty, params)
+
+                trade_logs.append({
+                    "日期": Dates[j].strftime('%Y-%m-%d'),
+                    "動作": "半倉停利",
+                    "成交價": exec_sell_price_half,
+                    "含息成本價": sell_net_price_half,
+                    "股數": sold_qty,
+                    "投入總金額": sell_net_price_half * sold_qty,
+                    "設定停損價": prev_stop,
+                    "半倉停利價": np.nan,
+                    "ATR(前日)": ATR_main[j - 1],
+                    "單筆實質損益": realized_delta
+                })
+
+            if 'STOP' in events or 'IND_SELL' in events:
+                exit_qty = prev_qty if 'TP_HALF' not in events else prev_qty - int(np.floor(prev_qty * params.tp_percent))
+                action_str = "停損殺出" if 'STOP' in events else "指標賣出"
+                active_stop = prev_stop
+
+                if 'STOP' in events:
+                    sell_price = adjust_to_tick(min(active_stop, O[j]))
+                else:
+                    sell_price = O[j]
+
+                sell_net_price = calc_net_sell_price(sell_price, position.get('qty', 0) + exit_qty - position.get('qty', 0), params)
+                final_leg_pnl = pnl_realized - realized_delta if 'TP_HALF' in events else pnl_realized
                 
-                # 📝 寫入買進明細
+                trade_logs.append({
+                    "日期": Dates[j].strftime('%Y-%m-%d'),
+                    "動作": action_str,
+                    "成交價": sell_price,
+                    "含息成本價": sell_net_price,
+                    "股數": exit_qty if exit_qty > 0 else prev_qty,
+                    "投入總金額": sell_net_price * (exit_qty if exit_qty > 0 else prev_qty),
+                    "設定停損價": active_stop,
+                    "半倉停利價": np.nan,
+                    "ATR(前日)": ATR_main[j - 1],
+                    "單筆實質損益": final_leg_pnl
+                })
+
+            currentCapital += pnl_realized
+
+        # 2. 處理 T 日進場（與正式核心同樣的盤前定錨邏輯）
+        isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
+        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j - 1])
+
+        if isSetup_prev:
+            buyLimitPrice = adjust_to_tick(C[j - 1] + ATR_main[j - 1] * params.atr_buy_tol)
+            planned_init_sl = adjust_to_tick(buyLimitPrice - ATR_main[j - 1] * params.atr_times_init)
+            planned_init_trail = adjust_to_tick(buyLimitPrice - ATR_main[j - 1] * params.atr_times_trail)
+            sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
+            buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
+
+            if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
+                buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
+                entryPrice = calc_entry_price(buyPrice, buyQty, params)
+                net_sl_per_share = calc_net_sell_price(planned_init_sl, buyQty, params)
+                sellPriceHalf = adjust_to_tick(buyPrice + (entryPrice - net_sl_per_share))
+
+                position = {
+                    'qty': buyQty,
+                    'entry': entryPrice,
+                    'sl': max(planned_init_sl, planned_init_trail),
+                    'initial_stop': planned_init_sl,
+                    'trailing_stop': planned_init_trail,
+                    'tp_half': sellPriceHalf,
+                    'sold_half': False,
+                    'pure_buy_price': buyPrice,
+                    'realized_pnl': 0.0,
+                    'initial_risk_total': (entryPrice - net_sl_per_share) * buyQty
+                }
+
                 trade_logs.append({
                     "日期": Dates[j].strftime('%Y-%m-%d'),
                     "動作": "買進",
@@ -132,102 +171,48 @@ def run_debug_backtest(df, ticker, params):
                     "含息成本價": entryPrice,
                     "股數": buyQty,
                     "投入總金額": entryPrice * buyQty,
-                    "設定停損價": initialStopLossPrice,
+                    "設定停損價": planned_init_sl,
                     "半倉停利價": sellPriceHalf,
-                    "ATR(前日)": ATR_main[j-1],
+                    "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": 0.0
                 })
 
-        isHoldingFromYesterday = (pos_start_of_current_bar > 0) and (not buyTriggered)
-        
-        if isHoldingFromYesterday:
-            activeStopPrice = max(initialStopLossPrice, trailingStopPrice)
-            isStopHit = L[j] <= activeStopPrice
-            isTakeProfitHit = H[j] >= sellPriceHalf and not soldHalf
-            isIndicatorSell = sellCondition[j-1]
-            
-            if isStopHit and isTakeProfitHit: isTakeProfitHit = False
-                
-            if isTakeProfitHit:
-                execSellPriceHalf = adjust_to_tick(max(sellPriceHalf, O[j]))
-                sellQtyHalf = int(math.floor(positionSize * params.tp_percent))
-                if sellQtyHalf > 0 and positionSize > sellQtyHalf:
-                    sellNetPriceHalf = calc_net_sell_price(execSellPriceHalf, sellQtyHalf, params)
-                    pnl_half = (sellNetPriceHalf - entryPrice) * sellQtyHalf
-                    cumulativeProfit += pnl_half
-                    positionSize -= sellQtyHalf
-                    soldHalf = True
-                    
-                    # 📝 寫入半倉停利明細
-                    trade_logs.append({
-                        "日期": Dates[j].strftime('%Y-%m-%d'),
-                        "動作": "半倉停利",
-                        "成交價": execSellPriceHalf,
-                        "含息成本價": sellNetPriceHalf,
-                        "股數": sellQtyHalf,
-                        "投入總金額": sellNetPriceHalf * sellQtyHalf,
-                        "設定停損價": activeStopPrice,
-                        "半倉停利價": np.nan,
-                        "ATR(前日)": ATR_main[j-1],
-                        "單筆實質損益": pnl_half
-                    })
-                else:
-                    isTakeProfitHit = False
-                
-            if isStopHit or isIndicatorSell:
-                # 🌟 實戰防線：一字跌停死鎖過濾器
-                is_locked_limit_down = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] < C[j-1])
-                
-                if not is_locked_limit_down:
-                    sellPrice = adjust_to_tick(min(activeStopPrice, O[j]) if isStopHit else O[j])
-                    sellQty = positionSize
-                    sellNetPrice = calc_net_sell_price(sellPrice, sellQty, params)
-                    pnl_final = (sellNetPrice - entryPrice) * sellQty
-                    profitValue = cumulativeProfit + pnl_final
-                    
-                    action_str = "停損殺出" if isStopHit else "指標賣出"
-                    
-                    # 📝 寫入清倉明細
-                    trade_logs.append({
-                        "日期": Dates[j].strftime('%Y-%m-%d'),
-                        "動作": action_str,
-                        "成交價": sellPrice,
-                        "含息成本價": sellNetPrice,
-                        "股數": sellQty,
-                        "投入總金額": sellNetPrice * sellQty,
-                        "設定停損價": activeStopPrice,
-                        "半倉停利價": np.nan,
-                        "ATR(前日)": ATR_main[j-1],
-                        "單筆實質損益": pnl_final
-                    })
-                    
-                    currentCapital += profitValue
-                    positionSize = 0
-                    soldHalf = False
+        currentEquity = currentCapital
+        if position['qty'] > 0:
+            floatingSellNet = calc_net_sell_price(C[j], position['qty'], params)
+            floatingPnL = (floatingSellNet - position['entry']) * position['qty']
+            currentEquity = currentCapital + floatingPnL
 
     if not trade_logs:
         print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
         return None
 
-    # 輸出成 Excel
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     df_logs = pd.DataFrame(trade_logs)
-    
-    # 增加一個輔助欄位，把同一筆交易串起來看 (根據 PnL 是否大於 0 來累加)
     df_logs['單筆實質損益'] = df_logs['單筆實質損益'].round(2)
     df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
-    
-    output_filename = f"outputs/Debug_TradeLog_{ticker}.xlsx"
+
+    output_filename = os.path.join(OUTPUT_DIR, f"Debug_TradeLog_{ticker}.xlsx")
     df_logs.to_excel(output_filename, index=False)
     print(f"{C_GREEN}📁 交易明細已成功匯出至：{output_filename}{C_RESET}")
-    
-    # 針對除錯，特別印出前五大虧損
+
     losses = df_logs[df_logs['單筆實質損益'] < 0]
     if not losses.empty:
         print(f"\n{C_CYAN}🚨 [抓漏分析] 前 3 大嚴重虧損明細：{C_RESET}")
         worst_losses = losses.sort_values(by='單筆實質損益', ascending=True).head(3)
         for _, row in worst_losses.iterrows():
-            print(f"日期: {row['日期']} | 動作: {row['動作']:<4} | 股價: {row['成交價']:>6.2f} | 股數: {row['股數']:>6}股 | 總投入金: {row['投入總金額']:>9,.0f} | 💸 虧損: {row['單筆實質損益']:>9,.0f}")
-            print(f"   ➤ 當下 ATR 僅有 {row['ATR(前日)']:.2f}，導致您在 {row['設定停損價']:.2f} 的停損防線被跳空/滑價擊穿。")
+            print(
+                f"日期: {row['日期']} | 動作: {row['動作']:<4} | 股價: {row['成交價']:>6.2f} | "
+                f"股數: {int(row['股數']):>6}股 | 總投入金: {row['投入總金額']:>9,.0f} | "
+                f"💸 虧損: {row['單筆實質損益']:>9,.0f}"
+            )
+            print(
+                f"   ➤ 當下 ATR 為 {row['ATR(前日)']:.2f}，"
+                f"停損/賣出參考價為 {row['設定停損價']:.2f}。"
+            )
+
+    return df_logs
 
 def main():
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -251,19 +236,24 @@ def main():
             return
             
     print(f"📥 讀取 {file_path}...")
-    df = pd.read_csv(file_path)
-    df.columns = [c.capitalize() for c in df.columns]
-    if 'Time' in df.columns:
-        df['Time'] = pd.to_datetime(df['Time'])
-        df.set_index('Time', inplace=True)
-    elif 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
-        
+    raw_df = pd.read_csv(file_path)
+
     params = load_params()
-    
+    min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+    df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+
+    dropped_row_count = sanitize_stats['dropped_row_count']
+    invalid_row_count = sanitize_stats['invalid_row_count']
+    duplicate_date_count = sanitize_stats['duplicate_date_count']
+
+    if dropped_row_count > 0:
+        print(
+            f"{C_YELLOW}⚠️ {ticker} 清洗移除 {dropped_row_count} 列 "
+            f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count}){C_RESET}"
+        )
+
     print("⏳ 正在產生完整交易明細...")
     run_debug_backtest(df, ticker, params)
-
+    
 if __name__ == "__main__":
     main()

@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -20,80 +21,41 @@ warnings.filterwarnings("once", category=RuntimeWarning)
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
-LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
 SCANNER_PROGRESS_EVERY = 1
-
-
-def sanitize_ohlcv_dataframe(df, ticker):
-    working = df.copy()
-    working.columns = [c.capitalize() for c in working.columns]
-
-    date_col = 'Time' if 'Time' in working.columns else 'Date'
-    if date_col not in working.columns:
-        raise KeyError("缺少 Time / Date 欄位")
-
-    missing_cols = [c for c in LOAD_DATA_REQUIRED_COLS if c not in working.columns]
-    if missing_cols:
-        raise KeyError(f"缺少必要欄位: {missing_cols}")
-
-    for col in LOAD_DATA_REQUIRED_COLS:
-        working[col] = pd.to_numeric(working[col], errors='coerce')
-
-    working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
-
-    invalid_mask = (
-        working[date_col].isna() |
-        working['Open'].isna() |
-        working['High'].isna() |
-        working['Low'].isna() |
-        working['Close'].isna() |
-        working['Volume'].isna() |
-        (working['Open'] <= 0) |
-        (working['High'] <= 0) |
-        (working['Low'] <= 0) |
-        (working['Close'] <= 0) |
-        (working['Volume'] < 0)
-    )
-
-    bad_count = int(invalid_mask.sum())
-    if bad_count > 0:
-        working = working.loc[~invalid_mask].copy()
-
-    if working.empty:
-        raise ValueError(f"{ticker} 清洗後無有效資料")
-
-    working.set_index(date_col, inplace=True)
-    working.sort_index(inplace=True)
-
-    if bad_count > 0:
-        print(f"{C_YELLOW}[警告] {ticker} 剔除 {bad_count} 筆無效 OHLCV 資料{C_RESET}")
-
-    return working
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
     if os.path.exists(json_file):
         try:
-            with open(json_file, 'r') as f:
+            with open(json_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             for key, value in data.items():
-                if hasattr(params, key): setattr(params, key, value)
+                if hasattr(params, key):
+                    setattr(params, key, value)
             return params, True
-        except Exception as e: 
-            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {e}{C_RESET}")
+        except Exception as e:
+            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {type(e).__name__}: {e}{C_RESET}")
     return params, False
 
 def process_single_stock(file_path, ticker, params):
     try:
-        df = pd.read_csv(file_path)
-        df = sanitize_ohlcv_dataframe(df, ticker)
-        if len(df) < params.high_len + 10:
-            return None
+        raw_df = pd.read_csv(file_path)
+        min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+        df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+
+        invalid_row_count = sanitize_stats['invalid_row_count']
+        duplicate_date_count = sanitize_stats['duplicate_date_count']
+        dropped_row_count = sanitize_stats['dropped_row_count']
 
         stats = run_v16_backtest(df, params)
-        
-        if not stats or not stats['is_candidate']: return None
-            
+                
+        if not stats or not stats['is_candidate']:
+            return None
+
+        sanitize_note = ""
+        if dropped_row_count > 0:
+            sanitize_note = f" | 清洗移除:{dropped_row_count} (異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
+
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
         reference_capital = params.initial_capital
         
@@ -108,8 +70,8 @@ def process_single_stock(file_path, ticker, params):
             est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
             
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-            msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
-            
+            msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}{sanitize_note}"
+
             return ('buy', proj_cost, stats['expected_value'], msg, ticker)
             
         elif stats.get('chase_today') is not None:
@@ -120,8 +82,7 @@ def process_single_stock(file_path, ticker, params):
             proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
             
             zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 參考投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
-            
+            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}{sanitize_note}"            
             return ('zone', proj_cost, stats['expected_value'], msg, ticker)
             
         return ('candidate', None, None, None, ticker)

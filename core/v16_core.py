@@ -283,6 +283,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     peakCapital, maxDrawdownPct = currentCapital, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
+    currentEquity = currentCapital
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]): continue
@@ -381,8 +382,10 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
 
         currentEquity = currentCapital
         if position['qty'] > 0:
+            # # (AI註: currentCapital 已經包含歷次已實現損益，
+            # # (AI註: 這裡只能再加「剩餘部位的未實現損益」，避免半倉獲利重複入帳)
             floatingSellNet = calc_net_sell_price(C[j], position['qty'], params)
-            floatingPnL = position['realized_pnl'] + (floatingSellNet - position['entry']) * position['qty']
+            floatingPnL = (floatingSellNet - position['entry']) * position['qty']
             currentEquity = currentCapital + floatingPnL
 
         peakCapital = max(peakCapital, currentEquity)
@@ -403,7 +406,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
     else: expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
-    totalNetProfitPct = ((currentCapital - params.initial_capital) / params.initial_capital) * 100
+    finalEquity = currentEquity
+    totalNetProfitPct = ((finalEquity - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (position['qty'] == 0)
@@ -423,11 +427,24 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     stats_dict = {
-        "asset_growth": totalNetProfitPct, "trade_count": tradeCount, "missed_buys": missedBuyCount,
-        "missed_sells": missedSellCount, "score": score, "win_rate": winRate, "payoff_ratio": payoffRatio, 
-        "expected_value": expectedValue, "max_drawdown": maxDrawdownPct, "is_candidate": isCandidate, 
-        "is_setup_today": isSetup_today, "buy_limit": buyLimit_today, "stop_loss": stopLoss_today, 
-        "chase_today": chase_today, "current_position": position['qty'], "avg_bars_held": avg_bars_held  
+        "asset_growth": totalNetProfitPct,
+        "trade_count": tradeCount,
+        "missed_buys": missedBuyCount,
+        "missed_sells": missedSellCount,
+        "score": score,
+        "win_rate": winRate,
+        "avg_win": avgWin,
+        "avg_loss": avgLoss,
+        "payoff_ratio": payoffRatio,
+        "expected_value": expectedValue,
+        "max_drawdown": maxDrawdownPct,
+        "is_candidate": isCandidate,
+        "is_setup_today": isSetup_today,
+        "buy_limit": buyLimit_today,
+        "stop_loss": stopLoss_today,
+        "chase_today": chase_today,
+        "current_position": position['qty'],
+        "avg_bars_held": avg_bars_held
     }
     
     if return_logs: return stats_dict, trade_logs

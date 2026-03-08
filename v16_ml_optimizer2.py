@@ -12,6 +12,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -41,8 +42,6 @@ DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
-LOAD_DATA_MIN_ROWS = 50
-LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
 def write_issue_log(prefix, lines):
@@ -65,53 +64,6 @@ def resolve_optimizer_max_workers(params):
         configured = DEFAULT_OPTIMIZER_MAX_WORKERS
     return max(1, configured)
 
-# # (AI註: 嚴格資料清洗 - 禁止以前值填補 OHLC，壞列直接剔除並回報)
-def sanitize_ohlcv_dataframe(df, ticker):
-    working = df.copy()
-    working.columns = [c.capitalize() for c in working.columns]
-
-    date_col = 'Time' if 'Time' in working.columns else 'Date'
-    if date_col not in working.columns:
-        raise KeyError("缺少 Time / Date 欄位")
-
-    missing_cols = [c for c in LOAD_DATA_REQUIRED_COLS if c not in working.columns]
-    if missing_cols:
-        raise KeyError(f"缺少必要欄位: {missing_cols}")
-
-    for col in LOAD_DATA_REQUIRED_COLS:
-        working[col] = pd.to_numeric(working[col], errors='coerce')
-
-    working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
-
-    invalid_mask = (
-        working[date_col].isna() |
-        working['Open'].isna() |
-        working['High'].isna() |
-        working['Low'].isna() |
-        working['Close'].isna() |
-        working['Volume'].isna() |
-        (working['Open'] <= 0) |
-        (working['High'] <= 0) |
-        (working['Low'] <= 0) |
-        (working['Close'] <= 0) |
-        (working['Volume'] < 0) |
-        (working['High'] < working[['Open', 'Low', 'Close']].max(axis=1)) |
-        (working['Low'] > working[['Open', 'High', 'Close']].min(axis=1))
-    )
-
-    dropped_rows = int(invalid_mask.sum())
-    if dropped_rows > 0:
-        working = working.loc[~invalid_mask].copy()
-
-    working.set_index(date_col, inplace=True)
-    working.sort_index(inplace=True)
-    working = working[~working.index.duplicated(keep='last')]
-
-    if len(working) < LOAD_DATA_MIN_ROWS:
-        raise ValueError(f"有效資料不足: 清洗後僅剩 {len(working)} 列")
-
-    return working, dropped_rows
-
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
         print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
@@ -120,6 +72,8 @@ def load_all_raw_data():
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
     load_issues = []
+    total_invalid_rows = 0
+    total_duplicate_dates = 0
     total_dropped_rows = 0
 
     for count, file in enumerate(files, start=1):
@@ -130,12 +84,22 @@ def load_all_raw_data():
                 load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})")
                 continue
 
-            clean_df, dropped_rows = sanitize_ohlcv_dataframe(raw_df, ticker)
+            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker)
             RAW_DATA_CACHE[ticker] = clean_df
-            total_dropped_rows += dropped_rows
 
-            if dropped_rows > 0:
-                load_issues.append(f"{ticker}: 清洗時移除 {dropped_rows} 列異常 OHLCV 資料")
+            invalid_row_count = sanitize_stats['invalid_row_count']
+            duplicate_date_count = sanitize_stats['duplicate_date_count']
+            dropped_row_count = sanitize_stats['dropped_row_count']
+
+            total_invalid_rows += invalid_row_count
+            total_duplicate_dates += duplicate_date_count
+            total_dropped_rows += dropped_row_count
+
+            if dropped_row_count > 0:
+                load_issues.append(
+                    f"{ticker}: 清洗移除 {dropped_row_count} 列 "
+                    f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
+                )
 
         except Exception as e:
             load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
@@ -144,7 +108,11 @@ def load_all_raw_data():
         if count % 50 == 0:
             print(f"{C_GRAY}   進度: 已掃描 {count} 檔股票...{C_RESET}", end="\r")
 
-    print(f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，移除 {total_dropped_rows} 列異常資料。{C_RESET}\n")
+    print(
+        f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，"
+        f"移除 {total_dropped_rows} 列資料 "
+        f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})。{C_RESET}\n"
+    )
 
     if load_issues:
         issue_path = write_issue_log("optimizer_load_issues", load_issues)

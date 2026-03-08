@@ -41,9 +41,64 @@ def prep_stock_data_and_trades(df, params):
     _, standalone_logs = run_v16_backtest(df, params, return_logs=True)
     return df, standalone_logs
 
-def get_pit_stats(trade_logs, current_date, params):
-    past_trades = [t for t in trade_logs if t['exit_date'] < current_date]
-    trade_count = len(past_trades)
+def build_trade_stats_index(trade_logs):
+    if not trade_logs:
+        return {
+            'exit_dates': [],
+            'cum_trade_count': np.array([], dtype=np.int32),
+            'cum_win_count': np.array([], dtype=np.int32),
+            'cum_win_r_sum': np.array([], dtype=np.float64),
+            'cum_loss_r_sum': np.array([], dtype=np.float64),
+            'cum_total_r_sum': np.array([], dtype=np.float64),
+        }
+
+    ordered_logs = sorted(trade_logs, key=lambda t: t['exit_date'])
+
+    exit_dates = []
+    cum_trade_count = []
+    cum_win_count = []
+    cum_win_r_sum = []
+    cum_loss_r_sum = []
+    cum_total_r_sum = []
+
+    trade_count = 0
+    win_count = 0
+    win_r_sum = 0.0
+    loss_r_sum = 0.0
+    total_r_sum = 0.0
+
+    for trade in ordered_logs:
+        trade_count += 1
+
+        pnl = float(trade.get('pnl', 0.0))
+        r_mult = float(trade.get('r_mult', 0.0))
+        total_r_sum += r_mult
+
+        if pnl > 0:
+            win_count += 1
+            win_r_sum += r_mult
+        else:
+            loss_r_sum += r_mult
+
+        exit_dates.append(trade['exit_date'])
+        cum_trade_count.append(trade_count)
+        cum_win_count.append(win_count)
+        cum_win_r_sum.append(win_r_sum)
+        cum_loss_r_sum.append(loss_r_sum)
+        cum_total_r_sum.append(total_r_sum)
+
+    return {
+        'exit_dates': exit_dates,
+        'cum_trade_count': np.array(cum_trade_count, dtype=np.int32),
+        'cum_win_count': np.array(cum_win_count, dtype=np.int32),
+        'cum_win_r_sum': np.array(cum_win_r_sum, dtype=np.float64),
+        'cum_loss_r_sum': np.array(cum_loss_r_sum, dtype=np.float64),
+        'cum_total_r_sum': np.array(cum_total_r_sum, dtype=np.float64),
+    }
+
+def get_pit_stats_from_index(stats_index, current_date, params):
+    cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date)
+    trade_count = int(stats_index['cum_trade_count'][cutoff - 1]) if cutoff > 0 else 0
     min_trades_req = getattr(params, 'min_history_trades', 0)
 
     if trade_count < min_trades_req:
@@ -51,18 +106,35 @@ def get_pit_stats(trade_logs, current_date, params):
     if trade_count == 0:
         return True, 0.0, 0.0
 
-    wins = [t for t in past_trades if t['pnl'] > 0]
-    win_rate = len(wins) / trade_count
+    win_count = int(stats_index['cum_win_count'][cutoff - 1])
+    win_rate = win_count / trade_count
+
     if EV_CALC_METHOD == 'B':
-        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
-        loss_count = trade_count - len(wins)
-        avg_loss_r = abs(sum(t['r_mult'] for t in past_trades if t['pnl'] <= 0) / loss_count) if loss_count > 0 else 0
-        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+        avg_win_r = (
+            stats_index['cum_win_r_sum'][cutoff - 1] / win_count
+            if win_count > 0 else 0.0
+        )
+
+        loss_count = trade_count - win_count
+        loss_r_sum = stats_index['cum_loss_r_sum'][cutoff - 1] if loss_count > 0 else 0.0
+        avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
+
+        if avg_loss_r > 0:
+            payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
+        elif avg_win_r > 0:
+            payoff_for_ev = 99.9
+        else:
+            payoff_for_ev = 0.0
+
         ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
     else:
-        ev_to_sort = sum(t['r_mult'] for t in past_trades) / trade_count
+        ev_to_sort = stats_index['cum_total_r_sum'][cutoff - 1] / trade_count
 
-    is_candidate = (ev_to_sort > getattr(params, 'min_history_ev', 0.0)) and (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
+    is_candidate = (
+        (ev_to_sort > getattr(params, 'min_history_ev', 0.0))
+        and
+        (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
+    )
     return is_candidate, ev_to_sort, win_rate
 
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True):
@@ -71,6 +143,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     start_idx = max(1, start_idx)
 
     ticker_dates = {t: sorted(list(df.keys())) for t, df in all_dfs_fast.items()}
+    pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
 
     initial_capital = params.initial_capital
     cash = initial_capital
@@ -124,7 +197,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 if ticker in pending_chases:
                     del pending_chases[ticker]
 
-                is_candidate, ev, win_rate = get_pit_stats(all_standalone_logs[ticker], today, params)
+                is_candidate, ev, win_rate = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
                 if is_candidate:
                     est_init_sl = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_init)
                     est_init_trail = adjust_to_tick(y_row['buy_limit'] - y_row['ATR'] * params.atr_times_trail)
@@ -147,7 +220,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
             elif ticker in pending_chases:
                 chase = pending_chases[ticker]
-                is_candidate, ev, win_rate = get_pit_stats(all_standalone_logs[ticker], today, params)
+                is_candidate, ev, win_rate = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
                 if is_candidate:
                     est_qty = chase['qty']
                     if est_qty > 0:
@@ -194,7 +267,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
                     is_strategically_better = False
                     if BUY_SORT_METHOD == 'EV':
-                        _, holding_ev, _ = get_pit_stats(all_standalone_logs[pt], today, params)
+                        _, holding_ev, _ = get_pit_stats_from_index(pit_stats_index[pt], today, params)                        
                         is_strategically_better = cand['ev'] > holding_ev
                     else:
                         holding_cost = pos['entry'] * pos['qty']
@@ -507,21 +580,30 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     if trade_count > 0:
         wins = [t for t in closed_trades_stats if t['pnl'] > 0]
         losses = [t for t in closed_trades_stats if t['pnl'] <= 0]
-        win_rate = (len(wins) / trade_count) * 100
-        avg_win_r = sum(t['r_mult'] for t in wins) / len(wins) if len(wins) > 0 else 0
-        avg_loss_r = abs(sum(t['r_mult'] for t in losses) / len(losses)) if len(losses) > 0 else 0
-        pf_payoff = (avg_win_r / avg_loss_r) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
+
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = (win_count / trade_count) * 100
+
+        # # (AI註: 統計口徑一致化 - pf_payoff 與單檔 run_v16_backtest 的 payoff_ratio 完全對齊，改用金額平均盈虧比)
+        avg_win_amount = sum(t['pnl'] for t in wins) / win_count if win_count > 0 else 0.0
+        avg_loss_amount = abs(sum(t['pnl'] for t in losses) / loss_count) if loss_count > 0 else 0.0
+        pf_payoff = (avg_win_amount / avg_loss_amount) if avg_loss_amount > 0 else (99.9 if avg_win_amount > 0 else 0.0)
+
+        # # (AI註: EV 仍維持原本以 R multiple 計算，避免改壞既有優化/篩選邏輯)
+        avg_win_r = sum(t['r_mult'] for t in wins) / win_count if win_count > 0 else 0.0
+        avg_loss_r = abs(sum(t['r_mult'] for t in losses) / loss_count) if loss_count > 0 else 0.0
 
         if EV_CALC_METHOD == 'B':
             payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-            pf_ev = (win_rate / 100 * payoff_for_ev) - (1 - win_rate / 100)
+            pf_ev = (win_rate / 100.0 * payoff_for_ev) - (1 - win_rate / 100.0)
         else:
             pf_ev = sum(t['r_mult'] for t in closed_trades_stats) / trade_count
     else:
         win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
 
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
-
+    
     if is_training:
         return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
     else:
