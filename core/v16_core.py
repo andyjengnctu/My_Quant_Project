@@ -19,6 +19,30 @@ def adjust_to_tick(price):
     tick = get_tick_size(price)
     return tv_round(price / tick) * tick
 
+
+def get_tick_size_array(prices):
+    prices = np.asarray(prices, dtype=np.float64)
+    ticks = np.full(prices.shape, 5.0, dtype=np.float64)
+    ticks[prices < 1000] = 1.0
+    ticks[prices < 500] = 0.5
+    ticks[prices < 100] = 0.1
+    ticks[prices < 50] = 0.05
+    ticks[prices < 10] = 0.01
+    ticks[prices < 1] = 0.001
+    return ticks
+
+
+def adjust_to_tick_array(prices):
+    prices = np.asarray(prices, dtype=np.float64)
+    out = np.full(prices.shape, np.nan, dtype=np.float64)
+    valid = ~np.isnan(prices)
+    if not np.any(valid):
+        return out
+    valid_prices = prices[valid]
+    ticks = get_tick_size_array(valid_prices)
+    out[valid] = np.floor(valid_prices / ticks + 0.5) * ticks
+    return out
+
 def calc_entry_price(bPrice, bQty, params):
     fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
     return bPrice + (fee / bQty)
@@ -236,44 +260,72 @@ def generate_signals(df, params):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
     ATR_main = tv_atr(H, L, C, params.atr_len)
-    HighN = pd.Series(H).shift(1).rolling(params.high_len, min_periods=1).max().values
+
+    close_series = pd.Series(C)
+    high_series = pd.Series(H)
+    volume_series = pd.Series(V)
+    HighN = high_series.shift(1).rolling(params.high_len, min_periods=1).max().values
     SuperTrend_Dir = tv_supertrend(H, L, C, ATR_main, params.atr_times_trail)
-    isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (np.roll(SuperTrend_Dir, 1) == -1)
+
+    prev_supertrend = np.empty_like(SuperTrend_Dir)
+    prev_supertrend[0] = SuperTrend_Dir[0]
+    prev_supertrend[1:] = SuperTrend_Dir[:-1]
+    isSupertrend_Bearish_Flip = (SuperTrend_Dir == 1) & (prev_supertrend == -1)
     isSupertrend_Bearish_Flip[0] = False
-    isPriceCrossover = (C > HighN) & (np.roll(C, 1) <= np.roll(HighN, 1))
+
+    prev_close = np.empty_like(C)
+    prev_close[0] = C[0]
+    prev_close[1:] = C[:-1]
+    prev_highn = np.empty_like(HighN)
+    prev_highn[0] = HighN[0]
+    prev_highn[1:] = HighN[:-1]
+    isPriceCrossover = (C > HighN) & (prev_close <= prev_highn)
     isPriceCrossover[0] = False
-    
+
     if getattr(params, 'use_bb', True):
-        BB_Mid = pd.Series(C).rolling(params.bb_len).mean().values
-        BB_Upper = BB_Mid + params.bb_mult * pd.Series(C).rolling(params.bb_len).std(ddof=0).values
+        BB_Mid = close_series.rolling(params.bb_len).mean().values
+        BB_Upper = BB_Mid + params.bb_mult * close_series.rolling(params.bb_len).std(ddof=0).values
         bbCondition = (C > BB_Upper)
-    else: bbCondition = np.ones_like(C, dtype=bool) 
+    else:
+        bbCondition = np.ones_like(C, dtype=bool)
+
     if getattr(params, 'use_vol', True):
-        VolS = pd.Series(V).rolling(params.vol_short_len).mean().values
-        VolL = pd.Series(V).rolling(params.vol_long_len).mean().values
+        VolS = volume_series.rolling(params.vol_short_len).mean().values
+        VolL = volume_series.rolling(params.vol_long_len).mean().values
         volCondition = np.isnan(V) | (VolS > VolL)
-    else: volCondition = np.ones_like(C, dtype=bool)
+    else:
+        volCondition = np.ones_like(C, dtype=bool)
+
     if getattr(params, 'use_kc', True):
         ATR_kc = tv_atr(H, L, C, params.kc_len)
         KC_Mid = tv_ema(C, params.kc_len)
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
-        isKcCrossunder = (C < KC_Lower) & (np.roll(C, 1) >= np.roll(KC_Lower, 1))
+        prev_kc_lower = np.empty_like(KC_Lower)
+        prev_kc_lower[0] = KC_Lower[0]
+        prev_kc_lower[1:] = KC_Lower[:-1]
+        isKcCrossunder = (C < KC_Lower) & (prev_close >= prev_kc_lower)
         isKcCrossunder[0] = False
-        kcSellCondition = (isKcCrossunder & (C < O))
-    else: kcSellCondition = np.zeros_like(C, dtype=bool) 
-    
+        kcSellCondition = isKcCrossunder & (C < O)
+    else:
+        kcSellCondition = np.zeros_like(C, dtype=bool)
+
     buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
     sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
+    raw_buy_limits = C + ATR_main * params.atr_buy_tol
     buy_limits = np.full_like(C, np.nan)
-    for i in range(len(C)):
-        if buyCondition[i]: buy_limits[i] = adjust_to_tick(C[i] + ATR_main[i] * params.atr_buy_tol)
+    valid_buy_mask = buyCondition & ~np.isnan(raw_buy_limits)
+    if np.any(valid_buy_mask):
+        buy_limits[valid_buy_mask] = adjust_to_tick_array(raw_buy_limits[valid_buy_mask])
     return ATR_main, buyCondition, sellCondition, buy_limits
 
-def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False):
+def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False, precomputed_signals=None):
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O, V = df['Open'].values, df['Volume'].values
     Dates = df.index
-    ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
+    if precomputed_signals is None:
+        ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
+    else:
+        ATR_main, buyCondition, sellCondition, buy_limits = precomputed_signals
 
     position = {'qty': 0}
     pending_chase = None
@@ -321,7 +373,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         
         if isSetup_prev:
             # # (AI註: 問題1修復 - 嚴格盤前定錨，qty與sl鎖死在 T-1 buyLimitPrice)
-            buyLimitPrice = adjust_to_tick(C[j-1] + ATR_main[j-1] * params.atr_buy_tol)
+            buyLimitPrice = buy_limits[j-1]
             planned_init_sl = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_init)
             planned_init_trail = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_trail)
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
