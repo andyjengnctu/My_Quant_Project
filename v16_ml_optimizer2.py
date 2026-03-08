@@ -13,6 +13,7 @@ from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -44,16 +45,68 @@ CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
-def write_issue_log(prefix, lines):
-    if not lines:
-        return None
+OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
+OPTIMIZER_PREP_OTHER_LOG_PATH = build_timestamped_log_path(
+    "optimizer_prep_other_failures",
+    timestamp=OPTIMIZER_SESSION_TS
+)
+OPTIMIZER_PREP_SUMMARY = {
+    "trials_with_insufficient": 0,
+    "trials_with_other": 0,
+    "insufficient_count_total": 0,
+    "other_count_total": 0,
+    "unique_other_count": 0,
+}
+OPTIMIZER_PREP_OTHER_SEEN = set()
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join("outputs", f"{prefix}_{timestamp}.log")
-    with open(log_path, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(f"{line}\n")
-    return log_path
+
+# # (AI註: optimizer 的預處理異常改成 session 級彙總：
+# # 1. 資料不足不逐 trial 洗板
+# # 2. 其他異常寫入單一 log 檔
+# # 3. 相同異常去重，避免長時間訓練下 log 爆量)
+def record_optimizer_prep_failures(trial_number, insufficient_failures, other_failures):
+    insufficient_count = len(insufficient_failures)
+    other_count = len(other_failures)
+
+    if insufficient_count > 0:
+        OPTIMIZER_PREP_SUMMARY["trials_with_insufficient"] += 1
+        OPTIMIZER_PREP_SUMMARY["insufficient_count_total"] += insufficient_count
+
+    if other_count > 0:
+        OPTIMIZER_PREP_SUMMARY["trials_with_other"] += 1
+        OPTIMIZER_PREP_SUMMARY["other_count_total"] += other_count
+
+        new_lines = []
+        for ticker, reason in other_failures:
+            signature = (ticker, reason)
+            if signature in OPTIMIZER_PREP_OTHER_SEEN:
+                continue
+            OPTIMIZER_PREP_OTHER_SEEN.add(signature)
+            new_lines.append(f"trial={trial_number + 1} | {ticker}: {reason}")
+
+        if new_lines:
+            append_issue_log(OPTIMIZER_PREP_OTHER_LOG_PATH, new_lines)
+
+        OPTIMIZER_PREP_SUMMARY["unique_other_count"] = len(OPTIMIZER_PREP_OTHER_SEEN)
+
+
+# # (AI註: 訓練結束時再印一次摘要，避免訓練過程被黃色警示干擾)
+def print_optimizer_prep_summary():
+    insufficient_total = OPTIMIZER_PREP_SUMMARY["insufficient_count_total"]
+    other_total = OPTIMIZER_PREP_SUMMARY["other_count_total"]
+
+    if insufficient_total == 0 and other_total == 0:
+        return
+
+    print(
+        f"{C_YELLOW}⚠️ 本輪預處理摘要："
+        f"資料不足 trial={OPTIMIZER_PREP_SUMMARY['trials_with_insufficient']} 次 / 累計 {insufficient_total} 檔；"
+        f"其他異常 trial={OPTIMIZER_PREP_SUMMARY['trials_with_other']} 次 / 累計 {other_total} 檔 / "
+        f"唯一 {OPTIMIZER_PREP_SUMMARY['unique_other_count']} 筆。{C_RESET}"
+    )
+
+    if OPTIMIZER_PREP_SUMMARY["unique_other_count"] > 0:
+        print(f"{C_YELLOW}⚠️ 其他異常詳細已寫入: {OPTIMIZER_PREP_OTHER_LOG_PATH}{C_RESET}")
 
 # # (AI註: 防止 magic number 散落；平行度預設沿用原本上限 14，但允許由 params 覆蓋)
 def resolve_optimizer_max_workers(params):
@@ -194,25 +247,14 @@ def objective(trial):
         insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
         other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
 
-        print(
-            f"{C_YELLOW}⚠️ 預處理失敗共 {len(prep_failures)} 檔 "
-            f"(資料不足={len(insufficient_failures)}, 其他異常={len(other_failures)}){C_RESET}"
+        record_optimizer_prep_failures(
+            trial_number=trial.number,
+            insufficient_failures=insufficient_failures,
+            other_failures=other_failures
         )
 
         if other_failures:
-            preview = other_failures[:20]
-            print(f"{C_YELLOW}   其他異常前 {len(preview)} 筆如下：{C_RESET}")
-            for ticker, reason in preview:
-                print(f"{C_YELLOW}   - {ticker}: {reason}{C_RESET}")
-
-            if len(other_failures) > len(preview):
-                print(f"{C_YELLOW}   ... 另有 {len(other_failures) - len(preview)} 筆其他異常省略，詳見 log。{C_RESET}")
-
-        prep_log_path = write_issue_log(
-            "optimizer_prep_failures",
-            [f"{ticker}: {reason}" for ticker, reason in prep_failures]
-        )
-        print(f"{C_YELLOW}⚠️ 預處理失敗摘要已寫入: {prep_log_path}{C_RESET}")
+            trial.set_user_attr("prep_other_failures", len(other_failures))
     if not master_dates: return -9999.0
     sorted_dates = sorted(list(master_dates))
     benchmark_data = all_dfs_fast.get("0050", None)
@@ -313,7 +355,11 @@ if __name__ == "__main__":
         except ValueError: print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
     else:
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
-        try: study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
+        try:
+            study.optimize(objective, n_trials=N_TRIALS, n_jobs=1, callbacks=[monitoring_callback])
         except KeyboardInterrupt:
             print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
-        print(f"\n\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
+
+        print()
+        print_optimizer_prep_summary()
+        print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")

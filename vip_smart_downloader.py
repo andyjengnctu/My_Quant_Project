@@ -6,6 +6,7 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from io import StringIO
 from FinMind.data import DataLoader
+from core.v16_log_utils import append_issue_log, build_timestamped_log_path
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,16 +38,22 @@ if API_TOKEN:
 
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
-def write_issue_log(prefix, lines):
-    if not lines:
-        return None
+DOWNLOADER_SESSION_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+DOWNLOADER_ISSUE_LOG_PATH = build_timestamped_log_path(
+    "downloader_issues",
+    log_dir=OUTPUT_DIR,
+    timestamp=DOWNLOADER_SESSION_TS
+)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(OUTPUT_DIR, f"{prefix}_{timestamp}.log")
-    with open(log_path, 'w', encoding='utf-8') as f:
-        for line in lines:
-            f.write(f"{line}\n")
-    return log_path
+# # (AI註: 將下載器的非致命問題統一寫入單一 session log，避免每種類別各自爆檔)
+def append_downloader_issues(section, lines):
+    if not lines:
+        return
+
+    append_issue_log(
+        DOWNLOADER_ISSUE_LOG_PATH,
+        [f"[{section}] {line}" for line in lines]
+    )
 
 def get_market_last_date():
     print("🕵️‍♂️ 正在確認最新交易日...")
@@ -161,19 +168,13 @@ def get_or_update_universe():
     print(f"\n🎉 海選完畢！共 {len(qualified_tickers)} 檔入選。")
 
     if universe_fetch_errors:
-        print("\n⚠️ 名單來源錯誤摘要:")
-        for msg in universe_fetch_errors:
-            print(f"   - {msg}")
-        universe_log_path = write_issue_log("downloader_universe_fetch_errors", universe_fetch_errors)
-        print(f"⚠️ 名單來源錯誤摘要已寫入: {universe_log_path}")
+        append_downloader_issues("名單來源失敗", universe_fetch_errors)
+        print(f"⚠️ 名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
 
     if screening_errors:
-        print(f"\n⚠️ 快篩失敗共 {len(screening_errors)} 檔，前 20 筆如下：")
-        for sid, yf_t, err in screening_errors[:20]:
-            print(f"   - {sid} ({yf_t}) -> {err}")
         screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
-        screening_log_path = write_issue_log("downloader_screening_errors", screening_log_lines)
-        print(f"⚠️ 快篩失敗摘要已寫入: {screening_log_path}")
+        append_downloader_issues("快篩失敗", screening_log_lines)
+        print(f"⚠️ 快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
 
     return qualified_tickers
 
@@ -184,6 +185,8 @@ def smart_download_vip_data(tickers, market_last_date):
 
     download_errors = []
     last_date_check_errors = []
+    count_success = 0
+    count_skipped_latest = 0
 
     for i, sid in enumerate(tickers, 1):
         file_path = os.path.join(SAVE_DIR, f"{sid}.csv")
@@ -193,14 +196,25 @@ def smart_download_vip_data(tickers, market_last_date):
                 # # (AI註: 修復 1 - 移除檔案修改時間判斷，嚴格依賴 CSV 內最後一筆日期，避免假更新跳過)
                 last_date_in_csv = str(pd.read_csv(file_path, index_col=0).tail(1).index[0]).split(' ')[0]
                 if last_date_in_csv == market_last_date:
-                    print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)
+                    count_skipped_latest += 1
+                    print(
+                        f"\r⏳ [{i:03d}/{total:03d}] 成功:{count_success:>4} | 跳過:{count_skipped_latest:>4} | "
+                        f"失敗:{len(download_errors):>4} | {sid:<6} 已最新",
+                        end="",
+                        flush=True
+                    )
                     continue
             except Exception as e:
                 last_date_check_errors.append(f"{sid}: {type(e).__name__}: {e}")
                 if VERBOSE_LAST_DATE_CHECK_ERRORS:
                     print(f"\n⚠️ {sid} 檢查最後日期發生錯誤，將強制重抓: {type(e).__name__}: {e}")
 
-        print(f"\r⚡ [{i:03d}/{total:03d}] 正在下載 {sid:<6} ...{' '*15}", end="", flush=True)
+        print(
+            f"\r⚡ [{i:03d}/{total:03d}] 成功:{count_success:>4} | 跳過:{count_skipped_latest:>4} | "
+            f"失敗:{len(download_errors):>4} | 正在下載 {sid:<6}",
+            end="",
+            flush=True
+        )
         try:
             df = dl.get_data(dataset=FINMIND_PRICE_DATASET, data_id=sid, start_date="1990-01-01")
             if df is None or df.empty:
@@ -222,6 +236,7 @@ def smart_download_vip_data(tickers, market_last_date):
                 raise KeyError(f"缺少必要欄位: {missing_cols}")
 
             df[required_cols].to_csv(file_path)
+            count_success += 1
             time.sleep(FINMIND_DOWNLOAD_SLEEP_SEC)
 
         except Exception as e:
@@ -230,22 +245,22 @@ def smart_download_vip_data(tickers, market_last_date):
                 print(f"\n❌ {sid} 失敗: {type(e).__name__}: {e}")
 
     print("\n" + "-" * 65)
-    print("🏆 本地尊爵資料庫更新完畢！")
+    print(
+        f"🏆 本地尊爵資料庫更新完畢！成功 {count_success} 檔 | "
+        f"已最新跳過 {count_skipped_latest} 檔 | "
+        f"最後日期檢查失敗 {len(last_date_check_errors)} 檔 | "
+        f"下載失敗 {len(download_errors)} 檔"
+    )
 
     if last_date_check_errors:
-        print(f"\n⚠️ 檢查最後日期失敗共 {len(last_date_check_errors)} 檔，前 20 筆如下：")
-        for msg in last_date_check_errors[:20]:
-            print(f"   - {msg}")
-        last_date_log_path = write_issue_log("downloader_last_date_check_errors", last_date_check_errors)
-        print(f"⚠️ 最後日期檢查失敗摘要已寫入: {last_date_log_path}")
+        append_downloader_issues("最後日期檢查失敗", last_date_check_errors)
 
     if download_errors:
-        print(f"\n⚠️ 本輪下載失敗共 {len(download_errors)} 檔，前 30 筆如下：")
-        for sid, err in download_errors[:30]:
-            print(f"   - {sid} -> {err}")
         download_log_lines = [f"{sid} -> {err}" for sid, err in download_errors]
-        download_log_path = write_issue_log("downloader_download_errors", download_log_lines)
-        print(f"⚠️ 下載失敗摘要已寫入: {download_log_path}")
+        append_downloader_issues("下載失敗", download_log_lines)
+
+    if last_date_check_errors or download_errors:
+        print(f"⚠️ 非致命問題詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
 
 if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")

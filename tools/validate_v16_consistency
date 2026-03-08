@@ -21,6 +21,8 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "v16_best_params.json")
 
 FLOAT_TOL = 1e-6
+VALIDATE_PROGRESS_EVERY = 25
+MAX_CONSOLE_FAIL_PREVIEW = 20
 
 
 def load_module_from_candidates(module_name, relative_paths, required_attrs=None):
@@ -480,7 +482,7 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
     return report_path
 
 
-def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path):
+def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time):
     total_tickers = len(df_summary)
     failed_tickers = int(df_failed["ticker"].nunique()) if not df_failed.empty else 0
     pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
@@ -488,8 +490,9 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
 
     print("\n================================================================================")
-    print("一致性壓力測試摘要")
+    print("一致性回歸摘要")
     print("================================================================================")
+    print(f"耗時: {elapsed_time:.2f} 秒")
     print(f"成功進入 summary 的股票數: {total_tickers}")
     print(f"總檢查數: {len(df_results)}")
     print(f"PASS 數: {pass_count}")
@@ -499,29 +502,30 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     print(f"完整 CSV: {csv_path}")
     print(f"問題 Excel: {xlsx_path if xlsx_path else '無，因為沒有 failed 項'}")
 
-    if not df_failed.empty:
-        print("\n失敗項摘要：")
-        show_cols = ["ticker", "module", "metric", "expected", "actual", "abs_diff", "note"]
-        print(df_failed[show_cols].to_string(index=False))
-    else:
+    if df_failed.empty:
         print("\n失敗項摘要：無")
+        return
 
-    if not df_summary.empty:
-        failed_ticker_set = set(df_failed["ticker"].tolist()) if not df_failed.empty else set()
-        failed_summary = df_summary[df_summary["ticker"].isin(failed_ticker_set)].copy()
+    print("\n失敗項前覽：")
+    show_cols = ["ticker", "module", "metric", "expected", "actual", "note"]
+    preview_df = df_failed[show_cols].head(MAX_CONSOLE_FAIL_PREVIEW).copy()
+    print(preview_df.to_string(index=False))
 
-        if not failed_summary.empty:
-            print("\n有問題股票摘要：")
-            show_cols = [
-                "ticker",
-                "sanitize_dropped",
-                "sanitize_invalid",
-                "sanitize_duplicate",
-                "single_trade_count",
-                "portfolio_trade_count",
-                "open_position_exists"
-            ]
-            print(failed_summary[show_cols].to_string(index=False))
+    remain_count = len(df_failed) - len(preview_df)
+    if remain_count > 0:
+        print(f"\n... 尚有 {remain_count} 筆 FAIL 未顯示，請直接查看 CSV / Excel。")
+
+    failed_summary = (
+        df_failed.groupby("ticker", dropna=False)
+        .agg(failed_checks=("passed", "size"))
+        .reset_index()
+        .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        .head(MAX_CONSOLE_FAIL_PREVIEW)
+    )
+
+    if not failed_summary.empty:
+        print("\n失敗股票前覽：")
+        print(failed_summary.to_string(index=False))
 
 
 def main():
@@ -533,11 +537,17 @@ def main():
     all_results = []
     summaries = []
 
-    print(f"開始自動掃描 {len(selected_tickers)} 檔股票...")
+    ticker_pass_count = 0
+    ticker_skip_count = 0
+    ticker_fail_count = 0
+
+    total_tickers = len(selected_tickers)
+    start_time = time.time()
+
+    print(f"開始自動掃描 {total_tickers} 檔股票...")
 
     for idx, ticker in enumerate(selected_tickers, start=1):
-        if idx % 50 == 0 or idx == 1 or idx == len(selected_tickers):
-            print(f"進度: {idx}/{len(selected_tickers)} | {ticker}")
+        ticker_results_before = len(all_results)
 
         try:
             results, summary = validate_one_ticker(ticker, base_params)
@@ -562,6 +572,26 @@ def main():
                     f"{type(e).__name__}: {e}",
                     "壓力測試執行失敗，先處理這個錯誤。"
                 )
+
+        ticker_results = all_results[ticker_results_before:]
+        ticker_statuses = {row["status"] for row in ticker_results}
+
+        if "FAIL" in ticker_statuses:
+            ticker_fail_count += 1
+        elif "PASS" in ticker_statuses:
+            ticker_pass_count += 1
+        else:
+            ticker_skip_count += 1
+
+        if idx % VALIDATE_PROGRESS_EVERY == 0 or idx == total_tickers:
+            print(
+                f"\r進度: [{idx}/{total_tickers}] "
+                f"PASS股票:{ticker_pass_count} | SKIP股票:{ticker_skip_count} | FAIL股票:{ticker_fail_count}",
+                end="",
+                flush=True
+            )
+
+    print(" " * 160, end="\r")
 
     df_results = pd.DataFrame(all_results)
     df_summary = pd.DataFrame(summaries)
@@ -602,14 +632,19 @@ def main():
         timestamp=timestamp
     )
 
+    elapsed_time = time.time() - start_time
+
     print_console_summary(
         df_results=df_results,
         df_failed=df_failed,
         df_summary=df_summary,
         csv_path=csv_path,
-        xlsx_path=xlsx_path
+        xlsx_path=xlsx_path,
+        elapsed_time=elapsed_time
     )
+
+    return 1 if not df_failed.empty else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

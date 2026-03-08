@@ -12,6 +12,7 @@ from core.v16_config import V16StrategyParams
 from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_log_utils import write_issue_log
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
 warnings.simplefilter("default")
@@ -21,18 +22,6 @@ os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
 LOAD_PROGRESS_EVERY = 50
-
-# # (AI註: 防錯透明化 - 將資料載入失敗摘要落檔，避免長批次後 console 訊息遺失)
-def write_issue_log(prefix, lines):
-    if not lines:
-        return None
-
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join("outputs", f"{prefix}_{timestamp}.log")
-    with open(log_path, "w", encoding="utf-8") as f:
-        for line in lines:
-            f.write(f"{line}\n")
-    return log_path
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
@@ -60,13 +49,17 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs, all_trade_logs, master_dates = {}, {}, set()
-    load_issues = []
+    load_issue_lines = []
     total_invalid_rows = 0
     total_duplicate_dates = 0
     total_dropped_rows = 0
     total_skipped_insufficient = 0
+    total_other_errors = 0
+    total_sanitize_issue_tickers = 0
 
     csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
+    total_files = len(csv_files)
+
     for count, file in enumerate(csv_files, start=1):
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
@@ -75,7 +68,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
             if len(raw_df) < min_rows_needed:
                 total_skipped_insufficient += 1
-                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆")
+                load_issue_lines.append(
+                    f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆"
+                )
                 continue
 
             df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
@@ -89,8 +84,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             total_dropped_rows += dropped_row_count
 
             if dropped_row_count > 0:
-                load_issues.append(
-                    f"{ticker}: 清洗移除 {dropped_row_count} 列 "
+                total_sanitize_issue_tickers += 1
+                load_issue_lines.append(
+                    f"[清洗] {ticker}: 清洗移除 {dropped_row_count} 列 "
                     f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                 )
 
@@ -101,18 +97,26 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         except Exception as e:
             if is_insufficient_data_error(e):
                 total_skipped_insufficient += 1
-                load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
+                load_issue_lines.append(f"[資料不足] {ticker}: {type(e).__name__}: {e}")
             else:
-                load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
-                print(f"{C_YELLOW}\n[警告] 股票 {ticker} 處理失敗: {type(e).__name__}: {e}{C_RESET}")
+                total_other_errors += 1
+                load_issue_lines.append(f"[異常] {ticker}: {type(e).__name__}: {e}")
             continue
 
-        if count % LOAD_PROGRESS_EVERY == 0:
-            print(f"{C_GRAY}   進度: 已處理 {count} 檔股票...{C_RESET}", end="\r")
+        if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
+            print(
+                f"{C_GRAY}   預載入進度: [{count}/{total_files}] "
+                f"成功:{len(all_dfs)} | 資料不足:{total_skipped_insufficient} | 異常:{total_other_errors}{C_RESET}",
+                end="\r",
+                flush=True
+            )
 
-    load_log_path = write_issue_log("portfolio_sim_load_issues", load_issues)
+    load_log_path = write_issue_log("portfolio_sim_load_issues", load_issue_lines) if load_issue_lines else None
+
+    print(" " * 160, end="\r")
+
     if load_log_path:
-        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要已寫入: {load_log_path}{C_RESET}")
+        print(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
 
     if not all_dfs:
         print(f"\n{C_RED}❌ 嚴重錯誤：未能成功載入任何股票資料！{C_RESET}")
@@ -125,7 +129,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs)} 檔標的，"
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})，"
-        f"資料不足跳過 {total_skipped_insufficient} 檔。"
+        f"候選清洗 {total_sanitize_issue_tickers} 檔，"
+        f"資料不足跳過 {total_skipped_insufficient} 檔，"
+        f"其他異常 {total_other_errors} 檔。"
         f"自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n"
     )
 
