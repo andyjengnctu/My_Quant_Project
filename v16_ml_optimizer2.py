@@ -458,16 +458,16 @@ def objective(trial):
         benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
     )
     profile_row['portfolio_wall_sec'] = time.perf_counter() - t0
-    profile_row['portfolio_total_sec'] = float(pf_profile.get('total_sec', 0.0))
-    profile_row['portfolio_ticker_dates_sec'] = float(pf_profile.get('ticker_dates_sec', 0.0))
-    profile_row['portfolio_build_trade_index_sec'] = float(pf_profile.get('build_trade_index_sec', 0.0))
-    profile_row['portfolio_day_loop_sec'] = float(pf_profile.get('day_loop_sec', 0.0))
-    profile_row['portfolio_candidate_scan_sec'] = float(pf_profile.get('candidate_scan_sec', 0.0))
-    profile_row['portfolio_rotation_sec'] = float(pf_profile.get('rotation_sec', 0.0))
-    profile_row['portfolio_settle_sec'] = float(pf_profile.get('settle_sec', 0.0))
-    profile_row['portfolio_buy_sec'] = float(pf_profile.get('buy_sec', 0.0))
-    profile_row['portfolio_equity_mark_sec'] = float(pf_profile.get('equity_mark_sec', 0.0))
-    profile_row['portfolio_closeout_sec'] = float(pf_profile.get('closeout_sec', 0.0))
+    profile_row['portfolio_total_sec'] = float(pf_profile.get('portfolio_wall_sec', 0.0))
+    profile_row['portfolio_ticker_dates_sec'] = float(pf_profile.get('portfolio_ticker_dates_sec', 0.0))
+    profile_row['portfolio_build_trade_index_sec'] = float(pf_profile.get('portfolio_build_trade_index_sec', 0.0))
+    profile_row['portfolio_day_loop_sec'] = float(pf_profile.get('portfolio_day_loop_sec', 0.0))
+    profile_row['portfolio_candidate_scan_sec'] = float(pf_profile.get('portfolio_candidate_scan_sec', 0.0))
+    profile_row['portfolio_rotation_sec'] = float(pf_profile.get('portfolio_rotation_sec', 0.0))
+    profile_row['portfolio_settle_sec'] = float(pf_profile.get('portfolio_settle_sec', 0.0))
+    profile_row['portfolio_buy_sec'] = float(pf_profile.get('portfolio_buy_sec', 0.0))
+    profile_row['portfolio_equity_mark_sec'] = float(pf_profile.get('portfolio_equity_mark_sec', 0.0))
+    profile_row['portfolio_closeout_sec'] = float(pf_profile.get('portfolio_closeout_sec', 0.0))
     profile_row['portfolio_curve_stats_sec'] = float(pf_profile.get('curve_stats_sec', 0.0))
     profile_row['ret_pct'] = ret_pct
     profile_row['mdd'] = mdd
