@@ -50,7 +50,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
         print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
     return params
 
-def run_debug_backtest(df, ticker, params):
+def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
     H, L, C = df['High'].values, df['Low'].values, df['Close'].values
     O = df['Open'].values
@@ -266,33 +266,36 @@ def run_debug_backtest(df, ticker, params):
             currentEquity = currentCapital + floatingPnL
 
     if not trade_logs:
-        print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
+        if verbose:
+            print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
         return None
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     df_logs = pd.DataFrame(trade_logs)
     df_logs['單筆實質損益'] = df_logs['單筆實質損益'].round(2)
     df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
 
-    output_filename = os.path.join(OUTPUT_DIR, f"Debug_TradeLog_{ticker}.xlsx")
-    df_logs.to_excel(output_filename, index=False)
-    print(f"{C_GREEN}📁 交易明細已成功匯出至：{output_filename}{C_RESET}")
+    if export_excel:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        output_filename = os.path.join(OUTPUT_DIR, f"Debug_TradeLog_{ticker}.xlsx")
+        df_logs.to_excel(output_filename, index=False)
+        if verbose:
+            print(f"{C_GREEN}📁 交易明細已成功匯出至：{output_filename}{C_RESET}")
 
-    losses = df_logs[df_logs['單筆實質損益'] < 0]
-    if not losses.empty:
-        print(f"\n{C_CYAN}🚨 [抓漏分析] 前 3 大嚴重虧損明細：{C_RESET}")
-        worst_losses = losses.sort_values(by='單筆實質損益', ascending=True).head(3)
-        for _, row in worst_losses.iterrows():
-            print(
-                f"日期: {row['日期']} | 動作: {row['動作']:<4} | 股價: {row['成交價']:>6.2f} | "
-                f"股數: {int(row['股數']):>6}股 | 總投入金: {row['投入總金額']:>9,.0f} | "
-                f"💸 虧損: {row['單筆實質損益']:>9,.0f}"
-            )
-            print(
-                f"   ➤ 當下 ATR 為 {row['ATR(前日)']:.2f}，"
-                f"停損/賣出參考價為 {row['設定停損價']:.2f}。"
-            )
+    if verbose:
+        losses = df_logs[df_logs['單筆實質損益'] < 0]
+        if not losses.empty:
+            print(f"\n{C_CYAN}🚨 [抓漏分析] 前 3 大嚴重虧損明細：{C_RESET}")
+            worst_losses = losses.sort_values(by='單筆實質損益', ascending=True).head(3)
+            for _, row in worst_losses.iterrows():
+                print(
+                    f"日期: {row['日期']} | 動作: {row['動作']:<4} | 股價: {row['成交價']:>6.2f} | "
+                    f"股數: {int(row['股數']):>6}股 | 總投入金: {row['投入總金額']:>9,.0f} | "
+                    f"💸 虧損: {row['單筆實質損益']:>9,.0f}"
+                )
+                print(
+                    f"   ➤ 當下 ATR 為 {row['ATR(前日)']:.2f}，"
+                    f"停損/賣出參考價為 {row['設定停損價']:.2f}。"
+                )
 
     return df_logs
 

@@ -454,8 +454,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             is_normal_worse_than_sl = True
 
                 if not buyTriggered:
-                    total_missed_buys += 1
                     if cand['type'] == 'normal':
+                        total_missed_buys += 1
                         if is_normal_worse_than_sl:
                             pass  # 摸到限價但跌破防線，直接放棄，絕不轉為 chase
                         else:
@@ -477,7 +477,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         else:
                             if cand['ticker'] in pending_chases:
                                 del pending_chases[cand['ticker']]
-
+                                
         today_equity = cash
         for pt in sorted(portfolio.keys()):
             pos = portfolio[pt]
