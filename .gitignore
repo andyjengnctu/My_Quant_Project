@@ -11,6 +11,7 @@ testing_csv/
 *.html
 *.7z
 *.zip
+*.log
 
 # 忽略 Python 運行暫存檔
 __pycache__/
