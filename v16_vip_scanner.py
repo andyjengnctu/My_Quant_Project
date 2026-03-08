@@ -11,10 +11,64 @@ from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 
-warnings.filterwarnings('ignore')
+# # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
+warnings.simplefilter("default")
+
+# # (AI註: 相同 RuntimeWarning 只顯示一次；保留可見性，但避免掃描輸出被重複洗版)
+warnings.filterwarnings("once", category=RuntimeWarning)
 
 os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
+
+LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
+SCANNER_PROGRESS_EVERY = 1
+
+
+def sanitize_ohlcv_dataframe(df, ticker):
+    working = df.copy()
+    working.columns = [c.capitalize() for c in working.columns]
+
+    date_col = 'Time' if 'Time' in working.columns else 'Date'
+    if date_col not in working.columns:
+        raise KeyError("缺少 Time / Date 欄位")
+
+    missing_cols = [c for c in LOAD_DATA_REQUIRED_COLS if c not in working.columns]
+    if missing_cols:
+        raise KeyError(f"缺少必要欄位: {missing_cols}")
+
+    for col in LOAD_DATA_REQUIRED_COLS:
+        working[col] = pd.to_numeric(working[col], errors='coerce')
+
+    working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
+
+    invalid_mask = (
+        working[date_col].isna() |
+        working['Open'].isna() |
+        working['High'].isna() |
+        working['Low'].isna() |
+        working['Close'].isna() |
+        working['Volume'].isna() |
+        (working['Open'] <= 0) |
+        (working['High'] <= 0) |
+        (working['Low'] <= 0) |
+        (working['Close'] <= 0) |
+        (working['Volume'] < 0)
+    )
+
+    bad_count = int(invalid_mask.sum())
+    if bad_count > 0:
+        working = working.loc[~invalid_mask].copy()
+
+    if working.empty:
+        raise ValueError(f"{ticker} 清洗後無有效資料")
+
+    working.set_index(date_col, inplace=True)
+    working.sort_index(inplace=True)
+
+    if bad_count > 0:
+        print(f"{C_YELLOW}[警告] {ticker} 剔除 {bad_count} 筆無效 OHLCV 資料{C_RESET}")
+
+    return working
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
@@ -32,27 +86,19 @@ def load_dynamic_params(json_file):
 def process_single_stock(file_path, ticker, params):
     try:
         df = pd.read_csv(file_path)
-        if len(df) < params.high_len + 10: return None
-            
-        df.columns = [c.capitalize() for c in df.columns]
-        df[['Open', 'High', 'Low', 'Close']] = df[['Open', 'High', 'Low', 'Close']].replace(0, np.nan).ffill()
-        
-        if 'Time' in df.columns:
-            df['Time'] = pd.to_datetime(df['Time'])
-            df.set_index('Time', inplace=True)
-        elif 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            df.set_index('Date', inplace=True)
-            
+        df = sanitize_ohlcv_dataframe(df, ticker)
+        if len(df) < params.high_len + 10:
+            return None
+
         stats = run_v16_backtest(df, params)
         
         if not stats or not stats['is_candidate']: return None
             
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        DUMMY_CAPITAL = params.initial_capital
+        reference_capital = params.initial_capital
         
         if stats['is_setup_today']:
-            proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], DUMMY_CAPITAL, params.fixed_risk, params)
+            proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], reference_capital, params.fixed_risk, params)
             if proj_qty == 0: return ('candidate', None, None, None, ticker)
                 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
@@ -61,7 +107,7 @@ def process_single_stock(file_path, ticker, params):
             net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
             est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
             
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 預計投入:{proj_cost:>7,.0f}"
+            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
             
             return ('buy', proj_cost, stats['expected_value'], msg, ticker)
@@ -73,7 +119,7 @@ def process_single_stock(file_path, ticker, params):
                 
             proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
             
-            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 投入:{proj_cost:>7,.0f}"
+            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
             
             return ('zone', proj_cost, stats['expected_value'], msg, ticker)
@@ -101,6 +147,7 @@ def run_daily_scanner(data_dir):
     else: print(f"{C_YELLOW}⚠️ 找不到最佳參數，使用系統內建預設值。{C_RESET}")
         
     print_scanner_header(params)
+    print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額僅以 initial_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
     count_scanned, count_candidates = 0, 0
@@ -112,7 +159,8 @@ def run_daily_scanner(data_dir):
 
         for future in as_completed(futures):
             count_scanned += 1
-            print(f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}]{C_RESET}", end="\r", flush=True)
+            if count_scanned % SCANNER_PROGRESS_EVERY == 0:
+                print(f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}]{C_RESET}", end="\r", flush=True)
             
             result = future.result()
             if result and len(result) == 5:
