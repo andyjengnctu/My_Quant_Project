@@ -148,6 +148,8 @@ def add_check(results, module_name, ticker, metric, expected, actual, tol=FLOAT_
         diff = None
         passed = expected == actual
 
+    status = "PASS" if passed else "FAIL"
+
     results.append({
         "ticker": ticker,
         "module": module_name,
@@ -156,6 +158,34 @@ def add_check(results, module_name, ticker, metric, expected, actual, tol=FLOAT_
         "actual": actual,
         "abs_diff": diff,
         "passed": passed,
+        "status": status,
+        "note": note
+    })
+
+def add_skip_result(results, module_name, ticker, metric, note):
+    results.append({
+        "ticker": ticker,
+        "module": module_name,
+        "metric": metric,
+        "expected": "SKIP",
+        "actual": "SKIP",
+        "abs_diff": None,
+        "passed": True,
+        "status": "SKIP",
+        "note": note
+    })
+
+
+def add_fail_result(results, module_name, ticker, metric, expected, actual, note):
+    results.append({
+        "ticker": ticker,
+        "module": module_name,
+        "metric": metric,
+        "expected": expected,
+        "actual": actual,
+        "abs_diff": None,
+        "passed": False,
+        "status": "FAIL",
         "note": note
     })
 
@@ -315,40 +345,33 @@ def validate_one_ticker(ticker, base_params):
         add_check(results, "single_vs_portfolio", ticker, "expected_value",
                   single_stats["expected_value"], portfolio_stats["pf_ev"])
     else:
-        results.append({
-            "ticker": ticker,
-            "module": "single_vs_portfolio",
-            "metric": "trade_stats_after_forced_close",
-            "expected": "SKIP",
-            "actual": "SKIP",
-            "abs_diff": None,
-            "passed": True,
-            "note": "期末未平倉，投組模擬多一筆強制結算，故 win_rate / payoff / EV 不逐值比對。"
-        })
+        add_skip_result(
+            results,
+            "single_vs_portfolio",
+            ticker,
+            "trade_stats_after_forced_close",
+            "期末未平倉，投組模擬多一筆強制結算，故 win_rate / payoff / EV 不逐值比對。"
+        )
 
     if export_row is None:
         if single_stats["trade_count"] == 0:
-            results.append({
-                "ticker": ticker,
-                "module": "all_stock_stats",
-                "metric": "export_row_exists",
-                "expected": "SKIP",
-                "actual": "SKIP",
-                "abs_diff": None,
-                "passed": True,
-                "note": "無 completed trades，匯出工具回傳 None 屬設計行為。"
-            })
+            add_skip_result(
+                results,
+                "all_stock_stats",
+                ticker,
+                "export_row_exists",
+                "無 completed trades，匯出工具回傳 None 屬設計行為。"
+            )
         else:
-            results.append({
-                "ticker": ticker,
-                "module": "all_stock_stats",
-                "metric": "export_row_exists",
-                "expected": "非空",
-                "actual": "None",
-                "abs_diff": None,
-                "passed": False,
-                "note": "有 completed trades，但匯出工具卻回傳 None。"
-            })
+            add_fail_result(
+                results,
+                "all_stock_stats",
+                ticker,
+                "export_row_exists",
+                "非空",
+                "None",
+                "有 completed trades，但匯出工具卻回傳 None。"
+            )
     else:
         add_check(results, "all_stock_stats", ticker, "交易次數",
                   single_stats["trade_count"], export_row["交易次數"])
@@ -373,27 +396,23 @@ def validate_one_ticker(ticker, base_params):
 
     if debug_df is None or len(debug_df) == 0:
         if expected_buy_rows == 0:
-            results.append({
-                "ticker": ticker,
-                "module": "debug_trade_log",
-                "metric": "debug_df_exists",
-                "expected": "SKIP",
-                "actual": "SKIP",
-                "abs_diff": None,
-                "passed": True,
-                "note": "無交易紀錄時，debug 工具回傳 None 屬設計行為。"
-            })
+            add_skip_result(
+                results,
+                "debug_trade_log",
+                ticker,
+                "debug_df_exists",
+                "無交易紀錄時，debug 工具回傳 None 屬設計行為。"
+            )
         else:
-            results.append({
-                "ticker": ticker,
-                "module": "debug_trade_log",
-                "metric": "debug_df_exists",
-                "expected": "非空",
-                "actual": "None/Empty",
-                "abs_diff": None,
-                "passed": False,
-                "note": "理應有交易明細，但 debug 工具回傳空值。"
-            })
+            add_fail_result(
+                results,
+                "debug_trade_log",
+                ticker,
+                "debug_df_exists",
+                "非空",
+                "None/Empty",
+                "理應有交易明細，但 debug 工具回傳空值。"
+            )
     else:
         buy_rows = int((debug_df["動作"] == "買進").sum())
         exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出"]).sum())
@@ -428,38 +447,11 @@ def validate_one_ticker(ticker, base_params):
             "actual": half_rows,
             "abs_diff": None,
             "passed": True,
+            "status": "PASS",
             "note": "半倉停利筆數只供人工檢查，不直接對應 completed trades。"
         })
 
     return results, summary
-
-
-def build_summary_tables(df_results):
-    if df_results.empty:
-        empty_cols = ["module", "checks", "failed", "pass_rate"]
-        return pd.DataFrame(columns=empty_cols), pd.DataFrame(columns=["ticker", "checks", "failed", "pass_rate"])
-
-    by_module = (
-        df_results.groupby("module", dropna=False)
-        .agg(
-            checks=("passed", "size"),
-            failed=("passed", lambda s: int((~s).sum()))
-        )
-        .reset_index()
-    )
-    by_module["pass_rate"] = ((by_module["checks"] - by_module["failed"]) / by_module["checks"] * 100).round(2)
-
-    by_ticker = (
-        df_results.groupby("ticker", dropna=False)
-        .agg(
-            checks=("passed", "size"),
-            failed=("passed", lambda s: int((~s).sum()))
-        )
-        .reset_index()
-    )
-    by_ticker["pass_rate"] = ((by_ticker["checks"] - by_ticker["failed"]) / by_ticker["checks"] * 100).round(2)
-
-    return by_module, by_ticker
 
 
 def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp):
@@ -491,13 +483,18 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
 def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path):
     total_tickers = len(df_summary)
     failed_tickers = int(df_failed["ticker"].nunique()) if not df_failed.empty else 0
+    pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
+    skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
+    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
 
     print("\n================================================================================")
     print("一致性壓力測試摘要")
     print("================================================================================")
-    print(f"掃描股票數: {total_tickers}")
+    print(f"成功進入 summary 的股票數: {total_tickers}")
     print(f"總檢查數: {len(df_results)}")
-    print(f"失敗項數: {len(df_failed)}")
+    print(f"PASS 數: {pass_count}")
+    print(f"SKIP 數: {skip_count}")
+    print(f"FAIL 數: {fail_count}")
     print(f"有問題股票數: {failed_tickers}")
     print(f"完整 CSV: {csv_path}")
     print(f"問題 Excel: {xlsx_path if xlsx_path else '無，因為沒有 failed 項'}")
@@ -548,31 +545,27 @@ def main():
             summaries.append(summary)
         except Exception as e:
             if is_insufficient_data_error(e):
-                all_results.append({
-                    "ticker": ticker,
-                    "module": "system",
-                    "metric": "validation_runtime",
-                    "expected": "SKIP",
-                    "actual": "SKIP",
-                    "abs_diff": None,
-                    "passed": True,
-                    "note": f"資料不足，跳過驗證。({type(e).__name__}: {e})"
-                })
+                add_skip_result(
+                    all_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    f"資料不足，跳過驗證。({type(e).__name__}: {e})"
+                )
             else:
-                all_results.append({
-                    "ticker": ticker,
-                    "module": "system",
-                    "metric": "validation_runtime",
-                    "expected": "成功執行",
-                    "actual": f"{type(e).__name__}: {e}",
-                    "abs_diff": None,
-                    "passed": False,
-                    "note": "壓力測試執行失敗，先處理這個錯誤。"
-                })
+                add_fail_result(
+                    all_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    "成功執行",
+                    f"{type(e).__name__}: {e}",
+                    "壓力測試執行失敗，先處理這個錯誤。"
+                )
 
     df_results = pd.DataFrame(all_results)
     df_summary = pd.DataFrame(summaries)
-    df_failed = df_results[df_results["passed"] == False].copy() if not df_results.empty else pd.DataFrame()
+    df_failed = df_results[df_results["status"] == "FAIL"].copy() if not df_results.empty else pd.DataFrame()
 
     for df_obj in [df_results, df_summary, df_failed]:
         if not df_obj.empty and "ticker" in df_obj.columns:

@@ -21,6 +21,11 @@ FINMIND_DOWNLOAD_SLEEP_SEC = 0.5
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
 OUTPUT_DIR = os.path.join(BASE_DIR, 'outputs')
 
+# # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
+VERBOSE_UNIVERSE_FETCH_ERRORS = False
+VERBOSE_LAST_DATE_CHECK_ERRORS = False
+VERBOSE_DOWNLOAD_ERRORS = False
+
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 if not os.path.exists(OUTPUT_DIR):
@@ -117,8 +122,9 @@ def get_or_update_universe():
                     tickers_info.append({"yf_ticker": f"{sid}{suffix}", "sid": sid, "is_etf": is_etf})
 
         except Exception as e:
-            universe_fetch_errors.append(f"{url} -> {e}")
-            print(f"\n⚠️ 名單來源抓取失敗: {url} | {e}")
+            universe_fetch_errors.append(f"{url} -> {type(e).__name__}: {e}")
+            if VERBOSE_UNIVERSE_FETCH_ERRORS:
+                print(f"\n⚠️ 名單來源抓取失敗: {url} | {type(e).__name__}: {e}")
 
     if not tickers_info:
         raise RuntimeError(
@@ -177,6 +183,7 @@ def smart_download_vip_data(tickers, market_last_date):
     print("-" * 65)
 
     download_errors = []
+    last_date_check_errors = []
 
     for i, sid in enumerate(tickers, 1):
         file_path = os.path.join(SAVE_DIR, f"{sid}.csv")
@@ -189,7 +196,9 @@ def smart_download_vip_data(tickers, market_last_date):
                     print(f"\r⏩ [{i:03d}/{total:03d}] {sid:<6} 資料已是最新 ({market_last_date})，跳過。{' '*15}", end="", flush=True)
                     continue
             except Exception as e:
-                print(f"\n⚠️ {sid} 檢查最後日期發生錯誤，將強制重抓: {e}")
+                last_date_check_errors.append(f"{sid}: {type(e).__name__}: {e}")
+                if VERBOSE_LAST_DATE_CHECK_ERRORS:
+                    print(f"\n⚠️ {sid} 檢查最後日期發生錯誤，將強制重抓: {type(e).__name__}: {e}")
 
         print(f"\r⚡ [{i:03d}/{total:03d}] 正在下載 {sid:<6} ...{' '*15}", end="", flush=True)
         try:
@@ -216,11 +225,19 @@ def smart_download_vip_data(tickers, market_last_date):
             time.sleep(FINMIND_DOWNLOAD_SLEEP_SEC)
 
         except Exception as e:
-            download_errors.append((sid, str(e)))
-            print(f"\n❌ {sid} 失敗: {e}")
+            download_errors.append((sid, f"{type(e).__name__}: {e}"))
+            if VERBOSE_DOWNLOAD_ERRORS:
+                print(f"\n❌ {sid} 失敗: {type(e).__name__}: {e}")
 
     print("\n" + "-" * 65)
     print("🏆 本地尊爵資料庫更新完畢！")
+
+    if last_date_check_errors:
+        print(f"\n⚠️ 檢查最後日期失敗共 {len(last_date_check_errors)} 檔，前 20 筆如下：")
+        for msg in last_date_check_errors[:20]:
+            print(f"   - {msg}")
+        last_date_log_path = write_issue_log("downloader_last_date_check_errors", last_date_check_errors)
+        print(f"⚠️ 最後日期檢查失敗摘要已寫入: {last_date_log_path}")
 
     if download_errors:
         print(f"\n⚠️ 本輪下載失敗共 {len(download_errors)} 檔，前 30 筆如下：")

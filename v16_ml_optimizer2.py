@@ -64,6 +64,11 @@ def resolve_optimizer_max_workers(params):
         configured = DEFAULT_OPTIMIZER_MAX_WORKERS
     return max(1, configured)
 
+
+# # (AI註: 將 trial 內的「有效資料不足」與真正異常分流，避免 optimizer 在高 high_len 區域反覆洗板)
+def is_insufficient_data_message(msg):
+    return isinstance(msg, str) and ("有效資料不足" in msg)
+
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
         print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
@@ -124,7 +129,7 @@ def worker_prep_data(ticker, df, params):
             return {
                 "ticker": ticker,
                 "ok": False,
-                "reason": f"資料長度不足: len(df)={len(df)}, 至少需要 {params.high_len + 10}",
+                "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {params.high_len + 10} 列",
                 "data": None,
                 "logs": None,
             }
@@ -186,10 +191,27 @@ def objective(trial):
             else:
                 prep_failures.append((ticker, result["reason"]))
     if prep_failures:
-        print(f"{C_YELLOW}⚠️ 預處理失敗共 {len(prep_failures)} 檔，前 30 筆如下：{C_RESET}")
-        for ticker, reason in prep_failures[:30]:
-            print(f"{C_YELLOW}   - {ticker}: {reason}{C_RESET}")
-        prep_log_path = write_issue_log("optimizer_prep_failures", [f"{ticker}: {reason}" for ticker, reason in prep_failures])
+        insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
+        other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
+
+        print(
+            f"{C_YELLOW}⚠️ 預處理失敗共 {len(prep_failures)} 檔 "
+            f"(資料不足={len(insufficient_failures)}, 其他異常={len(other_failures)}){C_RESET}"
+        )
+
+        if other_failures:
+            preview = other_failures[:20]
+            print(f"{C_YELLOW}   其他異常前 {len(preview)} 筆如下：{C_RESET}")
+            for ticker, reason in preview:
+                print(f"{C_YELLOW}   - {ticker}: {reason}{C_RESET}")
+
+            if len(other_failures) > len(preview):
+                print(f"{C_YELLOW}   ... 另有 {len(other_failures) - len(preview)} 筆其他異常省略，詳見 log。{C_RESET}")
+
+        prep_log_path = write_issue_log(
+            "optimizer_prep_failures",
+            [f"{ticker}: {reason}" for ticker, reason in prep_failures]
+        )
         print(f"{C_YELLOW}⚠️ 預處理失敗摘要已寫入: {prep_log_path}{C_RESET}")
     if not master_dates: return -9999.0
     sorted_dates = sorted(list(master_dates))

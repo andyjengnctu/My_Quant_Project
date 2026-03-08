@@ -37,6 +37,11 @@ def load_dynamic_params(json_file):
             print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {type(e).__name__}: {e}{C_RESET}")
     return params, False
 
+
+# # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 scanner 被新上市/短歷史標的洗板)
+def is_insufficient_data_error(exc):
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
 def process_single_stock(file_path, ticker, params):
     try:
         raw_df = pd.read_csv(file_path)
@@ -88,8 +93,17 @@ def process_single_stock(file_path, ticker, params):
         return ('candidate', None, None, None, ticker)
         
     except Exception as e:
-        return ('error', None, None, f"⚠️ 股票 {ticker} 資料處理異常: {e}", ticker)
+        if is_insufficient_data_error(e):
+            return ('skip_insufficient', None, None, None, ticker)
 
+        return (
+            'error',
+            None,
+            None,
+            f"⚠️ 股票 {ticker} 資料處理異常: {type(e).__name__}: {e}",
+            ticker
+        )
+    
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
@@ -112,6 +126,7 @@ def run_daily_scanner(data_dir):
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
     count_scanned, count_candidates = 0, 0
+    count_skipped_insufficient = 0
     buy_list, in_zone_list = [], []
     start_time = time.time()
 
@@ -126,8 +141,12 @@ def run_daily_scanner(data_dir):
             result = future.result()
             if result and len(result) == 5:
                 status, proj_cost, ev, msg, ticker = result
-                if status in ['buy', 'zone', 'candidate']: count_candidates += 1
-                    
+
+                if status in ['buy', 'zone', 'candidate']:
+                    count_candidates += 1
+                elif status == 'skip_insufficient':
+                    count_skipped_insufficient += 1
+
                 if status == 'buy':
                     print(" " * 120, end="\r")
                     print(f"{C_RED}{msg}{C_RESET}")
@@ -136,7 +155,9 @@ def run_daily_scanner(data_dir):
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
                     in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
-                # # (AI註: 修復低嚴重度問題 - 將異常檔案造成的錯誤印出，避免安靜地被吞掉)
+                elif status == 'skip_insufficient':
+                    pass
+                # # (AI註: 真正異常仍保留可見性，避免安靜吞錯)
                 elif status == 'error':
                     print(" " * 120, end="\r")
                     print(f"{C_YELLOW}{msg}{C_RESET}")
@@ -154,8 +175,11 @@ def run_daily_scanner(data_dir):
 
     print(" " * 120, end="\r") 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。歷史及格: {count_candidates} 檔")
-    
+    print(
+        f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
+        f"歷史及格: {count_candidates} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔"
+    )
+        
     if buy_list or in_zone_list:
         print(f"\n{C_RED}🔥 【第一優先：明日掛單清單 (最新買訊)】 {sort_title} 🔥{C_RESET}")
         if buy_list:

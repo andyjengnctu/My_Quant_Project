@@ -48,6 +48,11 @@ def load_dynamic_params(json_file):
             print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {type(e).__name__}: {e}{C_RESET}")
     return params, False
 
+
+# # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 portfolio_sim 被新上市/短歷史標的洗板)
+def is_insufficient_data_error(exc):
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
     if not os.path.exists(data_dir):
         print(f"\n{C_RED}❌ 嚴重錯誤：找不到資料夾 {data_dir}，請確認路徑或先下載資料！{C_RESET}")
@@ -59,6 +64,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     total_invalid_rows = 0
     total_duplicate_dates = 0
     total_dropped_rows = 0
+    total_skipped_insufficient = 0
 
     csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
     for count, file in enumerate(csv_files, start=1):
@@ -68,6 +74,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
 
             if len(raw_df) < min_rows_needed:
+                total_skipped_insufficient += 1
                 load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆")
                 continue
 
@@ -92,8 +99,12 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             master_dates.update(df.index)
 
         except Exception as e:
-            load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
-            print(f"{C_YELLOW}\n[警告] 股票 {ticker} 處理失敗: {type(e).__name__}: {e}{C_RESET}")
+            if is_insufficient_data_error(e):
+                total_skipped_insufficient += 1
+                load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
+            else:
+                load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
+                print(f"{C_YELLOW}\n[警告] 股票 {ticker} 處理失敗: {type(e).__name__}: {e}{C_RESET}")
             continue
 
         if count % LOAD_PROGRESS_EVERY == 0:
@@ -113,7 +124,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(
         f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs)} 檔標的，"
         f"移除 {total_dropped_rows} 列資料 "
-        f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})。"
+        f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})，"
+        f"資料不足跳過 {total_skipped_insufficient} 檔。"
         f"自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n"
     )
 
