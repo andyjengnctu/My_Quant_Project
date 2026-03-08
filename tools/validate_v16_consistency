@@ -570,7 +570,7 @@ def main():
                     "validation_runtime",
                     "成功執行",
                     f"{type(e).__name__}: {e}",
-                    "壓力測試執行失敗，先處理這個錯誤。"
+                    "壓力測試執行失一致性驗證執行失敗，先處理這個錯誤。"
                 )
 
         ticker_results = all_results[ticker_results_before:]
