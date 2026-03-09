@@ -77,7 +77,7 @@ PROFILE_FIELDS = [
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
     "score_calc_sec", "ret_pct", "mdd", "trade_count", "annual_return_pct", "annual_trades", "buy_fill_rate", "m_win_rate", "r_squared",
-    "trial_value", "fail_reason"
+    "base_score", "trade_objective_factor", "fill_objective_factor", "trial_value", "fail_reason"
 ]
 
 
@@ -210,6 +210,15 @@ def resolve_optimizer_max_workers(params):
 # # (AI註: 將 trial 內的「有效資料不足」與真正異常分流，避免 optimizer 在高 high_len 區域反覆洗板)
 def is_insufficient_data_message(msg):
     return isinstance(msg, str) and ("有效資料不足" in msg)
+
+# # (AI註: 不再新增額外 magic number；直接用既有硬門檻做 objective 正規化基準)
+def calc_objective_normalized_factor(actual_value, threshold_value):
+    safe_actual = max(float(actual_value), 0.0)
+    safe_threshold = max(float(threshold_value), 1.0)
+    denominator = np.log1p(safe_threshold)
+    if denominator <= 0:
+        return 1.0
+    return float(np.log1p(safe_actual) / denominator)
 
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
@@ -438,6 +447,9 @@ def objective(trial):
         'buy_fill_rate': 0.0,
         'm_win_rate': 0.0,
         'r_squared': 0.0,
+        'base_score': 0.0,
+        'trade_objective_factor': 0.0,
+        'fill_objective_factor': 0.0,
         'trial_value': -9999.0,
         'fail_reason': '',
     }
@@ -508,10 +520,16 @@ def objective(trial):
         return -9999.0
 
     t0 = time.perf_counter()
-    final_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
+    base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
+    trade_objective_factor = calc_objective_normalized_factor(annual_trades, MIN_ANNUAL_TRADES)
+    fill_objective_factor = calc_objective_normalized_factor(buy_fill_rate, MIN_BUY_FILL_RATE)
+    final_score = base_score * trade_objective_factor * fill_objective_factor
     profile_row['score_calc_sec'] = time.perf_counter() - t0
+    profile_row['base_score'] = base_score
+    profile_row['trade_objective_factor'] = trade_objective_factor
+    profile_row['fill_objective_factor'] = fill_objective_factor
 
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("buy_fill_rate", buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("buy_fill_rate", buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("base_score", base_score); trial.set_user_attr("trade_objective_factor", trade_objective_factor); trial.set_user_attr("fill_objective_factor", fill_objective_factor)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
     trial.set_user_attr("bm_r_squared", bm_r_sq)

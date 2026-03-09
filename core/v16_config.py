@@ -21,8 +21,8 @@ SCORE_CALC_METHOD = 'RoMD'
 
 # 4. Optimizer 硬門檻 (版本B：只作篩選，不乘入 score)
 MIN_ANNUAL_RETURN_PCT = 5.0
-MIN_ANNUAL_TRADES = 6.0
-MIN_BUY_FILL_RATE = 60.0
+MIN_ANNUAL_TRADES = 30.0
+MIN_BUY_FILL_RATE = 80.0
 # ==========================================
 
 @dataclass
