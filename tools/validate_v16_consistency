@@ -228,8 +228,12 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         is_training=True
     )
 
-    if len(result) != 17:
-        raise ValueError(f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}")
+    expected_result_len = 17
+    if len(result) != expected_result_len:
+        raise ValueError(
+            f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}，"
+            f"預期 {expected_result_len}"
+        )
 
     (
         total_return,
@@ -271,50 +275,6 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "bm_m_win_rate": bm_m_win_rate,
         "standalone_logs": standalone_logs,
         "prep_df": prep_df,
-    }
-
-    if len(result) != 17:
-        raise ValueError(f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}")
-
-    (
-        total_return,
-        mdd,
-        trade_count,
-        final_eq,
-        avg_exp,
-        max_exp,
-        bm_ret,
-        bm_mdd,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        total_missed,
-        total_missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate
-    ) = result
-
-    return {
-        "total_return": total_return,
-        "mdd": mdd,
-        "trade_count": trade_count,
-        "win_rate": win_rate,
-        "pf_ev": pf_ev,
-        "pf_payoff": pf_payoff,
-        "final_eq": final_eq,
-        "avg_exp": avg_exp,
-        "max_exp": max_exp,
-        "bm_ret": bm_ret,
-        "bm_mdd": bm_mdd,
-        "total_missed": total_missed,
-        "total_missed_sells": total_missed_sells,
-        "r_sq": r_sq,
-        "m_win_rate": m_win_rate,
-        "bm_r_sq": bm_r_sq,
-        "bm_m_win_rate": bm_m_win_rate,
-        "standalone_logs": standalone_logs
     }
 
 
