@@ -10,7 +10,7 @@ import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
+from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD, MIN_ANNUAL_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
@@ -76,7 +76,7 @@ PROFILE_FIELDS = [
     "portfolio_day_loop_sec", "portfolio_candidate_scan_sec", "portfolio_rotation_sec",
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
-    "score_calc_sec", "ret_pct", "mdd", "trade_count", "m_win_rate", "r_squared",
+    "score_calc_sec", "ret_pct", "mdd", "trade_count", "annual_return_pct", "annual_trades", "buy_fill_rate", "m_win_rate", "r_squared",
     "trial_value", "fail_reason"
 ]
 
@@ -433,6 +433,9 @@ def objective(trial):
         'ret_pct': 0.0,
         'mdd': 0.0,
         'trade_count': 0,
+        'annual_return_pct': 0.0,
+        'annual_trades': 0.0,
+        'buy_fill_rate': 0.0,
         'm_win_rate': 0.0,
         'r_squared': 0.0,
         'trial_value': -9999.0,
@@ -453,7 +456,7 @@ def objective(trial):
 
     pf_profile = {}
     t0 = time.perf_counter()
-    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
         benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
@@ -473,6 +476,9 @@ def objective(trial):
     profile_row['ret_pct'] = ret_pct
     profile_row['mdd'] = mdd
     profile_row['trade_count'] = t_count
+    profile_row['annual_return_pct'] = annual_return_pct
+    profile_row['annual_trades'] = annual_trades
+    profile_row['buy_fill_rate'] = buy_fill_rate
     profile_row['m_win_rate'] = m_win_rate
     profile_row['r_squared'] = r_sq
 
@@ -480,10 +486,12 @@ def objective(trial):
     fail_reason = None
     if mdd > 45.0:
         fail_reason = f"回撤過大 ({mdd:.1f}%)"
-    elif t_count < 30:
-        fail_reason = f"交易次數過低 ({t_count}次)"
-    elif ret_pct <= 0:
-        fail_reason = f"最終虧損 ({ret_pct:.1f}%)"
+    elif annual_return_pct < MIN_ANNUAL_RETURN_PCT:
+        fail_reason = f"年化報酬率過低 ({annual_return_pct:.2f}%)"
+    elif annual_trades < MIN_ANNUAL_TRADES:
+        fail_reason = f"年化交易次數過低 ({annual_trades:.2f}次/年)"
+    elif buy_fill_rate < MIN_BUY_FILL_RATE:
+        fail_reason = f"買進成交率過低 ({buy_fill_rate:.2f}%)"
     elif m_win_rate < 45.0:
         fail_reason = f"月勝率偏低 ({m_win_rate:.0f}%)"
     elif r_sq < 0.40:
@@ -503,7 +511,7 @@ def objective(trial):
     final_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
     profile_row['score_calc_sec'] = time.perf_counter() - t0
 
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("buy_fill_rate", buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
     trial.set_user_attr("bm_r_squared", bm_r_sq)
@@ -551,7 +559,10 @@ def monitoring_callback(study, trial):
             final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
             sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
             win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
-            r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0)
+            r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
+            normal_trades=attrs.get('normal_trades', attrs['pf_trades']), chase_trades=attrs.get('chase_trades', 0),
+            annual_trades=attrs.get('annual_trades', 0.0), buy_fill_rate=attrs.get('buy_fill_rate', 0.0),
+            annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0)
         )
 
 if __name__ == "__main__":

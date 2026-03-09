@@ -32,6 +32,27 @@ def calc_curve_stats(eq_list):
     return r_squared, monthly_win_rate
 
 
+# # (AI註: 年化報酬率與年化交易次數共用同一個回測期間口徑，避免統計不一致)
+def calc_sim_years(sorted_dates, start_idx):
+    if not sorted_dates or start_idx >= len(sorted_dates):
+        return 0.0
+    first_dt = pd.Timestamp(sorted_dates[start_idx])
+    last_dt = pd.Timestamp(sorted_dates[-1])
+    span_days = (last_dt - first_dt).days + 1
+    if span_days <= 0:
+        return 0.0
+    return span_days / 365.25
+
+
+# # (AI註: 用 CAGR 口徑統一系統與大盤年化報酬率；若期末值非正，直接回傳 -100% 避免數學異常)
+def calc_annual_return_pct(start_value, end_value, years):
+    if start_value <= 0 or years <= 0:
+        return 0.0
+    if end_value <= 0:
+        return -100.0
+    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
+
+
 FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'ATR', 'buy_limit')
 FAST_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
 
@@ -263,6 +284,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     portfolio = {}
     pending_chases = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
+    normal_trade_count, chase_trade_count = 0, 0
     peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [], []
@@ -426,7 +448,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
                         total_pnl = pos['realized_pnl'] + pnl
                         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                        if pos.get('entry_type', 'normal') == 'chase':
+                            chase_trade_count += 1
+                        else:
+                            normal_trade_count += 1
 
                         if not is_training:
                             trade_history.append({
@@ -482,7 +508,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = pos['realized_pnl']
                 total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+                closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                if pos.get('entry_type', 'normal') == 'chase':
+                    chase_trade_count += 1
+                else:
+                    normal_trade_count += 1
 
                 if not is_training:
                     t_type = "全倉結算(停損)" if 'STOP' in events else "全倉結算(指標)"
@@ -685,7 +715,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         pnl = (net_price - pos['entry']) * pos['qty']
         total_pnl = pos['realized_pnl'] + pnl
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+        if pos.get('entry_type', 'normal') == 'chase':
+            chase_trade_count += 1
+        else:
+            normal_trade_count += 1
 
         if not is_training:
             trade_history.append({
@@ -734,6 +768,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
 
+    sim_years = calc_sim_years(sorted_dates, start_idx)
+    annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
+    buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
+    annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
+    bm_end_value = benchmark_start_price * (1.0 + bm_ret_pct / 100.0) if benchmark_start_price is not None else 0.0
+    bm_annual_return_pct = calc_annual_return_pct(benchmark_start_price or 0.0, bm_end_value, sim_years)
+
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
@@ -745,10 +786,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
 
     if is_training:
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
     else:
         df_equity = pd.DataFrame(equity_curve)
         df_trades = pd.DataFrame(trade_history)
         final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
+        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
 

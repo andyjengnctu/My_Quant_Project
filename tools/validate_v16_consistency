@@ -30,6 +30,34 @@ VALIDATE_PROGRESS_EVERY = 25
 MAX_CONSOLE_FAIL_PREVIEW = 20
 
 
+# # (AI註: consistency test 與 portfolio engine 共用相同口徑：實際模擬起訖日換算年數)
+def calc_validation_sim_years(sorted_dates, start_year):
+    if not sorted_dates:
+        return 0.0
+
+    start_dt = pd.to_datetime(f"{start_year}-01-01")
+    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
+    start_idx = max(1, start_idx)
+    if start_idx >= len(sorted_dates):
+        return 0.0
+
+    first_dt = pd.Timestamp(sorted_dates[start_idx])
+    last_dt = pd.Timestamp(sorted_dates[-1])
+    span_days = (last_dt - first_dt).days + 1
+    if span_days <= 0:
+        return 0.0
+    return span_days / 365.25
+
+
+# # (AI註: 用 CAGR 驗證 annual return 指標，避免只驗證總報酬卻漏掉年化口徑)
+def calc_validation_annual_return_pct(start_value, end_value, years):
+    if start_value <= 0 or years <= 0:
+        return 0.0
+    if end_value <= 0:
+        return -100.0
+    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
+
+
 def load_module_from_candidates(module_name, relative_paths, required_attrs=None):
     if required_attrs is None:
         required_attrs = []
@@ -228,7 +256,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         is_training=True
     )
 
-    expected_result_len = 17
+    expected_result_len = 23
     if len(result) != expected_result_len:
         raise ValueError(
             f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}，"
@@ -253,6 +281,12 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         m_win_rate,
         bm_r_sq,
         bm_m_win_rate,
+        normal_trade_count,
+        chase_trade_count,
+        annual_trades,
+        buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
     ) = result
 
     return {
@@ -273,6 +307,14 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "m_win_rate": m_win_rate,
         "bm_r_sq": bm_r_sq,
         "bm_m_win_rate": bm_m_win_rate,
+        "normal_trade_count": normal_trade_count,
+        "chase_trade_count": chase_trade_count,
+        "annual_trades": annual_trades,
+        "buy_fill_rate": buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
+        "sorted_dates": sorted_dates,
+        "start_year": start_year,
         "standalone_logs": standalone_logs,
         "prep_df": prep_df,
     }
@@ -354,6 +396,34 @@ def validate_one_ticker(ticker, base_params):
         portfolio_stats["trade_count"],
         note="若期末仍有持倉，投組模擬會多 1 筆期末強制結算。"
     )
+
+    add_check(
+        results,
+        "single_vs_portfolio",
+        ticker,
+        "normal_plus_chase_trade_count",
+        portfolio_stats["trade_count"],
+        portfolio_stats["normal_trade_count"] + portfolio_stats["chase_trade_count"],
+        note="正常/追價完整交易數總和應等於總交易次數。"
+    )
+
+    sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
+    expected_annual_trades = (portfolio_stats["trade_count"] / sim_years) if sim_years > 0 else 0.0
+    expected_buy_fill_rate = (
+        portfolio_stats["trade_count"] / (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) * 100.0
+        if (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) > 0 else 0.0
+    )
+    expected_annual_return_pct = calc_validation_annual_return_pct(
+        params.initial_capital, portfolio_stats["final_eq"], sim_years
+    )
+    expected_bm_annual_return_pct = calc_validation_annual_return_pct(
+        100.0, 100.0 * (1.0 + portfolio_stats["bm_ret"] / 100.0), sim_years
+    )
+
+    add_check(results, "single_vs_portfolio", ticker, "annual_trades", expected_annual_trades, portfolio_stats["annual_trades"])
+    add_check(results, "single_vs_portfolio", ticker, "buy_fill_rate", expected_buy_fill_rate, portfolio_stats["buy_fill_rate"])
+    add_check(results, "single_vs_portfolio", ticker, "annual_return_pct", expected_annual_return_pct, portfolio_stats["annual_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "bm_annual_return_pct", expected_bm_annual_return_pct, portfolio_stats["bm_annual_return_pct"])
 
     if not open_position_exists:
         add_check(results, "single_vs_portfolio", ticker, "win_rate",
