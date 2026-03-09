@@ -3,6 +3,7 @@ import sys
 import time
 import json
 import traceback
+import csv
 import optuna
 import numpy as np
 import pandas as pd
@@ -10,7 +11,7 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
-from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline, calc_portfolio_score
+from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path
@@ -58,6 +59,26 @@ OPTIMIZER_PREP_SUMMARY = {
     "unique_other_count": 0,
 }
 OPTIMIZER_PREP_OTHER_SEEN = set()
+
+# # (AI註: profiling 版預設開啟 objective 分段計時；只量測，不改交易邏輯)
+ENABLE_OPTIMIZER_PROFILING = True
+ENABLE_PROFILE_CONSOLE_PRINT = False
+PROFILE_PRINT_EVERY_N_TRIALS = 1
+PROFILE_CSV_PATH = os.path.join("outputs", f"optimizer_profile_{OPTIMIZER_SESSION_TS}.csv")
+PROFILE_SUMMARY_PATH = os.path.join("outputs", f"optimizer_profile_summary_{OPTIMIZER_SESSION_TS}.json")
+PROFILE_ROWS = []
+PROFILE_FIELDS = [
+    "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
+    "prep_worker_copy_sum_sec", "prep_worker_generate_signals_sum_sec", "prep_worker_assign_sum_sec",
+    "prep_worker_run_backtest_sum_sec", "prep_worker_to_dict_sum_sec", "prep_ok_count",
+    "prep_fail_count", "prep_avg_per_ok_sec", "sort_dates_sec", "portfolio_wall_sec",
+    "portfolio_total_sec", "portfolio_ticker_dates_sec", "portfolio_build_trade_index_sec",
+    "portfolio_day_loop_sec", "portfolio_candidate_scan_sec", "portfolio_rotation_sec",
+    "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
+    "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
+    "score_calc_sec", "ret_pct", "mdd", "trade_count", "m_win_rate", "r_squared",
+    "trial_value", "fail_reason"
+]
 
 
 # # (AI註: optimizer 的預處理異常改成 session 級彙總：
@@ -107,6 +128,74 @@ def print_optimizer_prep_summary():
 
     if OPTIMIZER_PREP_SUMMARY["unique_other_count"] > 0:
         print(f"{C_YELLOW}⚠️ 其他異常詳細已寫入: {OPTIMIZER_PREP_OTHER_LOG_PATH}{C_RESET}")
+
+def init_profile_output_files():
+    if not ENABLE_OPTIMIZER_PROFILING:
+        return
+    with open(PROFILE_CSV_PATH, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+        writer.writeheader()
+
+
+def append_profile_row(row):
+    if not ENABLE_OPTIMIZER_PROFILING:
+        return
+
+    normalized = {field: row.get(field, "") for field in PROFILE_FIELDS}
+    PROFILE_ROWS.append(normalized)
+    with open(PROFILE_CSV_PATH, "a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+        writer.writerow(normalized)
+
+
+def print_profile_summary():
+    if not ENABLE_OPTIMIZER_PROFILING or not PROFILE_ROWS:
+        return
+
+    numeric_fields = [
+        "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
+        "prep_worker_generate_signals_sum_sec", "prep_worker_run_backtest_sum_sec",
+        "prep_worker_to_dict_sum_sec", "prep_avg_per_ok_sec", "sort_dates_sec",
+        "portfolio_wall_sec", "portfolio_total_sec", "portfolio_ticker_dates_sec",
+        "portfolio_build_trade_index_sec", "portfolio_day_loop_sec",
+        "portfolio_candidate_scan_sec", "portfolio_rotation_sec", "portfolio_settle_sec",
+        "portfolio_buy_sec", "portfolio_equity_mark_sec", "portfolio_closeout_sec",
+        "portfolio_curve_stats_sec", "filter_rules_sec", "score_calc_sec"
+    ]
+    summary = {
+        "trial_count": len(PROFILE_ROWS),
+        "avg": {}
+    }
+
+    for field in numeric_fields:
+        vals = []
+        for row in PROFILE_ROWS:
+            val = row.get(field, "")
+            if isinstance(val, (int, float)):
+                vals.append(float(val))
+            elif isinstance(val, str) and val not in ("", None):
+                try:
+                    vals.append(float(val))
+                except ValueError:
+                    pass
+        summary["avg"][field] = (sum(vals) / len(vals)) if vals else 0.0
+
+    with open(PROFILE_SUMMARY_PATH, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    avg = summary["avg"]
+    print(f"{C_CYAN}📊 Profiling 平均摘要（{summary['trial_count']} trials）:{C_RESET}")
+    print(
+        f"{C_GRAY}   objective={avg['objective_wall_sec']:.3f}s | "
+        f"prep_wall={avg['prep_wall_sec']:.3f}s | portfolio_wall={avg['portfolio_wall_sec']:.3f}s | "
+        f"worker_generate_sum={avg['prep_worker_generate_signals_sum_sec']:.3f}s | "
+        f"worker_backtest_sum={avg['prep_worker_run_backtest_sum_sec']:.3f}s | "
+        f"to_dict_sum={avg['prep_worker_to_dict_sum_sec']:.3f}s | "
+        f"pf_day_loop={avg['portfolio_day_loop_sec']:.3f}s{C_RESET}"
+    )
+    print(f"{C_GRAY}   CSV: {PROFILE_CSV_PATH}{C_RESET}")
+    print(f"{C_GRAY}   JSON: {PROFILE_SUMMARY_PATH}{C_RESET}")
+
 
 # # (AI註: 防止 magic number 散落；平行度預設沿用原本上限 14，但允許由 params 覆蓋)
 def resolve_optimizer_max_workers(params):
@@ -177,6 +266,8 @@ def load_all_raw_data():
         print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入: {issue_path}{C_RESET}")
 
 def worker_prep_data(ticker, df, params):
+    t_worker_start = time.perf_counter()
+    profile_stats = {}
     try:
         if len(df) < params.high_len + 10:
             return {
@@ -185,15 +276,36 @@ def worker_prep_data(ticker, df, params):
                 "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {params.high_len + 10} 列",
                 "data": None,
                 "logs": None,
+                "profile": {
+                    "worker_total_sec": time.perf_counter() - t_worker_start,
+                    "prep_total_sec": 0.0,
+                    "copy_sec": 0.0,
+                    "generate_signals_sec": 0.0,
+                    "assign_columns_sec": 0.0,
+                    "run_backtest_sec": 0.0,
+                    "to_dict_sec": 0.0,
+                },
             }
 
-        df_prepared, logs = prep_stock_data_and_trades(df, params)
+        df_prepared, logs = prep_stock_data_and_trades(df, params, profile_stats=profile_stats)
+        t0 = time.perf_counter()
+        packed_data = pack_prepared_stock_data(df_prepared)
+        pack_sec = time.perf_counter() - t0
         return {
             "ticker": ticker,
             "ok": True,
             "reason": "",
-            "data": df_prepared.to_dict('index'),
+            "data": packed_data,
             "logs": logs,
+            "profile": {
+                "worker_total_sec": time.perf_counter() - t_worker_start,
+                "prep_total_sec": float(profile_stats.get('total_sec', 0.0)),
+                "copy_sec": float(profile_stats.get('copy_sec', 0.0)),
+                "generate_signals_sec": float(profile_stats.get('generate_signals_sec', 0.0)),
+                "assign_columns_sec": float(profile_stats.get('assign_columns_sec', 0.0)),
+                "run_backtest_sec": float(profile_stats.get('run_backtest_sec', 0.0)),
+                "to_dict_sec": float(pack_sec),
+            },
         }
     except Exception as e:
         tb_lines = traceback.format_exc().strip().splitlines()
@@ -204,9 +316,20 @@ def worker_prep_data(ticker, df, params):
             "reason": f"{type(e).__name__}: {e}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
             "data": None,
             "logs": None,
+            "profile": {
+                "worker_total_sec": time.perf_counter() - t_worker_start,
+                "prep_total_sec": float(profile_stats.get('total_sec', 0.0)),
+                "copy_sec": float(profile_stats.get('copy_sec', 0.0)),
+                "generate_signals_sec": float(profile_stats.get('generate_signals_sec', 0.0)),
+                "assign_columns_sec": float(profile_stats.get('assign_columns_sec', 0.0)),
+                "run_backtest_sec": float(profile_stats.get('run_backtest_sec', 0.0)),
+                "to_dict_sec": 0.0,
+            },
         }
 
 def objective(trial):
+    t_objective_start = time.perf_counter()
+
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False]) 
@@ -231,18 +354,41 @@ def objective(trial):
     )
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
     prep_failures = []
+    prep_profile = {
+        'worker_total_sum_sec': 0.0,
+        'prep_total_sum_sec': 0.0,
+        'copy_sum_sec': 0.0,
+        'generate_signals_sum_sec': 0.0,
+        'assign_sum_sec': 0.0,
+        'run_backtest_sum_sec': 0.0,
+        'to_dict_sum_sec': 0.0,
+        'ok_count': 0,
+        'fail_count': 0,
+    }
     max_workers = resolve_optimizer_max_workers(ai_params)
+    t0 = time.perf_counter()
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
         for future in as_completed(futures):
             result = future.result()
             ticker = result["ticker"]
+            result_profile = result.get("profile", {})
+            prep_profile['worker_total_sum_sec'] += float(result_profile.get('worker_total_sec', 0.0))
+            prep_profile['prep_total_sum_sec'] += float(result_profile.get('prep_total_sec', 0.0))
+            prep_profile['copy_sum_sec'] += float(result_profile.get('copy_sec', 0.0))
+            prep_profile['generate_signals_sum_sec'] += float(result_profile.get('generate_signals_sec', 0.0))
+            prep_profile['assign_sum_sec'] += float(result_profile.get('assign_columns_sec', 0.0))
+            prep_profile['run_backtest_sum_sec'] += float(result_profile.get('run_backtest_sec', 0.0))
+            prep_profile['to_dict_sum_sec'] += float(result_profile.get('to_dict_sec', 0.0))
             if result["ok"]:
+                prep_profile['ok_count'] += 1
                 all_dfs_fast[ticker] = result["data"]
                 all_trade_logs[ticker] = result["logs"]
-                master_dates.update(result["data"].keys())
+                master_dates.update(get_fast_dates(result["data"]))
             else:
+                prep_profile['fail_count'] += 1
                 prep_failures.append((ticker, result["reason"]))
+    prep_wall_sec = time.perf_counter() - t0
     if prep_failures:
         insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
         other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
@@ -255,31 +401,118 @@ def objective(trial):
 
         if other_failures:
             trial.set_user_attr("prep_other_failures", len(other_failures))
-    if not master_dates: return -9999.0
-    sorted_dates = sorted(list(master_dates))
-    benchmark_data = all_dfs_fast.get("0050", None)
-    
-    # 精準 17 個變數解包，支援 max_exp
-    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
-        all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params, 
-        TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION, 
-        benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True
-    )
-    
-    if mdd > 45.0: trial.set_user_attr("fail_reason", f"回撤過大 ({mdd:.1f}%)"); return -9999.0
-    if t_count < 30: trial.set_user_attr("fail_reason", f"交易次數過低 ({t_count}次)"); return -9999.0
-    if ret_pct <= 0: trial.set_user_attr("fail_reason", f"最終虧損 ({ret_pct:.1f}%)"); return -9999.0
-    if m_win_rate < 45.0: trial.set_user_attr("fail_reason", f"月勝率偏低 ({m_win_rate:.0f}%)"); return -9999.0
-    if r_sq < 0.40: trial.set_user_attr("fail_reason", f"曲線過度震盪 (R²={r_sq:.2f})"); return -9999.0
 
+    profile_row = {
+        'trial_number': trial.number + 1,
+        'objective_wall_sec': 0.0,
+        'prep_wall_sec': prep_wall_sec,
+        'prep_worker_total_sum_sec': prep_profile['worker_total_sum_sec'],
+        'prep_worker_copy_sum_sec': prep_profile['copy_sum_sec'],
+        'prep_worker_generate_signals_sum_sec': prep_profile['generate_signals_sum_sec'],
+        'prep_worker_assign_sum_sec': prep_profile['assign_sum_sec'],
+        'prep_worker_run_backtest_sum_sec': prep_profile['run_backtest_sum_sec'],
+        'prep_worker_to_dict_sum_sec': prep_profile['to_dict_sum_sec'],
+        'prep_ok_count': prep_profile['ok_count'],
+        'prep_fail_count': prep_profile['fail_count'],
+        'prep_avg_per_ok_sec': (prep_profile['prep_total_sum_sec'] / prep_profile['ok_count']) if prep_profile['ok_count'] > 0 else 0.0,
+        'sort_dates_sec': 0.0,
+        'portfolio_wall_sec': 0.0,
+        'portfolio_total_sec': 0.0,
+        'portfolio_ticker_dates_sec': 0.0,
+        'portfolio_build_trade_index_sec': 0.0,
+        'portfolio_day_loop_sec': 0.0,
+        'portfolio_candidate_scan_sec': 0.0,
+        'portfolio_rotation_sec': 0.0,
+        'portfolio_settle_sec': 0.0,
+        'portfolio_buy_sec': 0.0,
+        'portfolio_equity_mark_sec': 0.0,
+        'portfolio_closeout_sec': 0.0,
+        'portfolio_curve_stats_sec': 0.0,
+        'filter_rules_sec': 0.0,
+        'score_calc_sec': 0.0,
+        'ret_pct': 0.0,
+        'mdd': 0.0,
+        'trade_count': 0,
+        'm_win_rate': 0.0,
+        'r_squared': 0.0,
+        'trial_value': -9999.0,
+        'fail_reason': '',
+    }
+
+    if not master_dates:
+        profile_row['objective_wall_sec'] = time.perf_counter() - t_objective_start
+        profile_row['fail_reason'] = '無有效資料'
+        append_profile_row(profile_row)
+        trial.set_user_attr("profile_row", profile_row)
+        return -9999.0
+
+    t0 = time.perf_counter()
+    sorted_dates = sorted(list(master_dates))
+    profile_row['sort_dates_sec'] = time.perf_counter() - t0
+    benchmark_data = all_dfs_fast.get("0050", None)
+
+    pf_profile = {}
+    t0 = time.perf_counter()
+    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+        all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
+        TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
+        benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
+    )
+    profile_row['portfolio_wall_sec'] = time.perf_counter() - t0
+    profile_row['portfolio_total_sec'] = float(pf_profile.get('portfolio_wall_sec', 0.0))
+    profile_row['portfolio_ticker_dates_sec'] = float(pf_profile.get('portfolio_ticker_dates_sec', 0.0))
+    profile_row['portfolio_build_trade_index_sec'] = float(pf_profile.get('portfolio_build_trade_index_sec', 0.0))
+    profile_row['portfolio_day_loop_sec'] = float(pf_profile.get('portfolio_day_loop_sec', 0.0))
+    profile_row['portfolio_candidate_scan_sec'] = float(pf_profile.get('portfolio_candidate_scan_sec', 0.0))
+    profile_row['portfolio_rotation_sec'] = float(pf_profile.get('portfolio_rotation_sec', 0.0))
+    profile_row['portfolio_settle_sec'] = float(pf_profile.get('portfolio_settle_sec', 0.0))
+    profile_row['portfolio_buy_sec'] = float(pf_profile.get('portfolio_buy_sec', 0.0))
+    profile_row['portfolio_equity_mark_sec'] = float(pf_profile.get('portfolio_equity_mark_sec', 0.0))
+    profile_row['portfolio_closeout_sec'] = float(pf_profile.get('portfolio_closeout_sec', 0.0))
+    profile_row['portfolio_curve_stats_sec'] = float(pf_profile.get('curve_stats_sec', 0.0))
+    profile_row['ret_pct'] = ret_pct
+    profile_row['mdd'] = mdd
+    profile_row['trade_count'] = t_count
+    profile_row['m_win_rate'] = m_win_rate
+    profile_row['r_squared'] = r_sq
+
+    t0 = time.perf_counter()
+    fail_reason = None
+    if mdd > 45.0:
+        fail_reason = f"回撤過大 ({mdd:.1f}%)"
+    elif t_count < 30:
+        fail_reason = f"交易次數過低 ({t_count}次)"
+    elif ret_pct <= 0:
+        fail_reason = f"最終虧損 ({ret_pct:.1f}%)"
+    elif m_win_rate < 45.0:
+        fail_reason = f"月勝率偏低 ({m_win_rate:.0f}%)"
+    elif r_sq < 0.40:
+        fail_reason = f"曲線過度震盪 (R²={r_sq:.2f})"
+    profile_row['filter_rules_sec'] = time.perf_counter() - t0
+
+    if fail_reason is not None:
+        trial.set_user_attr("fail_reason", fail_reason)
+        profile_row['fail_reason'] = fail_reason
+        profile_row['trial_value'] = -9999.0
+        profile_row['objective_wall_sec'] = time.perf_counter() - t_objective_start
+        append_profile_row(profile_row)
+        trial.set_user_attr("profile_row", profile_row)
+        return -9999.0
+
+    t0 = time.perf_counter()
     final_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
-    
+    profile_row['score_calc_sec'] = time.perf_counter() - t0
+
     trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
     trial.set_user_attr("bm_r_squared", bm_r_sq)
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
-    
+
+    profile_row['trial_value'] = final_score
+    profile_row['objective_wall_sec'] = time.perf_counter() - t_objective_start
+    append_profile_row(profile_row)
+    trial.set_user_attr("profile_row", profile_row)
     return final_score
 
 def monitoring_callback(study, trial):
@@ -292,6 +525,19 @@ def monitoring_callback(study, trial):
     else:
         status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value:.3f}"
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
+
+    if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
+        profile = trial.user_attrs.get("profile_row", {})
+        print()
+        print(
+            f"{C_GRAY}   [Profile] total={float(profile.get('objective_wall_sec', 0.0)):.3f}s | "
+            f"prep_wall={float(profile.get('prep_wall_sec', 0.0)):.3f}s | "
+            f"pf_wall={float(profile.get('portfolio_wall_sec', 0.0)):.3f}s | "
+            f"gen_sum={float(profile.get('prep_worker_generate_signals_sum_sec', 0.0)):.3f}s | "
+            f"backtest_sum={float(profile.get('prep_worker_run_backtest_sum_sec', 0.0)):.3f}s | "
+            f"to_dict_sum={float(profile.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
+            f"pf_loop={float(profile.get('portfolio_day_loop_sec', 0.0)):.3f}s{C_RESET}"
+        )
     
     if study.best_trial.number == trial.number and trial.value and trial.value > -9000:
         print()
@@ -313,6 +559,9 @@ if __name__ == "__main__":
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     load_all_raw_data(); db_file = "models/v16_portfolio_ai_10pos_overnight.db"; DB_NAME = f"sqlite:///{db_file}"
+    init_profile_output_files()
+    if ENABLE_OPTIMIZER_PROFILING:
+        print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
     
     if os.path.exists(db_file):
         choice = input(f"\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
@@ -361,5 +610,6 @@ if __name__ == "__main__":
             print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
 
         print()
+        print_profile_summary()
         print_optimizer_prep_summary()
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")

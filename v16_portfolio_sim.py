@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from core.v16_config import V16StrategyParams
-from core.v16_portfolio_engine import prep_stock_data_and_trades, run_portfolio_timeline
+from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 from core.v16_log_utils import write_issue_log
@@ -123,7 +123,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         sys.exit(1)
 
     sorted_dates = sorted(list(master_dates))
-    all_dfs_fast = {t: d.to_dict('index') for t, d in all_dfs.items()}
+    all_dfs_fast = {t: pack_prepared_stock_data(d) for t, d in all_dfs.items()}
 
     print(
         f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs)} 檔標的，"
