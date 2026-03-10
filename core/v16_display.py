@@ -1,6 +1,6 @@
 # core/v16_display.py
 import os
-from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD, MIN_FULL_YEAR_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE
+from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD, MIN_FULL_YEAR_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE, SYSTEM_SCORE_DISPLAY_MULTIPLIER
 from core.v16_portfolio_engine import calc_portfolio_score
 
 C_RED = '\033[91m'
@@ -77,7 +77,7 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 追價:{chase_trades})"
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score:.2f}{C_RESET}")
+    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}")
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易次數: {trade_split_str} | 年化交易次數: {annual_trades:.2f} 次/年")
     print(f"錯失次數: 買 {missed_b} | 賣 {missed_s} | 買進成交率: {buy_fill_rate:.2f}% | 最終資產: {final_eq:,.0f} 元")

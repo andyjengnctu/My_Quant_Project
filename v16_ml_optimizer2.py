@@ -13,7 +13,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.v16_config import (
     V16StrategyParams, SCORE_CALC_METHOD,
     MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE,
-    MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT
+    MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT,
+    SYSTEM_SCORE_DISPLAY_MULTIPLIER
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
@@ -530,7 +531,7 @@ def objective(trial):
         return -9999.0
 
     t0 = time.perf_counter()
-    base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct) * 1000
+    base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
     final_score = base_score
     profile_row['score_calc_sec'] = time.perf_counter() - t0
     profile_row['base_score'] = base_score
@@ -556,7 +557,7 @@ def monitoring_callback(study, trial):
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}", "N/A"
     else:
-        status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value:.3f}"
+        status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.3f}"
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
     if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):

@@ -32,14 +32,6 @@ def calc_curve_stats(eq_list):
             monthly_win_rate = (len(monthly_rets[monthly_rets > 0]) / len(monthly_rets)) * 100
     return r_squared, monthly_win_rate
 
-def calc_annual_return_pct(start_value, end_value, years):
-    if start_value <= 0 or years <= 0:
-        return 0.0
-    if end_value <= 0:
-        return -100.0
-    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
-
-
 # # (AI註: 只用完整年度做 min{r_y} > 0 的檢查；不把起始殘年與當前未完整年度算進去)
 def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equity, year_first_sim_date, year_last_sim_date):
     yearly_return_rows = []
@@ -848,8 +840,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
+    curve_stats_sec = (time.perf_counter() - t0) if profile_stats is not None else 0.0
 
     trade_count = len(closed_trades_stats)
     if trade_count > 0:
@@ -874,15 +868,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
 
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
-
-    if len(sorted_dates) > start_idx:
-        first_sim_date = pd.Timestamp(sorted_dates[start_idx])
-        last_sim_date = pd.Timestamp(sorted_dates[-1])
-        sim_span_days = (last_sim_date - first_sim_date).days + 1
-        sim_years = (sim_span_days / 365.25) if sim_span_days > 0 else 0.0
-    else:
-        sim_years = 0.0
-
+    sim_years = calc_sim_years(sorted_dates, start_idx)
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
     buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
     annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
@@ -891,55 +877,22 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     bm_end_value = bm_start_value * (1.0 + bm_ret_pct / 100.0) if bm_start_value > 0 else 0.0
     bm_annual_return_pct = calc_annual_return_pct(bm_start_value, bm_end_value, sim_years)
 
-def build_benchmark_full_year_return_stats(sorted_dates, benchmark_data, yearly_return_rows):
-    if benchmark_data is None or not yearly_return_rows:
-        return {
-            "bm_full_year_count": 0,
-            "bm_min_full_year_return_pct": 0.0,
-            "bm_yearly_return_rows": []
-        }
-
-    year_market_bounds = {}
-    for dt in sorted_dates:
-        year = dt.year
-        if year not in year_market_bounds:
-            year_market_bounds[year] = {"first": dt, "last": dt}
-        else:
-            year_market_bounds[year]["last"] = dt
-
-    bm_yearly_rows = []
-    full_years = [row["year"] for row in yearly_return_rows if row["is_full_year"]]
-
-    for year in full_years:
-        bounds = year_market_bounds.get(year)
-        if bounds is None:
-            continue
-        if not has_fast_date(benchmark_data, bounds["first"]) or not has_fast_date(benchmark_data, bounds["last"]):
-            continue
-
-        start_value = get_fast_close(benchmark_data, date=bounds["first"])
-        end_value = get_fast_close(benchmark_data, date=bounds["last"])
-        if start_value is None or end_value is None or start_value <= 0:
-            continue
-
-        bm_yearly_rows.append({
-            "year": int(year),
-            "year_return_pct": float((end_value / start_value - 1.0) * 100.0),
-            "is_full_year": True,
-            "start_date": bounds["first"].strftime("%Y-%m-%d"),
-            "end_date": bounds["last"].strftime("%Y-%m-%d"),
-        })
-
-    bm_min_full_year_return_pct = min((row["year_return_pct"] for row in bm_yearly_rows), default=0.0)
-
-    return {
-        "bm_full_year_count": len(bm_yearly_rows),
-        "bm_min_full_year_return_pct": float(bm_min_full_year_return_pct),
-        "bm_yearly_return_rows": bm_yearly_rows
-    }
+    yearly_stats = build_full_year_return_stats(
+        sorted_dates=sorted_dates,
+        year_start_equity=year_start_equity,
+        year_end_equity=year_end_equity,
+        year_first_sim_date=year_first_sim_date,
+        year_last_sim_date=year_last_sim_date,
+    )
+    bm_yearly_stats = build_benchmark_full_year_return_stats(
+        sorted_dates=sorted_dates,
+        benchmark_data=benchmark_data,
+        yearly_return_rows=yearly_stats['yearly_return_rows'],
+    )
 
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
+        profile_stats['portfolio_ticker_dates_sec'] = 0.0
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec
         profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
@@ -947,15 +900,18 @@ def build_benchmark_full_year_return_stats(sorted_dates, benchmark_data, yearly_
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
+        profile_stats['portfolio_closeout_sec'] = 0.0
+        profile_stats['curve_stats_sec'] = curve_stats_sec
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct
-
+        profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
+        profile_stats.update(yearly_stats)
+        profile_stats.update(bm_yearly_stats)
 
     if is_training:
         return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
-    else:
-        df_equity = pd.DataFrame(equity_curve)
-        df_trades = pd.DataFrame(trade_history)
-        final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
 
+    df_equity = pd.DataFrame(equity_curve)
+    df_trades = pd.DataFrame(trade_history)
+    final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
+    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
