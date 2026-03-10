@@ -17,12 +17,13 @@ BUY_SORT_METHOD = 'EV'
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
 # 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
-SCORE_CALC_METHOD = 'LOG_R2'
+SCORE_CALC_METHOD = 'RoMD'
 
-# 4. Optimizer 硬門檻 (版本B：只作篩選，不乘入 score)
-MIN_ANNUAL_RETURN_PCT = 5.0
-MIN_ANNUAL_TRADES = 40.0
-MIN_BUY_FILL_RATE = 90.0
+# 4. Optimizer 穩定性 / 可執行性硬門檻
+MIN_ANNUAL_TRADES = 5.0
+MIN_BUY_FILL_RATE = 80.0
+MIN_TRADE_WIN_RATE = 22.0
+MIN_FULL_YEAR_RETURN_PCT = -10.0
 # ==========================================
 
 @dataclass
