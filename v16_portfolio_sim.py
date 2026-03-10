@@ -169,11 +169,11 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(" " * 120, end="\r")
 
     pf_profile = {}
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile
     )
-    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, pf_profile
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
 if __name__ == "__main__":
@@ -191,21 +191,15 @@ if __name__ == "__main__":
         print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, pf_profile = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
 
     mode_display = "開啟 (強勢輪動)" if USER_ROTATION else "關閉 (穩定鎖倉)"
 
-    annual_trades = pf_profile.get("annual_trades", 0.0)
-    buy_fill_rate = pf_profile.get("buy_fill_rate", 0.0)
-    annual_return_pct = pf_profile.get("annual_return_pct", 0.0)
-    bm_annual_return_pct = pf_profile.get("bm_annual_return_pct", 0.0)
     min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
     bm_min_full_year_return_pct = pf_profile.get("bm_min_full_year_return_pct", 0.0)
-    normal_trade_count = pf_profile.get("normal_trade_count", trade_count)
-    chase_trade_count = pf_profile.get("chase_trade_count", 0)
 
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📊 【投資組合實戰模擬報告 (自 {USER_START_YEAR} 年起算)】")
@@ -230,6 +224,7 @@ if __name__ == "__main__":
         print(
             f"{C_GRAY}完整年度數: {pf_profile.get('full_year_count', 0)} | "
             f"最差完整年度報酬: {pf_profile.get('min_full_year_return_pct', 0.0):.2f}% | "
+            f"大盤最差完整年度報酬: {pf_profile.get('bm_min_full_year_return_pct', 0.0):.2f}% | "
             f"年化報酬率: {annual_return_pct:.2f}%{C_RESET}"
         )
 
