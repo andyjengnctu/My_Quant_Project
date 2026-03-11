@@ -640,12 +640,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         pre_market_occupied = len(portfolio) + len(sold_today)
 
         for cand in candidates_today:
-            if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
-                continue
-
-            available_cash -= cand['proj_cost']
-            pre_market_occupied += 1
-
             fast_df = all_dfs_fast[cand['ticker']]
             t_pos = cand['today_pos']
             y_pos = cand['yesterday_pos']
@@ -660,6 +654,23 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 (t_low == t_close) and
                 (t_close > y_close)
             )
+
+            if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
+                if cand['type'] == 'chase':
+                    if cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
+                        chase_res = evaluate_chase_condition(t_close, cand['orig_limit'], cand['y_atr'], sizing_equity, params)
+                        if chase_res:
+                            chase_res['orig_limit'] = cand['orig_limit']
+                            chase_res['orig_atr'] = cand['y_atr']
+                            pending_chases[cand['ticker']] = chase_res
+                        elif cand['ticker'] in pending_chases:
+                            del pending_chases[cand['ticker']]
+                    elif cand['ticker'] in pending_chases:
+                        del pending_chases[cand['ticker']]
+                continue
+
+            available_cash -= cand['proj_cost']
+            pre_market_occupied += 1
 
             buyTriggered = False
             is_normal_worse_than_sl = False

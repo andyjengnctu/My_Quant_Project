@@ -556,7 +556,10 @@ def objective(trial):
     elif full_year_count <= 0:
         fail_reason = "無完整年度可驗證 min{r_y}"
     elif min_full_year_return_pct <= MIN_FULL_YEAR_RETURN_PCT:
-        fail_reason = f"完整年度最差報酬未大於 0 ({min_full_year_return_pct:.2f}%)"
+        fail_reason = (
+            f"完整年度最差報酬未大於 {MIN_FULL_YEAR_RETURN_PCT:.2f}% "
+            f"({min_full_year_return_pct:.2f}%)"
+        )
     elif win_rate < MIN_TRADE_WIN_RATE:
         fail_reason = f"實戰勝率偏低 ({win_rate:.2f}%)"
     elif m_win_rate < 45.0:
