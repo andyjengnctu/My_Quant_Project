@@ -12,6 +12,7 @@ from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 from core.v16_log_utils import write_issue_log
+from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -71,7 +72,7 @@ def process_single_stock(file_path, ticker, params):
         if stats['is_setup_today']:
             proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], reference_capital, params.fixed_risk, params)
             if proj_qty == 0:
-                return ('candidate', None, None, None, ticker, sanitize_issue)
+                return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
 
@@ -82,28 +83,30 @@ def process_single_stock(file_path, ticker, params):
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
 
-            return ('buy', proj_cost, stats['expected_value'], msg, ticker, sanitize_issue)
+            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
+            return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
         elif stats.get('chase_today') is not None:
             chase = stats['chase_today']
             proj_qty = chase['qty']
             if proj_qty == 0:
-                return ('candidate', None, None, None, ticker, sanitize_issue)
-
+                return ('candidate', None, None, None, None, ticker, sanitize_issue)
             proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
 
             zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
-            return ('zone', proj_cost, stats['expected_value'], msg, ticker, sanitize_issue)
+            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
+            return ('zone', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
-        return ('candidate', None, None, None, ticker, sanitize_issue)
+        return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
     except Exception as e:
         if is_insufficient_data_error(e):
-            return ('skip_insufficient', None, None, None, ticker, None)
+            return ('skip_insufficient', None, None, None, None, ticker, None)
 
         return (
             'error',
+            None,
             None,
             None,
             f"{ticker}: {type(e).__name__}: {e}",
@@ -147,8 +150,8 @@ def run_daily_scanner(data_dir):
             count_scanned += 1
 
             result = future.result()
-            if result and len(result) == 6:
-                status, proj_cost, ev, msg, ticker, sanitize_issue = result
+            if result and len(result) == 7:
+                status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
 
                 if status in ['buy', 'zone', 'candidate']:
                     count_candidates += 1
@@ -162,9 +165,9 @@ def run_daily_scanner(data_dir):
                     scanner_issue_lines.append(f"[異常] {msg}")
 
                 if status == 'buy':
-                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
+                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
                 elif status == 'zone':
-                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'text': msg, 'ticker': ticker})
+                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
 
             if count_scanned % SCANNER_PROGRESS_EVERY == 0 or count_scanned == total_files:
                 print(
@@ -177,14 +180,9 @@ def run_daily_scanner(data_dir):
     scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines) if scanner_issue_lines else None
     elapsed_time = time.time() - start_time
 
-    if BUY_SORT_METHOD == 'EV':
-        buy_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
-        in_zone_list.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
-        sort_title = "按期望值 (EV) 由大到小排序"
-    else:
-        buy_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
-        in_zone_list.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
-        sort_title = "按預估投入資金由大到小排序"
+    buy_list.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+    in_zone_list.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+    sort_title = get_buy_sort_title(BUY_SORT_METHOD)
 
     print(" " * 160, end="\r")
     print(f"{C_CYAN}================================================================================{C_RESET}")

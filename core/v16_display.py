@@ -1,6 +1,7 @@
 # core/v16_display.py
 import os
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD, MIN_FULL_YEAR_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE, SYSTEM_SCORE_DISPLAY_MULTIPLIER
+from core.v16_buy_sort import get_buy_sort_title
 from core.v16_portfolio_engine import calc_portfolio_score
 
 C_RED = '\033[91m'
@@ -15,7 +16,7 @@ def get_p(params, key, default=None):
     return getattr(params, key, default)
 
 def print_scanner_header(params):
-    print(f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]")
+    print(f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]")
     print(f"   ➤ 核心風控: 創高 {get_p(params, 'high_len', 201)}日 | ATR {get_p(params, 'atr_len', 14)}日 | 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍")
     print(f"   ➤ 停損停利: 初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | 追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f}倍 | 半倉 {get_p(params, 'tp_percent', 0.5)*100:.0f}%")
     # 🚀 FIX: 對齊 0 預設值
@@ -77,7 +78,7 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 追價:{chase_trades})"
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}")
+    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}")
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易次數: {trade_split_str} | 年化交易次數: {annual_trades:.2f} 次/年")
     print(f"錯失次數: 買 {missed_b} | 賣 {missed_s} | 買進成交率: {buy_fill_rate:.2f}% | 最終資產: {final_eq:,.0f} 元")

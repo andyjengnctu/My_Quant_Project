@@ -4,6 +4,7 @@ import bisect
 import time
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
+from core.v16_buy_sort import calc_buy_sort_value
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
     from core.v16_config import SCORE_CALC_METHOD
@@ -313,9 +314,9 @@ def get_pit_stats_from_index(stats_index, current_date, params):
     min_trades_req = getattr(params, 'min_history_trades', 0)
 
     if trade_count < min_trades_req:
-        return False, 0.0, 0.0
+        return False, 0.0, 0.0, trade_count
     if trade_count == 0:
-        return True, 0.0, 0.0
+        return True, 0.0, 0.0, trade_count
 
     win_count = int(stats_index['cum_win_count'][cutoff - 1])
     win_rate = win_count / trade_count
@@ -346,7 +347,7 @@ def get_pit_stats_from_index(stats_index, current_date, params):
         and
         (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
     )
-    return is_candidate, ev_to_sort, win_rate
+    return is_candidate, ev_to_sort, win_rate, trade_count
 
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None):
     t_portfolio_start = time.perf_counter() if profile_stats is not None else None
@@ -415,7 +416,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if ticker in pending_chases:
                 del pending_chases[ticker]
 
-            is_candidate, ev, _ = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
+            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
+                pit_stats_index[ticker], today, params
+            )
             if not is_candidate:
                 continue
 
@@ -428,6 +431,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 continue
 
             est_cost = calc_entry_price(y_buy_limit, est_qty, params) * est_qty
+            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
             candidates_today.append({
                 'ticker': ticker,
                 'type': 'normal',
@@ -438,6 +442,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 'yesterday_pos': y_pos,
                 'qty': est_qty,
                 'proj_cost': est_cost,
+                'sort_value': sort_value,
+                'hist_win_rate': win_rate,
+                'hist_trade_count': trade_count,
                 'init_sl': est_init_sl,
                 'init_trail': est_init_trail,
             })
@@ -456,11 +463,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             y_pos = t_pos - 1
 
             chase = pending_chases[ticker]
-            is_candidate, ev, _ = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
+            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
             if is_candidate:
                 est_qty = chase['qty']
                 if est_qty > 0:
                     est_cost = calc_entry_price(chase['chase_price'], est_qty, params) * est_qty
+                    sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
                     candidates_today.append({
                         'ticker': ticker,
                         'type': 'chase',
@@ -471,6 +479,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         'yesterday_pos': y_pos,
                         'qty': est_qty,
                         'proj_cost': est_cost,
+                        'sort_value': sort_value,
+                        'hist_win_rate': win_rate,
+                        'hist_trade_count': trade_count,
                         'chase_data': chase,
                         'init_sl': chase['sl'],
                         'init_trail': chase['sl'],
@@ -479,10 +490,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             else:
                 del pending_chases[ticker]
 
-        if BUY_SORT_METHOD == 'EV':
-            candidates_today.sort(key=lambda x: (x['ev'], x['ticker']), reverse=True)
-        else:
-            candidates_today.sort(key=lambda x: (x['proj_cost'], x['ticker']), reverse=True)
+        candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0
 
@@ -503,13 +511,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     pt_y_close = get_fast_close(pt_data, pos=pt_y_pos)
                     ret = (pt_y_close - pos['entry']) / pos['entry']
 
-                    is_strategically_better = False
-                    if BUY_SORT_METHOD == 'EV':
-                        _, holding_ev, _ = get_pit_stats_from_index(pit_stats_index[pt], today, params)
-                        is_strategically_better = cand['ev'] > holding_ev
-                    else:
-                        holding_cost = pos['entry'] * pos['qty']
-                        is_strategically_better = cand['proj_cost'] > holding_cost
+                    holding_cost = pos['entry'] * pos['qty']
+                    _, holding_ev, holding_win_rate, holding_trade_count = get_pit_stats_from_index(pit_stats_index[pt], today, params)
+                    holding_sort_value = calc_buy_sort_value(BUY_SORT_METHOD, holding_ev, holding_cost, holding_win_rate, holding_trade_count)
+                    is_strategically_better = cand['sort_value'] > holding_sort_value
 
                     if is_strategically_better and ret < lowest_ret:
                         lowest_ret = ret
@@ -685,6 +690,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         'pure_buy_price': buy_price,
                         'realized_pnl': 0.0,
                         'initial_risk_total': initial_risk,
+                        'entry_type': cand['type'],
                     }
                     buyTriggered = True
 

@@ -12,7 +12,8 @@ EV_CALC_METHOD = 'A'
 # 2. 買入優先序切換開關
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'EV'        = 優先買入期望值最高的標的 (單筆質量極大化)
-BUY_SORT_METHOD = 'EV'
+# 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
+BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)

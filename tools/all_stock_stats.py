@@ -9,7 +9,8 @@ if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
 # 🌟 依賴您的模組化架構：直接引入原本的參數檔與核心引擎
-from core.v16_config import V16StrategyParams
+from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
+from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 from core.v16_core import run_v16_backtest
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
 
@@ -24,6 +25,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 OUTPUT_FILE = "outputs/V16_All_Stocks_Stats_Report.xlsx"
 DEFAULT_EXPORT_MAX_WORKERS = 14
+
+def resolve_report_sort_method():
+    if BUY_SORT_METHOD == 'PROJ_COST':
+        return 'EV'
+    return BUY_SORT_METHOD
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
@@ -73,6 +79,14 @@ def process_single_stock_for_export(file_name, params):
         invalid_row_count = sanitize_stats['invalid_row_count']
         duplicate_date_count = sanitize_stats['duplicate_date_count']
         dropped_row_count = sanitize_stats['dropped_row_count']
+        active_sort_method = resolve_report_sort_method()
+        sort_value = calc_buy_sort_value(
+            active_sort_method,
+            stats.get("expected_value", 0.0),
+            0.0,
+            stats.get("win_rate", 0.0) / 100.0,
+            stats.get("trade_count", 0)
+        )
 
         # 將核心引擎算出來的數字打包
         return {
@@ -83,6 +97,7 @@ def process_single_stock_for_export(file_name, params):
             "平均虧損金額 (avgLoss)": stats.get("avg_loss", 0.0),
             "盈虧比 (payoffRatio)": stats.get("payoff_ratio", 0.0),
             "期望值 (expectedValue)": stats.get("expected_value", 0.0),
+            "排序值 (sortValue)": sort_value,
             "平均持倉天數": stats.get("avg_bars_held", 0.0),
             "總資產報酬率 (%)": stats.get("asset_growth", 0.0),
             "最大回撤 MDD (%)": stats.get("max_drawdown", 0.0),
@@ -133,10 +148,14 @@ def main():
     
     if results:
         df_out = pd.DataFrame(results)
-        
-        # 預設依期望值由大到小排序
-        df_out.sort_values(by="期望值 (expectedValue)", ascending=False, inplace=True)
-        
+        active_sort_method = resolve_report_sort_method()
+
+        if BUY_SORT_METHOD == 'PROJ_COST':
+            print(f"{C_YELLOW}⚠️ all_stock_stats 缺少盤前 sizing / qty 上下文，無法真實反映 PROJ_COST，已自動改用 EV 排序。{C_RESET}")
+
+        print(f"   ➤ 報表排序方式: {get_buy_sort_title(active_sort_method)}")
+        df_out.sort_values(by=["排序值 (sortValue)", "股票代號"], ascending=[False, False], inplace=True)
+
         # 美化小數點位數
         df_out = df_out.round({
             "勝率 (Win Rate %)": 2,
@@ -144,6 +163,7 @@ def main():
             "平均虧損金額 (avgLoss)": 0,
             "盈虧比 (payoffRatio)": 2,
             "期望值 (expectedValue)": 2,
+            "排序值 (sortValue)": 2,
             "平均持倉天數": 1,
             "總資產報酬率 (%)": 2,
             "最大回撤 MDD (%)": 2,
