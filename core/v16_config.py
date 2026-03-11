@@ -22,7 +22,7 @@ SCORE_CALC_METHOD = 'RoMD'
 # 4. Optimizer 穩定性 / 可執行性硬門檻
 MIN_ANNUAL_TRADES = 5.0
 MIN_BUY_FILL_RATE = 80.0
-MIN_TRADE_WIN_RATE = 35.0
+MIN_TRADE_WIN_RATE = 40.0
 MIN_FULL_YEAR_RETURN_PCT = -10.0
 # ==========================================
 
