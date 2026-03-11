@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
 from core.v16_config import (
     V16StrategyParams, SCORE_CALC_METHOD,
@@ -48,7 +49,8 @@ TRAIN_ENABLE_ROTATION = False
 DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
-DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
+# # (AI註: Windows / Python 3.14 下 ProcessPool + 大量 dataframe IPC 容易不穩，先保守降平行度)
+DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
 OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
@@ -335,6 +337,28 @@ def worker_prep_data(ticker, df, params):
             },
         }
 
+# # (AI註: 單一真理來源 - 統一合併 worker 回傳，避免平行與 fallback 序列邏輯分叉)
+def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
+    ticker = result["ticker"]
+    result_profile = result.get("profile", {})
+
+    prep_profile['worker_total_sum_sec'] += float(result_profile.get('worker_total_sec', 0.0))
+    prep_profile['prep_total_sum_sec'] += float(result_profile.get('prep_total_sec', 0.0))
+    prep_profile['copy_sum_sec'] += float(result_profile.get('copy_sec', 0.0))
+    prep_profile['generate_signals_sum_sec'] += float(result_profile.get('generate_signals_sec', 0.0))
+    prep_profile['assign_sum_sec'] += float(result_profile.get('assign_columns_sec', 0.0))
+    prep_profile['run_backtest_sum_sec'] += float(result_profile.get('run_backtest_sec', 0.0))
+    prep_profile['to_dict_sum_sec'] += float(result_profile.get('to_dict_sec', 0.0))
+
+    if result["ok"]:
+        prep_profile['ok_count'] += 1
+        all_dfs_fast[ticker] = result["data"]
+        all_trade_logs[ticker] = result["logs"]
+        master_dates.update(get_fast_dates(result["data"]))
+    else:
+        prep_profile['fail_count'] += 1
+        prep_failures.append((ticker, result["reason"]))
+
 def objective(trial):
     t_objective_start = time.perf_counter()
 
@@ -375,28 +399,48 @@ def objective(trial):
     }
     max_workers = resolve_optimizer_max_workers(ai_params)
     t0 = time.perf_counter()
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
-        for future in as_completed(futures):
-            result = future.result()
-            ticker = result["ticker"]
-            result_profile = result.get("profile", {})
-            prep_profile['worker_total_sum_sec'] += float(result_profile.get('worker_total_sec', 0.0))
-            prep_profile['prep_total_sum_sec'] += float(result_profile.get('prep_total_sec', 0.0))
-            prep_profile['copy_sum_sec'] += float(result_profile.get('copy_sec', 0.0))
-            prep_profile['generate_signals_sum_sec'] += float(result_profile.get('generate_signals_sec', 0.0))
-            prep_profile['assign_sum_sec'] += float(result_profile.get('assign_columns_sec', 0.0))
-            prep_profile['run_backtest_sum_sec'] += float(result_profile.get('run_backtest_sec', 0.0))
-            prep_profile['to_dict_sum_sec'] += float(result_profile.get('to_dict_sec', 0.0))
-            if result["ok"]:
-                prep_profile['ok_count'] += 1
-                all_dfs_fast[ticker] = result["data"]
-                all_trade_logs[ticker] = result["logs"]
-                master_dates.update(get_fast_dates(result["data"]))
-            else:
-                prep_profile['fail_count'] += 1
-                prep_failures.append((ticker, result["reason"]))
+    prep_mode = "parallel"
+
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
+            for future in as_completed(futures):
+                result = future.result()
+                merge_prep_result(
+                    result,
+                    all_dfs_fast, all_trade_logs, master_dates,
+                    prep_failures, prep_profile
+                )
+
+    except BrokenProcessPool as e:
+        # # (AI註: Windows 多進程池偶發崩潰時，不讓整個 Optuna 中止；退回單進程完成本 trial)
+        prep_mode = "sequential_fallback"
+        trial.set_user_attr("prep_pool_error", f"{type(e).__name__}: {e}")
+
+        all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
+        prep_failures = []
+        prep_profile = {
+            'worker_total_sum_sec': 0.0,
+            'prep_total_sum_sec': 0.0,
+            'copy_sum_sec': 0.0,
+            'generate_signals_sum_sec': 0.0,
+            'assign_sum_sec': 0.0,
+            'run_backtest_sum_sec': 0.0,
+            'to_dict_sum_sec': 0.0,
+            'ok_count': 0,
+            'fail_count': 0,
+        }
+
+        for ticker, df in RAW_DATA_CACHE.items():
+            result = worker_prep_data(ticker, df, ai_params)
+            merge_prep_result(
+                result,
+                all_dfs_fast, all_trade_logs, master_dates,
+                prep_failures, prep_profile
+            )
+
     prep_wall_sec = time.perf_counter() - t0
+    trial.set_user_attr("prep_mode", prep_mode)
     if prep_failures:
         insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
         other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
@@ -557,7 +601,9 @@ def monitoring_callback(study, trial):
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}", "N/A"
     else:
-        status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.3f}"
+        prep_mode = trial.user_attrs.get("prep_mode", "parallel")
+        mode_suffix = " [fallback]" if prep_mode == "sequential_fallback" else ""
+        status_text, score_text = f"{C_GREEN}進化中{mode_suffix}{C_RESET}", f"{trial.value:.3f}"
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
     if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
