@@ -12,13 +12,22 @@ EV_CALC_METHOD = 'A'
 # 2. 買入優先序切換開關
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'EV'        = 優先買入期望值最高的標的 (單筆質量極大化)
-BUY_SORT_METHOD = 'PROJ_COST'
+BUY_SORT_METHOD = 'EV'
 
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
 # 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
-SCORE_CALC_METHOD = 'LOG_R2'
+SCORE_CALC_METHOD = 'RoMD'
+
+# 4. Optimizer 穩定性 / 可執行性硬門檻
+MIN_ANNUAL_TRADES = 5.0
+MIN_BUY_FILL_RATE = 80.0
+MIN_TRADE_WIN_RATE = 40.0
+MIN_FULL_YEAR_RETURN_PCT = -10.0
 # ==========================================
+
+# # (AI註: 僅影響顯示，不改實際排序與優化邏輯)
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
 @dataclass
 class V16StrategyParams:

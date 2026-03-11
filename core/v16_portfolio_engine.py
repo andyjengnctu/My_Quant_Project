@@ -5,12 +5,13 @@ import time
 from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 
-def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq):
+def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
     from core.v16_config import SCORE_CALC_METHOD
-    romd = sys_ret / (abs(sys_mdd) + 0.0001)
+    base_return = sys_ret if annual_return_pct is None else annual_return_pct
+    annualized_romd = base_return / (abs(sys_mdd) + 0.0001)
     if SCORE_CALC_METHOD == 'LOG_R2':
-        return romd * (m_win_rate / 100.0) * r_sq
-    return romd
+        return annualized_romd * (m_win_rate / 100.0) * r_sq
+    return annualized_romd
 
 def calc_curve_stats(eq_list):
     r_squared, monthly_win_rate = 0.0, 0.0
@@ -30,6 +31,115 @@ def calc_curve_stats(eq_list):
         if len(monthly_rets) > 0:
             monthly_win_rate = (len(monthly_rets[monthly_rets > 0]) / len(monthly_rets)) * 100
     return r_squared, monthly_win_rate
+
+# # (AI註: 只用完整年度做 min{r_y} > 0 的檢查；不把起始殘年與當前未完整年度算進去)
+def build_full_year_return_stats(sorted_dates, year_start_equity, year_end_equity, year_first_sim_date, year_last_sim_date):
+    yearly_return_rows = []
+    year_market_bounds = {}
+
+    for dt in sorted_dates:
+        year = dt.year
+        if year not in year_market_bounds:
+            year_market_bounds[year] = {"first": dt, "last": dt}
+        else:
+            year_market_bounds[year]["last"] = dt
+
+    for year in sorted(year_start_equity.keys()):
+        start_equity = float(year_start_equity.get(year, 0.0))
+        end_equity = float(year_end_equity.get(year, 0.0))
+        first_sim_date = year_first_sim_date.get(year)
+        last_sim_date = year_last_sim_date.get(year)
+        market_bounds = year_market_bounds.get(year)
+
+        if start_equity <= 0 or end_equity <= 0 or market_bounds is None or first_sim_date is None or last_sim_date is None:
+            continue
+
+        year_return_pct = (end_equity / start_equity - 1.0) * 100.0
+        is_full_year = (first_sim_date == market_bounds["first"]) and (last_sim_date == market_bounds["last"])
+
+        yearly_return_rows.append({
+            "year": int(year),
+            "year_return_pct": float(year_return_pct),
+            "is_full_year": bool(is_full_year),
+            "start_date": first_sim_date.strftime("%Y-%m-%d"),
+            "end_date": last_sim_date.strftime("%Y-%m-%d"),
+        })
+
+    full_year_rows = [row for row in yearly_return_rows if row["is_full_year"]]
+    min_full_year_return_pct = min((row["year_return_pct"] for row in full_year_rows), default=0.0)
+
+    return {
+        "full_year_count": len(full_year_rows),
+        "min_full_year_return_pct": float(min_full_year_return_pct),
+        "yearly_return_rows": yearly_return_rows,
+    }
+
+def build_benchmark_full_year_return_stats(sorted_dates, benchmark_data, yearly_return_rows):
+    if benchmark_data is None or not yearly_return_rows:
+        return {
+            "bm_full_year_count": 0,
+            "bm_min_full_year_return_pct": 0.0,
+            "bm_yearly_return_rows": []
+        }
+
+    year_market_bounds = {}
+    for dt in sorted_dates:
+        year = dt.year
+        if year not in year_market_bounds:
+            year_market_bounds[year] = {"first": dt, "last": dt}
+        else:
+            year_market_bounds[year]["last"] = dt
+
+    bm_yearly_rows = []
+    full_years = [row["year"] for row in yearly_return_rows if row["is_full_year"]]
+
+    for year in full_years:
+        bounds = year_market_bounds.get(year)
+        if bounds is None:
+            continue
+        if not has_fast_date(benchmark_data, bounds["first"]) or not has_fast_date(benchmark_data, bounds["last"]):
+            continue
+
+        start_value = get_fast_close(benchmark_data, date=bounds["first"])
+        end_value = get_fast_close(benchmark_data, date=bounds["last"])
+        if start_value is None or end_value is None or start_value <= 0:
+            continue
+
+        bm_yearly_rows.append({
+            "year": int(year),
+            "year_return_pct": float((end_value / start_value - 1.0) * 100.0),
+            "is_full_year": True,
+            "start_date": bounds["first"].strftime("%Y-%m-%d"),
+            "end_date": bounds["last"].strftime("%Y-%m-%d"),
+        })
+
+    bm_min_full_year_return_pct = min((row["year_return_pct"] for row in bm_yearly_rows), default=0.0)
+
+    return {
+        "bm_full_year_count": len(bm_yearly_rows),
+        "bm_min_full_year_return_pct": float(bm_min_full_year_return_pct),
+        "bm_yearly_return_rows": bm_yearly_rows
+    }
+
+# # (AI註: 年化報酬率與年化交易次數共用同一個回測期間口徑，避免統計不一致)
+def calc_sim_years(sorted_dates, start_idx):
+    if not sorted_dates or start_idx >= len(sorted_dates):
+        return 0.0
+    first_dt = pd.Timestamp(sorted_dates[start_idx])
+    last_dt = pd.Timestamp(sorted_dates[-1])
+    span_days = (last_dt - first_dt).days + 1
+    if span_days <= 0:
+        return 0.0
+    return span_days / 365.25
+
+
+# # (AI註: 用 CAGR 口徑統一系統與大盤年化報酬率；若期末值非正，直接回傳 -100% 避免數學異常)
+def calc_annual_return_pct(start_value, end_value, years):
+    if start_value <= 0 or years <= 0:
+        return 0.0
+    if end_value <= 0:
+        return -100.0
+    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
 
 
 FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'ATR', 'buy_limit')
@@ -263,10 +373,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     portfolio = {}
     pending_chases = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
+    normal_trade_count, chase_trade_count = 0, 0
     peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [], []
     yesterday_equity = initial_capital
+    year_start_equity, year_end_equity = {}, {}
+    year_first_sim_date, year_last_sim_date = {}, {}
 
     current_month = sorted_dates[start_idx].month if start_idx < len(sorted_dates) else 1
     current_bm_px = get_fast_close(benchmark_data, date=sorted_dates[start_idx]) if benchmark_data and start_idx < len(sorted_dates) and has_fast_date(benchmark_data, sorted_dates[start_idx]) else None
@@ -276,6 +389,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         t_day_start = time.perf_counter() if profile_stats is not None else None
         sim_days += 1
         today = sorted_dates[i]
+
+        if today.year not in year_start_equity:
+            year_start_equity[today.year] = current_equity
+            year_first_sim_date[today.year] = pd.Timestamp(today)
 
         available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
@@ -426,7 +543,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
                         total_pnl = pos['realized_pnl'] + pnl
                         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                        if pos.get('entry_type', 'normal') == 'chase':
+                            chase_trade_count += 1
+                        else:
+                            normal_trade_count += 1
 
                         if not is_training:
                             trade_history.append({
@@ -482,7 +603,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = pos['realized_pnl']
                 total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+                closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                if pos.get('entry_type', 'normal') == 'chase':
+                    chase_trade_count += 1
+                else:
+                    normal_trade_count += 1
 
                 if not is_training:
                     t_type = "全倉結算(停損)" if 'STOP' in events else "全倉結算(指標)"
@@ -648,6 +773,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         yesterday_equity = today_equity
         yesterday_bm_px = current_bm_px
+        year_end_equity[today.year] = today_equity
+        year_last_sim_date[today.year] = pd.Timestamp(today)
 
         if not is_training:
             equity_curve.append({
@@ -685,7 +812,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         pnl = (net_price - pos['entry']) * pos['qty']
         total_pnl = pos['realized_pnl'] + pnl
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r})
+        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+        if pos.get('entry_type', 'normal') == 'chase':
+            chase_trade_count += 1
+        else:
+            normal_trade_count += 1
 
         if not is_training:
             trade_history.append({
@@ -699,6 +830,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             })
 
     today_equity = final_cash
+    if last_date is not None and last_date.year in year_end_equity:
+        year_end_equity[last_date.year] = today_equity
     total_return = (today_equity - initial_capital) / initial_capital * 100
 
     if not is_training and len(equity_curve) > 0:
@@ -707,8 +840,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
+    curve_stats_sec = (time.perf_counter() - t0) if profile_stats is not None else 0.0
 
     trade_count = len(closed_trades_stats)
     if trade_count > 0:
@@ -733,9 +868,31 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         win_rate, pf_ev, pf_payoff = 0.0, 0.0, 0.0
 
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
+    sim_years = calc_sim_years(sorted_dates, start_idx)
+    annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
+    buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
+    annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
+
+    bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
+    bm_end_value = bm_start_value * (1.0 + bm_ret_pct / 100.0) if bm_start_value > 0 else 0.0
+    bm_annual_return_pct = calc_annual_return_pct(bm_start_value, bm_end_value, sim_years)
+
+    yearly_stats = build_full_year_return_stats(
+        sorted_dates=sorted_dates,
+        year_start_equity=year_start_equity,
+        year_end_equity=year_end_equity,
+        year_first_sim_date=year_first_sim_date,
+        year_last_sim_date=year_last_sim_date,
+    )
+    bm_yearly_stats = build_benchmark_full_year_return_stats(
+        sorted_dates=sorted_dates,
+        benchmark_data=benchmark_data,
+        yearly_return_rows=yearly_stats['yearly_return_rows'],
+    )
 
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
+        profile_stats['portfolio_ticker_dates_sec'] = 0.0
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec
         profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
@@ -743,12 +900,18 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
+        profile_stats['portfolio_closeout_sec'] = 0.0
+        profile_stats['curve_stats_sec'] = curve_stats_sec
+        profile_stats['sim_years'] = sim_years
+        profile_stats['annual_return_pct'] = annual_return_pct
+        profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
+        profile_stats.update(yearly_stats)
+        profile_stats.update(bm_yearly_stats)
 
     if is_training:
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
-    else:
-        df_equity = pd.DataFrame(equity_curve)
-        df_trades = pd.DataFrame(trade_history)
-        final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-        return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
 
+    df_equity = pd.DataFrame(equity_curve)
+    df_trades = pd.DataFrame(trade_history)
+    final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
+    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct

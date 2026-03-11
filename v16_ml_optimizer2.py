@@ -9,8 +9,14 @@ import numpy as np
 import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 
-from core.v16_config import V16StrategyParams, SCORE_CALC_METHOD
+from core.v16_config import (
+    V16StrategyParams, SCORE_CALC_METHOD,
+    MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE,
+    MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT,
+    SYSTEM_SCORE_DISPLAY_MULTIPLIER
+)
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
@@ -43,7 +49,8 @@ TRAIN_ENABLE_ROTATION = False
 DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
-DEFAULT_OPTIMIZER_MAX_WORKERS = min(14, os.cpu_count() or 1)
+# # (AI註: Windows / Python 3.14 下 ProcessPool + 大量 dataframe IPC 容易不穩，先保守降平行度)
+DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
 OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
@@ -76,8 +83,11 @@ PROFILE_FIELDS = [
     "portfolio_day_loop_sec", "portfolio_candidate_scan_sec", "portfolio_rotation_sec",
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
-    "score_calc_sec", "ret_pct", "mdd", "trade_count", "m_win_rate", "r_squared",
-    "trial_value", "fail_reason"
+    "score_calc_sec", "ret_pct", "mdd", "trade_count",
+    "annual_return_pct", "annual_trades", "buy_fill_rate",
+    "full_year_count", "min_full_year_return_pct",
+    "m_win_rate", "r_squared",
+    "base_score", "trial_value", "fail_reason"
 ]
 
 
@@ -327,6 +337,28 @@ def worker_prep_data(ticker, df, params):
             },
         }
 
+# # (AI註: 單一真理來源 - 統一合併 worker 回傳，避免平行與 fallback 序列邏輯分叉)
+def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
+    ticker = result["ticker"]
+    result_profile = result.get("profile", {})
+
+    prep_profile['worker_total_sum_sec'] += float(result_profile.get('worker_total_sec', 0.0))
+    prep_profile['prep_total_sum_sec'] += float(result_profile.get('prep_total_sec', 0.0))
+    prep_profile['copy_sum_sec'] += float(result_profile.get('copy_sec', 0.0))
+    prep_profile['generate_signals_sum_sec'] += float(result_profile.get('generate_signals_sec', 0.0))
+    prep_profile['assign_sum_sec'] += float(result_profile.get('assign_columns_sec', 0.0))
+    prep_profile['run_backtest_sum_sec'] += float(result_profile.get('run_backtest_sec', 0.0))
+    prep_profile['to_dict_sum_sec'] += float(result_profile.get('to_dict_sec', 0.0))
+
+    if result["ok"]:
+        prep_profile['ok_count'] += 1
+        all_dfs_fast[ticker] = result["data"]
+        all_trade_logs[ticker] = result["logs"]
+        master_dates.update(get_fast_dates(result["data"]))
+    else:
+        prep_profile['fail_count'] += 1
+        prep_failures.append((ticker, result["reason"]))
+
 def objective(trial):
     t_objective_start = time.perf_counter()
 
@@ -338,8 +370,8 @@ def objective(trial):
         atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 250, step=1), 
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
+        high_len = trial.suggest_int("high_len", 40, 250, step=5), 
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.0, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
         bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
         bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
@@ -349,7 +381,7 @@ def objective(trial):
         vol_long_len = trial.suggest_int("vol_long_len", 5, 30) if ai_use_vol else 19, 
         min_history_trades = trial.suggest_int("min_history_trades", 0, 5),
         min_history_ev = trial.suggest_float("min_history_ev", -1.0, 0.5, step=0.1),
-        min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.05),
+        min_history_win_rate = trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.01),
         use_compounding = True 
     )
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
@@ -367,28 +399,48 @@ def objective(trial):
     }
     max_workers = resolve_optimizer_max_workers(ai_params)
     t0 = time.perf_counter()
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
-        for future in as_completed(futures):
-            result = future.result()
-            ticker = result["ticker"]
-            result_profile = result.get("profile", {})
-            prep_profile['worker_total_sum_sec'] += float(result_profile.get('worker_total_sec', 0.0))
-            prep_profile['prep_total_sum_sec'] += float(result_profile.get('prep_total_sec', 0.0))
-            prep_profile['copy_sum_sec'] += float(result_profile.get('copy_sec', 0.0))
-            prep_profile['generate_signals_sum_sec'] += float(result_profile.get('generate_signals_sec', 0.0))
-            prep_profile['assign_sum_sec'] += float(result_profile.get('assign_columns_sec', 0.0))
-            prep_profile['run_backtest_sum_sec'] += float(result_profile.get('run_backtest_sec', 0.0))
-            prep_profile['to_dict_sum_sec'] += float(result_profile.get('to_dict_sec', 0.0))
-            if result["ok"]:
-                prep_profile['ok_count'] += 1
-                all_dfs_fast[ticker] = result["data"]
-                all_trade_logs[ticker] = result["logs"]
-                master_dates.update(get_fast_dates(result["data"]))
-            else:
-                prep_profile['fail_count'] += 1
-                prep_failures.append((ticker, result["reason"]))
+    prep_mode = "parallel"
+
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
+            for future in as_completed(futures):
+                result = future.result()
+                merge_prep_result(
+                    result,
+                    all_dfs_fast, all_trade_logs, master_dates,
+                    prep_failures, prep_profile
+                )
+
+    except BrokenProcessPool as e:
+        # # (AI註: Windows 多進程池偶發崩潰時，不讓整個 Optuna 中止；退回單進程完成本 trial)
+        prep_mode = "sequential_fallback"
+        trial.set_user_attr("prep_pool_error", f"{type(e).__name__}: {e}")
+
+        all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
+        prep_failures = []
+        prep_profile = {
+            'worker_total_sum_sec': 0.0,
+            'prep_total_sum_sec': 0.0,
+            'copy_sum_sec': 0.0,
+            'generate_signals_sum_sec': 0.0,
+            'assign_sum_sec': 0.0,
+            'run_backtest_sum_sec': 0.0,
+            'to_dict_sum_sec': 0.0,
+            'ok_count': 0,
+            'fail_count': 0,
+        }
+
+        for ticker, df in RAW_DATA_CACHE.items():
+            result = worker_prep_data(ticker, df, ai_params)
+            merge_prep_result(
+                result,
+                all_dfs_fast, all_trade_logs, master_dates,
+                prep_failures, prep_profile
+            )
+
     prep_wall_sec = time.perf_counter() - t0
+    trial.set_user_attr("prep_mode", prep_mode)
     if prep_failures:
         insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
         other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
@@ -433,8 +485,14 @@ def objective(trial):
         'ret_pct': 0.0,
         'mdd': 0.0,
         'trade_count': 0,
+        'annual_return_pct': 0.0,
+        'annual_trades': 0.0,
+        'buy_fill_rate': 0.0,
+        'full_year_count': 0,
+        'min_full_year_return_pct': 0.0,
         'm_win_rate': 0.0,
         'r_squared': 0.0,
+        'base_score': 0.0,
         'trial_value': -9999.0,
         'fail_reason': '',
     }
@@ -453,7 +511,7 @@ def objective(trial):
 
     pf_profile = {}
     t0 = time.perf_counter()
-    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate = run_portfolio_timeline(
+    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
         benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
@@ -470,9 +528,18 @@ def objective(trial):
     profile_row['portfolio_equity_mark_sec'] = float(pf_profile.get('portfolio_equity_mark_sec', 0.0))
     profile_row['portfolio_closeout_sec'] = float(pf_profile.get('portfolio_closeout_sec', 0.0))
     profile_row['portfolio_curve_stats_sec'] = float(pf_profile.get('curve_stats_sec', 0.0))
+    full_year_count = int(pf_profile.get('full_year_count', 0))
+    min_full_year_return_pct = float(pf_profile.get('min_full_year_return_pct', 0.0))
+    bm_min_full_year_return_pct = float(pf_profile.get('bm_min_full_year_return_pct', 0.0))
+
     profile_row['ret_pct'] = ret_pct
     profile_row['mdd'] = mdd
     profile_row['trade_count'] = t_count
+    profile_row['annual_return_pct'] = annual_return_pct
+    profile_row['annual_trades'] = annual_trades
+    profile_row['buy_fill_rate'] = buy_fill_rate
+    profile_row['full_year_count'] = full_year_count
+    profile_row['min_full_year_return_pct'] = min_full_year_return_pct
     profile_row['m_win_rate'] = m_win_rate
     profile_row['r_squared'] = r_sq
 
@@ -480,10 +547,18 @@ def objective(trial):
     fail_reason = None
     if mdd > 45.0:
         fail_reason = f"回撤過大 ({mdd:.1f}%)"
-    elif t_count < 30:
-        fail_reason = f"交易次數過低 ({t_count}次)"
-    elif ret_pct <= 0:
-        fail_reason = f"最終虧損 ({ret_pct:.1f}%)"
+    elif annual_trades < MIN_ANNUAL_TRADES:
+        fail_reason = f"年化交易次數過低 ({annual_trades:.2f}次/年)"
+    elif buy_fill_rate < MIN_BUY_FILL_RATE:
+        fail_reason = f"買進成交率過低 ({buy_fill_rate:.2f}%)"
+    elif annual_return_pct <= 0:
+        fail_reason = f"年化報酬率非正 ({annual_return_pct:.2f}%)"
+    elif full_year_count <= 0:
+        fail_reason = "無完整年度可驗證 min{r_y}"
+    elif min_full_year_return_pct <= MIN_FULL_YEAR_RETURN_PCT:
+        fail_reason = f"完整年度最差報酬未大於 0 ({min_full_year_return_pct:.2f}%)"
+    elif win_rate < MIN_TRADE_WIN_RATE:
+        fail_reason = f"實戰勝率偏低 ({win_rate:.2f}%)"
     elif m_win_rate < 45.0:
         fail_reason = f"月勝率偏低 ({m_win_rate:.0f}%)"
     elif r_sq < 0.40:
@@ -500,10 +575,13 @@ def objective(trial):
         return -9999.0
 
     t0 = time.perf_counter()
-    final_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq)
+    base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
+    final_score = base_score
     profile_row['score_calc_sec'] = time.perf_counter() - t0
+    profile_row['base_score'] = base_score
 
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("buy_fill_rate", buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("full_year_count", full_year_count); trial.set_user_attr("min_full_year_return_pct", min_full_year_return_pct); trial.set_user_attr("yearly_return_rows", pf_profile.get("yearly_return_rows", [])); trial.set_user_attr("base_score", base_score)
+    trial.set_user_attr("bm_min_full_year_return_pct", bm_min_full_year_return_pct)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
     trial.set_user_attr("bm_r_squared", bm_r_sq)
@@ -523,7 +601,9 @@ def monitoring_callback(study, trial):
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}", "N/A"
     else:
-        status_text, score_text = f"{C_GREEN}進化中{C_RESET}", f"{trial.value:.3f}"
+        prep_mode = trial.user_attrs.get("prep_mode", "parallel")
+        mode_suffix = " [fallback]" if prep_mode == "sequential_fallback" else ""
+        status_text, score_text = f"{C_GREEN}進化中{mode_suffix}{C_RESET}", f"{trial.value:.3f}"
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
     if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
@@ -551,8 +631,13 @@ def monitoring_callback(study, trial):
             final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
             sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
             win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
-            r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0)
+            r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
+            normal_trades=attrs.get('normal_trades', attrs['pf_trades']), chase_trades=attrs.get('chase_trades', 0),
+            annual_trades=attrs.get('annual_trades', 0.0), buy_fill_rate=attrs.get('buy_fill_rate', 0.0),
+            annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
+            min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
         )
+        print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 買進成交率: {attrs.get('buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -590,8 +675,13 @@ if __name__ == "__main__":
                     final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
                     sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
                     win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
-                    r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0)
+                    r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
+                    normal_trades=attrs.get('normal_trades', attrs['pf_trades']), chase_trades=attrs.get('chase_trades', 0),
+                    annual_trades=attrs.get('annual_trades', 0.0), buy_fill_rate=attrs.get('buy_fill_rate', 0.0),
+                    annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
+                    min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
                 )
+                print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 買進成交率: {attrs.get('buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
         except ValueError as e:
             print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
 
