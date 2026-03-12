@@ -14,16 +14,22 @@ from core.v16_config import V16StrategyParams
 from core.v16_core import (
     generate_signals,
     execute_bar_step,
-    adjust_to_tick,
+    adjust_long_buy_limit,
+    adjust_long_stop_price,
+    adjust_long_target_price,
+    adjust_long_buy_fill_price,
+    adjust_long_sell_fill_price,
     calc_entry_price,
     calc_net_sell_price,
     calc_position_size,
     calc_initial_risk_total,
     evaluate_chase_condition
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_log_utils import format_exception_summary
 
-warnings.filterwarnings('ignore')
+warnings.simplefilter("default")
+warnings.filterwarnings("once", category=RuntimeWarning)
 
 C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
@@ -45,7 +51,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
                     setattr(params, k, v)
             print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，改用系統預設值。({type(e).__name__}: {e}){C_RESET}")
+            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，改用系統預設值。({format_exception_summary(e)}){C_RESET}")
     else:
         print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
     return params
@@ -93,7 +99,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
             if 'TP_HALF' in events and realized_delta != 0:
                 sold_qty = prev_qty - position['qty']
-                exec_sell_price_half = adjust_to_tick(max(prev_tp_half, O[j]))
+                exec_sell_price_half = adjust_long_sell_fill_price(max(prev_tp_half, O[j]))
                 sell_net_price_half = calc_net_sell_price(exec_sell_price_half, sold_qty, params)
 
                 trade_logs.append({
@@ -115,9 +121,9 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                 action_str = "停損殺出" if 'STOP' in events else "指標賣出"
 
                 if 'STOP' in events:
-                    sell_price = adjust_to_tick(min(active_stop_after_update, O[j]))
+                    sell_price = adjust_long_sell_fill_price(min(active_stop_after_update, O[j]))
                 else:
-                    sell_price = adjust_to_tick(O[j])
+                    sell_price = adjust_long_sell_fill_price(O[j])
 
                 sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params)
                 final_leg_pnl = pnl_realized - realized_delta if 'TP_HALF' in events else pnl_realized
@@ -148,20 +154,20 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         buyTriggered = False
 
         if isSetup_prev:
-            buyLimitPrice = adjust_to_tick(C[j - 1] + ATR_main[j - 1] * params.atr_buy_tol)
-            planned_init_sl = adjust_to_tick(buyLimitPrice - ATR_main[j - 1] * params.atr_times_init)
-            planned_init_trail = adjust_to_tick(buyLimitPrice - ATR_main[j - 1] * params.atr_times_trail)
+            buyLimitPrice = adjust_long_buy_limit(C[j - 1] + ATR_main[j - 1] * params.atr_buy_tol)
+            planned_init_sl = adjust_long_stop_price(buyLimitPrice - ATR_main[j - 1] * params.atr_times_init)
+            planned_init_trail = adjust_long_stop_price(buyLimitPrice - ATR_main[j - 1] * params.atr_times_trail)
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
 
             if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
+                buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
 
                 # # (AI註: 與正式核心一致 - 若開盤已跌破盤前停損死線，直接放棄，不可硬買)
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    tp_half = adjust_to_tick(buyPrice + (entryPrice - net_sl))
+                    tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
                     init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
 
                     position = {
@@ -210,7 +216,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
             buyQty = pending_chase['qty']
 
             if L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_to_tick(min(O[j], chase_limit))
+                buyPrice = adjust_long_buy_fill_price(min(O[j], chase_limit))
 
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
@@ -324,7 +330,7 @@ def main():
     raw_df = pd.read_csv(file_path)
 
     params = load_params()
-    min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+    min_rows_needed = get_required_min_rows(params)
     df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
 
     dropped_row_count = sanitize_stats['dropped_row_count']

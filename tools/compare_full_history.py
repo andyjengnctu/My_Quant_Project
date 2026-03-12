@@ -9,8 +9,10 @@ if BASE_DIR not in sys.path:
     
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
+from core.v16_log_utils import format_exception_summary
 
-warnings.filterwarnings('ignore')
+warnings.simplefilter("default")
+warnings.filterwarnings("once", category=RuntimeWarning)
 
 C_RED = '\033[91m'
 C_CYAN = '\033[96m'
@@ -20,13 +22,16 @@ C_RESET = '\033[0m'
 def load_params_from_json(json_file):
     params = V16StrategyParams()
     if os.path.exists(json_file):
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        # 動態將 JSON 的值覆寫到 params 物件
-        for key, value in data.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
-        return params, True
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # 動態將 JSON 的值覆寫到 params 物件
+            for key, value in data.items():
+                if hasattr(params, key):
+                    setattr(params, key, value)
+            return params, True
+        except Exception as e:
+            print(f"{C_RED}❌ 讀取參數檔失敗: {format_exception_summary(e)}{C_RESET}")
     return params, False
 
 def compare_with_tv(csv_file_path, params, param_source):

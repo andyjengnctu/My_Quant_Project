@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_to_tick, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -424,8 +424,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
             y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
             y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-            est_init_sl = adjust_to_tick(y_buy_limit - y_atr * params.atr_times_init)
-            est_init_trail = adjust_to_tick(y_buy_limit - y_atr * params.atr_times_trail)
+            est_init_sl = adjust_long_stop_price(y_buy_limit - y_atr * params.atr_times_init)
+            est_init_trail = adjust_long_stop_price(y_buy_limit - y_atr * params.atr_times_trail)
             est_qty = calc_position_size(y_buy_limit, est_init_sl, sizing_equity, params.fixed_risk, params)
             if est_qty <= 0:
                 continue
@@ -538,37 +538,40 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         (w_close < w_y_close)
                     )
 
-                    if not is_locked_down and cand['proj_cost'] <= available_cash:
+                    if not is_locked_down:
                         pos = portfolio[weakest_ticker]
-                        est_sell_px = adjust_to_tick(w_open)
+                        est_sell_px = adjust_long_sell_fill_price(w_open)
                         est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
+                        cash_available_next_day = available_cash + est_freed_cash
 
-                        pnl = est_freed_cash - (pos['entry'] * pos['qty'])
-                        cash += est_freed_cash
+                        # # (AI註: 問題3 版本B - rotation 改成 T 日只賣弱股、T+1 才能用騰出的名額與現金重新評估買進)
+                        if cand['proj_cost'] <= cash_available_next_day:
+                            pnl = est_freed_cash - (pos['entry'] * pos['qty'])
+                            cash += est_freed_cash
 
-                        total_pnl = pos['realized_pnl'] + pnl
-                        total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
-                        if pos.get('entry_type', 'normal') == 'chase':
-                            chase_trade_count += 1
-                        else:
-                            normal_trade_count += 1
+                            total_pnl = pos['realized_pnl'] + pnl
+                            total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+                            closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                            if pos.get('entry_type', 'normal') == 'chase':
+                                chase_trade_count += 1
+                            else:
+                                normal_trade_count += 1
 
-                        if not is_training:
-                            trade_history.append({
-                                "Date": today.strftime('%Y-%m-%d'),
-                                "Ticker": weakest_ticker,
-                                "Type": "汰弱賣出(Open)",
-                                "單筆損益": pnl,
-                                "該筆總損益": total_pnl,
-                                "R_Multiple": total_r,
-                                "Risk": params.fixed_risk
-                            })
+                            if not is_training:
+                                trade_history.append({
+                                    "Date": today.strftime('%Y-%m-%d'),
+                                    "Ticker": weakest_ticker,
+                                    "Type": "汰弱賣出(Open, T+1再評估買進)",
+                                    "單筆損益": pnl,
+                                    "該筆總損益": total_pnl,
+                                    "R_Multiple": total_r,
+                                    "Risk": params.fixed_risk
+                                })
 
-                        del portfolio[weakest_ticker]
-                        rotation_sold_today.add(weakest_ticker)
-                        candidates_today = candidates_today[cand_idx:]
-                        break
+                            del portfolio[weakest_ticker]
+                            sold_today.add(weakest_ticker)
+                            rotation_sold_today.add(weakest_ticker)
+                            break
         if profile_stats is not None:
             rotation_sec += time.perf_counter() - t0
 
@@ -637,6 +640,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             settle_sec += time.perf_counter() - t0
 
         t0 = time.perf_counter() if profile_stats is not None else None
+        # # (AI註: 問題3 版本B - sold_today 也包含 rotation 當日賣出，名額必須凍結到下一交易日)
         pre_market_occupied = len(portfolio) + len(sold_today)
 
         for cand in candidates_today:
@@ -676,7 +680,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             is_normal_worse_than_sl = False
 
             if t_low <= cand['limit_px'] and not is_locked_up:
-                buy_price = adjust_to_tick(min(t_open, cand['limit_px']))
+                buy_price = adjust_long_buy_fill_price(min(t_open, cand['limit_px']))
                 if buy_price > cand['init_sl']:
                     qty = cand['qty']
                     actual_cost_per_share = calc_entry_price(buy_price, qty, params)
@@ -685,7 +689,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
                     net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params)
                     if cand['type'] == 'normal':
-                        tp_px = adjust_to_tick(buy_price + (actual_cost_per_share - net_sl_per_share))
+                        tp_px = adjust_long_target_price(buy_price + (actual_cost_per_share - net_sl_per_share))
                     else:
                         tp_px = cand['chase_data']['tp']
 
@@ -887,7 +891,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
     sim_years = calc_sim_years(sorted_dates, start_idx)
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
-    buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
+    reserved_buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
     annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
@@ -926,9 +930,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats.update(bm_yearly_stats)
 
     if is_training:
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
+        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
 
     df_equity = pd.DataFrame(equity_curve)
     df_trades = pd.DataFrame(trade_history)
     final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct
+    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct

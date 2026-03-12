@@ -8,10 +8,10 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_to_tick, calc_net_sell_price
+from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_long_target_price, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
-from core.v16_log_utils import write_issue_log
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -36,7 +36,7 @@ def load_dynamic_params(json_file):
                     setattr(params, key, value)
             return params, True
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {type(e).__name__}: {e}{C_RESET}")
+            print(f"{C_YELLOW}⚠️ 讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}{C_RESET}")
     return params, False
 
 
@@ -47,7 +47,7 @@ def is_insufficient_data_error(exc):
 def process_single_stock(file_path, ticker, params):
     try:
         raw_df = pd.read_csv(file_path)
-        min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+        min_rows_needed = get_required_min_rows(params)
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
 
         invalid_row_count = sanitize_stats['invalid_row_count']
@@ -78,7 +78,7 @@ def process_single_stock(file_path, ticker, params):
 
             actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
             net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
-            est_target = adjust_to_tick(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
+            est_target = adjust_long_target_price(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
 
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
@@ -109,7 +109,7 @@ def process_single_stock(file_path, ticker, params):
             None,
             None,
             None,
-            f"{ticker}: {type(e).__name__}: {e}",
+            f"{ticker}: {format_exception_summary(e)}",
             ticker,
             None
         )

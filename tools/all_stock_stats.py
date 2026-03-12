@@ -12,9 +12,11 @@ if BASE_DIR not in sys.path:
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 from core.v16_core import run_v16_backtest
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_log_utils import format_exception_summary
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
 
-warnings.filterwarnings('ignore')
+warnings.simplefilter("default")
+warnings.filterwarnings("once", category=RuntimeWarning)
 
 C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
@@ -42,7 +44,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
                     setattr(params, k, v)
             print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，使用系統預設值。({type(e).__name__}: {e}){C_RESET}")
+            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，使用系統預設值。({format_exception_summary(e)}){C_RESET}")
     else:
         print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
     return params
@@ -63,7 +65,7 @@ def process_single_stock_for_export(file_name, params):
 
     try:
         raw_df = pd.read_csv(file_path)
-        min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+        min_rows_needed = get_required_min_rows(params)
         if len(raw_df) < min_rows_needed:
             return None
 
@@ -107,7 +109,7 @@ def process_single_stock_for_export(file_name, params):
         }
     except Exception as e:
         # # (AI註: 補捉具體錯誤，避免運算失敗被無聲忽略)
-        print(f"{C_YELLOW}⚠️ 處理 {ticker} 時發生錯誤: {type(e).__name__}: {e}{C_RESET}")
+        print(f"{C_YELLOW}⚠️ 處理 {ticker} 時發生錯誤: {format_exception_summary(e)}{C_RESET}")
         return None
     
 def main():

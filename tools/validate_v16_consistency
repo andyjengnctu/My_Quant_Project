@@ -18,7 +18,8 @@ from core.v16_portfolio_engine import (
     get_fast_dates,
     run_portfolio_timeline,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_log_utils import format_exception_summary
 
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
@@ -104,7 +105,7 @@ def load_params():
                     setattr(params, k, v)
             print(f"✅ 已載入參數檔: {PARAMS_FILE}")
         except Exception as e:
-            print(f"⚠️ 讀取參數檔失敗，改用預設值。({type(e).__name__}: {e})")
+            print(f"⚠️ 讀取參數檔失敗，改用預設值。({format_exception_summary(e)})")
     else:
         print(f"⚠️ 找不到參數檔，改用預設值。({PARAMS_FILE})")
     return params
@@ -170,7 +171,7 @@ def resolve_csv_path(ticker):
 def load_clean_df(ticker, params):
     file_path = resolve_csv_path(ticker)
     raw_df = pd.read_csv(file_path)
-    min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+    min_rows_needed = get_required_min_rows(params)
     df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
     return file_path, df, sanitize_stats
 
@@ -284,7 +285,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         normal_trade_count,
         chase_trade_count,
         annual_trades,
-        buy_fill_rate,
+        reserved_buy_fill_rate,
         annual_return_pct,
         bm_annual_return_pct,
     ) = result
@@ -310,7 +311,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "normal_trade_count": normal_trade_count,
         "chase_trade_count": chase_trade_count,
         "annual_trades": annual_trades,
-        "buy_fill_rate": buy_fill_rate,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
         "bm_annual_return_pct": bm_annual_return_pct,
         "sorted_dates": sorted_dates,
@@ -409,7 +410,7 @@ def validate_one_ticker(ticker, base_params):
 
     sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
     expected_annual_trades = (portfolio_stats["trade_count"] / sim_years) if sim_years > 0 else 0.0
-    expected_buy_fill_rate = (
+    expected_reserved_buy_fill_rate = (
         portfolio_stats["trade_count"] / (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) * 100.0
         if (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) > 0 else 0.0
     )
@@ -421,7 +422,7 @@ def validate_one_ticker(ticker, base_params):
     )
 
     add_check(results, "single_vs_portfolio", ticker, "annual_trades", expected_annual_trades, portfolio_stats["annual_trades"])
-    add_check(results, "single_vs_portfolio", ticker, "buy_fill_rate", expected_buy_fill_rate, portfolio_stats["buy_fill_rate"])
+    add_check(results, "single_vs_portfolio", ticker, "reserved_buy_fill_rate", expected_reserved_buy_fill_rate, portfolio_stats["reserved_buy_fill_rate"])
     add_check(results, "single_vs_portfolio", ticker, "annual_return_pct", expected_annual_return_pct, portfolio_stats["annual_return_pct"])
     add_check(results, "single_vs_portfolio", ticker, "bm_annual_return_pct", expected_bm_annual_return_pct, portfolio_stats["bm_annual_return_pct"])
 

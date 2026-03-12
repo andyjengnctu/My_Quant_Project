@@ -21,8 +21,8 @@ from core.v16_config import (
     MIN_TRADE_WIN_RATE,
     MIN_FULL_YEAR_RETURN_PCT,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
-from core.v16_log_utils import write_issue_log
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS, get_required_min_rows
+from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
@@ -104,11 +104,12 @@ def load_all_raw_data(data_dir):
         file_path = os.path.join(data_dir, file_name)
         try:
             raw_df = pd.read_csv(file_path)
-            if len(raw_df) < LOAD_DATA_MIN_ROWS:
-                load_issue_lines.append(f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})")
+            min_rows_needed = LOAD_DATA_MIN_ROWS
+            if len(raw_df) < min_rows_needed:
+                load_issue_lines.append(f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆")
                 continue
 
-            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker)
+            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
             raw_cache[ticker] = clean_df
 
             if sanitize_stats['dropped_row_count'] > 0:
@@ -117,7 +118,7 @@ def load_all_raw_data(data_dir):
                     f"(異常OHLCV={sanitize_stats['invalid_row_count']}, 重複日期={sanitize_stats['duplicate_date_count']})"
                 )
         except Exception as exc:
-            load_issue_lines.append(f"[異常] {ticker}: {type(exc).__name__}: {exc}")
+            load_issue_lines.append(f"[異常] {ticker}: {format_exception_summary(exc)}")
 
     if not raw_cache:
         raise RuntimeError("未能成功載入任何可用股票資料")
@@ -133,7 +134,7 @@ def prepare_candidate_market_data(raw_cache, params):
     master_dates = set()
     issue_lines = []
 
-    min_rows_needed = max(LOAD_DATA_MIN_ROWS, int(params.high_len) + 10)
+    min_rows_needed = get_required_min_rows(params)
 
     for ticker, raw_df in raw_cache.items():
         try:
@@ -240,8 +241,8 @@ def evaluate_filter_pass(metrics):
         return False, f"回撤過大 ({metrics['mdd']:.2f}%)"
     if metrics['annual_trades'] < MIN_ANNUAL_TRADES:
         return False, f"年化交易次數過低 ({metrics['annual_trades']:.2f})"
-    if metrics['buy_fill_rate'] < MIN_BUY_FILL_RATE:
-        return False, f"買進成交率過低 ({metrics['buy_fill_rate']:.2f}%)"
+    if metrics['reserved_buy_fill_rate'] < MIN_BUY_FILL_RATE:
+        return False, f"保留後買進成交率過低 ({metrics['reserved_buy_fill_rate']:.2f}%)"
     if metrics['annual_return_pct'] <= 0:
         return False, f"年化報酬率非正 ({metrics['annual_return_pct']:.2f}%)"
     if metrics['full_year_count'] <= 0:
@@ -308,7 +309,7 @@ def evaluate_period(
         normal_trade_count,
         chase_trade_count,
         annual_trades,
-        buy_fill_rate,
+        reserved_buy_fill_rate,
         annual_return_pct,
         bm_annual_return_pct,
     ) = run_portfolio_timeline(
@@ -337,7 +338,7 @@ def evaluate_period(
     filter_pass, filter_reason = evaluate_filter_pass({
         'mdd': float(mdd),
         'annual_trades': float(annual_trades),
-        'buy_fill_rate': float(buy_fill_rate),
+        'reserved_buy_fill_rate': float(reserved_buy_fill_rate),
         'annual_return_pct': float(annual_return_pct),
         'full_year_count': full_year_count,
         'min_full_year_return_pct': min_full_year_return_pct,
@@ -368,7 +369,7 @@ def evaluate_period(
         'normal_trade_count': int(normal_trade_count),
         'chase_trade_count': int(chase_trade_count),
         'annual_trades': float(annual_trades),
-        'buy_fill_rate': float(buy_fill_rate),
+        'reserved_buy_fill_rate': float(reserved_buy_fill_rate),
         'annual_return_pct': float(annual_return_pct),
         'bm_annual_return_pct': float(bm_annual_return_pct),
         'full_year_count': full_year_count,

@@ -14,10 +14,51 @@ def get_tick_size(price):
     elif price < 1000: return 1.0
     else: return 5.0
 
-def adjust_to_tick(price):
-    if pd.isna(price): return np.nan
+
+# # (AI註: 第12點 - 跳價取整方向統一收斂到單一函式，避免買/賣/停損/停利各自手寫)
+def round_to_tick(price, direction="nearest"):
+    if pd.isna(price):
+        return np.nan
     tick = get_tick_size(price)
-    return tv_round(price / tick) * tick
+    ratio = price / tick
+    if direction == "up":
+        return math.ceil(ratio - 1e-12) * tick
+    if direction == "down":
+        return math.floor(ratio + 1e-12) * tick
+    return tv_round(ratio) * tick
+
+
+def adjust_to_tick(price):
+    return round_to_tick(price, direction="nearest")
+
+
+def adjust_price_up_to_tick(price):
+    return round_to_tick(price, direction="up")
+
+
+def adjust_price_down_to_tick(price):
+    return round_to_tick(price, direction="down")
+
+
+# # (AI註: 長倉語義化封裝 - 買單/賣單/停損/停利各自固定方向，避免保守性漂移)
+def adjust_long_buy_limit(price):
+    return adjust_price_down_to_tick(price)
+
+
+def adjust_long_stop_price(price):
+    return adjust_price_up_to_tick(price)
+
+
+def adjust_long_target_price(price):
+    return adjust_price_up_to_tick(price)
+
+
+def adjust_long_buy_fill_price(price):
+    return adjust_price_up_to_tick(price)
+
+
+def adjust_long_sell_fill_price(price):
+    return adjust_price_down_to_tick(price)
 
 
 def get_tick_size_array(prices):
@@ -32,7 +73,7 @@ def get_tick_size_array(prices):
     return ticks
 
 
-def adjust_to_tick_array(prices):
+def round_to_tick_array(prices, direction="nearest"):
     prices = np.asarray(prices, dtype=np.float64)
     out = np.full(prices.shape, np.nan, dtype=np.float64)
     valid = ~np.isnan(prices)
@@ -40,8 +81,22 @@ def adjust_to_tick_array(prices):
         return out
     valid_prices = prices[valid]
     ticks = get_tick_size_array(valid_prices)
-    out[valid] = np.floor(valid_prices / ticks + 0.5) * ticks
+    ratios = valid_prices / ticks
+    if direction == "up":
+        out[valid] = np.ceil(ratios - 1e-12) * ticks
+    elif direction == "down":
+        out[valid] = np.floor(ratios + 1e-12) * ticks
+    else:
+        out[valid] = np.floor(ratios + 0.5) * ticks
     return out
+
+
+def adjust_to_tick_array(prices):
+    return round_to_tick_array(prices, direction="nearest")
+
+
+def adjust_long_buy_limit_array(prices):
+    return round_to_tick_array(prices, direction="down")
 
 def calc_entry_price(bPrice, bQty, params):
     fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
@@ -92,7 +147,7 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
     if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
     
-    planned_init_sl = adjust_to_tick(original_limit - atr * params.atr_times_init)
+    planned_init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
     
     # 1. 精準還原原始策略 1R 目標價
     orig_qty = calc_position_size(original_limit, planned_init_sl, sizing_capital, params.fixed_risk, params)
@@ -100,7 +155,7 @@ def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, p
     orig_entry_price = calc_entry_price(original_limit, orig_qty, params)
     orig_net_sl = calc_net_sell_price(planned_init_sl, orig_qty, params)
     orig_risk_per_share = orig_entry_price - orig_net_sl
-    original_tp = adjust_to_tick(original_limit + orig_risk_per_share)
+    original_tp = adjust_long_target_price(original_limit + orig_risk_per_share)
     
     if planned_init_sl < close_price < original_tp:
         # 2. 確切計算追車縮減股數與實際成本盈虧比
@@ -133,7 +188,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         return position, freed_cash, pnl_realized, events
 
     if y_close > position['pure_buy_price'] + (y_atr * params.atr_times_trail):
-        new_trail = adjust_to_tick(y_close - (y_atr * params.atr_times_trail))
+        new_trail = adjust_long_stop_price(y_close - (y_atr * params.atr_times_trail))
         position['trailing_stop'] = max(position.get('trailing_stop', 0.0), new_trail)
         position['sl'] = max(position['initial_stop'], position['trailing_stop'])
 
@@ -148,7 +203,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         )
 
         if not is_locked_down:
-            exec_price = adjust_to_tick(t_open)
+            exec_price = adjust_long_sell_fill_price(t_open)
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
             freed_cash += net_price * position['qty']
             pnl = (net_price - position['entry']) * position['qty']
@@ -169,7 +224,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         is_tp_hit = False
 
     if is_tp_hit:
-        exec_price = adjust_to_tick(max(position['tp_half'], t_open))
+        exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open))
         sell_qty = int(math.floor(position['qty'] * params.tp_percent))
         if sell_qty > 0 and position['qty'] > sell_qty:
             net_price = calc_net_sell_price(exec_price, sell_qty, params)
@@ -190,7 +245,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         )
 
         if not is_locked_down:
-            exec_price = adjust_to_tick(min(position['sl'], t_open))
+            exec_price = adjust_long_sell_fill_price(min(position['sl'], t_open))
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
             freed_cash += net_price * position['qty']
             pnl = (net_price - position['entry']) * position['qty']
@@ -264,7 +319,7 @@ def generate_signals(df, params):
     close_series = pd.Series(C)
     high_series = pd.Series(H)
     volume_series = pd.Series(V)
-    HighN = high_series.shift(1).rolling(params.high_len, min_periods=1).max().values
+    HighN = high_series.shift(1).rolling(params.high_len, min_periods=params.high_len).max().values
     SuperTrend_Dir = tv_supertrend(H, L, C, ATR_main, params.atr_times_trail)
 
     prev_supertrend = np.empty_like(SuperTrend_Dir)
@@ -315,7 +370,7 @@ def generate_signals(df, params):
     buy_limits = np.full_like(C, np.nan)
     valid_buy_mask = buyCondition & ~np.isnan(raw_buy_limits)
     if np.any(valid_buy_mask):
-        buy_limits[valid_buy_mask] = adjust_to_tick_array(raw_buy_limits[valid_buy_mask])
+        buy_limits[valid_buy_mask] = adjust_long_buy_limit_array(raw_buy_limits[valid_buy_mask])
     return ATR_main, buyCondition, sellCondition, buy_limits
 
 def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False, precomputed_signals=None):
@@ -374,18 +429,18 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         if isSetup_prev:
             # # (AI註: 問題1修復 - 嚴格盤前定錨，qty與sl鎖死在 T-1 buyLimitPrice)
             buyLimitPrice = buy_limits[j-1]
-            planned_init_sl = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_init)
-            planned_init_trail = adjust_to_tick(buyLimitPrice - ATR_main[j-1] * params.atr_times_trail)
+            planned_init_sl = adjust_long_stop_price(buyLimitPrice - ATR_main[j-1] * params.atr_times_init)
+            planned_init_trail = adjust_long_stop_price(buyLimitPrice - ATR_main[j-1] * params.atr_times_trail)
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
             
             if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_to_tick(min(O[j], buyLimitPrice))
+                buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
                 # 確保跳空暴跌沒擊穿盤前停損死線
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    tp_half = adjust_to_tick(buyPrice + (entryPrice - net_sl))
+                    tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
                     init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
                     
                     position = {
@@ -410,7 +465,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             buyQty = pending_chase['qty']
             
             if L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_to_tick(min(O[j], chase_limit))
+                buyPrice = adjust_long_buy_fill_price(min(O[j], chase_limit))
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)
                     net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
@@ -463,8 +518,8 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
     isSetup_today = buyCondition[-1] and (position['qty'] == 0)
-    buyLimit_today = adjust_to_tick(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
-    stopLoss_today = adjust_to_tick(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
+    buyLimit_today = adjust_long_buy_limit(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
+    stopLoss_today = adjust_long_stop_price(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
 
     min_trades = getattr(params, 'min_history_trades', 0)
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100

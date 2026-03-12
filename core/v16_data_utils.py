@@ -2,6 +2,13 @@ import pandas as pd
 
 LOAD_DATA_MIN_ROWS = 50
 LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
+BACKTEST_EXTRA_MIN_ROWS = 10
+
+
+# # (AI註: 單一真理來源 - 統一 high_len 對資料長度的最低要求，避免 optimizer / sim / scanner / tools 各自寫 +10)
+def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
+    high_len = int(getattr(params, "high_len", 0) or 0)
+    return max(int(base_min_rows), high_len + int(extra_rows))
 
 
 # # (AI註: 單一真理來源 - 統一所有模組的 OHLCV 清洗規則，禁止 optimizer / sim / scanner / tools 各自為政)

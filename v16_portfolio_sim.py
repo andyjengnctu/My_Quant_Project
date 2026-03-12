@@ -11,8 +11,8 @@ import pandas as pd
 from core.v16_config import V16StrategyParams
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
-from core.v16_log_utils import write_issue_log
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_log_utils import write_issue_log, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
 warnings.simplefilter("default")
@@ -35,7 +35,7 @@ def load_dynamic_params(json_file):
                     setattr(params, k, v)
             return params, True
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {type(e).__name__}: {e}{C_RESET}")
+            print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {format_exception_summary(e)}{C_RESET}")
     return params, False
 
 
@@ -93,7 +93,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             raw_df = pd.read_csv(os.path.join(data_dir, file))
-            min_rows_needed = max(LOAD_DATA_MIN_ROWS, params.high_len + 10)
+            min_rows_needed = get_required_min_rows(params)
 
             if len(raw_df) < min_rows_needed:
                 total_skipped_insufficient += 1
@@ -129,7 +129,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                 load_issue_lines.append(f"[資料不足] {ticker}: {type(e).__name__}: {e}")
             else:
                 total_other_errors += 1
-                load_issue_lines.append(f"[異常] {ticker}: {type(e).__name__}: {e}")
+                load_issue_lines.append(f"[異常] {ticker}: {format_exception_summary(e)}")
             continue
 
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
@@ -169,11 +169,11 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(" " * 120, end="\r")
 
     pf_profile = {}
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile
     )
-    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
 if __name__ == "__main__":
@@ -191,7 +191,7 @@ if __name__ == "__main__":
         print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         benchmark_ticker=USER_BENCHMARK, max_exp=max_exp,
         r_sq=r_sq, m_win_rate=m_win_rate, bm_r_sq=bm_r_sq, bm_m_win_rate=bm_m_win_rate,
         normal_trades=normal_trade_count, chase_trades=chase_trade_count,
-        annual_trades=annual_trades, buy_fill_rate=buy_fill_rate,
+        annual_trades=annual_trades, reserved_buy_fill_rate=reserved_buy_fill_rate,
         annual_return_pct=annual_return_pct, bm_annual_return_pct=bm_annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct
     )
@@ -248,4 +248,4 @@ if __name__ == "__main__":
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
         webbrowser.open('file://' + os.path.realpath(html_filename))
     except Exception as e:
-        print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {type(e).__name__}: {e}{C_RESET}")
+        print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")

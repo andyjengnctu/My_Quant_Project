@@ -19,8 +19,8 @@ from core.v16_config import (
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS
-from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path
+from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS, get_required_min_rows
+from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -74,6 +74,13 @@ PROFILE_PRINT_EVERY_N_TRIALS = 1
 PROFILE_CSV_PATH = os.path.join("outputs", f"optimizer_profile_{OPTIMIZER_SESSION_TS}.csv")
 PROFILE_SUMMARY_PATH = os.path.join("outputs", f"optimizer_profile_summary_{OPTIMIZER_SESSION_TS}.json")
 PROFILE_ROWS = []
+
+# # (AI註: 問題6 - optimizer 搜尋空間與資料最低長度共用單一常數，避免 raw cache 與 trial worker 各自為政)
+OPTIMIZER_HIGH_LEN_MIN = 40
+OPTIMIZER_HIGH_LEN_MAX = 250
+OPTIMIZER_HIGH_LEN_STEP = 5
+OPTIMIZER_REQUIRED_MIN_ROWS = max(LOAD_DATA_MIN_ROWS, OPTIMIZER_HIGH_LEN_MAX + 10)
+
 PROFILE_FIELDS = [
     "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
     "prep_worker_copy_sum_sec", "prep_worker_generate_signals_sum_sec", "prep_worker_assign_sum_sec",
@@ -84,7 +91,7 @@ PROFILE_FIELDS = [
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
     "score_calc_sec", "ret_pct", "mdd", "trade_count",
-    "annual_return_pct", "annual_trades", "buy_fill_rate",
+    "annual_return_pct", "annual_trades", "reserved_buy_fill_rate",
     "full_year_count", "min_full_year_return_pct",
     "m_win_rate", "r_squared",
     "base_score", "trial_value", "fail_reason"
@@ -237,11 +244,12 @@ def load_all_raw_data():
         ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
         try:
             raw_df = pd.read_csv(os.path.join(DATA_DIR, file))
-            if len(raw_df) < LOAD_DATA_MIN_ROWS:
-                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})")
+            min_rows_needed = OPTIMIZER_REQUIRED_MIN_ROWS
+            if len(raw_df) < min_rows_needed:
+                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 列")
                 continue
 
-            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker)
+            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
             RAW_DATA_CACHE[ticker] = clean_df
 
             invalid_row_count = sanitize_stats['invalid_row_count']
@@ -259,7 +267,7 @@ def load_all_raw_data():
                 )
 
         except Exception as e:
-            load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
+            load_issues.append(f"{ticker}: {format_exception_summary(e)}")
             continue
 
         if count % 50 == 0:
@@ -279,11 +287,12 @@ def worker_prep_data(ticker, df, params):
     t_worker_start = time.perf_counter()
     profile_stats = {}
     try:
-        if len(df) < params.high_len + 10:
+        min_rows_needed = get_required_min_rows(params)
+        if len(df) < min_rows_needed:
             return {
                 "ticker": ticker,
                 "ok": False,
-                "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {params.high_len + 10} 列",
+                "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {min_rows_needed} 列",
                 "data": None,
                 "logs": None,
                 "profile": {
@@ -370,7 +379,7 @@ def objective(trial):
         atr_times_init = trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
-        high_len = trial.suggest_int("high_len", 40, 250, step=5), 
+        high_len = trial.suggest_int("high_len", OPTIMIZER_HIGH_LEN_MIN, OPTIMIZER_HIGH_LEN_MAX, step=OPTIMIZER_HIGH_LEN_STEP), 
         tp_percent = trial.suggest_float("tp_percent", 0.0, 0.0, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
         bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
@@ -487,7 +496,7 @@ def objective(trial):
         'trade_count': 0,
         'annual_return_pct': 0.0,
         'annual_trades': 0.0,
-        'buy_fill_rate': 0.0,
+        'reserved_buy_fill_rate': 0.0,
         'full_year_count': 0,
         'min_full_year_return_pct': 0.0,
         'm_win_rate': 0.0,
@@ -511,7 +520,7 @@ def objective(trial):
 
     pf_profile = {}
     t0 = time.perf_counter()
-    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
+    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
         TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
         benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
@@ -537,7 +546,7 @@ def objective(trial):
     profile_row['trade_count'] = t_count
     profile_row['annual_return_pct'] = annual_return_pct
     profile_row['annual_trades'] = annual_trades
-    profile_row['buy_fill_rate'] = buy_fill_rate
+    profile_row['reserved_buy_fill_rate'] = reserved_buy_fill_rate
     profile_row['full_year_count'] = full_year_count
     profile_row['min_full_year_return_pct'] = min_full_year_return_pct
     profile_row['m_win_rate'] = m_win_rate
@@ -549,8 +558,8 @@ def objective(trial):
         fail_reason = f"回撤過大 ({mdd:.1f}%)"
     elif annual_trades < MIN_ANNUAL_TRADES:
         fail_reason = f"年化交易次數過低 ({annual_trades:.2f}次/年)"
-    elif buy_fill_rate < MIN_BUY_FILL_RATE:
-        fail_reason = f"買進成交率過低 ({buy_fill_rate:.2f}%)"
+    elif reserved_buy_fill_rate < MIN_BUY_FILL_RATE:
+        fail_reason = f"保留後買進成交率過低 ({reserved_buy_fill_rate:.2f}%)"
     elif annual_return_pct <= 0:
         fail_reason = f"年化報酬率非正 ({annual_return_pct:.2f}%)"
     elif full_year_count <= 0:
@@ -583,7 +592,7 @@ def objective(trial):
     profile_row['score_calc_sec'] = time.perf_counter() - t0
     profile_row['base_score'] = base_score
 
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("buy_fill_rate", buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("full_year_count", full_year_count); trial.set_user_attr("min_full_year_return_pct", min_full_year_return_pct); trial.set_user_attr("yearly_return_rows", pf_profile.get("yearly_return_rows", [])); trial.set_user_attr("base_score", base_score)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("chase_trades", chase_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("reserved_buy_fill_rate", reserved_buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("full_year_count", full_year_count); trial.set_user_attr("min_full_year_return_pct", min_full_year_return_pct); trial.set_user_attr("yearly_return_rows", pf_profile.get("yearly_return_rows", [])); trial.set_user_attr("base_score", base_score)
     trial.set_user_attr("bm_min_full_year_return_pct", bm_min_full_year_return_pct)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
@@ -636,11 +645,11 @@ def monitoring_callback(study, trial):
             win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
             r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
             normal_trades=attrs.get('normal_trades', attrs['pf_trades']), chase_trades=attrs.get('chase_trades', 0),
-            annual_trades=attrs.get('annual_trades', 0.0), buy_fill_rate=attrs.get('buy_fill_rate', 0.0),
+            annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
             annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
             min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
         )
-        print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 買進成交率: {attrs.get('buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
+        print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
 
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -680,11 +689,11 @@ if __name__ == "__main__":
                     win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
                     r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
                     normal_trades=attrs.get('normal_trades', attrs['pf_trades']), chase_trades=attrs.get('chase_trades', 0),
-                    annual_trades=attrs.get('annual_trades', 0.0), buy_fill_rate=attrs.get('buy_fill_rate', 0.0),
+                    annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
                     annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
                     min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
                 )
-                print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 買進成交率: {attrs.get('buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
+                print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
         except ValueError as e:
             print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
 
