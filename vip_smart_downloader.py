@@ -66,6 +66,11 @@ EXPECTED_DOWNLOAD_EXCEPTIONS = (
     OSError,
 )
 
+# # (AI註: 大量批次時預設不逐筆洗板；需要時再手動切成 True)
+VERBOSE_UNIVERSE_FETCH_ERRORS = False
+VERBOSE_LAST_DATE_CHECK_ERRORS = False
+VERBOSE_DOWNLOAD_ERRORS = False
+
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 if not os.path.exists(OUTPUT_DIR):
