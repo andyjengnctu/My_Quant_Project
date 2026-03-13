@@ -104,16 +104,9 @@ def process_single_stock(file_path, ticker, params):
     except Exception as e:
         if is_insufficient_data_error(e):
             return ('skip_insufficient', None, None, None, None, ticker, None)
-
-        return (
-            'error',
-            None,
-            None,
-            None,
-            f"{ticker}: {format_exception_summary(e)}",
-            ticker,
-            None
-        )
+        raise RuntimeError(
+            f"scanner 處理失敗: ticker={ticker} | {format_exception_summary(e)}"
+        ) from e
     
 def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -161,9 +154,13 @@ def run_daily_scanner(data_dir):
                         scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
                 elif status == 'skip_insufficient':
                     count_skipped_insufficient += 1
-                elif status == 'error':
-                    count_errors += 1
-                    scanner_issue_lines.append(f"[異常] {msg}")
+                if status in ['buy', 'zone', 'candidate']:
+                    count_candidates += 1
+                    if sanitize_issue is not None:
+                        count_sanitized_candidates += 1
+                        scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
+                elif status == 'skip_insufficient':
+                    count_skipped_insufficient += 1
 
                 if status == 'buy':
                     buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
