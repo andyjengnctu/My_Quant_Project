@@ -831,7 +831,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
-        exec_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
+        raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
+        exec_price = adjust_long_sell_fill_price(raw_exit_price)
         net_price = calc_net_sell_price(exec_price, pos['qty'], params)
         final_cash += net_price * pos['qty']
 
