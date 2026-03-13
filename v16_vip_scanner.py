@@ -114,12 +114,12 @@ def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     
     if not os.path.exists(data_dir):
-        print(f"❌ 找不到資料夾 {data_dir}。")
-        return
+        raise FileNotFoundError(f"找不到資料夾 {data_dir}。")
 
     csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
     total_files = len(csv_files)
-    if total_files == 0: return
+    if total_files == 0:
+        raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
     params, is_loaded = load_dynamic_params("models/v16_best_params.json")
     if is_loaded:
