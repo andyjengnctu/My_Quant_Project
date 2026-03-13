@@ -117,7 +117,12 @@ def load_all_raw_data(data_dir, min_rows_needed):
                     f"(異常OHLCV={sanitize_stats['invalid_row_count']}, 重複日期={sanitize_stats['duplicate_date_count']})"
                 )
         except Exception as exc:
-            load_issue_lines.append(f"[異常] {ticker}: {format_exception_summary(exc)}")
+            if is_insufficient_data_error(exc):
+                load_issue_lines.append(f"[資料不足] {ticker}: {type(exc).__name__}: {exc}")
+                continue
+            raise RuntimeError(
+                f"overfitting 原始資料載入失敗: ticker={ticker} | {format_exception_summary(exc)}"
+            ) from exc
 
     if not raw_cache:
         raise RuntimeError("未能成功載入任何可用股票資料")
@@ -158,8 +163,10 @@ def prepare_candidate_market_data(raw_cache, params):
         except Exception as exc:
             if is_insufficient_data_error(exc):
                 issue_lines.append(f"[資料不足] {ticker}: {type(exc).__name__}: {exc}")
-            else:
-                issue_lines.append(f"[異常] {ticker}: {type(exc).__name__}: {exc}")
+                continue
+            raise RuntimeError(
+                f"overfitting 候選資料準備失敗: ticker={ticker} | {format_exception_summary(exc)}"
+            ) from exc
 
     if not all_dfs_fast:
         raise RuntimeError("此組參數沒有任何可用標的可進行回測")
