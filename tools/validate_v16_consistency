@@ -389,16 +389,15 @@ def validate_one_ticker(ticker, base_params):
               single_stats["missed_sells"], portfolio_stats["total_missed_sells"])
 
     open_position_exists = single_stats["current_position"] > 0
-    expected_pf_trade_count = single_stats["trade_count"] + (1 if open_position_exists else 0)
 
     add_check(
         results,
         "single_vs_portfolio",
         ticker,
         "trade_count",
-        expected_pf_trade_count,
+        single_stats["trade_count"],
         portfolio_stats["trade_count"],
-        note="若期末仍有持倉，投組模擬會多 1 筆期末強制結算。"
+        note="單股與投組都已將期末強制結算納入交易統計。"
     )
 
     add_check(
@@ -429,21 +428,12 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "single_vs_portfolio", ticker, "annual_return_pct", expected_annual_return_pct, portfolio_stats["annual_return_pct"])
     add_check(results, "single_vs_portfolio", ticker, "bm_annual_return_pct", expected_bm_annual_return_pct, portfolio_stats["bm_annual_return_pct"])
 
-    if not open_position_exists:
-        add_check(results, "single_vs_portfolio", ticker, "win_rate",
-                  single_stats["win_rate"], portfolio_stats["win_rate"])
-        add_check(results, "single_vs_portfolio", ticker, "payoff_ratio",
-                  single_stats["payoff_ratio"], portfolio_stats["pf_payoff"])
-        add_check(results, "single_vs_portfolio", ticker, "expected_value",
-                  single_stats["expected_value"], portfolio_stats["pf_ev"])
-    else:
-        add_skip_result(
-            results,
-            "single_vs_portfolio",
-            ticker,
-            "trade_stats_after_forced_close",
-            "期末未平倉，投組模擬多一筆強制結算，故 win_rate / payoff / EV 不逐值比對。"
-        )
+    add_check(results, "single_vs_portfolio", ticker, "win_rate",
+              single_stats["win_rate"], portfolio_stats["win_rate"])
+    add_check(results, "single_vs_portfolio", ticker, "payoff_ratio",
+              single_stats["payoff_ratio"], portfolio_stats["pf_payoff"])
+    add_check(results, "single_vs_portfolio", ticker, "expected_value",
+              single_stats["expected_value"], portfolio_stats["pf_ev"])
 
     if export_row is None:
         if single_stats["trade_count"] == 0:
@@ -484,7 +474,7 @@ def validate_one_ticker(ticker, base_params):
         add_check(results, "all_stock_stats", ticker, "最大回撤 MDD (%)",
                   single_stats["max_drawdown"], export_row["最大回撤 MDD (%)"])
 
-    expected_buy_rows = len(standalone_logs) + (1 if open_position_exists else 0)
+    expected_buy_rows = len(standalone_logs)
 
     if debug_df is None or len(debug_df) == 0:
         if expected_buy_rows == 0:
@@ -507,7 +497,7 @@ def validate_one_ticker(ticker, base_params):
             )
     else:
         buy_rows = int((debug_df["動作"] == "買進").sum())
-        exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出"]).sum())
+        exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
         half_rows = int((debug_df["動作"] == "半倉停利").sum())
 
         expected_exit_rows = len(standalone_logs)
@@ -519,7 +509,7 @@ def validate_one_ticker(ticker, base_params):
             "buy_rows",
             expected_buy_rows,
             buy_rows,
-            note="若期末仍有未平倉，debug 會多 1 筆買進但不做期末強制結算。"
+            note="debug 已將期末強制結算列為完整賣出紀錄，買進筆數應等於 completed trades。"
         )
 
         add_check(

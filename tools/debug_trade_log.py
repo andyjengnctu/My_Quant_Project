@@ -271,6 +271,25 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
             floatingPnL = (floatingSellNet - position['entry']) * position['qty']
             currentEquity = currentCapital + floatingPnL
 
+    # # (AI註: 與正式核心一致 - 期末若仍有持倉，補記一筆期末強制結算)
+    if position['qty'] > 0:
+        exec_sell_price = adjust_long_sell_fill_price(C[-1])
+        sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
+        final_leg_pnl = (sell_net_price - position['entry']) * position['qty']
+
+        trade_logs.append({
+            "日期": Dates[-1].strftime('%Y-%m-%d'),
+            "動作": "期末強制結算",
+            "成交價": exec_sell_price,
+            "含息成本價": sell_net_price,
+            "股數": position['qty'],
+            "投入總金額": sell_net_price * position['qty'],
+            "設定停損價": position.get('sl', np.nan),
+            "半倉停利價": np.nan,
+            "ATR(前日)": ATR_main[-1] if len(ATR_main) > 0 else np.nan,
+            "單筆實質損益": final_leg_pnl
+        })
+
     if not trade_logs:
         if verbose:
             print(f"{C_YELLOW}⚠️ 這檔股票沒有任何交易紀錄。{C_RESET}")
