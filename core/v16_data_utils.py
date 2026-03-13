@@ -6,9 +6,26 @@ BACKTEST_EXTRA_MIN_ROWS = 10
 
 
 # # (AI註: 單一真理來源 - 統一 high_len 對資料長度的最低要求，避免 optimizer / sim / scanner / tools 各自寫 +10)
+def get_required_min_rows_from_high_len(high_len, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
+    resolved_high_len = int(high_len or 0)
+    return max(int(base_min_rows), resolved_high_len + int(extra_rows))
+
+
+# # (AI註: 單一真理來源 - 由策略參數物件推導最低資料長度需求)
 def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
-    high_len = int(getattr(params, "high_len", 0) or 0)
-    return max(int(base_min_rows), high_len + int(extra_rows))
+    high_len = getattr(params, "high_len", 0)
+    return get_required_min_rows_from_high_len(high_len, base_min_rows=base_min_rows, extra_rows=extra_rows)
+
+
+# # (AI註: 單一真理來源 - 批次參數共用同一個最低資料長度門檻，避免預載 raw cache 與 trial / 候選評估口徑分裂)
+def get_max_required_min_rows(params_list, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
+    max_needed = int(base_min_rows)
+    for params in params_list:
+        max_needed = max(
+            max_needed,
+            get_required_min_rows(params, base_min_rows=base_min_rows, extra_rows=extra_rows)
+        )
+    return max_needed
 
 
 # # (AI註: 單一真理來源 - 統一所有模組的 OHLCV 清洗規則，禁止 optimizer / sim / scanner / tools 各自為政)

@@ -19,7 +19,7 @@ from core.v16_config import (
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, get_required_min_rows_from_high_len
 from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -79,7 +79,7 @@ PROFILE_ROWS = []
 OPTIMIZER_HIGH_LEN_MIN = 40
 OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
-OPTIMIZER_REQUIRED_MIN_ROWS = max(LOAD_DATA_MIN_ROWS, OPTIMIZER_HIGH_LEN_MAX + 10)
+OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
 
 PROFILE_FIELDS = [
     "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",

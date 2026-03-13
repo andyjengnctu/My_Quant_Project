@@ -21,7 +21,7 @@ from core.v16_config import (
     MIN_TRADE_WIN_RATE,
     MIN_FULL_YEAR_RETURN_PCT,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, LOAD_DATA_MIN_ROWS, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, get_max_required_min_rows
 from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
@@ -89,7 +89,7 @@ def load_study_candidates(db_path, study_name, top_k):
     return selected
 
 
-def load_all_raw_data(data_dir):
+def load_all_raw_data(data_dir, min_rows_needed):
     if not os.path.isdir(data_dir):
         raise FileNotFoundError(f"找不到資料夾: {data_dir}")
 
@@ -104,7 +104,6 @@ def load_all_raw_data(data_dir):
         file_path = os.path.join(data_dir, file_name)
         try:
             raw_df = pd.read_csv(file_path)
-            min_rows_needed = LOAD_DATA_MIN_ROWS
             if len(raw_df) < min_rows_needed:
                 load_issue_lines.append(f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆")
                 continue
@@ -452,15 +451,17 @@ def summarize_overfitting(fold_summary_df):
 
 def run_overfitting_analysis(args):
     os.makedirs(args.output_dir, exist_ok=True)
-    raw_cache, raw_log_path = load_all_raw_data(args.data_dir)
-    print(f"✅ 原始資料載入完成: {len(raw_cache)} 檔")
-    if raw_log_path:
-        print(f"⚠️ 原始資料清洗摘要: {raw_log_path}")
 
     candidates = load_study_candidates(args.db_path, args.study_name, args.top_k)
     if not candidates:
         raise RuntimeError("找不到任何可分析的 Optuna 完成 trial")
     print(f"✅ 候選參數載入完成: {len(candidates)} 組")
+
+    raw_min_rows_needed = get_max_required_min_rows([candidate['params'] for candidate in candidates])
+    raw_cache, raw_log_path = load_all_raw_data(args.data_dir, min_rows_needed=raw_min_rows_needed)
+    print(f"✅ 原始資料載入完成: {len(raw_cache)} 檔 (最低需求 {raw_min_rows_needed} 列)")
+    if raw_log_path:
+        print(f"⚠️ 原始資料清洗摘要: {raw_log_path}")
 
     available_years = sorted({int(dt.year) for df in raw_cache.values() for dt in df.index})
     folds = build_expanding_folds(
