@@ -228,6 +228,9 @@ def resolve_optimizer_max_workers(params):
 def is_insufficient_data_message(msg):
     return isinstance(msg, str) and ("有效資料不足" in msg)
 
+def is_insufficient_data_error(exc):
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
         print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
@@ -267,8 +270,12 @@ def load_all_raw_data():
                 )
 
         except Exception as e:
-            load_issues.append(f"{ticker}: {format_exception_summary(e)}")
-            continue
+            if is_insufficient_data_error(e):
+                load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
+                continue
+            raise RuntimeError(
+                f"optimizer 原始資料快取失敗: ticker={ticker} | {format_exception_summary(e)}"
+            ) from e
 
         if count % 50 == 0:
             print(f"{C_GRAY}   進度: 已掃描 {count} 檔股票...{C_RESET}", end="\r")
