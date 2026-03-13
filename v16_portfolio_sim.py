@@ -74,8 +74,7 @@ def print_yearly_return_report(yearly_return_rows):
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
     if not os.path.exists(data_dir):
-        print(f"\n{C_RED}❌ 嚴重錯誤：找不到資料夾 {data_dir}，請確認路徑或先下載資料！{C_RESET}")
-        sys.exit(1)
+        raise FileNotFoundError(f"找不到資料夾 {data_dir}，請確認路徑或先下載資料！")
 
     print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs, all_trade_logs, master_dates = {}, {}, set()
@@ -148,8 +147,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         print(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
 
     if not all_dfs:
-        print(f"\n{C_RED}❌ 嚴重錯誤：未能成功載入任何股票資料！{C_RESET}")
-        sys.exit(1)
+        raise RuntimeError("未能成功載入任何股票資料！")
 
     sorted_dates = sorted(list(master_dates))
     all_dfs_fast = {t: pack_prepared_stock_data(d) for t, d in all_dfs.items()}
