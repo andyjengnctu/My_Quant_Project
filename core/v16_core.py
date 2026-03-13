@@ -495,8 +495,11 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     missedBuyCount += 1 # 放棄交易
             else:
                 missedBuyCount += 1
-                chase_res = evaluate_chase_condition(C[j], buyLimitPrice, ATR_main[j-1], sizing_cap, params)
-                pending_chase = chase_res if chase_res else None
+                if V[j] > 0:
+                    chase_res = evaluate_chase_condition(C[j], buyLimitPrice, ATR_main[j-1], sizing_cap, params)
+                    pending_chase = chase_res if chase_res else None
+                else:
+                    pending_chase = None
 
         elif pending_chase is not None and pos_start_of_current_bar == 0:
             chase_limit = pending_chase['chase_price']
@@ -522,10 +525,20 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             
             # # (AI註: 統一續追邏輯)
             if not buyTriggered:
-                if pending_chase['sl'] < C[j] < pending_chase['tp']:
-                    chase_res = evaluate_chase_condition(C[j], pending_chase['orig_limit'], pending_chase['orig_atr'], sizing_cap, params)
+                # # (AI註: 零成交量日不可用當日 close 建立或更新 chase；保留既有 pending_chase 到下一個可交易日再判斷)
+                if V[j] <= 0:
+                    pass
+                elif pending_chase['sl'] < C[j] < pending_chase['tp']:
+                    chase_res = evaluate_chase_condition(
+                        C[j],
+                        pending_chase['orig_limit'],
+                        pending_chase['orig_atr'],
+                        sizing_cap,
+                        params
+                    )
                     pending_chase = chase_res if chase_res else None
-                else: pending_chase = None
+                else:
+                    pending_chase = None
 
         currentEquity = currentCapital
         if position['qty'] > 0:

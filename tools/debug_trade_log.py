@@ -193,14 +193,17 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                 else:
                     pending_chase = None
             else:
-                chase_res = evaluate_chase_condition(
-                    C[j],
-                    buyLimitPrice,
-                    ATR_main[j - 1],
-                    sizing_cap,
-                    params
-                )
-                pending_chase = chase_res if chase_res else None
+                if V[j] > 0:
+                    chase_res = evaluate_chase_condition(
+                        C[j],
+                        buyLimitPrice,
+                        ATR_main[j - 1],
+                        sizing_cap,
+                        params
+                    )
+                    pending_chase = chase_res if chase_res else None
+                else:
+                    pending_chase = None
 
         elif pending_chase is not None and pos_start_of_current_bar == 0:
             chase_limit = pending_chase['chase_price']
@@ -246,7 +249,10 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
             # # (AI註: 與正式核心一致 - 未成交時，依原始 limit / ATR 續追或放棄)
             if not buyTriggered:
-                if pending_chase['sl'] < C[j] < pending_chase['tp']:
+                # # (AI註: 與正式核心一致 - 零成交量日不可用當日 close 更新續追)
+                if V[j] <= 0:
+                    pass
+                elif pending_chase['sl'] < C[j] < pending_chase['tp']:
                     chase_res = evaluate_chase_condition(
                         C[j],
                         pending_chase['orig_limit'],
