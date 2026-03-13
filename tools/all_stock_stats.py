@@ -1,9 +1,9 @@
 import sys
 import os
-import json
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
+from core.v16_params_io import load_params_from_json
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
@@ -37,19 +37,8 @@ def is_insufficient_data_error(exc):
     return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
-    params = V16StrategyParams()
-    if not os.path.exists(json_file):
-        raise FileNotFoundError(f"找不到參數檔: {json_file}")
-
-    try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if hasattr(params, k):
-                setattr(params, k, v)
-        print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
+    params = load_params_from_json(json_file)
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params
 
 # # (AI註: 第16點 - 平行度可控，避免 ProcessPoolExecutor 預設開太滿造成上下文切換成本上升)

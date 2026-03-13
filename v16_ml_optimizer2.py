@@ -599,7 +599,7 @@ def monitoring_callback(study, trial):
     global CURRENT_SESSION_TRIAL
     CURRENT_SESSION_TRIAL += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
-    if trial.value and trial.value <= -9000:
+    if trial.value is not None and trial.value <= -9000:
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}", "N/A"
     else:
@@ -621,7 +621,7 @@ def monitoring_callback(study, trial):
             f"pf_loop={float(profile.get('portfolio_day_loop_sec', 0.0)):.3f}s{C_RESET}"
         )
     
-    if study.best_trial.number == trial.number and trial.value and trial.value > -9000:
+    if study.best_trial.number == trial.number and trial.value is not None and trial.value > -9000:
         print()
         attrs, p = trial.user_attrs, trial.params
         mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
@@ -664,7 +664,7 @@ if __name__ == "__main__":
         print(f"\n{C_GREEN}✅ 已累積 {len(study.trials)} 次經驗。{C_RESET}")
         try:
             best_trial = study.best_trial
-            if best_trial.value and best_trial.value > -9000:
+            if best_trial.value is not None and best_trial.value > -9000:
                 attrs, p = best_trial.user_attrs, best_trial.params
                 mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
                 

@@ -10,6 +10,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from core.v16_params_io import load_params_from_json
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
 from core.v16_portfolio_engine import (
@@ -106,20 +107,7 @@ def load_module_from_candidates(module_name, relative_paths, required_attrs=None
 
 
 def load_params():
-    params = V16StrategyParams()
-    if not os.path.exists(PARAMS_FILE):
-        raise FileNotFoundError(f"找不到參數檔: {PARAMS_FILE}")
-
-    try:
-        with open(PARAMS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if hasattr(params, k):
-                setattr(params, k, v)
-        print(f"✅ 已載入參數檔: {PARAMS_FILE}")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
-    return params
+    return load_params_from_json(PARAMS_FILE)
 
 
 def normalize_ticker_text(value):

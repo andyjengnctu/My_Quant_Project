@@ -10,6 +10,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
+from core.v16_params_io import load_params_from_json
 from core.v16_config import V16StrategyParams
 from core.v16_core import (
     generate_signals,
@@ -23,7 +24,8 @@ from core.v16_core import (
     calc_net_sell_price,
     calc_position_size,
     calc_initial_risk_total,
-    evaluate_chase_condition
+    evaluate_chase_condition,
+    build_normal_entry_plan,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
 from core.v16_log_utils import format_exception_summary
@@ -41,19 +43,8 @@ DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
-    params = V16StrategyParams()
-    if not os.path.exists(json_file):
-        raise FileNotFoundError(f"找不到參數檔: {json_file}")
-
-    try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if hasattr(params, k):
-                setattr(params, k, v)
-        print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
+    params = load_params_from_json(json_file)
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params
 
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
@@ -62,7 +53,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     O = df['Open'].values
     Dates = df.index
 
-    ATR_main, buyCondition, sellCondition, _ = generate_signals(df, params)
+    ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
 
     position = {'qty': 0}
     pending_chase = None
@@ -154,11 +145,15 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         buyTriggered = False
 
         if isSetup_prev:
-            buyLimitPrice = adjust_long_buy_limit(C[j - 1] + ATR_main[j - 1] * params.atr_buy_tol)
-            planned_init_sl = adjust_long_stop_price(buyLimitPrice - ATR_main[j - 1] * params.atr_times_init)
-            planned_init_trail = adjust_long_stop_price(buyLimitPrice - ATR_main[j - 1] * params.atr_times_trail)
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
+            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params)
+            if entry_plan is None:
+                buyQty = 0
+            else:
+                buyLimitPrice = entry_plan['limit_price']
+                planned_init_sl = entry_plan['init_sl']
+                planned_init_trail = entry_plan['init_trail']
+                buyQty = entry_plan['qty']
 
             if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))

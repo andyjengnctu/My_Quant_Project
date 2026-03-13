@@ -142,6 +142,23 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     actual_total_cost = entry_price * qty
     return max(actual_total_cost * params.fixed_risk, 0.0)
 
+# # (AI註: 單一真理來源 - 正常單的 limit/sl/trail/qty 規格統一由此產生)
+def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
+    if pd.isna(limit_price) or pd.isna(atr):
+        return None
+
+    init_sl = adjust_long_stop_price(limit_price - atr * params.atr_times_init)
+    init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
+    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
+    if qty <= 0:
+        return None
+
+    return {
+        'limit_price': limit_price,
+        'init_sl': init_sl,
+        'init_trail': init_trail,
+        'qty': qty,
+    }
 
 # # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):

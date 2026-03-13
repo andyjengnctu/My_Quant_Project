@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np 
 import warnings
 import time
+from core.v16_params_io import load_params_from_json
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -35,20 +36,7 @@ def resolve_scanner_max_workers(params):
     return max(1, configured)
 
 def load_dynamic_params(json_file):
-    params = V16StrategyParams()
-    if not os.path.exists(json_file):
-        raise FileNotFoundError(f"找不到參數檔: {json_file}")
-
-    try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for key, value in data.items():
-            if hasattr(params, key):
-                setattr(params, key, value)
-        return params, True
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}") from e
-
+    return load_params_from_json(json_file), True
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 scanner 被新上市/短歷史標的洗板)
 def is_insufficient_data_error(exc):

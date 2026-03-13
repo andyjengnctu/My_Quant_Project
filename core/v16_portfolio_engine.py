@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest, build_normal_entry_plan
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
+
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
     from core.v16_config import SCORE_CALC_METHOD
@@ -142,6 +143,35 @@ def calc_annual_return_pct(start_value, end_value, years):
         return -100.0
     return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
 
+def calc_annual_return_pct(start_value, end_value, years):
+    if start_value <= 0 or years <= 0:
+        return 0.0
+    if end_value <= 0:
+        return -100.0
+    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
+
+
+# # (AI註: 單一真理來源 - 浮動權益估值與 pending_chase 的 next-day sizing 共用同一口徑)
+def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
+    equity = cash
+
+    for ticker in sorted(portfolio.keys()):
+        pos = portfolio[ticker]
+        pt_data = all_dfs_fast[ticker]
+        pt_pos = get_fast_pos(pt_data, today)
+
+        if pt_pos >= 0:
+            px = get_fast_close(pt_data, pos=pt_pos)
+        else:
+            px = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
+
+        pos['last_px'] = px
+
+        floating_exec_price = adjust_long_sell_fill_price(px)
+        net_px = calc_net_sell_price(floating_exec_price, pos['qty'], params)
+        equity += pos['qty'] * net_px
+
+    return float(equity)
 
 FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'ATR', 'buy_limit')
 FAST_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
@@ -432,11 +462,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
             y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
             y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-            est_init_sl = adjust_long_stop_price(y_buy_limit - y_atr * params.atr_times_init)
-            est_init_trail = adjust_long_stop_price(y_buy_limit - y_atr * params.atr_times_trail)
-            est_qty = calc_position_size(y_buy_limit, est_init_sl, sizing_equity, params.fixed_risk, params)
-            if est_qty <= 0:
+            entry_plan = build_normal_entry_plan(y_buy_limit, y_atr, sizing_equity, params)
+            if entry_plan is None:
                 continue
+
+            est_init_sl = entry_plan['init_sl']
+            est_init_trail = entry_plan['init_trail']
+            est_qty = entry_plan['qty']
 
             est_cost = calc_entry_price(y_buy_limit, est_qty, params) * est_qty
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
@@ -665,15 +697,20 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             )
 
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
-                if cand['type'] == 'chase':
-                    if cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
-                        chase_res = evaluate_chase_condition(t_close, cand['orig_limit'], cand['y_atr'], sizing_equity, params)
+                if cand['type'] == 'normal':
+                    total_missed_buys += 1
+                    if not is_normal_worse_than_sl:
+                        next_day_sizing_equity = (
+                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+                            if getattr(params, 'use_compounding', True) else initial_capital
+                        )
+                        chase_res = evaluate_chase_condition(
+                            t_close, cand['limit_px'], cand['y_atr'], next_day_sizing_equity, params
+                        )
                         if chase_res:
-                            chase_res['orig_limit'] = cand['orig_limit']
+                            chase_res['orig_limit'] = cand['limit_px']
                             chase_res['orig_atr'] = cand['y_atr']
                             pending_chases[cand['ticker']] = chase_res
-                        elif cand['ticker'] in pending_chases:
-                            del pending_chases[cand['ticker']]
                     elif cand['ticker'] in pending_chases:
                         del pending_chases[cand['ticker']]
                 continue
@@ -740,7 +777,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                             pending_chases[cand['ticker']] = chase_res
                 elif cand['type'] == 'chase':
                     if cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
-                        chase_res = evaluate_chase_condition(t_close, cand['orig_limit'], cand['y_atr'], sizing_equity, params)
+                        next_day_sizing_equity = (
+                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+                            if getattr(params, 'use_compounding', True) else initial_capital
+                        )
+                        chase_res = evaluate_chase_condition(
+                            t_close, cand['orig_limit'], cand['y_atr'], next_day_sizing_equity, params
+                        )
                         if chase_res:
                             chase_res['orig_limit'] = cand['orig_limit']
                             chase_res['orig_atr'] = cand['y_atr']
@@ -753,21 +796,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             buy_sec += time.perf_counter() - t0
 
         t0 = time.perf_counter() if profile_stats is not None else None
-        today_equity = cash
-        for pt in sorted(portfolio.keys()):
-            pos = portfolio[pt]
-            pt_data = all_dfs_fast[pt]
-            pt_pos = get_fast_pos(pt_data, today)
-            if pt_pos >= 0:
-                px = get_fast_close(pt_data, pos=pt_pos)
-            else:
-                px = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
-            pos['last_px'] = px
-
-            # # (AI註: 浮動權益也統一用保守可賣出價口徑，避免月度曲線 / MDD 比最終結算樂觀)
-            floating_exec_price = adjust_long_sell_fill_price(px)
-            net_px = calc_net_sell_price(floating_exec_price, pos['qty'], params)
-            today_equity += pos['qty'] * net_px
+        today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
         if profile_stats is not None:
             equity_mark_sec += time.perf_counter() - t0
 
