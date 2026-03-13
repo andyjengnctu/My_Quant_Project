@@ -125,13 +125,11 @@ def main():
     os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 
     if not os.path.exists(DATA_DIR):
-        print("❌ 找不到資料夾，請確認路徑。")
-        return
+        raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
         
     csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
     if not csv_files:
-        print("📂 資料夾內沒有 CSV 檔案。")
-        return
+        raise FileNotFoundError(f"資料夾內沒有 CSV 檔案: {DATA_DIR}")
         
     params = load_params()
     results = []
