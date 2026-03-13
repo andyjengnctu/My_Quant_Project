@@ -57,7 +57,8 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         (working['High'] <= 0) |
         (working['Low'] <= 0) |
         (working['Close'] <= 0) |
-        (working['Volume'] < 0) |
+        # # (AI註: 零成交量日不可成交，直接排除，避免回測在不可交易日買入/賣出)
+        (working['Volume'] <= 0) |
         (working['High'] < working[['Open', 'Low', 'Close']].max(axis=1)) |
         (working['Low'] > working[['Open', 'High', 'Close']].min(axis=1))
     )

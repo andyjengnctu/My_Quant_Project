@@ -312,11 +312,20 @@ def get_pit_stats_from_index(stats_index, current_date, params):
     cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date)
     trade_count = int(stats_index['cum_trade_count'][cutoff - 1]) if cutoff > 0 else 0
     min_trades_req = getattr(params, 'min_history_trades', 0)
+    min_ev_req = getattr(params, 'min_history_ev', 0.0)
+    min_win_rate_req = getattr(params, 'min_history_win_rate', 0.30)
+
+    # # (AI註: 與單股回測完全一致；零樣本只有在所有歷史門檻都被明確放寬時才可通過)
+    allow_zero_history = (
+        (min_trades_req == 0) and
+        (min_ev_req <= 0) and
+        (min_win_rate_req <= 0)
+    )
 
     if trade_count < min_trades_req:
         return False, 0.0, 0.0, trade_count
     if trade_count == 0:
-        return True, 0.0, 0.0, trade_count
+        return allow_zero_history, 0.0, 0.0, trade_count
 
     win_count = int(stats_index['cum_win_count'][cutoff - 1])
     win_rate = win_count / trade_count

@@ -499,6 +499,39 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
         maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
+    # # (AI註: 與投組模擬一致；若回測最後一天仍有持倉，做期末強制結算，
+    # # (AI註: 讓 asset_growth / trade_count / win_rate / expected_value 口徑一致)
+    if position['qty'] > 0:
+        exec_price = adjust_long_sell_fill_price(C[-1])
+        net_price = calc_net_sell_price(exec_price, position['qty'], params)
+        pnl = (net_price - position['entry']) * position['qty']
+        total_pnl = position['realized_pnl'] + pnl
+        trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0.0
+
+        total_r_multiple += trade_r_mult
+        tradeCount += 1
+
+        if return_logs:
+            trade_logs.append({
+                'exit_date': Dates[-1],
+                'pnl': total_pnl,
+                'r_mult': trade_r_mult
+            })
+
+        if total_pnl > 0:
+            fullWins += 1
+            totalProfit += total_pnl
+            total_r_win += trade_r_mult
+        else:
+            totalLoss += abs(total_pnl)
+            total_r_loss += abs(trade_r_mult)
+
+        # # (AI註: currentCapital 平常只累加已實現損益，
+        # # (AI註: 這裡只補上剩餘部位尚未實現的 pnl，不可加整筆賣出金額)
+        currentCapital += pnl
+        currentEquity = currentCapital
+        position['qty'] = 0
+
     winRate = (fullWins / tradeCount * 100) if tradeCount > 0 else 0
     avgWin = totalProfit / fullWins if fullWins > 0 else 0
     lossCount = tradeCount - fullWins
@@ -525,9 +558,20 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
-    if tradeCount < min_trades: isCandidate = False
-    elif tradeCount == 0 and min_trades == 0: isCandidate = True
-    else: isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
+    # # (AI註: 零樣本不可繞過 EV / 勝率門檻；
+    # # (AI註: 只有在使用者明確把三個門檻都放到完全寬鬆時，才允許零歷史直接通過)
+    allow_zero_history = (
+        (min_trades == 0) and
+        (min_win_rate <= 0) and
+        (min_ev <= 0)
+    )
+
+    if tradeCount < min_trades:
+        isCandidate = False
+    elif tradeCount == 0:
+        isCandidate = allow_zero_history
+    else:
+        isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
     # # (AI註: 解除 Scanner 分歧 - 回測內部 pending_chase 活著，就直接回傳給 Scanner)
     chase_today = pending_chase if position['qty'] == 0 else None
