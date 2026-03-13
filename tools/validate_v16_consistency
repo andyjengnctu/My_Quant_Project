@@ -650,15 +650,9 @@ def main():
                     f"資料不足，跳過驗證。({type(e).__name__}: {e})"
                 )
             else:
-                add_fail_result(
-                    all_results,
-                    "system",
-                    ticker,
-                    "validation_runtime",
-                    "成功執行",
-                    f"{type(e).__name__}: {e}",
-                    "一致性驗證執行失敗，先處理這個錯誤。"
-                )
+                raise RuntimeError(
+                    f"一致性驗證執行失敗: ticker={ticker} | {format_exception_summary(e)}"
+                ) from e
 
         ticker_results = all_results[ticker_results_before:]
         ticker_statuses = {row["status"] for row in ticker_results}
