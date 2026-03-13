@@ -467,12 +467,20 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         buyTriggered = False
         
         if isSetup_prev:
-            # # (AI註: 問題1修復 - 嚴格盤前定錨，qty與sl鎖死在 T-1 buyLimitPrice)
-            buyLimitPrice = buy_limits[j-1]
-            planned_init_sl = adjust_long_stop_price(buyLimitPrice - ATR_main[j-1] * params.atr_times_init)
-            planned_init_trail = adjust_long_stop_price(buyLimitPrice - ATR_main[j-1] * params.atr_times_trail)
+            # # (AI註: 單一真理來源 - 正常單的盤前 limit/sl/trail/qty 全部統一由 build_normal_entry_plan 產生)
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
+            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+
+            if entry_plan is None:
+                buyLimitPrice = buy_limits[j-1]
+                planned_init_sl = np.nan
+                planned_init_trail = np.nan
+                buyQty = 0
+            else:
+                buyLimitPrice = entry_plan['limit_price']
+                planned_init_sl = entry_plan['init_sl']
+                planned_init_trail = entry_plan['init_trail']
+                buyQty = entry_plan['qty']
             
             if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
