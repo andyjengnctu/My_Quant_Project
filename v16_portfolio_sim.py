@@ -36,7 +36,7 @@ def load_dynamic_params(json_file):
             if hasattr(params, k):
                 setattr(params, k, v)
         return params, True
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"讀取參數 {json_file} 失敗: {format_exception_summary(e)}") from e
 
 
@@ -122,7 +122,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             all_dfs[ticker], all_trade_logs[ticker] = df, logs
             master_dates.update(df.index)
 
-        except Exception as e:
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
             if is_insufficient_data_error(e):
                 total_skipped_insufficient += 1
                 load_issue_lines.append(f"[資料不足] {ticker}: {type(e).__name__}: {e}")
@@ -244,5 +244,5 @@ if __name__ == "__main__":
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
         webbrowser.open('file://' + os.path.realpath(html_filename))
-    except Exception as e:
+    except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
         print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")

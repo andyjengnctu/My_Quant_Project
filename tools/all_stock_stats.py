@@ -48,7 +48,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
             if hasattr(params, k):
                 setattr(params, k, v)
         print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
     return params
 
@@ -112,7 +112,7 @@ def process_single_stock_for_export(ticker, file_path, params):
             "異常OHLCV筆數": invalid_row_count,
             "重複日期筆數": duplicate_date_count
         }
-    except Exception as e:
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return {
                 "__status__": "skip_insufficient",

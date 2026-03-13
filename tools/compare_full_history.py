@@ -33,7 +33,7 @@ def load_params_from_json(json_file):
             if hasattr(params, key):
                 setattr(params, key, value)
         return params, True
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
 
 def compare_with_tv(csv_file_path, params, param_source):

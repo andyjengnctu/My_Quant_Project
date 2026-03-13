@@ -242,7 +242,7 @@ def load_all_raw_data():
                     f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                 )
 
-        except Exception as e:
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
             if is_insufficient_data_error(e):
                 load_issues.append(f"{ticker}: {type(e).__name__}: {e}")
                 continue
@@ -317,7 +317,7 @@ def worker_prep_data(ticker, df, params):
                 "to_dict_sec": float(pack_sec),
             },
         }
-    except Exception as e:
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             tb_lines = traceback.format_exc().strip().splitlines()
             tb_tail = " | ".join(tb_lines[-3:]) if tb_lines else ""

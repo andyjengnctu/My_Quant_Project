@@ -122,7 +122,7 @@ def load_all_raw_data(data_dir, min_rows_needed):
                     f"[清洗] {ticker}: 清洗移除 {sanitize_stats['dropped_row_count']} 列 "
                     f"(異常OHLCV={sanitize_stats['invalid_row_count']}, 重複日期={sanitize_stats['duplicate_date_count']})"
                 )
-        except Exception as exc:
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
             if is_insufficient_data_error(exc):
                 load_issue_lines.append(f"[資料不足] {ticker}: {type(exc).__name__}: {exc}")
                 continue
@@ -166,7 +166,7 @@ def prepare_candidate_market_data(raw_cache, params):
             all_dfs_fast[ticker] = packed
             all_trade_logs[ticker] = sorted(logs, key=lambda x: x['exit_date'])
             master_dates.update(packed['dates'])
-        except Exception as exc:
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
             if is_insufficient_data_error(exc):
                 issue_lines.append(f"[資料不足] {ticker}: {type(exc).__name__}: {exc}")
                 continue

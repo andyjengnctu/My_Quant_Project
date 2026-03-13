@@ -52,7 +52,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
             if hasattr(params, k):
                 setattr(params, k, v)
         print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
     return params
 

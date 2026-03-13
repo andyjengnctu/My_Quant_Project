@@ -46,7 +46,7 @@ def load_dynamic_params(json_file):
             if hasattr(params, key):
                 setattr(params, key, value)
         return params, True
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}") from e
 
 
@@ -110,7 +110,7 @@ def process_single_stock(file_path, ticker, params):
 
         return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
-    except Exception as e:
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
         if is_insufficient_data_error(e):
             return ('skip_insufficient', None, None, None, None, ticker, None)
         raise RuntimeError(

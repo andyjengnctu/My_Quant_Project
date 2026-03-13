@@ -117,7 +117,7 @@ def load_params():
             if hasattr(params, k):
                 setattr(params, k, v)
         print(f"✅ 已載入參數檔: {PARAMS_FILE}")
-    except Exception as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
         raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
     return params
 
@@ -633,7 +633,7 @@ def main():
             results, summary = validate_one_ticker(ticker, base_params)
             all_results.extend(results)
             summaries.append(summary)
-        except Exception as e:
+        except (FileNotFoundError, ImportError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
             if is_insufficient_data_error(e):
                 add_skip_result(
                     all_results,

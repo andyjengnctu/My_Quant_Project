@@ -61,8 +61,8 @@ def verify_local_database():
         df_vip = pd.read_csv(vip_path, index_col=0, parse_dates=True)
         df_tv = pd.read_csv(tv_path, index_col=0, parse_dates=True)
         df_tv.columns = [c.capitalize() for c in df_tv.columns]
-    except Exception as e:
-        print(f"❌ 讀取 CSV 失敗: {e}")
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+        print(f"❌ 讀取 CSV 失敗: {type(e).__name__}: {e}")
         return True
 
     # 3. 合併與計算價差
