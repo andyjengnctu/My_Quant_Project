@@ -334,24 +334,28 @@ def worker_prep_data(ticker, df, params):
             },
         }
     except Exception as e:
-        tb_lines = traceback.format_exc().strip().splitlines()
-        tb_tail = " | ".join(tb_lines[-3:]) if tb_lines else ""
-        return {
-            "ticker": ticker,
-            "ok": False,
-            "reason": f"{type(e).__name__}: {e}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
-            "data": None,
-            "logs": None,
-            "profile": {
-                "worker_total_sec": time.perf_counter() - t_worker_start,
-                "prep_total_sec": float(profile_stats.get('total_sec', 0.0)),
-                "copy_sec": float(profile_stats.get('copy_sec', 0.0)),
-                "generate_signals_sec": float(profile_stats.get('generate_signals_sec', 0.0)),
-                "assign_columns_sec": float(profile_stats.get('assign_columns_sec', 0.0)),
-                "run_backtest_sec": float(profile_stats.get('run_backtest_sec', 0.0)),
-                "to_dict_sec": 0.0,
-            },
-        }
+        if is_insufficient_data_error(e):
+            tb_lines = traceback.format_exc().strip().splitlines()
+            tb_tail = " | ".join(tb_lines[-3:]) if tb_lines else ""
+            return {
+                "ticker": ticker,
+                "ok": False,
+                "reason": f"{type(e).__name__}: {e}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
+                "data": None,
+                "logs": None,
+                "profile": {
+                    "worker_total_sec": time.perf_counter() - t_worker_start,
+                    "prep_total_sec": float(profile_stats.get('total_sec', 0.0)),
+                    "copy_sec": float(profile_stats.get('copy_sec', 0.0)),
+                    "generate_signals_sec": float(profile_stats.get('generate_signals_sec', 0.0)),
+                    "assign_columns_sec": float(profile_stats.get('assign_columns_sec', 0.0)),
+                    "run_backtest_sec": float(profile_stats.get('run_backtest_sec', 0.0)),
+                    "to_dict_sec": 0.0,
+                },
+            }
+        raise RuntimeError(
+            f"optimizer 候選資料準備失敗: ticker={ticker} | {format_exception_summary(e)}"
+        ) from e
 
 # # (AI註: 單一真理來源 - 統一合併 worker 回傳，避免平行與 fallback 序列邏輯分叉)
 def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
