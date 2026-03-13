@@ -872,6 +872,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         if current_bm_px is not None:
             bm_monthly_equities.append(current_bm_px)
 
+    total_return = (today_equity - initial_capital) / initial_capital * 100
+
     if not is_training and len(equity_curve) > 0:
         equity_curve[-1]['Equity'] = today_equity
         equity_curve[-1]['Strategy_Return_Pct'] = total_return
