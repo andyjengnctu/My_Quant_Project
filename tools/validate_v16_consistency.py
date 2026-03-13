@@ -10,7 +10,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
