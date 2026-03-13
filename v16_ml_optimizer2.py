@@ -233,8 +233,7 @@ def is_insufficient_data_error(exc):
 
 def load_all_raw_data():
     if not os.path.exists(DATA_DIR):
-        print(f"{C_RED}❌ 嚴重錯誤：找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！{C_RESET}")
-        sys.exit(1)
+        raise FileNotFoundError(f"找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！")
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
