@@ -128,10 +128,10 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             if is_insufficient_data_error(e):
                 total_skipped_insufficient += 1
                 load_issue_lines.append(f"[資料不足] {ticker}: {type(e).__name__}: {e}")
-            else:
-                total_other_errors += 1
-                load_issue_lines.append(f"[異常] {ticker}: {format_exception_summary(e)}")
-            continue
+                continue
+            raise RuntimeError(
+                f"預載入失敗: ticker={ticker} | {format_exception_summary(e)}"
+            ) from e
 
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
             print(
