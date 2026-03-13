@@ -23,9 +23,48 @@ FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
 OUTPUT_DIR = os.path.join(BASE_DIR, 'outputs')
 
 # # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
-VERBOSE_UNIVERSE_FETCH_ERRORS = False
-VERBOSE_LAST_DATE_CHECK_ERRORS = False
-VERBOSE_DOWNLOAD_ERRORS = False
+EXPECTED_MARKET_DATE_EXCEPTIONS = (
+    requests.RequestException,
+    ValueError,
+    KeyError,
+    IndexError,
+    TypeError,
+)
+
+EXPECTED_UNIVERSE_FETCH_EXCEPTIONS = (
+    requests.RequestException,
+    ValueError,
+    KeyError,
+    IndexError,
+    pd.errors.EmptyDataError,
+)
+
+EXPECTED_SCREENING_EXCEPTIONS = (
+    requests.RequestException,
+    ValueError,
+    KeyError,
+    TypeError,
+    AttributeError,
+)
+
+EXPECTED_LAST_DATE_CHECK_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    KeyError,
+    IndexError,
+    pd.errors.EmptyDataError,
+    pd.errors.ParserError,
+)
+
+EXPECTED_DOWNLOAD_EXCEPTIONS = (
+    requests.RequestException,
+    ValueError,
+    KeyError,
+    TypeError,
+    pd.errors.EmptyDataError,
+    pd.errors.ParserError,
+    OSError,
+)
 
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
@@ -65,8 +104,9 @@ def get_market_last_date():
             actual_date = str(df['date'].max()).split(' ')[0]
             print(f"📅 台股最新交易日 (FinMind) 為: {actual_date}")
             return actual_date
-    except Exception as e:
-        print(f"⚠️ FinMind 日期獲取異常: {e}")
+    except EXPECTED_MARKET_DATE_EXCEPTIONS as e:
+        append_downloader_issues("最新交易日(FinMind)失敗", [f"{type(e).__name__}: {e}"])
+        print(f"⚠️ FinMind 日期獲取異常: {type(e).__name__}: {e}")
 
     print("🔄 啟動備援方案 (YFinance) 獲取交易日...")
     try:
@@ -76,8 +116,9 @@ def get_market_last_date():
             actual_date = hist.index[-1].strftime("%Y-%m-%d")
             print(f"📅 台股最新交易日 (YF備援) 為: {actual_date}")
             return actual_date
-    except Exception as e:
-        print(f"⚠️ YFinance 備援失敗: {e}")
+    except EXPECTED_MARKET_DATE_EXCEPTIONS as e:
+        append_downloader_issues("最新交易日(YF備援)失敗", [f"{type(e).__name__}: {e}"])
+        print(f"⚠️ YFinance 備援失敗: {type(e).__name__}: {e}")
 
     fallback_date = datetime.now()
     if fallback_date.hour < 14:
@@ -128,7 +169,7 @@ def get_or_update_universe():
                     is_etf = str(row['CFICode']).startswith('CE')
                     tickers_info.append({"yf_ticker": f"{sid}{suffix}", "sid": sid, "is_etf": is_etf})
 
-        except Exception as e:
+        except EXPECTED_UNIVERSE_FETCH_EXCEPTIONS as e:
             universe_fetch_errors.append(f"{url} -> {type(e).__name__}: {e}")
             if VERBOSE_UNIVERSE_FETCH_ERRORS:
                 print(f"\n⚠️ 名單來源抓取失敗: {url} | {type(e).__name__}: {e}")
@@ -157,8 +198,8 @@ def get_or_update_universe():
                 if is_etf or market_cap >= MIN_MARKET_CAP:
                     qualified_tickers.append(sid)
 
-        except Exception as e:
-            screening_errors.append((sid, yf_t, str(e)))
+        except EXPECTED_SCREENING_EXCEPTIONS as e:
+            screening_errors.append((sid, yf_t, f"{type(e).__name__}: {e}"))
         time.sleep(YF_SCREEN_SLEEP_SEC)
 
     with open(LIST_FILE, 'w') as f:
@@ -204,7 +245,7 @@ def smart_download_vip_data(tickers, market_last_date):
                         flush=True
                     )
                     continue
-            except Exception as e:
+            except EXPECTED_LAST_DATE_CHECK_EXCEPTIONS as e:
                 last_date_check_errors.append(f"{sid}: {type(e).__name__}: {e}")
                 if VERBOSE_LAST_DATE_CHECK_ERRORS:
                     print(f"\n⚠️ {sid} 檢查最後日期發生錯誤，將強制重抓: {type(e).__name__}: {e}")
@@ -239,7 +280,7 @@ def smart_download_vip_data(tickers, market_last_date):
             count_success += 1
             time.sleep(FINMIND_DOWNLOAD_SLEEP_SEC)
 
-        except Exception as e:
+        except EXPECTED_DOWNLOAD_EXCEPTIONS as e:
             download_errors.append((sid, f"{type(e).__name__}: {e}"))
             if VERBOSE_DOWNLOAD_ERRORS:
                 print(f"\n❌ {sid} 失敗: {type(e).__name__}: {e}")

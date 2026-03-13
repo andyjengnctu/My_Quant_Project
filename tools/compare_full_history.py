@@ -87,6 +87,7 @@ if __name__ == "__main__":
     print("3. 使用 v16_config.py 系統預設值")
     
     choice = input("請輸入 1, 2, 或 3 (預設為 1): ").strip()
+    original_params_path = os.path.join(BASE_DIR, "v16_original_params.json")
     
     if choice == '2':
         params, success = load_params_from_json(os.path.join(BASE_DIR, "models", "v16_best_params.json"))
@@ -95,8 +96,13 @@ if __name__ == "__main__":
         params = V16StrategyParams()
         param_source = "v16_config.py 系統預設"
     else:
-        params, success = load_params_from_json(os.path.join(BASE_DIR, "v16_original_params.json"))
-        param_source = "v16_original_params.json"
+        if os.path.exists(original_params_path):
+            params, success = load_params_from_json(original_params_path)
+            param_source = "v16_original_params.json"
+        else:
+            print(f"{C_CYAN}⚠️ 找不到 {original_params_path}，改用 v16_config.py 系統預設值。{C_RESET}")
+            params = V16StrategyParams()
+            param_source = "v16_config.py 系統預設 (fallback: 缺少 v16_original_params.json)"
 
     while True:
         ticker_input = input(f"請輸入要測試的股票代碼 (例如 2330，輸入 'q' 離開): ").strip()
