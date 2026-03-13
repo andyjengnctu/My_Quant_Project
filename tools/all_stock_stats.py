@@ -12,7 +12,7 @@ if BASE_DIR not in sys.path:
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 from core.v16_core import run_v16_backtest
-from core.v16_log_utils import format_exception_summary
+from core.v16_log_utils import format_exception_summary, write_issue_log
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
 
 warnings.simplefilter("default")
@@ -112,7 +112,11 @@ def process_single_stock_for_export(file_name, params):
         }
     except Exception as e:
         if is_insufficient_data_error(e):
-            return None
+            return {
+                "__status__": "skip_insufficient",
+                "__ticker__": ticker,
+                "__reason__": f"{type(e).__name__}: {e}"
+            }
         raise RuntimeError(
             f"全市場匯出失敗: ticker={ticker} | {format_exception_summary(e)}"
         ) from e
@@ -133,6 +137,8 @@ def main():
         
     params = load_params()
     results = []
+    skipped_insufficient_count = 0
+    export_issue_lines = []
     max_workers = resolve_export_max_workers(params)
 
     print(f"\n🚀 開始平行掃描 {len(csv_files)} 檔股票... (max_workers={max_workers})")
@@ -146,10 +152,21 @@ def main():
             print(f"\r⏳ 進度: [{completed}/{len(csv_files)}] 掃描中...", end="", flush=True)
             
             res = future.result()
+            if isinstance(res, dict) and res.get("__status__") == "skip_insufficient":
+                skipped_insufficient_count += 1
+                export_issue_lines.append(f"[資料不足] {res['__ticker__']}: {res['__reason__']}")
+                continue
+
             if res:
                 results.append(res)
                 
     print(f"\n\n{C_CYAN}📈 運算完成！正在整理並匯出 Excel...{C_RESET}")
+
+    export_issue_log_path = write_issue_log("all_stock_stats_skips", export_issue_lines) if export_issue_lines else None
+    if export_issue_log_path:
+        print(f"{C_YELLOW}⚠️ 資料不足略過 {skipped_insufficient_count} 檔，摘要已寫入: {export_issue_log_path}{C_RESET}")
+    elif skipped_insufficient_count > 0:
+        print(f"{C_YELLOW}⚠️ 資料不足略過 {skipped_insufficient_count} 檔。{C_RESET}")
     
     if results:
         df_out = pd.DataFrame(results)

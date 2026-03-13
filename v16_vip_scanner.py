@@ -129,7 +129,7 @@ def run_daily_scanner(data_dir):
     print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額僅以 initial_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
-    count_scanned, count_candidates = 0, 0
+    count_scanned, count_history_qualified = 0, 0
     count_skipped_insufficient = 0
     count_sanitized_candidates = 0
     buy_list, in_zone_list = [], []
@@ -147,7 +147,7 @@ def run_daily_scanner(data_dir):
                 status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
 
                 if status in ['buy', 'zone', 'candidate']:
-                    count_candidates += 1
+                    count_history_qualified += 1
                     if sanitize_issue is not None:
                         count_sanitized_candidates += 1
                         scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
@@ -178,7 +178,7 @@ def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(
         f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
-        f"歷史及格: {count_candidates} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
+        f"歷史及格候選: {count_history_qualified} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
         f"候選清洗: {count_sanitized_candidates} 檔"
     )
         

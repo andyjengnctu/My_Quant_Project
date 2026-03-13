@@ -20,7 +20,7 @@ from core.v16_config import (
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, get_required_min_rows_from_high_len
-from core.v16_log_utils import write_issue_log, append_issue_log, build_timestamped_log_path, format_exception_summary
+from core.v16_log_utils import write_issue_log, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -52,20 +52,12 @@ CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0
 # # (AI註: Windows / Python 3.14 下 ProcessPool + 大量 dataframe IPC 容易不穩，先保守降平行度)
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 
-# # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免 console 訊息在長時間訓練後遺失)
+# # (AI註: 預處理摘要只保留「資料不足」統計；其他非預期錯誤已改成直接 raise，不再保留死邏輯分支)
 OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
-OPTIMIZER_PREP_OTHER_LOG_PATH = build_timestamped_log_path(
-    "optimizer_prep_other_failures",
-    timestamp=OPTIMIZER_SESSION_TS
-)
 OPTIMIZER_PREP_SUMMARY = {
     "trials_with_insufficient": 0,
-    "trials_with_other": 0,
     "insufficient_count_total": 0,
-    "other_count_total": 0,
-    "unique_other_count": 0,
 }
-OPTIMIZER_PREP_OTHER_SEEN = set()
 
 # # (AI註: profiling 版預設開啟 objective 分段計時；只量測，不改交易邏輯)
 ENABLE_OPTIMIZER_PROFILING = True
@@ -98,53 +90,26 @@ PROFILE_FIELDS = [
 ]
 
 
-# # (AI註: optimizer 的預處理異常改成 session 級彙總：
-# # 1. 資料不足不逐 trial 洗板
-# # 2. 其他異常寫入單一 log 檔
-# # 3. 相同異常去重，避免長時間訓練下 log 爆量)
-def record_optimizer_prep_failures(trial_number, insufficient_failures, other_failures):
+# # (AI註: optimizer 的預處理摘要只保留「資料不足」統計；其他非預期錯誤已改成直接 raise)
+def record_optimizer_prep_failures(trial_number, insufficient_failures):
     insufficient_count = len(insufficient_failures)
-    other_count = len(other_failures)
 
     if insufficient_count > 0:
         OPTIMIZER_PREP_SUMMARY["trials_with_insufficient"] += 1
         OPTIMIZER_PREP_SUMMARY["insufficient_count_total"] += insufficient_count
 
-    if other_count > 0:
-        OPTIMIZER_PREP_SUMMARY["trials_with_other"] += 1
-        OPTIMIZER_PREP_SUMMARY["other_count_total"] += other_count
 
-        new_lines = []
-        for ticker, reason in other_failures:
-            signature = (ticker, reason)
-            if signature in OPTIMIZER_PREP_OTHER_SEEN:
-                continue
-            OPTIMIZER_PREP_OTHER_SEEN.add(signature)
-            new_lines.append(f"trial={trial_number + 1} | {ticker}: {reason}")
-
-        if new_lines:
-            append_issue_log(OPTIMIZER_PREP_OTHER_LOG_PATH, new_lines)
-
-        OPTIMIZER_PREP_SUMMARY["unique_other_count"] = len(OPTIMIZER_PREP_OTHER_SEEN)
-
-
-# # (AI註: 訓練結束時再印一次摘要，避免訓練過程被黃色警示干擾)
+# # (AI註: 訓練結束時再印一次資料不足摘要，避免訓練過程被重複警示干擾)
 def print_optimizer_prep_summary():
     insufficient_total = OPTIMIZER_PREP_SUMMARY["insufficient_count_total"]
-    other_total = OPTIMIZER_PREP_SUMMARY["other_count_total"]
 
-    if insufficient_total == 0 and other_total == 0:
+    if insufficient_total == 0:
         return
 
     print(
         f"{C_YELLOW}⚠️ 本輪預處理摘要："
-        f"資料不足 trial={OPTIMIZER_PREP_SUMMARY['trials_with_insufficient']} 次 / 累計 {insufficient_total} 檔；"
-        f"其他異常 trial={OPTIMIZER_PREP_SUMMARY['trials_with_other']} 次 / 累計 {other_total} 檔 / "
-        f"唯一 {OPTIMIZER_PREP_SUMMARY['unique_other_count']} 筆。{C_RESET}"
+        f"資料不足 trial={OPTIMIZER_PREP_SUMMARY['trials_with_insufficient']} 次 / 累計 {insufficient_total} 檔。{C_RESET}"
     )
-
-    if OPTIMIZER_PREP_SUMMARY["unique_other_count"] > 0:
-        print(f"{C_YELLOW}⚠️ 其他異常詳細已寫入: {OPTIMIZER_PREP_OTHER_LOG_PATH}{C_RESET}")
 
 def init_profile_output_files():
     if not ENABLE_OPTIMIZER_PROFILING:
@@ -462,16 +427,11 @@ def objective(trial):
     trial.set_user_attr("prep_mode", prep_mode)
     if prep_failures:
         insufficient_failures = [(ticker, reason) for ticker, reason in prep_failures if is_insufficient_data_message(reason)]
-        other_failures = [(ticker, reason) for ticker, reason in prep_failures if not is_insufficient_data_message(reason)]
 
         record_optimizer_prep_failures(
             trial_number=trial.number,
-            insufficient_failures=insufficient_failures,
-            other_failures=other_failures
+            insufficient_failures=insufficient_failures
         )
-
-        if other_failures:
-            trial.set_user_attr("prep_other_failures", len(other_failures))
 
     profile_row = {
         'trial_number': trial.number + 1,
