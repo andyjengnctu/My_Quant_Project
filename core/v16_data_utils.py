@@ -5,16 +5,33 @@ LOAD_DATA_REQUIRED_COLS = ['Open', 'High', 'Low', 'Close', 'Volume']
 BACKTEST_EXTRA_MIN_ROWS = 10
 
 
-# # (AI註: 單一真理來源 - 統一 high_len 對資料長度的最低要求，避免 optimizer / sim / scanner / tools 各自寫 +10)
-def get_required_min_rows_from_high_len(high_len, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
-    resolved_high_len = int(high_len or 0)
-    return max(int(base_min_rows), resolved_high_len + int(extra_rows))
+# # (AI註: 單一真理來源 - 統一各類 lookback 對資料長度的最低要求，
+# # (AI註: 避免 optimizer / sim / scanner / tools 只看 high_len，導致其他 rolling 指標長度不足卻靜默通過)
+def get_required_min_rows_from_lookbacks(*lookbacks, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
+    resolved_lookbacks = [int(x or 0) for x in lookbacks]
+    max_lookback = max(resolved_lookbacks) if resolved_lookbacks else 0
+    return max(int(base_min_rows), max_lookback + int(extra_rows))
 
 
 # # (AI註: 單一真理來源 - 由策略參數物件推導最低資料長度需求)
 def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
     high_len = getattr(params, "high_len", 0)
-    return get_required_min_rows_from_high_len(high_len, base_min_rows=base_min_rows, extra_rows=extra_rows)
+    atr_len = getattr(params, "atr_len", 0)
+    bb_len = getattr(params, "bb_len", 0) if getattr(params, "use_bb", False) else 0
+    kc_len = getattr(params, "kc_len", 0) if getattr(params, "use_kc", False) else 0
+    vol_short_len = getattr(params, "vol_short_len", 0) if getattr(params, "use_vol", False) else 0
+    vol_long_len = getattr(params, "vol_long_len", 0) if getattr(params, "use_vol", False) else 0
+
+    return get_required_min_rows_from_lookbacks(
+        high_len,
+        atr_len,
+        bb_len,
+        kc_len,
+        vol_short_len,
+        vol_long_len,
+        base_min_rows=base_min_rows,
+        extra_rows=extra_rows
+    )
 
 
 # # (AI註: 單一真理來源 - 批次參數共用同一個最低資料長度門檻，避免預載 raw cache 與 trial / 候選評估口徑分裂)
