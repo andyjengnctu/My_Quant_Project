@@ -499,9 +499,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
         maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
-    # # (AI註: 與投組模擬一致；若回測最後一天仍有持倉，做期末強制結算，
-    # # (AI註: 讓 asset_growth / trade_count / win_rate / expected_value 口徑一致)
-    if position['qty'] > 0:
+    # # (AI註: 保留「原始回測終點持倉狀態」給 scanner / validate 使用；
+    # # (AI註: 統計則另外做虛擬期末強制結算，避免 trade_count / EV / win_rate 少一筆)
+    end_position_qty = position['qty']
+    had_open_position_at_end = end_position_qty > 0
+
+    if had_open_position_at_end:
         exec_price = adjust_long_sell_fill_price(C[-1])
         net_price = calc_net_sell_price(exec_price, position['qty'], params)
         pnl = (net_price - position['entry']) * position['qty']
@@ -550,7 +553,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     totalNetProfitPct = ((finalEquity - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
     
-    isSetup_today = buyCondition[-1] and (position['qty'] == 0)
+    isSetup_today = buyCondition[-1] and (not had_open_position_at_end)
     buyLimit_today = adjust_long_buy_limit(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_long_stop_price(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
 
@@ -574,7 +577,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
     # # (AI註: 解除 Scanner 分歧 - 回測內部 pending_chase 活著，就直接回傳給 Scanner)
-    chase_today = pending_chase if position['qty'] == 0 else None
+    chase_today = pending_chase if not had_open_position_at_end else None
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     stats_dict = {
@@ -594,7 +597,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "buy_limit": buyLimit_today,
         "stop_loss": stopLoss_today,
         "chase_today": chase_today,
-        "current_position": position['qty'],
+        "current_position": end_position_qty,
         "avg_bars_held": avg_bars_held
     }
     
