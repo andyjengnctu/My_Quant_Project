@@ -331,8 +331,8 @@ def run_all_stock_stats_check(ticker, params):
         required_attrs=["process_single_stock_for_export"]
     )
 
-    file_name = os.path.basename(resolve_csv_path(ticker))
-    export_row = module.process_single_stock_for_export(file_name, params)
+    file_path = resolve_csv_path(ticker)
+    export_row = module.process_single_stock_for_export(ticker, file_path, params)
     return export_row, module_path
 
 
