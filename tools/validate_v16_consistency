@@ -105,7 +105,7 @@ def load_params():
                     setattr(params, k, v)
             print(f"✅ 已載入參數檔: {PARAMS_FILE}")
         except Exception as e:
-            print(f"⚠️ 讀取參數檔失敗，改用預設值。({format_exception_summary(e)})")
+            raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
     else:
         print(f"⚠️ 找不到參數檔，改用預設值。({PARAMS_FILE})")
     return params

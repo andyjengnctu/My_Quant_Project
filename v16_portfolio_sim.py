@@ -35,7 +35,7 @@ def load_dynamic_params(json_file):
                     setattr(params, k, v)
             return params, True
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 讀取參數 {json_file} 失敗: {format_exception_summary(e)}{C_RESET}")
+            raise RuntimeError(f"讀取參數 {json_file} 失敗: {format_exception_summary(e)}") from e
     return params, False
 
 

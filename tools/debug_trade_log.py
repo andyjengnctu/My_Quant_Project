@@ -51,7 +51,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
                     setattr(params, k, v)
             print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
         except Exception as e:
-            print(f"{C_YELLOW}⚠️ 載入 {json_file} 失敗，改用系統預設值。({format_exception_summary(e)}){C_RESET}")
+            raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
     else:
         print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
     return params

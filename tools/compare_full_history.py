@@ -31,7 +31,7 @@ def load_params_from_json(json_file):
                     setattr(params, key, value)
             return params, True
         except Exception as e:
-            print(f"{C_RED}❌ 讀取參數檔失敗: {format_exception_summary(e)}{C_RESET}")
+            raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
     return params, False
 
 def compare_with_tv(csv_file_path, params, param_source):

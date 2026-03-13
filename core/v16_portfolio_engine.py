@@ -399,7 +399,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
 
         sold_today = set()
-        rotation_sold_today = set()
 
         if not is_training and i % 20 == 0:
             exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
@@ -409,7 +408,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         candidates_today = []
 
         for ticker, y_pos, t_pos in sorted(normal_setup_index.get(today, []), key=lambda x: x[0]):
-            if ticker in portfolio or ticker in sold_today or ticker in rotation_sold_today:
+            if ticker in portfolio or ticker in sold_today:
                 continue
 
             fast_df = all_dfs_fast[ticker]
@@ -450,7 +449,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             })
 
         for ticker in sorted(list(pending_chases.keys())):
-            if ticker in portfolio or ticker in sold_today or ticker in rotation_sold_today:
+            if ticker in portfolio or ticker in sold_today:
                 continue
 
             fast_df = all_dfs_fast.get(ticker)
@@ -542,36 +541,33 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         pos = portfolio[weakest_ticker]
                         est_sell_px = adjust_long_sell_fill_price(w_open)
                         est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
-                        cash_available_next_day = available_cash + est_freed_cash
 
-                        # # (AI註: 問題3 版本B - rotation 改成 T 日只賣弱股、T+1 才能用騰出的名額與現金重新評估買進)
-                        if cand['proj_cost'] <= cash_available_next_day:
-                            pnl = est_freed_cash - (pos['entry'] * pos['qty'])
-                            cash += est_freed_cash
+                        # # (AI註: 問題3 版本B - rotation 改成 T 日只賣弱股、T+1 才重新評估可買標的，不用今天候選的 proj_cost 綁定是否先賣弱股)
+                        pnl = est_freed_cash - (pos['entry'] * pos['qty'])
+                        cash += est_freed_cash
 
-                            total_pnl = pos['realized_pnl'] + pnl
-                            total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
-                            closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
-                            if pos.get('entry_type', 'normal') == 'chase':
-                                chase_trade_count += 1
-                            else:
-                                normal_trade_count += 1
+                        total_pnl = pos['realized_pnl'] + pnl
+                        total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+                        closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
+                        if pos.get('entry_type', 'normal') == 'chase':
+                            chase_trade_count += 1
+                        else:
+                            normal_trade_count += 1
 
-                            if not is_training:
-                                trade_history.append({
-                                    "Date": today.strftime('%Y-%m-%d'),
-                                    "Ticker": weakest_ticker,
-                                    "Type": "汰弱賣出(Open, T+1再評估買進)",
-                                    "單筆損益": pnl,
-                                    "該筆總損益": total_pnl,
-                                    "R_Multiple": total_r,
-                                    "Risk": params.fixed_risk
-                                })
+                        if not is_training:
+                            trade_history.append({
+                                "Date": today.strftime('%Y-%m-%d'),
+                                "Ticker": weakest_ticker,
+                                "Type": "汰弱賣出(Open, T+1再評估買進)",
+                                "單筆損益": pnl,
+                                "該筆總損益": total_pnl,
+                                "R_Multiple": total_r,
+                                "Risk": params.fixed_risk
+                            })
 
-                            del portfolio[weakest_ticker]
-                            sold_today.add(weakest_ticker)
-                            rotation_sold_today.add(weakest_ticker)
-                            break
+                        del portfolio[weakest_ticker]
+                        sold_today.add(weakest_ticker)
+                        break
         if profile_stats is not None:
             rotation_sec += time.perf_counter() - t0
 
