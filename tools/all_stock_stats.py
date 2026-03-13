@@ -13,7 +13,7 @@ from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 from core.v16_core import run_v16_backtest
 from core.v16_log_utils import format_exception_summary, write_issue_log
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -61,10 +61,8 @@ def resolve_export_max_workers(params):
         configured = DEFAULT_EXPORT_MAX_WORKERS
     return max(1, configured)
 
-def process_single_stock_for_export(file_name, params):
+def process_single_stock_for_export(ticker, file_path, params):
     """處理單檔股票並回傳所需數據"""
-    ticker = file_name.replace('.csv', '').replace('TV_Data_Full_', '')
-    file_path = os.path.join(DATA_DIR, file_name)
 
     try:
         raw_df = pd.read_csv(file_path)
@@ -135,25 +133,28 @@ def main():
     if not os.path.exists(DATA_DIR):
         raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
         
-    csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
-    if not csv_files:
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
+    if not csv_inputs:
         raise FileNotFoundError(f"資料夾內沒有 CSV 檔案: {DATA_DIR}")
         
     params = load_params()
     results = []
     skipped_insufficient_count = 0
-    export_issue_lines = []
+    export_issue_lines = list(duplicate_file_issue_lines)
     max_workers = resolve_export_max_workers(params)
 
-    print(f"\n🚀 開始平行掃描 {len(csv_files)} 檔股票... (max_workers={max_workers})")
+    print(f"\n🚀 開始平行掃描 {len(csv_inputs)} 檔股票... (max_workers={max_workers})")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_single_stock_for_export, f, params) for f in csv_files]
+        futures = [
+            executor.submit(process_single_stock_for_export, ticker, file_path, params)
+            for ticker, file_path in csv_inputs
+        ]
 
         completed = 0
         for future in as_completed(futures):
             completed += 1
-            print(f"\r⏳ 進度: [{completed}/{len(csv_files)}] 掃描中...", end="", flush=True)
+            print(f"\r⏳ 進度: [{completed}/{len(csv_inputs)}] 掃描中...", end="", flush=True)
             
             res = future.result()
             if isinstance(res, dict) and res.get("__status__") == "skip_insufficient":

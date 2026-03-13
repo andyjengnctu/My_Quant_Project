@@ -21,7 +21,12 @@ from core.v16_config import (
     MIN_TRADE_WIN_RATE,
     MIN_FULL_YEAR_RETURN_PCT,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, get_max_required_min_rows
+from core.v16_data_utils import (
+    sanitize_ohlcv_dataframe,
+    get_required_min_rows,
+    get_max_required_min_rows,
+    discover_unique_csv_inputs,
+)
 from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
@@ -94,18 +99,19 @@ def load_all_raw_data(data_dir, min_rows_needed):
         raise FileNotFoundError(f"找不到資料夾: {data_dir}")
 
     raw_cache = {}
-    load_issue_lines = []
-    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
-    if not csv_files:
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
+    load_issue_lines = list(duplicate_file_issue_lines)
+
+    if not csv_inputs:
         raise FileNotFoundError(f"{data_dir} 中沒有任何 csv 檔")
 
-    for file_name in csv_files:
-        ticker = file_name.replace('.csv', '').replace('TV_Data_Full_', '')
-        file_path = os.path.join(data_dir, file_name)
+    for ticker, file_path in csv_inputs:
         try:
             raw_df = pd.read_csv(file_path)
             if len(raw_df) < min_rows_needed:
-                load_issue_lines.append(f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆")
+                load_issue_lines.append(
+                    f"[資料不足] {ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 筆"
+                )
                 continue
 
             clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
