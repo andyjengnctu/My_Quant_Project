@@ -156,15 +156,17 @@ def print_profile_summary():
 
     for field in numeric_fields:
         vals = []
-        for row in PROFILE_ROWS:
+        for row_idx, row in enumerate(PROFILE_ROWS):
             val = row.get(field, "")
             if isinstance(val, (int, float)):
                 vals.append(float(val))
             elif isinstance(val, str) and val not in ("", None):
                 try:
                     vals.append(float(val))
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    raise ValueError(
+                        f"PROFILE_ROWS[{row_idx}]['{field}'] 無法轉成 float: {val!r}"
+                    ) from e
         summary["avg"][field] = (sum(vals) / len(vals)) if vals else 0.0
 
     with open(PROFILE_SUMMARY_PATH, "w", encoding="utf-8") as f:

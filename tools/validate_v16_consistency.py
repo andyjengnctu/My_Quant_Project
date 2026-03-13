@@ -2,7 +2,6 @@ import os
 import sys
 import copy
 import time
-import json
 import importlib.util
 import pandas as pd
 
@@ -116,11 +115,8 @@ def normalize_ticker_text(value):
 
     text = str(value).strip()
 
-    if text.endswith(".0"):
-        try:
-            text = str(int(float(text)))
-        except ValueError:
-            pass
+    if text[:-2].isdigit() and text.endswith(".0"):
+        text = text[:-2]
 
     if text.isdigit() and len(text) < 4:
         text = text.zfill(4)

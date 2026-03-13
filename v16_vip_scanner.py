@@ -1,14 +1,12 @@
 import os
-import json
 import pandas as pd
-import numpy as np 
 import warnings
 import time
 from core.v16_params_io import load_params_from_json
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
+from core.v16_config import BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_long_target_price, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
