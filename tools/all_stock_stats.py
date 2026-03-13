@@ -33,6 +33,9 @@ def resolve_report_sort_method():
         return 'EV'
     return BUY_SORT_METHOD
 
+def is_insufficient_data_error(exc):
+    return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
+
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
     if not os.path.exists(json_file):
@@ -108,9 +111,11 @@ def process_single_stock_for_export(file_name, params):
             "重複日期筆數": duplicate_date_count
         }
     except Exception as e:
-        # # (AI註: 補捉具體錯誤，避免運算失敗被無聲忽略)
-        print(f"{C_YELLOW}⚠️ 處理 {ticker} 時發生錯誤: {format_exception_summary(e)}{C_RESET}")
-        return None
+        if is_insufficient_data_error(e):
+            return None
+        raise RuntimeError(
+            f"全市場匯出失敗: ticker={ticker} | {format_exception_summary(e)}"
+        ) from e
     
 def main():
     print(f"{C_CYAN}================================================================================{C_RESET}")
