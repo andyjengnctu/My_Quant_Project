@@ -131,7 +131,6 @@ def run_daily_scanner(data_dir):
 
     count_scanned, count_candidates = 0, 0
     count_skipped_insufficient = 0
-    count_errors = 0
     count_sanitized_candidates = 0
     buy_list, in_zone_list = [], []
     scanner_issue_lines = []
@@ -163,7 +162,7 @@ def run_daily_scanner(data_dir):
             if count_scanned % SCANNER_PROGRESS_EVERY == 0 or count_scanned == total_files:
                 print(
                     f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}] "
-                    f"最新買訊:{len(buy_list)} | 追車:{len(in_zone_list)} | 異常:{count_errors}{C_RESET}",
+                    f"最新買訊:{len(buy_list)} | 追車:{len(in_zone_list)}{C_RESET}",
                     end="\r",
                     flush=True
                 )
@@ -180,7 +179,7 @@ def run_daily_scanner(data_dir):
     print(
         f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
         f"歷史及格: {count_candidates} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
-        f"候選清洗: {count_sanitized_candidates} 檔 | 其他異常: {count_errors} 檔"
+        f"候選清洗: {count_sanitized_candidates} 檔"
     )
         
     if buy_list or in_zone_list:
@@ -198,8 +197,8 @@ def run_daily_scanner(data_dir):
 
     if scanner_issue_log_path:
         print(
-            f"\n{C_YELLOW}⚠️ 清洗/異常摘要已寫入: {scanner_issue_log_path} "
-            f"(候選清洗 {count_sanitized_candidates} 檔，其他異常 {count_errors} 檔){C_RESET}"
+            f"\n{C_YELLOW}⚠️ 清洗摘要已寫入: {scanner_issue_log_path} "
+            f"(候選清洗 {count_sanitized_candidates} 檔){C_RESET}"
         )
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
