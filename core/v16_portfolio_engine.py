@@ -143,13 +143,6 @@ def calc_annual_return_pct(start_value, end_value, years):
         return -100.0
     return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
 
-def calc_annual_return_pct(start_value, end_value, years):
-    if start_value <= 0 or years <= 0:
-        return 0.0
-    if end_value <= 0:
-        return -100.0
-    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
-
 
 # # (AI註: 單一真理來源 - 浮動權益估值與 pending_chase 的 next-day sizing 共用同一口徑)
 def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):

@@ -1,7 +1,6 @@
 import pandas as pd
 import sys
 import os
-import json
 import warnings
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -20,8 +19,6 @@ C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
 C_RESET = '\033[0m'
 
-def load_params_from_json_file(json_file):
-    return load_params_from_json(json_file), True
 
 def compare_with_tv(csv_file_path, params, param_source):
     print(f"\n🔍 正在讀取資料: {csv_file_path}")

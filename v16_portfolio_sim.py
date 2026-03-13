@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 import time
 import warnings
 import webbrowser
@@ -8,7 +7,7 @@ import webbrowser
 import numpy as np
 import pandas as pd
 
-from core.v16_config import V16StrategyParams
+from core.v16_params_io import load_params_from_json
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
@@ -25,19 +24,7 @@ LOAD_PROGRESS_EVERY = 50
 
 
 def load_dynamic_params(json_file):
-    params = V16StrategyParams()
-    if not os.path.exists(json_file):
-        raise FileNotFoundError(f"找不到參數檔: {json_file}")
-
-    try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        for k, v in data.items():
-            if hasattr(params, k):
-                setattr(params, k, v)
-        return params, True
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"讀取參數 {json_file} 失敗: {format_exception_summary(e)}") from e
+    return load_params_from_json(json_file), True
 
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 portfolio_sim 被新上市/短歷史標的洗板)
