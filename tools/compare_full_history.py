@@ -10,7 +10,7 @@ if BASE_DIR not in sys.path:
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
 from core.v16_log_utils import format_exception_summary
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, normalize_ticker_from_csv_filename, resolve_unique_csv_path
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -44,7 +44,7 @@ def compare_with_tv(csv_file_path, params, param_source):
         
     raw_df = pd.read_csv(csv_file_path)
     min_rows_needed = get_required_min_rows(params)
-    ticker = os.path.splitext(os.path.basename(csv_file_path))[0].replace("TV_Data_Full_", "")
+    ticker = normalize_ticker_from_csv_filename(os.path.basename(csv_file_path))
     df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
         
     stats = run_v16_backtest(df, params)

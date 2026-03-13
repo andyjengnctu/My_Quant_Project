@@ -73,6 +73,25 @@ def discover_unique_csv_inputs(data_dir):
     ]
     return discovered, duplicate_issue_lines
 
+
+# # (AI註: 單一真理來源 - 統一建立 ticker->csv path 對照表，避免工具腳本反覆重掃資料夾)
+def discover_unique_csv_map(data_dir):
+    csv_inputs, duplicate_issue_lines = discover_unique_csv_inputs(data_dir)
+    return {ticker: file_path for ticker, file_path in csv_inputs}, duplicate_issue_lines
+
+
+# # (AI註: 單一真理來源 - 統一依 ticker 解析唯一 csv 路徑，支援 2330.csv / TV_Data_Full_2330.csv)
+def resolve_unique_csv_path(data_dir, ticker):
+    csv_map, duplicate_issue_lines = discover_unique_csv_map(data_dir)
+    if ticker in csv_map:
+        return csv_map[ticker], duplicate_issue_lines
+
+    available_tickers = sorted(csv_map.keys())
+    preview = ", ".join(available_tickers[:20])
+    if len(available_tickers) > 20:
+        preview += f" ... 共 {len(available_tickers)} 檔"
+    raise FileNotFoundError(f"找不到 {ticker} 的 CSV。資料夾={data_dir}；可用 ticker: [{preview}]")
+
 # # (AI註: 單一真理來源 - 由策略參數物件推導最低資料長度需求)
 def get_required_min_rows(params, base_min_rows=LOAD_DATA_MIN_ROWS, extra_rows=BACKTEST_EXTRA_MIN_ROWS):
     high_len = getattr(params, "high_len", 0)

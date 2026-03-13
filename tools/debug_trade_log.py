@@ -25,7 +25,7 @@ from core.v16_core import (
     calc_initial_risk_total,
     evaluate_chase_condition
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
 from core.v16_log_utils import format_exception_summary
 
 warnings.simplefilter("default")
@@ -313,12 +313,9 @@ def main():
     ticker = input("\n👉 請輸入要除錯的股票代號 (例如: 00972): ").strip()
     if not ticker: return
     
-    # 支援 TV_Data_Full_ 前綴或是直接數字
-    file_path = os.path.join(DATA_DIR, f"TV_Data_Full_{ticker}.csv")
-    if not os.path.exists(file_path):
-        file_path = os.path.join(DATA_DIR, f"{ticker}.csv")
-        
-    if not os.path.exists(file_path):
+    try:
+        file_path, _duplicate_file_issue_lines = resolve_unique_csv_path(DATA_DIR, ticker)
+    except FileNotFoundError:
         # 允許使用者手動上傳的檔案
         if os.path.exists(f"{ticker}.csv"):
             file_path = f"{ticker}.csv"

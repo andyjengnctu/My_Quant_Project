@@ -18,7 +18,7 @@ from core.v16_portfolio_engine import (
     get_fast_dates,
     run_portfolio_timeline,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
 from core.v16_log_utils import format_exception_summary
 
 
@@ -29,6 +29,17 @@ PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "v16_best_params.json")
 FLOAT_TOL = 1e-6
 VALIDATE_PROGRESS_EVERY = 25
 MAX_CONSOLE_FAIL_PREVIEW = 20
+
+
+CSV_PATH_CACHE = None
+CSV_DUPLICATE_ISSUES = None
+
+
+def get_data_dir_csv_map():
+    global CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES
+    if CSV_PATH_CACHE is None:
+        CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES = discover_unique_csv_map(DATA_DIR)
+    return CSV_PATH_CACHE
 
 
 # # (AI註: consistency test 與 portfolio engine 共用相同口徑：實際模擬起訖日換算年數)
@@ -143,14 +154,11 @@ def discover_available_tickers():
     if not os.path.exists(DATA_DIR):
         raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
 
-    csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
-    return [ticker for ticker, _file_path in csv_inputs]
+    return sorted(get_data_dir_csv_map().keys())
 
 
 def resolve_csv_path(ticker):
-    csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
-    csv_map = {resolved_ticker: file_path for resolved_ticker, file_path in csv_inputs}
-
+    csv_map = get_data_dir_csv_map()
     if ticker in csv_map:
         return csv_map[ticker]
 
