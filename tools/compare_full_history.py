@@ -10,6 +10,7 @@ if BASE_DIR not in sys.path:
 from core.v16_config import V16StrategyParams
 from core.v16_core import run_v16_backtest
 from core.v16_log_utils import format_exception_summary
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -39,24 +40,27 @@ def compare_with_tv(csv_file_path, params, param_source):
     print(f"\n🔍 正在讀取資料: {csv_file_path}")
     
     if not os.path.exists(csv_file_path):
-        print(f"❌ 找不到檔案！請確認 {csv_file_path} 是否存在。")
-        return
+        raise FileNotFoundError(f"找不到檔案！請確認 {csv_file_path} 是否存在。")
         
-    df = pd.read_csv(csv_file_path)
-    df.columns = [c.capitalize() for c in df.columns]
-    
-    if 'Time' in df.columns:
-        df['Time'] = pd.to_datetime(df['Time'])
-        df.set_index('Time', inplace=True)
-    elif 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-        df.set_index('Date', inplace=True)
+    raw_df = pd.read_csv(csv_file_path)
+    min_rows_needed = get_required_min_rows(params)
+    ticker = os.path.splitext(os.path.basename(csv_file_path))[0].replace("TV_Data_Full_", "")
+    df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
         
     stats = run_v16_backtest(df, params)
     
+    dropped_row_count = sanitize_stats['dropped_row_count']
+    invalid_row_count = sanitize_stats['invalid_row_count']
+    duplicate_date_count = sanitize_stats['duplicate_date_count']
+
+    if dropped_row_count > 0:
+        print(
+            f"⚠️ {ticker} 清洗移除 {dropped_row_count} 列 "
+            f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
+        )
+    
     if not stats:
-        print("❌ 運算失敗：無法產生指標訊號。")
-        return
+        raise RuntimeError("運算失敗：無法產生指標訊號。")
 
     print(f"\n{C_CYAN}[Python 核心運算結果 vs TradingView 面板]{C_RESET}")
     print(f"⚙️ 載入參數來源: {param_source}")
