@@ -138,7 +138,7 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         raise KeyError(f"缺少必要欄位: {missing_cols}")
 
     for col in required_cols:
-        working[col] = pd.to_numeric(working[col], errors='coerce')
+        working[col] = pd.to_numeric(working[col], errors='coerce').astype('float64')
 
     working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
 
@@ -153,12 +153,11 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         (working['High'] <= 0) |
         (working['Low'] <= 0) |
         (working['Close'] <= 0) |
-        # # (AI註: 零成交量日不可成交，直接排除，避免回測在不可交易日買入/賣出)
-        (working['Volume'] <= 0) |
         (working['High'] < working[['Open', 'Low', 'Close']].max(axis=1)) |
         (working['Low'] > working[['Open', 'High', 'Close']].min(axis=1))
     )
 
+    zero_volume_row_count = int((working['Volume'] <= 0).sum())
     invalid_row_count = int(invalid_mask.sum())
     if invalid_row_count > 0:
         working = working.loc[~invalid_mask].copy()
@@ -179,6 +178,7 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
     stats = {
         'invalid_row_count': invalid_row_count,
         'duplicate_date_count': duplicate_date_count,
+        'zero_volume_row_count': zero_volume_row_count,
         'dropped_row_count': invalid_row_count + duplicate_date_count,
     }
     return working, stats

@@ -41,8 +41,11 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
 
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
-    H, L, C = df['High'].values, df['Low'].values, df['Close'].values
-    O = df['Open'].values
+    H = df['High'].to_numpy(dtype=np.float64, copy=False)
+    L = df['Low'].to_numpy(dtype=np.float64, copy=False)
+    C = df['Close'].to_numpy(dtype=np.float64, copy=False)
+    O = df['Open'].to_numpy(dtype=np.float64, copy=False)
+    V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     Dates = df.index
 
     ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
@@ -74,6 +77,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                 H[j],
                 L[j],
                 C[j],
+                V[j],
                 params
             )
 
@@ -139,15 +143,17 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         if isSetup_prev:
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params)
-            if entry_plan is None:
-                buyQty = 0
-            else:
+            buyLimitPrice = buy_limits[j - 1]
+            planned_init_sl = np.nan
+            planned_init_trail = np.nan
+            buyQty = 0
+            if entry_plan is not None:
                 buyLimitPrice = entry_plan['limit_price']
                 planned_init_sl = entry_plan['init_sl']
                 planned_init_trail = entry_plan['init_trail']
                 buyQty = entry_plan['qty']
 
-            if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
+            if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
 
                 # # (AI註: 與正式核心一致 - 若開盤已跌破盤前停損死線，直接放棄，不可硬買)
@@ -202,7 +208,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = pending_chase['qty']
 
-            if L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
+            if V[j] > 0 and L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], chase_limit))
 
                 if buyPrice > planned_init_sl:

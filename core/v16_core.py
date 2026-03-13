@@ -197,7 +197,7 @@ def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, p
     return None
 
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, params):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params):
     freed_cash, pnl_realized = 0.0, 0.0
     events = []
 
@@ -208,6 +208,11 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         new_trail = adjust_long_stop_price(y_close - (y_atr * params.atr_times_trail))
         position['trailing_stop'] = max(position.get('trailing_stop', 0.0), new_trail)
         position['sl'] = max(position['initial_stop'], position['trailing_stop'])
+
+    # # (AI註: 零成交量日保留在時間序列中，但當日不可成交；
+    # # (AI註: 僅允許先用前一日已知資訊更新停損線，再禁止當日任何賣出事件)
+    if pd.isna(t_volume) or t_volume <= 0:
+        return position, freed_cash, pnl_realized, events
 
     # # (AI註: y_ind_sell 是 T-1 收盤後已知、T 日盤前即可決定的賣出指令，
     # # (AI註: 必須優先於 T 日盤中的 TP_HALF / STOP 判斷，避免出現不可能的事件序列)
@@ -276,7 +281,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     return position, freed_cash, pnl_realized, events
 
 def tv_rma(source, length):
-    rma = np.full_like(source, np.nan)
+    source = np.asarray(source, dtype=np.float64)
+    rma = np.full(source.shape, np.nan, dtype=np.float64)
     valid_idx = np.where(~np.isnan(source))[0]
     if len(valid_idx) < length: return rma
     first_valid = valid_idx[length - 1]
@@ -288,6 +294,9 @@ def tv_rma(source, length):
     return rma
 
 def tv_atr(high, low, close, length):
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
     tr1 = high - low
     tr2 = np.abs(high - np.roll(close, 1))
     tr3 = np.abs(low - np.roll(close, 1))
@@ -296,7 +305,8 @@ def tv_atr(high, low, close, length):
     return tv_rma(tr, length)
 
 def tv_ema(source, length):
-    ema = np.full_like(source, np.nan)
+    source = np.asarray(source, dtype=np.float64)
+    ema = np.full(source.shape, np.nan, dtype=np.float64)
     valid_idx = np.where(~np.isnan(source))[0]
     if len(valid_idx) == 0: return ema
     first_valid = valid_idx[0]
@@ -310,10 +320,16 @@ def tv_ema(source, length):
     return ema
 
 def tv_supertrend(high, low, close, atr, multiplier):
+    high = np.asarray(high, dtype=np.float64)
+    low = np.asarray(low, dtype=np.float64)
+    close = np.asarray(close, dtype=np.float64)
+    atr = np.asarray(atr, dtype=np.float64)
     hl2 = (high + low) / 2.0
     basic_ub = hl2 + multiplier * atr
     basic_lb = hl2 - multiplier * atr
-    final_ub, final_lb, direction = np.full_like(close, np.nan), np.full_like(close, np.nan), np.full_like(close, 1) 
+    final_ub = np.full(close.shape, np.nan, dtype=np.float64)
+    final_lb = np.full(close.shape, np.nan, dtype=np.float64)
+    direction = np.full(close.shape, 1, dtype=np.int8) 
     first_valid = np.where(~np.isnan(atr))[0]
     if len(first_valid) == 0: return direction
     first = first_valid[0]
@@ -329,8 +345,12 @@ def tv_supertrend(high, low, close, atr, multiplier):
     return direction
 
 def generate_signals(df, params):
-    H, L, C = df['High'].values, df['Low'].values, df['Close'].values
-    O, V = df['Open'].values, df['Volume'].values
+    H = df['High'].to_numpy(dtype=np.float64, copy=False)
+    L = df['Low'].to_numpy(dtype=np.float64, copy=False)
+    C = df['Close'].to_numpy(dtype=np.float64, copy=False)
+    O = df['Open'].to_numpy(dtype=np.float64, copy=False)
+    V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
+    is_tradable_bar = V > 0
     ATR_main = tv_atr(H, L, C, params.atr_len)
 
     close_series = pd.Series(C)
@@ -381,8 +401,8 @@ def generate_signals(df, params):
     else:
         kcSellCondition = np.zeros_like(C, dtype=bool)
 
-    buyCondition = (C > O) & isPriceCrossover & bbCondition & volCondition
-    sellCondition = (isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition
+    buyCondition = is_tradable_bar & (C > O) & isPriceCrossover & bbCondition & volCondition
+    sellCondition = is_tradable_bar & ((isSupertrend_Bearish_Flip & (C <= O)) | kcSellCondition)
     raw_buy_limits = C + ATR_main * params.atr_buy_tol
     buy_limits = np.full_like(C, np.nan)
     valid_buy_mask = buyCondition & ~np.isnan(raw_buy_limits)
@@ -391,8 +411,11 @@ def generate_signals(df, params):
     return ATR_main, buyCondition, sellCondition, buy_limits
 
 def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False, precomputed_signals=None):
-    H, L, C = df['High'].values, df['Low'].values, df['Close'].values
-    O, V = df['Open'].values, df['Volume'].values
+    H = df['High'].to_numpy(dtype=np.float64, copy=False)
+    L = df['Low'].to_numpy(dtype=np.float64, copy=False)
+    C = df['Close'].to_numpy(dtype=np.float64, copy=False)
+    O = df['Open'].to_numpy(dtype=np.float64, copy=False)
+    V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     Dates = df.index
     if precomputed_signals is None:
         ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
@@ -418,7 +441,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             total_bars_held += 1
             position, freed_cash, pnl_realized, events = execute_bar_step(
                 position, ATR_main[j-1], sellCondition[j-1], C[j-1], 
-                O[j], H[j], L[j], C[j], params
+                O[j], H[j], L[j], C[j], V[j], params
             )
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
@@ -451,7 +474,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = calc_position_size(buyLimitPrice, planned_init_sl, sizing_cap, params.fixed_risk, params)
             
-            if L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
+            if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
                 # 確保跳空暴跌沒擊穿盤前停損死線
                 if buyPrice > planned_init_sl:
@@ -481,7 +504,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
             buyQty = pending_chase['qty']
             
-            if L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
+            if V[j] > 0 and L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
                 buyPrice = adjust_long_buy_fill_price(min(O[j], chase_limit))
                 if buyPrice > planned_init_sl:
                     entryPrice = calc_entry_price(buyPrice, buyQty, params)

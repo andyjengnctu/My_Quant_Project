@@ -166,7 +166,7 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
 
     return float(equity)
 
-FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'ATR', 'buy_limit')
+FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'Volume', 'ATR', 'buy_limit')
 FAST_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
 
 
@@ -624,6 +624,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 get_fast_value(fast_df, 'High', pos=t_pos),
                 get_fast_value(fast_df, 'Low', pos=t_pos),
                 get_fast_close(fast_df, pos=t_pos),
+                get_fast_value(fast_df, 'Volume', pos=t_pos),
                 params,
             )
             cash += freed_cash
@@ -681,6 +682,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             t_high = get_fast_value(fast_df, 'High', pos=t_pos)
             t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
             t_close = get_fast_close(fast_df, pos=t_pos)
+            t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
             y_close = get_fast_close(fast_df, pos=y_pos)
             is_locked_up = (
                 (t_open == t_high) and
@@ -688,6 +690,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 (t_low == t_close) and
                 (t_close > y_close)
             )
+
+            is_normal_worse_than_sl = False
 
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
                 if cand['type'] == 'normal':
@@ -712,9 +716,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             pre_market_occupied += 1
 
             buyTriggered = False
-            is_normal_worse_than_sl = False
 
-            if t_low <= cand['limit_px'] and not is_locked_up:
+            if t_volume > 0 and t_low <= cand['limit_px'] and not is_locked_up:
                 buy_price = adjust_long_buy_fill_price(min(t_open, cand['limit_px']))
                 if buy_price > cand['init_sl']:
                     qty = cand['qty']
