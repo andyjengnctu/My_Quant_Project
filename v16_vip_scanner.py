@@ -10,7 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
 from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_long_target_price, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 
@@ -125,8 +125,8 @@ def run_daily_scanner(data_dir):
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"找不到資料夾 {data_dir}。")
 
-    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
-    total_files = len(csv_files)
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
+    total_files = len(csv_inputs)
     if total_files == 0:
         raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
@@ -142,7 +142,7 @@ def run_daily_scanner(data_dir):
     count_skipped_insufficient = 0
     count_sanitized_candidates = 0
     buy_list, in_zone_list = [], []
-    scanner_issue_lines = []
+    scanner_issue_lines = list(duplicate_file_issue_lines)
     start_time = time.time()
     max_workers = resolve_scanner_max_workers(params)
 
@@ -150,10 +150,10 @@ def run_daily_scanner(data_dir):
         futures = {
             executor.submit(
                 process_single_stock,
-                os.path.join(data_dir, f),
-                f.replace('.csv', '').replace('TV_Data_Full_', ''),
+                file_path,
+                ticker,
                 params
-            ): f for f in csv_files
+            ): file_path for ticker, file_path in csv_inputs
         }
 
         for future in as_completed(futures):

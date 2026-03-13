@@ -11,7 +11,7 @@ import pandas as pd
 from core.v16_config import V16StrategyParams
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
@@ -85,13 +85,13 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     total_skipped_insufficient = 0
     total_sanitize_issue_tickers = 0
 
-    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
-    total_files = len(csv_files)
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
+    load_issue_lines.extend(duplicate_file_issue_lines)
+    total_files = len(csv_inputs)
 
-    for count, file in enumerate(csv_files, start=1):
-        ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
+    for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
         try:
-            raw_df = pd.read_csv(os.path.join(data_dir, file))
+            raw_df = pd.read_csv(file_path)
             min_rows_needed = get_required_min_rows(params)
 
             if len(raw_df) < min_rows_needed:
