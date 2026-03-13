@@ -84,7 +84,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     total_duplicate_dates = 0
     total_dropped_rows = 0
     total_skipped_insufficient = 0
-    total_other_errors = 0
     total_sanitize_issue_tickers = 0
 
     csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
@@ -136,7 +135,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
             print(
                 f"{C_GRAY}   預載入進度: [{count}/{total_files}] "
-                f"成功:{len(all_dfs)} | 資料不足:{total_skipped_insufficient} | 異常:{total_other_errors}{C_RESET}",
+                f"成功:{len(all_dfs)} | 資料不足:{total_skipped_insufficient}{C_RESET}",
                 end="\r",
                 flush=True
             )
@@ -160,8 +159,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})，"
         f"候選清洗 {total_sanitize_issue_tickers} 檔，"
-        f"資料不足跳過 {total_skipped_insufficient} 檔，"
-        f"其他異常 {total_other_errors} 檔。"
+        f"資料不足跳過 {total_skipped_insufficient} 檔。"
         f"自 {start_year} 年開始啟動真實時間軸回測...{C_RESET}\n"
     )
 
