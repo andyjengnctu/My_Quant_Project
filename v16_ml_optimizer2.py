@@ -19,7 +19,12 @@ from core.v16_config import (
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, get_required_min_rows_from_high_len
+from core.v16_data_utils import (
+    sanitize_ohlcv_dataframe,
+    get_required_min_rows,
+    get_required_min_rows_from_high_len,
+    discover_unique_csv_inputs,
+)
 from core.v16_log_utils import write_issue_log, format_exception_summary
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -201,19 +206,19 @@ def load_all_raw_data():
         raise FileNotFoundError(f"找不到資料夾 {DATA_DIR}，請先執行 vip_smart_downloader.py！")
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
-    files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
-    if not files:
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
+    if not csv_inputs:
         raise FileNotFoundError(f"資料夾 {DATA_DIR} 內沒有任何 CSV 檔案。")
 
-    load_issues = []
+    load_issues = list(duplicate_file_issue_lines)
     total_invalid_rows = 0
     total_duplicate_dates = 0
     total_dropped_rows = 0
+    total_files = len(csv_inputs)
 
-    for count, file in enumerate(files, start=1):
-        ticker = file.replace('.csv', '').replace('TV_Data_Full_', '')
+    for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
         try:
-            raw_df = pd.read_csv(os.path.join(DATA_DIR, file))
+            raw_df = pd.read_csv(file_path)
             min_rows_needed = OPTIMIZER_REQUIRED_MIN_ROWS
             if len(raw_df) < min_rows_needed:
                 load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 列")
@@ -244,8 +249,11 @@ def load_all_raw_data():
                 f"optimizer 原始資料快取失敗: ticker={ticker} | {format_exception_summary(e)}"
             ) from e
 
-        if count % 50 == 0:
-            print(f"{C_GRAY}   進度: 已掃描 {count} 檔股票...{C_RESET}", end="\r")
+        if count % 50 == 0 or count == total_files:
+            print(
+                f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}",
+                end="\r"
+            )
 
     print(
         f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，"
