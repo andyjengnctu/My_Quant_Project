@@ -154,13 +154,6 @@ def run_daily_scanner(data_dir):
                         scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
                 elif status == 'skip_insufficient':
                     count_skipped_insufficient += 1
-                if status in ['buy', 'zone', 'candidate']:
-                    count_candidates += 1
-                    if sanitize_issue is not None:
-                        count_sanitized_candidates += 1
-                        scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
-                elif status == 'skip_insufficient':
-                    count_skipped_insufficient += 1
 
                 if status == 'buy':
                     buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
