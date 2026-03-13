@@ -696,21 +696,40 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
                 if cand['type'] == 'normal':
                     total_missed_buys += 1
-                    if not is_normal_worse_than_sl:
-                        if t_volume > 0:
-                            next_day_sizing_equity = (
-                                calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-                                if getattr(params, 'use_compounding', True) else initial_capital
-                            )
-                            chase_res = evaluate_chase_condition(
-                                t_close, cand['limit_px'], cand['y_atr'], next_day_sizing_equity, params
-                            )
-                            if chase_res:
-                                chase_res['orig_limit'] = cand['limit_px']
-                                chase_res['orig_atr'] = cand['y_atr']
-                                pending_chases[cand['ticker']] = chase_res
+                    if t_volume > 0:
+                        next_day_sizing_equity = (
+                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+                            if getattr(params, 'use_compounding', True) else initial_capital
+                        )
+                        chase_res = evaluate_chase_condition(
+                            t_close, cand['limit_px'], cand['y_atr'], next_day_sizing_equity, params
+                        )
+                        if chase_res:
+                            chase_res['orig_limit'] = cand['limit_px']
+                            chase_res['orig_atr'] = cand['y_atr']
+                            pending_chases[cand['ticker']] = chase_res
+
+                elif cand['type'] == 'chase':
+                    # # (AI註: chase 候選即使因滿倉/資金不足未買，也必須依當日收盤更新、失效或保留 pending_chase)
+                    if t_volume <= 0:
+                        pass
+                    elif cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
+                        next_day_sizing_equity = (
+                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+                            if getattr(params, 'use_compounding', True) else initial_capital
+                        )
+                        chase_res = evaluate_chase_condition(
+                            t_close, cand['orig_limit'], cand['y_atr'], next_day_sizing_equity, params
+                        )
+                        if chase_res:
+                            chase_res['orig_limit'] = cand['orig_limit']
+                            chase_res['orig_atr'] = cand['y_atr']
+                            pending_chases[cand['ticker']] = chase_res
+                        elif cand['ticker'] in pending_chases:
+                            del pending_chases[cand['ticker']]
                     elif cand['ticker'] in pending_chases:
                         del pending_chases[cand['ticker']]
+
                 continue
 
             available_cash -= cand['proj_cost']
