@@ -215,6 +215,7 @@ def load_all_raw_data():
     total_duplicate_dates = 0
     total_dropped_rows = 0
     total_files = len(csv_inputs)
+    fresh_raw_data_cache = {}
 
     for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
         try:
@@ -225,7 +226,7 @@ def load_all_raw_data():
                 continue
 
             clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
-            RAW_DATA_CACHE[ticker] = clean_df
+            fresh_raw_data_cache[ticker] = clean_df
 
             invalid_row_count = sanitize_stats['invalid_row_count']
             duplicate_date_count = sanitize_stats['duplicate_date_count']
@@ -255,14 +256,19 @@ def load_all_raw_data():
                 end="\r"
             )
 
+    if not fresh_raw_data_cache:
+        raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
+
+    # # (AI註: 原子性更新快取，避免同一個 Python session 重跑時殘留舊 ticker，
+    # # (AI註: 也避免載入途中失敗留下半新半舊的污染狀態)
+    RAW_DATA_CACHE.clear()
+    RAW_DATA_CACHE.update(fresh_raw_data_cache)
+
     print(
         f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，"
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})。{C_RESET}\n"
     )
-
-    if not RAW_DATA_CACHE:
-        raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
 
     if load_issues:
         issue_path = write_issue_log("optimizer_load_issues", load_issues)
