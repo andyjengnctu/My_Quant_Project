@@ -395,7 +395,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             year_start_equity[today.year] = current_equity
             year_first_sim_date[today.year] = pd.Timestamp(today)
 
-        available_cash = cash #test
+        available_cash = cash
         sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
 
         sold_today = set()

@@ -26,17 +26,18 @@ LOAD_PROGRESS_EVERY = 50
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for k, v in data.items():
-                if hasattr(params, k):
-                    setattr(params, k, v)
-            return params, True
-        except Exception as e:
-            raise RuntimeError(f"讀取參數 {json_file} 失敗: {format_exception_summary(e)}") from e
-    return params, False
+    if not os.path.exists(json_file):
+        raise FileNotFoundError(f"找不到參數檔: {json_file}")
+
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if hasattr(params, k):
+                setattr(params, k, v)
+        return params, True
+    except Exception as e:
+        raise RuntimeError(f"讀取參數 {json_file} 失敗: {format_exception_summary(e)}") from e
 
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 portfolio_sim 被新上市/短歷史標的洗板)

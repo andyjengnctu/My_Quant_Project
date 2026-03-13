@@ -21,18 +21,19 @@ C_RESET = '\033[0m'
 
 def load_params_from_json(json_file):
     params = V16StrategyParams()
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            # 動態將 JSON 的值覆寫到 params 物件
-            for key, value in data.items():
-                if hasattr(params, key):
-                    setattr(params, key, value)
-            return params, True
-        except Exception as e:
-            raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
-    return params, False
+    if not os.path.exists(json_file):
+        raise FileNotFoundError(f"找不到參數檔: {json_file}")
+
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # 動態將 JSON 的值覆寫到 params 物件
+        for key, value in data.items():
+            if hasattr(params, key):
+                setattr(params, key, value)
+        return params, True
+    except Exception as e:
+        raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
 
 def compare_with_tv(csv_file_path, params, param_source):
     print(f"\n🔍 正在讀取資料: {csv_file_path}")
@@ -85,13 +86,13 @@ if __name__ == "__main__":
     
     if choice == '2':
         params, success = load_params_from_json(os.path.join(BASE_DIR, "models", "v16_best_params.json"))
-        param_source = "models/v16_best_params.json" if success else "找不到檔案，使用預設值"
+        param_source = "models/v16_best_params.json"
     elif choice == '3':
         params = V16StrategyParams()
         param_source = "v16_config.py 系統預設"
     else:
         params, success = load_params_from_json("v16_original_params.json")
-        param_source = "v16_original_params.json" if success else "找不到檔案，使用預設值"
+        param_source = "v16_original_params.json"
 
     while True:
         ticker_input = input(f"請輸入要測試的股票代碼 (例如 2330，輸入 'q' 離開): ").strip()

@@ -27,17 +27,18 @@ SCANNER_PROGRESS_EVERY = 25
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for key, value in data.items():
-                if hasattr(params, key):
-                    setattr(params, key, value)
-            return params, True
-        except Exception as e:
-            raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}") from e
-    return params, False
+    if not os.path.exists(json_file):
+        raise FileNotFoundError(f"找不到參數檔: {json_file}")
+
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for key, value in data.items():
+            if hasattr(params, key):
+                setattr(params, key, value)
+        return params, True
+    except Exception as e:
+        raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}") from e
 
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 scanner 被新上市/短歷史標的洗板)
@@ -128,8 +129,8 @@ def run_daily_scanner(data_dir):
     if total_files == 0: return
 
     params, is_loaded = load_dynamic_params("models/v16_best_params.json")
-    if is_loaded: print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
-    else: print(f"{C_YELLOW}⚠️ 找不到最佳參數，使用系統內建預設值。{C_RESET}")
+    if is_loaded:
+        print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
         
     print_scanner_header(params)
     print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額僅以 initial_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")

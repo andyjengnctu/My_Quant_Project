@@ -96,18 +96,18 @@ def load_module_from_candidates(module_name, relative_paths, required_attrs=None
 
 def load_params():
     params = V16StrategyParams()
-    if os.path.exists(PARAMS_FILE):
-        try:
-            with open(PARAMS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            for k, v in data.items():
-                if hasattr(params, k):
-                    setattr(params, k, v)
-            print(f"✅ 已載入參數檔: {PARAMS_FILE}")
-        except Exception as e:
-            raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
-    else:
-        print(f"⚠️ 找不到參數檔，改用預設值。({PARAMS_FILE})")
+    if not os.path.exists(PARAMS_FILE):
+        raise FileNotFoundError(f"找不到參數檔: {PARAMS_FILE}")
+
+    try:
+        with open(PARAMS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if hasattr(params, k):
+                setattr(params, k, v)
+        print(f"✅ 已載入參數檔: {PARAMS_FILE}")
+    except Exception as e:
+        raise RuntimeError(f"讀取參數檔失敗: {format_exception_summary(e)}") from e
     return params
 
 

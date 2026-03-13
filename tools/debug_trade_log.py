@@ -42,18 +42,18 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
     params = V16StrategyParams()
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for k, v in data.items():
-                if hasattr(params, k):
-                    setattr(params, k, v)
-            print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
-        except Exception as e:
-            raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
-    else:
-        print(f"{C_YELLOW}⚠️ 找不到 {json_file}，使用系統預設值。{C_RESET}")
+    if not os.path.exists(json_file):
+        raise FileNotFoundError(f"找不到參數檔: {json_file}")
+
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for k, v in data.items():
+            if hasattr(params, k):
+                setattr(params, k, v)
+        print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
+    except Exception as e:
+        raise RuntimeError(f"載入 {json_file} 失敗: {format_exception_summary(e)}") from e
     return params
 
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
