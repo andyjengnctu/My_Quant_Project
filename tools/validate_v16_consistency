@@ -18,7 +18,7 @@ from core.v16_portfolio_engine import (
     get_fast_dates,
     run_portfolio_timeline,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import format_exception_summary
 
 
@@ -143,28 +143,23 @@ def discover_available_tickers():
     if not os.path.exists(DATA_DIR):
         raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
 
-    tickers = []
-    for file_name in sorted(os.listdir(DATA_DIR)):
-        if not file_name.endswith(".csv"):
-            continue
-
-        ticker = file_name.replace(".csv", "").replace("TV_Data_Full_", "").strip()
-        if ticker:
-            tickers.append(ticker)
-
-    return tickers
+    csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
+    return [ticker for ticker, _file_path in csv_inputs]
 
 
 def resolve_csv_path(ticker):
+    csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
+    csv_map = {resolved_ticker: file_path for resolved_ticker, file_path in csv_inputs}
+
+    if ticker in csv_map:
+        return csv_map[ticker]
+
     candidates = [
         os.path.join(DATA_DIR, f"TV_Data_Full_{ticker}.csv"),
         os.path.join(DATA_DIR, f"{ticker}.csv"),
         os.path.join(PROJECT_ROOT, f"TV_Data_Full_{ticker}.csv"),
         os.path.join(PROJECT_ROOT, f"{ticker}.csv"),
     ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
     raise FileNotFoundError(f"找不到 {ticker} 的 CSV。已檢查: {candidates}")
 
 
