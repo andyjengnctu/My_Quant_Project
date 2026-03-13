@@ -70,7 +70,11 @@ def process_single_stock_for_export(file_name, params):
         raw_df = pd.read_csv(file_path)
         min_rows_needed = get_required_min_rows(params)
         if len(raw_df) < min_rows_needed:
-            return None
+            return {
+                "__status__": "skip_insufficient",
+                "__ticker__": ticker,
+                "__reason__": f"原始資料列數不足 ({len(raw_df)})，至少需要 {min_rows_needed} 列"
+            }
 
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
 

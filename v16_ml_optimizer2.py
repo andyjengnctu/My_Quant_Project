@@ -202,6 +202,9 @@ def load_all_raw_data():
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.csv')])
+    if not files:
+        raise FileNotFoundError(f"資料夾 {DATA_DIR} 內沒有任何 CSV 檔案。")
+
     load_issues = []
     total_invalid_rows = 0
     total_duplicate_dates = 0
@@ -249,6 +252,9 @@ def load_all_raw_data():
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})。{C_RESET}\n"
     )
+
+    if not RAW_DATA_CACHE:
+        raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
 
     if load_issues:
         issue_path = write_issue_log("optimizer_load_issues", load_issues)

@@ -24,6 +24,15 @@ os.makedirs("outputs", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
 SCANNER_PROGRESS_EVERY = 25
+DEFAULT_SCANNER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1) // 2))
+
+def resolve_scanner_max_workers(params):
+    configured = getattr(params, 'scanner_max_workers', DEFAULT_SCANNER_MAX_WORKERS)
+    try:
+        configured = int(configured)
+    except (TypeError, ValueError):
+        configured = DEFAULT_SCANNER_MAX_WORKERS
+    return max(1, configured)
 
 def load_dynamic_params(json_file):
     params = V16StrategyParams()
@@ -135,9 +144,17 @@ def run_daily_scanner(data_dir):
     buy_list, in_zone_list = [], []
     scanner_issue_lines = []
     start_time = time.time()
+    max_workers = resolve_scanner_max_workers(params)
 
-    with ProcessPoolExecutor() as executor:
-        futures = {executor.submit(process_single_stock, os.path.join(data_dir, f), f.replace('.csv', '').replace('TV_Data_Full_', ''), params): f for f in csv_files}
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                process_single_stock,
+                os.path.join(data_dir, f),
+                f.replace('.csv', '').replace('TV_Data_Full_', ''),
+                params
+            ): f for f in csv_files
+        }
 
         for future in as_completed(futures):
             count_scanned += 1
@@ -179,7 +196,7 @@ def run_daily_scanner(data_dir):
     print(
         f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
         f"歷史及格候選: {count_history_qualified} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
-        f"候選清洗: {count_sanitized_candidates} 檔"
+        f"候選清洗: {count_sanitized_candidates} 檔 | max_workers: {max_workers}"
     )
         
     if buy_list or in_zone_list:
