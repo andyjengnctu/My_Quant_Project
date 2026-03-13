@@ -323,8 +323,7 @@ def main():
         if os.path.exists(f"{ticker}.csv"):
             file_path = f"{ticker}.csv"
         else:
-            print(f"❌ 找不到 {ticker} 的歷史資料 CSV。")
-            return
+            raise FileNotFoundError(f"找不到 {ticker} 的歷史資料 CSV。")
             
     print(f"📥 讀取 {file_path}...")
     raw_df = pd.read_csv(file_path)
