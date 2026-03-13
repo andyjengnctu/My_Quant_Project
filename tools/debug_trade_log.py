@@ -267,7 +267,9 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
         currentEquity = currentCapital
         if position['qty'] > 0:
-            floatingSellNet = calc_net_sell_price(C[j], position['qty'], params)
+            # # (AI註: 浮動權益也統一用保守可賣出價口徑，避免 debug 顯示比正式結算樂觀)
+            floating_exec_price = adjust_long_sell_fill_price(C[j])
+            floatingSellNet = calc_net_sell_price(floating_exec_price, position['qty'], params)
             floatingPnL = (floatingSellNet - position['entry']) * position['qty']
             currentEquity = currentCapital + floatingPnL
 

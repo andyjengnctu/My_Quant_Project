@@ -95,7 +95,7 @@ if __name__ == "__main__":
         params = V16StrategyParams()
         param_source = "v16_config.py 系統預設"
     else:
-        params, success = load_params_from_json("v16_original_params.json")
+        params, success = load_params_from_json(os.path.join(BASE_DIR, "v16_original_params.json"))
         param_source = "v16_original_params.json"
 
     while True:

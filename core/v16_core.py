@@ -489,9 +489,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
 
         currentEquity = currentCapital
         if position['qty'] > 0:
-            # # (AI註: currentCapital 已經包含歷次已實現損益，
-            # # (AI註: 這裡只能再加「剩餘部位的未實現損益」，避免半倉獲利重複入帳)
-            floatingSellNet = calc_net_sell_price(C[j], position['qty'], params)
+            # # (AI註: 浮動權益也統一用保守可賣出價口徑，避免權益曲線 / MDD 比最終結算樂觀)
+            floating_exec_price = adjust_long_sell_fill_price(C[j])
+            floatingSellNet = calc_net_sell_price(floating_exec_price, position['qty'], params)
             floatingPnL = (floatingSellNet - position['entry']) * position['qty']
             currentEquity = currentCapital + floatingPnL
 
@@ -533,6 +533,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         # # (AI註: 這裡只補上剩餘部位尚未實現的 pnl，不可加整筆賣出金額)
         currentCapital += pnl
         currentEquity = currentCapital
+
+        # # (AI註: 期末強制結算後補做一次 peak / drawdown 更新，避免 final closeout 對 MDD 漏算)
+        peakCapital = max(peakCapital, currentEquity)
+        currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
+        maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
+
         position['qty'] = 0
 
     winRate = (fullWins / tradeCount * 100) if tradeCount > 0 else 0

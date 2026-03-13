@@ -763,7 +763,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             else:
                 px = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
             pos['last_px'] = px
-            net_px = calc_net_sell_price(px, pos['qty'], params)
+
+            # # (AI註: 浮動權益也統一用保守可賣出價口徑，避免月度曲線 / MDD 比最終結算樂觀)
+            floating_exec_price = adjust_long_sell_fill_price(px)
+            net_px = calc_net_sell_price(floating_exec_price, pos['qty'], params)
             today_equity += pos['qty'] * net_px
         if profile_stats is not None:
             equity_mark_sec += time.perf_counter() - t0
@@ -821,10 +824,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         if profile_stats is not None:
             day_loop_sec += time.perf_counter() - t_day_start
 
-    if len(sorted_dates) > start_idx:
-        monthly_equities.append(today_equity)
-        if current_bm_px is not None:
-            bm_monthly_equities.append(current_bm_px)
+    # # (AI註: 月底權益應以期末強制結算後的真實 final equity 為準，故移到 closeout 後再 append)
 
     final_cash = cash
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
@@ -859,7 +859,18 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     today_equity = final_cash
     if last_date is not None and last_date.year in year_end_equity:
         year_end_equity[last_date.year] = today_equity
-    total_return = (today_equity - initial_capital) / initial_capital * 100
+
+    # # (AI註: 期末強制結算後補做一次 peak / drawdown 更新，避免 final closeout 對 MDD 漏算)
+    if today_equity > peak_equity:
+        peak_equity = today_equity
+    drawdown = (peak_equity - today_equity) / peak_equity * 100 if peak_equity > 0 else 0.0
+    if drawdown > max_drawdown:
+        max_drawdown = drawdown
+
+    if len(sorted_dates) > start_idx:
+        monthly_equities.append(today_equity)
+        if current_bm_px is not None:
+            bm_monthly_equities.append(current_bm_px)
 
     if not is_training and len(equity_curve) > 0:
         equity_curve[-1]['Equity'] = today_equity

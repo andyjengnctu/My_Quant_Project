@@ -12,7 +12,7 @@ from core.v16_data_utils import discover_unique_csv_map
 # 0. 設定區
 # ==========================================
 VIP_DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")  # 你的下載路徑
-TV_DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")   # 你的對帳基準路徑
+TV_DATA_DIR = os.path.join(BASE_DIR, "testing_csv")         # 你的對帳基準路徑
 
 
 def resolve_compare_csv_path(data_dir, ticker, preferred_file_names):
