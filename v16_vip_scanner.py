@@ -33,8 +33,8 @@ def resolve_scanner_max_workers(params):
         configured = DEFAULT_SCANNER_MAX_WORKERS
     return max(1, configured)
 
-def load_dynamic_params(json_file):
-    return load_params_from_json(json_file), True
+def load_strict_params(json_file):
+    return load_params_from_json(json_file)
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 scanner 被新上市/短歷史標的洗板)
 def is_insufficient_data_error(exc):
@@ -116,9 +116,8 @@ def run_daily_scanner(data_dir):
     if total_files == 0:
         raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
-    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
-    if is_loaded:
-        print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
+    params = load_strict_params("models/v16_best_params.json")
+    print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
         
     print_scanner_header(params)
     print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額僅以 initial_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")

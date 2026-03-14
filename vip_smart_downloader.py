@@ -2,10 +2,8 @@ import pandas as pd
 import os
 import time
 import requests
-import yfinance as yf
 from datetime import datetime, timedelta
 from io import StringIO
-from FinMind.data import DataLoader
 from core.v16_log_utils import append_issue_log, build_timestamped_log_path
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
@@ -79,9 +77,20 @@ if not os.path.exists(OUTPUT_DIR):
 dl = None
 
 
+def get_yfinance_module():
+    import yfinance as yf
+    return yf
+
+
+def get_finmind_dataloader_class():
+    from FinMind.data import DataLoader
+    return DataLoader
+
+
 def get_finmind_loader():
     global dl
     if dl is None:
+        DataLoader = get_finmind_dataloader_class()
         dl = DataLoader()
         if API_TOKEN:
             dl.login_by_token(api_token=API_TOKEN)
@@ -123,6 +132,7 @@ def get_market_last_date():
 
     print("🔄 啟動備援方案 (YFinance) 獲取交易日...")
     try:
+        yf = get_yfinance_module()
         ticker = yf.Ticker("0050.TW")
         hist = ticker.history(period="5d")
         if not hist.empty:
@@ -195,6 +205,7 @@ def get_or_update_universe():
     qualified_tickers = []
     screening_errors = []
     total_check = len(tickers_info)
+    yf = get_yfinance_module()
     print(f"⏳ 準備快篩 {total_check} 檔純股與 ETF...\n")
 
     for i, item in enumerate(tickers_info):

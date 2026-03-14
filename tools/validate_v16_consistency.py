@@ -258,12 +258,9 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
 
 # # (AI註: validate 的 single_vs_portfolio 要驗證「原始執行邏輯一致性」，
 # # (AI註: 不應混入 portfolio 的歷史績效濾網，否則會把設計上的選股層差異誤判成執行層 bug)
+# # (AI註: 與 make_consistency_params 共用同一份放寬口徑，避免 validate 內部再出現第二套歷史門檻)
 def build_execution_only_params(params):
-    execution_params = copy.deepcopy(params)
-    execution_params.min_history_trades = 0
-    execution_params.min_history_ev = -999.0
-    execution_params.min_history_win_rate = 0.0
-    return execution_params
+    return make_consistency_params(params)
 
 def run_single_backtest_check(ticker, df, params):
     stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True)

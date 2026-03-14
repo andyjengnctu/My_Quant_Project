@@ -27,8 +27,8 @@ os.makedirs("models", exist_ok=True)
 LOAD_PROGRESS_EVERY = 50
 
 
-def load_dynamic_params(json_file):
-    return load_params_from_json(json_file), True
+def load_strict_params(json_file):
+    return load_params_from_json(json_file)
 
 
 # # (AI註: 將「清洗後有效資料不足」與真正異常分流，避免 portfolio_sim 被新上市/短歷史標的洗板)
@@ -216,9 +216,8 @@ if __name__ == "__main__":
     USER_START_YEAR = int(input(f"👉 3. 開始回測年份 (預設 2015): ").strip() or 2015)
     USER_BENCHMARK = input(f"👉 4. 大盤比較標的 (預設 0050): ").strip() or "0050"
 
-    params, is_loaded = load_dynamic_params("models/v16_best_params.json")
-    if is_loaded:
-        print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+    params = load_strict_params("models/v16_best_params.json")
+    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
     df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
