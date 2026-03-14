@@ -501,6 +501,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     pending_chase = None
                 else:
                     missedBuyCount += 1 # 放棄交易
+                    pending_chase = None
             else:
                 missedBuyCount += 1
                 if V[j] > 0:
