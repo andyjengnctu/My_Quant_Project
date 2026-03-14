@@ -14,7 +14,13 @@ import pandas as pd
 import optuna
 from optuna.trial import TrialState
 
-from core.v16_config import V16StrategyParams
+from core.v16_config import (
+    V16StrategyParams,
+    MIN_ANNUAL_TRADES,
+    MIN_BUY_FILL_RATE,
+    MIN_TRADE_WIN_RATE,
+    MIN_FULL_YEAR_RETURN_PCT,
+)
 from core.v16_data_utils import (
     sanitize_ohlcv_dataframe,
     get_required_min_rows,
@@ -26,9 +32,7 @@ from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
     run_portfolio_timeline,
-    unpack_portfolio_timeline_result,
     calc_portfolio_score,
-    evaluate_portfolio_hard_filter,
 )
 
 
@@ -245,17 +249,25 @@ def spearman_rank_correlation_desc(train_scores, test_scores):
 
 # # (AI註: 與 optimizer 硬門檻完全一致，避免 overfitting 報告與訓練篩選口徑漂移)
 def evaluate_filter_pass(metrics):
-    return evaluate_portfolio_hard_filter({
-        'mdd': float(metrics['mdd']),
-        'annual_trades': float(metrics['annual_trades']),
-        'reserved_buy_fill_rate': float(metrics['reserved_buy_fill_rate']),
-        'annual_return_pct': float(metrics['annual_return_pct']),
-        'full_year_count': int(metrics['full_year_count']),
-        'min_full_year_return_pct': float(metrics['min_full_year_return_pct']),
-        'win_rate': float(metrics['win_rate']),
-        'monthly_win_rate': float(metrics['m_win_rate']),
-        'r_squared': float(metrics['r_squared']),
-    })
+    if metrics['mdd'] > 45.0:
+        return False, f"回撤過大 ({metrics['mdd']:.2f}%)"
+    if metrics['annual_trades'] < MIN_ANNUAL_TRADES:
+        return False, f"年化交易次數過低 ({metrics['annual_trades']:.2f})"
+    if metrics['reserved_buy_fill_rate'] < MIN_BUY_FILL_RATE:
+        return False, f"保留後買進成交率過低 ({metrics['reserved_buy_fill_rate']:.2f}%)"
+    if metrics['annual_return_pct'] <= 0:
+        return False, f"年化報酬率非正 ({metrics['annual_return_pct']:.2f}%)"
+    if metrics['full_year_count'] <= 0:
+        return False, "無完整年度可驗證 min{r_y}"
+    if metrics['min_full_year_return_pct'] <= MIN_FULL_YEAR_RETURN_PCT:
+        return False, f"完整年度最差報酬過低 ({metrics['min_full_year_return_pct']:.2f}%)"
+    if metrics['win_rate'] < MIN_TRADE_WIN_RATE:
+        return False, f"實戰勝率偏低 ({metrics['win_rate']:.2f}%)"
+    if metrics['m_win_rate'] < 45.0:
+        return False, f"月勝率偏低 ({metrics['m_win_rate']:.2f}%)"
+    if metrics['r_squared'] < 0.40:
+        return False, f"曲線過度震盪 (R²={metrics['r_squared']:.3f})"
+    return True, "PASS"
 
 
 def evaluate_period(
@@ -288,46 +300,44 @@ def evaluate_period(
 
     benchmark_data = truncated_dfs.get(benchmark_ticker)
     pf_profile = {}
-    pf_result = unpack_portfolio_timeline_result(
-        run_portfolio_timeline(
-            truncated_dfs,
-            truncated_logs,
-            truncated_dates,
-            start_year,
-            params,
-            max_positions,
-            enable_rotation,
-            benchmark_ticker=benchmark_ticker,
-            benchmark_data=benchmark_data,
-            is_training=True,
-            profile_stats=pf_profile,
-            verbose=False,
-        ),
+    (
+        tot_ret,
+        mdd,
+        trade_count,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        chase_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+    ) = run_portfolio_timeline(
+        truncated_dfs,
+        truncated_logs,
+        truncated_dates,
+        start_year,
+        params,
+        max_positions,
+        enable_rotation,
+        benchmark_ticker=benchmark_ticker,
+        benchmark_data=benchmark_data,
         is_training=True,
+        profile_stats=pf_profile,
+        verbose=False,
     )
-    tot_ret = pf_result['total_return']
-    mdd = pf_result['mdd']
-    trade_count = pf_result['trade_count']
-    final_eq = pf_result['final_equity']
-    avg_exp = pf_result['avg_exposure']
-    max_exp = pf_result['max_exposure']
-    bm_ret = pf_result['benchmark_return_pct']
-    bm_mdd = pf_result['benchmark_mdd']
-    win_rate = pf_result['win_rate']
-    pf_ev = pf_result['pf_ev']
-    pf_payoff = pf_result['pf_payoff']
-    total_missed = pf_result['total_missed_buys']
-    total_missed_sells = pf_result['total_missed_sells']
-    r_sq = pf_result['r_squared']
-    m_win_rate = pf_result['monthly_win_rate']
-    bm_r_sq = pf_result['benchmark_r_squared']
-    bm_m_win_rate = pf_result['benchmark_monthly_win_rate']
-    normal_trade_count = pf_result['normal_trade_count']
-    chase_trade_count = pf_result['chase_trade_count']
-    annual_trades = pf_result['annual_trades']
-    reserved_buy_fill_rate = pf_result['reserved_buy_fill_rate']
-    annual_return_pct = pf_result['annual_return_pct']
-    bm_annual_return_pct = pf_result['benchmark_annual_return_pct']
 
     score = calc_portfolio_score(
         tot_ret,

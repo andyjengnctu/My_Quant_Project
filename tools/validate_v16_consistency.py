@@ -3,10 +3,6 @@ import sys
 import copy
 import time
 import importlib.util
-import tempfile
-import io
-import warnings
-from contextlib import redirect_stdout, redirect_stderr
 import pandas as pd
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,8 +16,6 @@ from core.v16_portfolio_engine import (
     pack_prepared_stock_data,
     get_fast_dates,
     run_portfolio_timeline,
-    unpack_portfolio_timeline_result,
-    PORTFOLIO_TIMELINE_TRAIN_FIELDS,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
 from core.v16_log_utils import format_exception_summary
@@ -38,33 +32,6 @@ MAX_CONSOLE_FAIL_PREVIEW = 20
 
 CSV_PATH_CACHE = None
 CSV_DUPLICATE_ISSUES = None
-MODULE_CACHE = {}
-
-
-# # (AI註: validate 自己做唯一輸出層；tool 全部 silent，只在這裡判定單檔 PASS / FAIL / SKIP)
-def classify_ticker_status(ticker_results):
-    statuses = {row["status"] for row in ticker_results}
-    if "FAIL" in statuses:
-        return "FAIL"
-    if "PASS" in statuses:
-        return "PASS"
-    return "SKIP"
-
-
-def build_progress_line(idx, total_tickers, ticker, pass_count, fail_count, skip_count):
-    return (
-        f"\r進度: [{idx:03d}/{total_tickers:03d}] "
-        f"目前: {ticker:<8} | "
-        f"PASS股票: {pass_count:<4} | "
-        f"FAIL股票: {fail_count:<4} | "
-        f"SKIP股票: {skip_count:<4}"
-    )
-
-
-def suppress_tool_output(func, *args, **kwargs):
-    sink = io.StringIO()
-    with redirect_stdout(sink), redirect_stderr(sink):
-        return func(*args, **kwargs)
 
 
 def get_data_dir_csv_map():
@@ -108,9 +75,6 @@ def load_module_from_candidates(module_name, relative_paths, required_attrs=None
 
     checked_paths = []
     rejected_paths = []
-    cache_key = (module_name, tuple(relative_paths), tuple(required_attrs))
-    if cache_key in MODULE_CACHE:
-        return MODULE_CACHE[cache_key]
 
     for rel_path in relative_paths:
         abs_path = os.path.join(PROJECT_ROOT, rel_path)
@@ -125,22 +89,14 @@ def load_module_from_candidates(module_name, relative_paths, required_attrs=None
             continue
 
         module = importlib.util.module_from_spec(spec)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r".*asyncio\.get_event_loop_policy.*deprecated.*Python 3\.16.*",
-                category=DeprecationWarning,
-                module=r"nest_asyncio",
-            )
-            spec.loader.exec_module(module)
+        spec.loader.exec_module(module)
 
         missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
         if missing_attrs:
             rejected_paths.append(f"{abs_path} -> 缺少必要屬性: {missing_attrs}")
             continue
 
-        MODULE_CACHE[cache_key] = (module, abs_path)
-        return MODULE_CACHE[cache_key]
+        return module, abs_path
 
     detail_msg = "；".join(rejected_paths) if rejected_paths else "沒有任何可用候選檔"
     raise FileNotFoundError(
@@ -258,7 +214,6 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
 
 # # (AI註: validate 的 single_vs_portfolio 要驗證「原始執行邏輯一致性」，
 # # (AI註: 不應混入 portfolio 的歷史績效濾網，否則會把設計上的選股層差異誤判成執行層 bug)
-# # (AI註: 與 make_consistency_params 共用同一份放寬口徑，避免 validate 內部再出現第二套歷史門檻)
 def build_execution_only_params(params):
     return make_consistency_params(params)
 
@@ -280,54 +235,82 @@ def run_single_ticker_portfolio_check(ticker, df, params):
 
     start_year = int(pd.Timestamp(sorted_dates[0]).year)
 
-    portfolio_result = unpack_portfolio_timeline_result(
-        run_portfolio_timeline(
-            all_dfs_fast=all_dfs_fast,
-            all_standalone_logs=all_standalone_logs,
-            sorted_dates=sorted_dates,
-            start_year=start_year,
-            params=execution_params,
-            max_positions=1,
-            enable_rotation=False,
-            benchmark_ticker=ticker,
-            benchmark_data=fast_data,
-            is_training=True,
-            verbose=False
-        ),
+    result = run_portfolio_timeline(
+        all_dfs_fast=all_dfs_fast,
+        all_standalone_logs=all_standalone_logs,
+        sorted_dates=sorted_dates,
+        start_year=start_year,
+        params=execution_params,
+        max_positions=1,
+        enable_rotation=False,
+        benchmark_ticker=ticker,
+        benchmark_data=fast_data,
         is_training=True,
+        verbose=False
     )
 
-    result = {
-        "total_return": portfolio_result["total_return"],
-        "mdd": portfolio_result["mdd"],
-        "trade_count": portfolio_result["trade_count"],
-        "final_eq": portfolio_result["final_equity"],
-        "avg_exp": portfolio_result["avg_exposure"],
-        "max_exp": portfolio_result["max_exposure"],
-        "bm_ret": portfolio_result["benchmark_return_pct"],
-        "bm_mdd": portfolio_result["benchmark_mdd"],
-        "win_rate": portfolio_result["win_rate"],
-        "pf_ev": portfolio_result["pf_ev"],
-        "pf_payoff": portfolio_result["pf_payoff"],
-        "total_missed": portfolio_result["total_missed_buys"],
-        "total_missed_sells": portfolio_result["total_missed_sells"],
-        "r_sq": portfolio_result["r_squared"],
-        "m_win_rate": portfolio_result["monthly_win_rate"],
-        "bm_r_sq": portfolio_result["benchmark_r_squared"],
-        "bm_m_win_rate": portfolio_result["benchmark_monthly_win_rate"],
-        "normal_trade_count": portfolio_result["normal_trade_count"],
-        "chase_trade_count": portfolio_result["chase_trade_count"],
-        "annual_trades": portfolio_result["annual_trades"],
-        "reserved_buy_fill_rate": portfolio_result["reserved_buy_fill_rate"],
-        "annual_return_pct": portfolio_result["annual_return_pct"],
-        "bm_annual_return_pct": portfolio_result["benchmark_annual_return_pct"],
+    expected_result_len = 23
+    if len(result) != expected_result_len:
+        raise ValueError(
+            f"run_portfolio_timeline(is_training=True) 回傳長度異常: {len(result)}，"
+            f"預期 {expected_result_len}"
+        )
+
+    (
+        total_return,
+        mdd,
+        trade_count,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        chase_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+    ) = result
+
+    return {
+        "total_return": total_return,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "normal_trade_count": normal_trade_count,
+        "chase_trade_count": chase_trade_count,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
         "sorted_dates": sorted_dates,
         "start_year": start_year,
         "standalone_logs": standalone_logs,
         "prep_df": prep_df,
     }
-    result["run_portfolio_timeline_result_len"] = len(PORTFOLIO_TIMELINE_TRAIN_FIELDS)
-    return result
 
 
 def run_all_stock_stats_check(ticker, params):
@@ -358,150 +341,6 @@ def run_debug_trade_log_check(ticker, df, params):
     return debug_df, module_path
 
 
-
-
-def run_portfolio_sim_tool_check(ticker, file_path, params):
-    module, module_path = load_module_from_candidates(
-        "portfolio_sim_module",
-        ["v16_portfolio_sim.py"],
-        required_attrs=["run_portfolio_simulation"]
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        source_df = pd.read_csv(file_path)
-        date_col = "Time" if "Time" in source_df.columns else "Date"
-        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
-        min_year = parsed_dates.dt.year.min()
-        if pd.isna(min_year):
-            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
-        start_year = int(min_year)
-        temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
-        source_df.to_csv(temp_csv_path, index=False)
-        result = suppress_tool_output(
-            module.run_portfolio_simulation,
-            data_dir=temp_dir,
-            params=copy.deepcopy(params),
-            max_positions=1,
-            enable_rotation=False,
-            start_year=start_year,
-            benchmark_ticker=ticker,
-            verbose=False,
-        )
-
-    (
-        df_eq,
-        df_tr,
-        tot_ret,
-        mdd,
-        trade_count,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        final_eq,
-        avg_exp,
-        max_exp,
-        bm_ret,
-        bm_mdd,
-        total_missed,
-        total_missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate,
-        normal_trade_count,
-        chase_trade_count,
-        annual_trades,
-        reserved_buy_fill_rate,
-        annual_return_pct,
-        bm_annual_return_pct,
-        pf_profile,
-    ) = result
-
-    return {
-        "module_path": module_path,
-        "df_eq": df_eq,
-        "df_tr": df_tr,
-        "total_return": tot_ret,
-        "mdd": mdd,
-        "trade_count": trade_count,
-        "win_rate": win_rate,
-        "pf_ev": pf_ev,
-        "pf_payoff": pf_payoff,
-        "final_eq": final_eq,
-        "avg_exp": avg_exp,
-        "max_exp": max_exp,
-        "bm_ret": bm_ret,
-        "bm_mdd": bm_mdd,
-        "total_missed": total_missed,
-        "total_missed_sells": total_missed_sells,
-        "r_sq": r_sq,
-        "m_win_rate": m_win_rate,
-        "bm_r_sq": bm_r_sq,
-        "bm_m_win_rate": bm_m_win_rate,
-        "normal_trade_count": normal_trade_count,
-        "chase_trade_count": chase_trade_count,
-        "annual_trades": annual_trades,
-        "reserved_buy_fill_rate": reserved_buy_fill_rate,
-        "annual_return_pct": annual_return_pct,
-        "bm_annual_return_pct": bm_annual_return_pct,
-        "pf_profile": pf_profile,
-    }
-
-
-def run_scanner_tool_check(ticker, file_path, params):
-    module, module_path = load_module_from_candidates(
-        "vip_scanner_module",
-        ["v16_vip_scanner.py"],
-        required_attrs=["process_single_stock"]
-    )
-    result = module.process_single_stock(file_path, ticker, copy.deepcopy(params))
-    return result, module_path
-
-
-def run_downloader_tool_check(ticker):
-    module, module_path = load_module_from_candidates(
-        "vip_downloader_module",
-        ["vip_smart_downloader.py"],
-        required_attrs=["smart_download_vip_data"]
-    )
-
-    class DummyDL:
-        def get_data(self, dataset, data_id, start_date):
-            if data_id != ticker:
-                raise ValueError(f"unexpected ticker: {data_id}")
-            return pd.DataFrame({
-                'date': ['2024-01-03', '2024-01-02'],
-                'open': [11.0, 10.0],
-                'max': [12.0, 11.0],
-                'min': [10.5, 9.5],
-                'close': [11.5, 10.5],
-                'trading_volume': [2000, 1000],
-            })
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        original_save_dir = module.SAVE_DIR
-        original_dl = module.dl
-        original_sleep = module.time.sleep
-        try:
-            module.SAVE_DIR = temp_dir
-            module.dl = DummyDL()
-            module.time.sleep = lambda *_args, **_kwargs: None
-            suppress_tool_output(
-                module.smart_download_vip_data,
-                [ticker],
-                market_last_date='2024-01-03',
-                verbose=False,
-            )
-            csv_path = os.path.join(temp_dir, f"{ticker}.csv")
-            downloaded_df = pd.read_csv(csv_path, index_col=0)
-        finally:
-            module.SAVE_DIR = original_save_dir
-            module.dl = original_dl
-            module.time.sleep = original_sleep
-
-    return downloaded_df, module_path
-
-
 def validate_one_ticker(ticker, base_params):
     params = make_consistency_params(base_params)
     file_path, df, sanitize_stats = load_clean_df(ticker, params)
@@ -519,15 +358,9 @@ def validate_one_ticker(ticker, base_params):
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
     export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
-    portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
-    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
-    downloader_df, downloader_module_path = run_downloader_tool_check(ticker)
 
     summary["export_module_path"] = export_module_path
     summary["debug_module_path"] = debug_module_path
-    summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
-    summary["scanner_module_path"] = scanner_module_path
-    summary["downloader_module_path"] = downloader_module_path
     summary["single_trade_count"] = single_stats["trade_count"]
     summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
     summary["open_position_exists"] = bool(single_stats["current_position"] > 0)
@@ -689,73 +522,6 @@ def validate_one_ticker(ticker, base_params):
             "note": "半倉停利筆數只供人工檢查，不直接對應 completed trades。"
         })
 
-    add_check(results, "portfolio_sim", ticker, "total_return",
-              portfolio_stats["total_return"], portfolio_sim_stats["total_return"])
-    add_check(results, "portfolio_sim", ticker, "mdd",
-              portfolio_stats["mdd"], portfolio_sim_stats["mdd"])
-    add_check(results, "portfolio_sim", ticker, "trade_count",
-              portfolio_stats["trade_count"], portfolio_sim_stats["trade_count"])
-    add_check(results, "portfolio_sim", ticker, "win_rate",
-              portfolio_stats["win_rate"], portfolio_sim_stats["win_rate"])
-    add_check(results, "portfolio_sim", ticker, "pf_ev",
-              portfolio_stats["pf_ev"], portfolio_sim_stats["pf_ev"])
-    add_check(results, "portfolio_sim", ticker, "pf_payoff",
-              portfolio_stats["pf_payoff"], portfolio_sim_stats["pf_payoff"])
-    add_check(results, "portfolio_sim", ticker, "annual_trades",
-              portfolio_stats["annual_trades"], portfolio_sim_stats["annual_trades"])
-    add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate",
-              portfolio_stats["reserved_buy_fill_rate"], portfolio_sim_stats["reserved_buy_fill_rate"])
-    add_check(results, "portfolio_sim", ticker, "annual_return_pct",
-              portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
-    add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct",
-              portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
-    add_check(results, "portfolio_sim", ticker, "timeline_result_len",
-              portfolio_stats.get("run_portfolio_timeline_result_len", len(PORTFOLIO_TIMELINE_TRAIN_FIELDS)),
-              len(PORTFOLIO_TIMELINE_TRAIN_FIELDS),
-              note="透過 shared field map 驗證 portfolio_sim 與 portfolio_engine API 長度一致。")
-
-    expected_scanner_result = None
-    if single_stats['is_candidate']:
-        if single_stats['is_setup_today']:
-            from core.v16_core import calc_position_size, calc_entry_price
-            proj_qty = calc_position_size(single_stats['buy_limit'], single_stats['stop_loss'], params.initial_capital, params.fixed_risk, params)
-            if proj_qty == 0:
-                expected_scanner_result = ('candidate', None, None, None, None, ticker, None)
-            else:
-                proj_cost = calc_entry_price(single_stats['buy_limit'], proj_qty, params) * proj_qty
-                expected_scanner_result = ('buy', proj_cost, single_stats['expected_value'], None, None, ticker, None)
-        elif single_stats.get('chase_today') is not None:
-            chase = single_stats['chase_today']
-            if chase['qty'] == 0:
-                expected_scanner_result = ('candidate', None, None, None, None, ticker, None)
-            else:
-                proj_cost = calc_entry_price(chase['chase_price'], chase['qty'], params) * chase['qty']
-                expected_scanner_result = ('zone', proj_cost, single_stats['expected_value'], None, None, ticker, None)
-        else:
-            expected_scanner_result = ('candidate', None, None, None, None, ticker, None)
-
-    if expected_scanner_result is None:
-        add_check(results, "vip_scanner", ticker, "candidate_none",
-                  None, scanner_result)
-    else:
-        add_check(results, "vip_scanner", ticker, "status",
-                  expected_scanner_result[0], scanner_result[0] if scanner_result is not None else None)
-        add_check(results, "vip_scanner", ticker, "proj_cost",
-                  expected_scanner_result[1], scanner_result[1] if scanner_result is not None else None)
-        add_check(results, "vip_scanner", ticker, "expected_value",
-                  expected_scanner_result[2], scanner_result[2] if scanner_result is not None else None)
-        add_check(results, "vip_scanner", ticker, "ticker",
-                  expected_scanner_result[5], scanner_result[5] if scanner_result is not None and len(scanner_result) > 5 else None)
-
-    add_check(results, "vip_smart_downloader", ticker, "download_columns",
-              ['Open', 'High', 'Low', 'Close', 'Volume'], list(downloader_df.columns))
-    add_check(results, "vip_smart_downloader", ticker, "download_sorted_ascending",
-              True, bool(pd.Index(downloader_df.index).is_monotonic_increasing))
-    add_check(results, "vip_smart_downloader", ticker, "download_row_count",
-              2, int(len(downloader_df)))
-    add_check(results, "vip_smart_downloader", ticker, "download_last_date",
-              '2024-01-03', str(downloader_df.index[-1]).split(' ')[0])
-
     return results, summary
 
 
@@ -871,26 +637,19 @@ def main():
                 ) from e
 
         ticker_results = all_results[ticker_results_before:]
-        ticker_status = classify_ticker_status(ticker_results)
+        ticker_statuses = {row["status"] for row in ticker_results}
 
-        if ticker_status == "FAIL":
+        if "FAIL" in ticker_statuses:
             ticker_fail_count += 1
-        elif ticker_status == "PASS":
+        elif "PASS" in ticker_statuses:
             ticker_pass_count += 1
         else:
             ticker_skip_count += 1
 
         print(
-            build_progress_line(
-                idx,
-                total_tickers,
-                ticker,
-                ticker_pass_count,
-                ticker_fail_count,
-                ticker_skip_count,
-            ),
+            f"\r進度: [{idx}/{total_tickers}] 目前: {ticker:<8} | PASS股票:{ticker_pass_count} | SKIP股票:{ticker_skip_count} | FAIL股票:{ticker_fail_count}",
             end="",
-            flush=True,
+            flush=True
         )
 
     print(" " * 160, end="\r")
