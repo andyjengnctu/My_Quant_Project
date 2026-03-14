@@ -13,11 +13,13 @@ from concurrent.futures.process import BrokenProcessPool
 
 from core.v16_config import (
     V16StrategyParams, SCORE_CALC_METHOD,
-    MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE,
-    MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER
 )
-from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
+from core.v16_portfolio_engine import (
+    prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates,
+    run_portfolio_timeline, unpack_portfolio_timeline_result,
+    calc_portfolio_score, evaluate_portfolio_hard_filter,
+)
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import (
     sanitize_ohlcv_dataframe,
@@ -512,12 +514,38 @@ def objective(trial):
 
     pf_profile = {}
     t0 = time.perf_counter()
-    ret_pct, mdd, t_count, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, win_rate, pf_ev, pf_payoff, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
-        all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
-        TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
-        benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
+    pf_result = unpack_portfolio_timeline_result(
+        run_portfolio_timeline(
+            all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
+            TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
+            benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
+        ),
+        is_training=True,
     )
     profile_row['portfolio_wall_sec'] = time.perf_counter() - t0
+    ret_pct = pf_result['total_return']
+    mdd = pf_result['mdd']
+    t_count = pf_result['trade_count']
+    final_eq = pf_result['final_equity']
+    avg_exp = pf_result['avg_exposure']
+    max_exp = pf_result['max_exposure']
+    bm_ret = pf_result['benchmark_return_pct']
+    bm_mdd = pf_result['benchmark_mdd']
+    win_rate = pf_result['win_rate']
+    pf_ev = pf_result['pf_ev']
+    pf_payoff = pf_result['pf_payoff']
+    total_missed = pf_result['total_missed_buys']
+    total_missed_sells = pf_result['total_missed_sells']
+    r_sq = pf_result['r_squared']
+    m_win_rate = pf_result['monthly_win_rate']
+    bm_r_sq = pf_result['benchmark_r_squared']
+    bm_m_win_rate = pf_result['benchmark_monthly_win_rate']
+    normal_trade_count = pf_result['normal_trade_count']
+    chase_trade_count = pf_result['chase_trade_count']
+    annual_trades = pf_result['annual_trades']
+    reserved_buy_fill_rate = pf_result['reserved_buy_fill_rate']
+    annual_return_pct = pf_result['annual_return_pct']
+    bm_annual_return_pct = pf_result['benchmark_annual_return_pct']
     profile_row['portfolio_total_sec'] = float(pf_profile.get('portfolio_wall_sec', 0.0))
     profile_row['portfolio_ticker_dates_sec'] = float(pf_profile.get('portfolio_ticker_dates_sec', 0.0))
     profile_row['portfolio_build_trade_index_sec'] = float(pf_profile.get('portfolio_build_trade_index_sec', 0.0))
@@ -545,31 +573,21 @@ def objective(trial):
     profile_row['r_squared'] = r_sq
 
     t0 = time.perf_counter()
-    fail_reason = None
-    if mdd > 45.0:
-        fail_reason = f"回撤過大 ({mdd:.1f}%)"
-    elif annual_trades < MIN_ANNUAL_TRADES:
-        fail_reason = f"年化交易次數過低 ({annual_trades:.2f}次/年)"
-    elif reserved_buy_fill_rate < MIN_BUY_FILL_RATE:
-        fail_reason = f"保留後買進成交率過低 ({reserved_buy_fill_rate:.2f}%)"
-    elif annual_return_pct <= 0:
-        fail_reason = f"年化報酬率非正 ({annual_return_pct:.2f}%)"
-    elif full_year_count <= 0:
-        fail_reason = "無完整年度可驗證 min{r_y}"
-    elif min_full_year_return_pct <= MIN_FULL_YEAR_RETURN_PCT:
-        fail_reason = (
-            f"完整年度最差報酬未大於 {MIN_FULL_YEAR_RETURN_PCT:.2f}% "
-            f"({min_full_year_return_pct:.2f}%)"
-        )
-    elif win_rate < MIN_TRADE_WIN_RATE:
-        fail_reason = f"實戰勝率偏低 ({win_rate:.2f}%)"
-    elif m_win_rate < 45.0:
-        fail_reason = f"月勝率偏低 ({m_win_rate:.0f}%)"
-    elif r_sq < 0.40:
-        fail_reason = f"曲線過度震盪 (R²={r_sq:.2f})"
+    filter_pass, fail_reason = evaluate_portfolio_hard_filter({
+        'mdd': float(mdd),
+        'annual_trades': float(annual_trades),
+        'reserved_buy_fill_rate': float(reserved_buy_fill_rate),
+        'annual_return_pct': float(annual_return_pct),
+        'full_year_count': int(full_year_count),
+        'min_full_year_return_pct': float(min_full_year_return_pct),
+        'win_rate': float(win_rate),
+        'monthly_win_rate': float(m_win_rate),
+        'r_squared': float(r_sq),
+    })
     profile_row['filter_rules_sec'] = time.perf_counter() - t0
 
-    if fail_reason is not None:
+    if not filter_pass:
+
         trial.set_user_attr("fail_reason", fail_reason)
         profile_row['fail_reason'] = fail_reason
         profile_row['trial_value'] = -9999.0
@@ -691,7 +709,7 @@ if __name__ == "__main__":
 
     if N_TRIALS == 0:
         try:
-            if study.best_value and study.best_value > -9000:
+            if study.best_value is not None and study.best_value > -9000:
                 with open("models/v16_best_params.json", "w") as f: json.dump(study.best_params, f, indent=4)
                 print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
             else: print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")

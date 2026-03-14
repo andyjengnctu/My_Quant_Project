@@ -20,11 +20,14 @@ BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 # 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
 SCORE_CALC_METHOD = 'RoMD'
 
-# 4. Optimizer 穩定性 / 可執行性硬門檻
+# 4. Optimizer / Overfitting / 驗證工具共用硬門檻
 MIN_ANNUAL_TRADES = 5.0
 MIN_BUY_FILL_RATE = 80.0
 MIN_TRADE_WIN_RATE = 40.0
 MIN_FULL_YEAR_RETURN_PCT = -10.0
+MAX_PORTFOLIO_MDD_PCT = 45.0
+MIN_MONTHLY_WIN_RATE = 45.0
+MIN_EQUITY_CURVE_R_SQUARED = 0.40
 # ==========================================
 
 # # (AI註: 僅影響顯示，不改實際排序與優化邏輯)

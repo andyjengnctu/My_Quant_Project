@@ -7,7 +7,12 @@ import numpy as np
 import pandas as pd
 
 from core.v16_params_io import load_params_from_json
-from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
+from core.v16_portfolio_engine import (
+    prep_stock_data_and_trades,
+    pack_prepared_stock_data,
+    run_portfolio_timeline,
+    unpack_portfolio_timeline_result,
+)
 from core.v16_display import print_strategy_dashboard, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
@@ -152,11 +157,41 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     print(" " * 120, end="\r")
 
     pf_profile = {}
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
-        all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
-        benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile
+    pf_result = unpack_portfolio_timeline_result(
+        run_portfolio_timeline(
+            all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
+            benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile
+        ),
+        is_training=False,
     )
-    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
+    return (
+        pf_result['df_equity'],
+        pf_result['df_trades'],
+        pf_result['total_return'],
+        pf_result['mdd'],
+        pf_result['trade_count'],
+        pf_result['win_rate'],
+        pf_result['pf_ev'],
+        pf_result['pf_payoff'],
+        pf_result['final_equity'],
+        pf_result['avg_exposure'],
+        pf_result['max_exposure'],
+        pf_result['benchmark_return_pct'],
+        pf_result['benchmark_mdd'],
+        pf_result['total_missed_buys'],
+        pf_result['total_missed_sells'],
+        pf_result['r_squared'],
+        pf_result['monthly_win_rate'],
+        pf_result['benchmark_r_squared'],
+        pf_result['benchmark_monthly_win_rate'],
+        pf_result['normal_trade_count'],
+        pf_result['chase_trade_count'],
+        pf_result['annual_trades'],
+        pf_result['reserved_buy_fill_rate'],
+        pf_result['annual_return_pct'],
+        pf_result['benchmark_annual_return_pct'],
+        pf_profile,
+    )
 
 
 if __name__ == "__main__":

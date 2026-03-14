@@ -3,7 +3,12 @@ import numpy as np
 import bisect
 import time
 from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest, build_normal_entry_plan
-from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
+from core.v16_config import (
+    EV_CALC_METHOD, BUY_SORT_METHOD,
+    MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE, MIN_TRADE_WIN_RATE,
+    MIN_FULL_YEAR_RETURN_PCT, MAX_PORTFOLIO_MDD_PCT,
+    MIN_MONTHLY_WIN_RATE, MIN_EQUITY_CURVE_R_SQUARED,
+)
 from core.v16_buy_sort import calc_buy_sort_value
 
 
@@ -14,6 +19,62 @@ def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=N
     if SCORE_CALC_METHOD == 'LOG_R2':
         return annualized_romd * (m_win_rate / 100.0) * r_sq
     return annualized_romd
+
+
+
+PORTFOLIO_TIMELINE_TRAIN_FIELDS = (
+    'total_return', 'mdd', 'trade_count', 'final_equity', 'avg_exposure', 'max_exposure',
+    'benchmark_return_pct', 'benchmark_mdd', 'win_rate', 'pf_ev', 'pf_payoff',
+    'total_missed_buys', 'total_missed_sells', 'r_squared', 'monthly_win_rate',
+    'benchmark_r_squared', 'benchmark_monthly_win_rate', 'normal_trade_count',
+    'chase_trade_count', 'annual_trades', 'reserved_buy_fill_rate',
+    'annual_return_pct', 'benchmark_annual_return_pct'
+)
+
+PORTFOLIO_TIMELINE_FULL_FIELDS = (
+    'df_equity', 'df_trades', 'total_return', 'mdd', 'trade_count', 'win_rate',
+    'pf_ev', 'pf_payoff', 'final_equity', 'avg_exposure', 'max_exposure',
+    'benchmark_return_pct', 'benchmark_mdd', 'total_missed_buys', 'total_missed_sells',
+    'r_squared', 'monthly_win_rate', 'benchmark_r_squared', 'benchmark_monthly_win_rate',
+    'normal_trade_count', 'chase_trade_count', 'annual_trades', 'reserved_buy_fill_rate',
+    'annual_return_pct', 'benchmark_annual_return_pct'
+)
+
+
+def unpack_portfolio_timeline_result(result, is_training):
+    fields = PORTFOLIO_TIMELINE_TRAIN_FIELDS if is_training else PORTFOLIO_TIMELINE_FULL_FIELDS
+    if len(result) != len(fields):
+        mode = 'is_training=True' if is_training else 'is_training=False'
+        raise ValueError(
+            f"run_portfolio_timeline({mode}) 回傳長度異常: {len(result)}，預期 {len(fields)}"
+        )
+    return dict(zip(fields, result))
+
+
+# # (AI註: Optimizer / overfitting / 驗證工具共用同一份投組硬門檻，避免多處口徑漂移)
+def evaluate_portfolio_hard_filter(metrics):
+    if metrics['mdd'] > MAX_PORTFOLIO_MDD_PCT:
+        return False, f"回撤過大 ({metrics['mdd']:.1f}%)"
+    if metrics['annual_trades'] < MIN_ANNUAL_TRADES:
+        return False, f"年化交易次數過低 ({metrics['annual_trades']:.2f}次/年)"
+    if metrics['reserved_buy_fill_rate'] < MIN_BUY_FILL_RATE:
+        return False, f"保留後買進成交率過低 ({metrics['reserved_buy_fill_rate']:.2f}%)"
+    if metrics['annual_return_pct'] <= 0:
+        return False, f"年化報酬率非正 ({metrics['annual_return_pct']:.2f}%)"
+    if metrics['full_year_count'] <= 0:
+        return False, "無完整年度可驗證 min{r_y}"
+    if metrics['min_full_year_return_pct'] <= MIN_FULL_YEAR_RETURN_PCT:
+        return False, (
+            f"完整年度最差報酬未大於 {MIN_FULL_YEAR_RETURN_PCT:.2f}% "
+            f"({metrics['min_full_year_return_pct']:.2f}%)"
+        )
+    if metrics['win_rate'] < MIN_TRADE_WIN_RATE:
+        return False, f"實戰勝率偏低 ({metrics['win_rate']:.2f}%)"
+    if metrics['monthly_win_rate'] < MIN_MONTHLY_WIN_RATE:
+        return False, f"月勝率偏低 ({metrics['monthly_win_rate']:.0f}%)"
+    if metrics['r_squared'] < MIN_EQUITY_CURVE_R_SQUARED:
+        return False, f"曲線過度震盪 (R²={metrics['r_squared']:.2f})"
+    return True, None
 
 def calc_curve_stats(eq_list):
     r_squared, monthly_win_rate = 0.0, 0.0
@@ -401,10 +462,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     buy_sec = 0.0
     equity_mark_sec = 0.0
     build_trade_index_sec = 0.0
+    ticker_dates_sec = 0.0
+    closeout_sec = 0.0
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     start_dt = pd.to_datetime(f"{start_year}-01-01")
     start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
     start_idx = max(1, start_idx)
+    if profile_stats is not None:
+        ticker_dates_sec = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
     pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
@@ -902,6 +968,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     final_cash = cash
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
         raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
@@ -939,6 +1006,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     drawdown = (peak_equity - today_equity) / peak_equity * 100 if peak_equity > 0 else 0.0
     if drawdown > max_drawdown:
         max_drawdown = drawdown
+
+    if profile_stats is not None:
+        closeout_sec = time.perf_counter() - t0
 
     if len(sorted_dates) > start_idx:
         monthly_equities.append(today_equity)
@@ -1005,7 +1075,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
-        profile_stats['portfolio_ticker_dates_sec'] = 0.0
+        profile_stats['portfolio_ticker_dates_sec'] = ticker_dates_sec
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec
         profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
@@ -1013,7 +1083,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
-        profile_stats['portfolio_closeout_sec'] = 0.0
+        profile_stats['portfolio_closeout_sec'] = closeout_sec
         profile_stats['curve_stats_sec'] = curve_stats_sec
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct
