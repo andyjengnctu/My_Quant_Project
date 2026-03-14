@@ -27,6 +27,8 @@ EXPECTED_MARKET_DATE_EXCEPTIONS = (
     KeyError,
     IndexError,
     TypeError,
+    ImportError,
+    ModuleNotFoundError,
 )
 
 EXPECTED_UNIVERSE_FETCH_EXCEPTIONS = (
@@ -43,6 +45,8 @@ EXPECTED_SCREENING_EXCEPTIONS = (
     KeyError,
     TypeError,
     AttributeError,
+    ImportError,
+    ModuleNotFoundError,
 )
 
 EXPECTED_LAST_DATE_CHECK_EXCEPTIONS = (
@@ -62,6 +66,8 @@ EXPECTED_DOWNLOAD_EXCEPTIONS = (
     pd.errors.EmptyDataError,
     pd.errors.ParserError,
     OSError,
+    ImportError,
+    ModuleNotFoundError,
 )
 
 # # (AI註: 大量批次時預設不逐筆洗板；需要時再手動切成 True)
@@ -205,8 +211,16 @@ def get_or_update_universe():
     qualified_tickers = []
     screening_errors = []
     total_check = len(tickers_info)
-    yf = get_yfinance_module()
     print(f"⏳ 準備快篩 {total_check} 檔純股與 ETF...\n")
+
+    try:
+        yf = get_yfinance_module()
+    except EXPECTED_SCREENING_EXCEPTIONS as e:
+        screening_errors.append(("__INIT__", "yfinance", f"{type(e).__name__}: {e}"))
+        screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
+        append_downloader_issues("快篩失敗", screening_log_lines)
+        print(f"⚠️ 快篩初始化失敗，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
+        return []
 
     for i, item in enumerate(tickers_info):
         pct = ((i + 1) / total_check) * 100
