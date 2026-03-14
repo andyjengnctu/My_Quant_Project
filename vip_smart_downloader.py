@@ -242,6 +242,8 @@ def get_or_update_universe():
             screening_errors.append((sid, yf_t, f"{type(e).__name__}: {e}"))
         time.sleep(YF_SCREEN_SLEEP_SEC)
 
+    qualified_tickers = list(dict.fromkeys(qualified_tickers))
+
     with open(LIST_FILE, 'w') as f:
         for t in qualified_tickers:
             f.write(f"{t}\n")

@@ -370,7 +370,11 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
     with tempfile.TemporaryDirectory() as temp_dir:
         source_df = pd.read_csv(file_path)
         date_col = "Time" if "Time" in source_df.columns else "Date"
-        start_year = int(pd.to_datetime(source_df[date_col], errors="coerce").dt.year.min())
+        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
+        min_year = parsed_dates.dt.year.min()
+        if pd.isna(min_year):
+            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
+        start_year = int(min_year)
         temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
         source_df.to_csv(temp_csv_path, index=False)
         result = suppress_tool_output(
