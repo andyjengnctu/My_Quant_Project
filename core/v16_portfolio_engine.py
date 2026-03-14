@@ -453,7 +453,7 @@ def get_pit_stats_from_index(stats_index, current_date, params):
     )
     return is_candidate, ev_to_sort, win_rate, trade_count
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None):
+def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True):
     t_portfolio_start = time.perf_counter() if profile_stats is not None else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
@@ -519,7 +519,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         sold_today = set()
 
-        if not is_training and i % 20 == 0:
+        if verbose and (not is_training) and i % 20 == 0:
             exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
             print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
 

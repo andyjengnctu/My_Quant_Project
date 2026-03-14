@@ -172,7 +172,8 @@ def run_portfolio_simulation(
     pf_result = unpack_portfolio_timeline_result(
         run_portfolio_timeline(
             all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
-            benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile
+            benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile,
+            verbose=verbose
         ),
         is_training=False,
     )

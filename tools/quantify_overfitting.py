@@ -301,6 +301,7 @@ def evaluate_period(
             benchmark_data=benchmark_data,
             is_training=True,
             profile_stats=pf_profile,
+            verbose=False,
         ),
         is_training=True,
     )

@@ -518,7 +518,8 @@ def objective(trial):
         run_portfolio_timeline(
             all_dfs_fast, all_trade_logs, sorted_dates, TRAIN_START_YEAR, ai_params,
             TRAIN_MAX_POSITIONS, TRAIN_ENABLE_ROTATION,
-            benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile
+            benchmark_ticker="0050", benchmark_data=benchmark_data, is_training=True, profile_stats=pf_profile,
+            verbose=False
         ),
         is_training=True,
     )

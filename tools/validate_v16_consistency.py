@@ -291,7 +291,8 @@ def run_single_ticker_portfolio_check(ticker, df, params):
             enable_rotation=False,
             benchmark_ticker=ticker,
             benchmark_data=fast_data,
-            is_training=True
+            is_training=True,
+            verbose=False
         ),
         is_training=True,
     )

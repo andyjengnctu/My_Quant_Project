@@ -164,9 +164,12 @@ def get_or_update_universe():
     if os.path.exists(LIST_FILE):
         file_mod_time = datetime.fromtimestamp(os.path.getmtime(LIST_FILE))
         if datetime.now() - file_mod_time < timedelta(days=RESCAN_DAYS):
-            print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
             with open(LIST_FILE, 'r') as f:
-                return [line.strip() for line in f if line.strip()]
+                cached_tickers = [line.strip() for line in f if line.strip()]
+            if cached_tickers:
+                print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
+                return cached_tickers
+            print("⚠️ universe 快取為空，重新海選。")
 
     print(f"🕵️‍♂️ 啟動全市場海選 (市值 > {MIN_MARKET_CAP/1e8:.0f}億 且 成交量 > {MIN_VOLUME/10000:.0f}萬)...")
 
