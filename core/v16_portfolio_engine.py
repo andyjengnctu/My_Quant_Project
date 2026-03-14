@@ -228,12 +228,15 @@ def get_fast_close(data, *, pos=None, date=None):
 
 
 # # (AI註: benchmark 起算必須與模擬起點對齊；若起點當日無資料，取起點當日或之前最近一筆收盤價，避免之後才開始算 benchmark)
+# # (AI註: benchmark 起算必須與模擬起點對齊；若起點當日無資料，取起點當日或之前最近一筆收盤價，避免之後才開始算 benchmark)
 def get_fast_close_on_or_before(data, date):
     dates = get_fast_dates(data)
     pos = bisect.bisect_right(dates, date) - 1
     if pos < 0:
         return None, None
-    return get_fast_close(data, pos=pos), dates[pos]
+
+    anchor_date = dates[pos]
+    return get_fast_close(data, date=anchor_date), anchor_date
 
 
 def build_normal_setup_index(all_dfs_fast):
