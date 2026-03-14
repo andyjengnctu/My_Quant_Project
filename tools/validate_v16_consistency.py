@@ -4,6 +4,9 @@ import copy
 import time
 import importlib.util
 import tempfile
+import io
+import warnings
+from contextlib import redirect_stdout, redirect_stderr
 import pandas as pd
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +39,32 @@ MAX_CONSOLE_FAIL_PREVIEW = 20
 CSV_PATH_CACHE = None
 CSV_DUPLICATE_ISSUES = None
 MODULE_CACHE = {}
+
+
+# # (AI註: validate 自己做唯一輸出層；tool 全部 silent，只在這裡判定單檔 PASS / FAIL / SKIP)
+def classify_ticker_status(ticker_results):
+    statuses = {row["status"] for row in ticker_results}
+    if "FAIL" in statuses:
+        return "FAIL"
+    if "PASS" in statuses:
+        return "PASS"
+    return "SKIP"
+
+
+def build_progress_line(idx, total_tickers, ticker, pass_count, fail_count, skip_count):
+    return (
+        f"\r進度: [{idx:03d}/{total_tickers:03d}] "
+        f"目前: {ticker:<8} | "
+        f"PASS股票: {pass_count:<4} | "
+        f"FAIL股票: {fail_count:<4} | "
+        f"SKIP股票: {skip_count:<4}"
+    )
+
+
+def suppress_tool_output(func, *args, **kwargs):
+    sink = io.StringIO()
+    with redirect_stdout(sink), redirect_stderr(sink):
+        return func(*args, **kwargs)
 
 
 def get_data_dir_csv_map():
@@ -96,7 +125,14 @@ def load_module_from_candidates(module_name, relative_paths, required_attrs=None
             continue
 
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*asyncio\.get_event_loop_policy.*deprecated.*Python 3\.16.*",
+                category=DeprecationWarning,
+                module=r"nest_asyncio",
+            )
+            spec.loader.exec_module(module)
 
         missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
         if missing_attrs:
@@ -334,14 +370,18 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
+        source_df = pd.read_csv(file_path)
         temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
-        pd.read_csv(file_path).to_csv(temp_csv_path, index=False)
-        result = module.run_portfolio_simulation(
+        source_df.to_csv(temp_csv_path, index=False)
+        result = suppress_tool_output(
+            module.run_portfolio_simulation,
             data_dir=temp_dir,
             params=copy.deepcopy(params),
             max_positions=1,
             enable_rotation=False,
-            start_year=int(pd.read_csv(file_path)['Date'].astype(str).str[:4].min()),
+            start_year=int(source_df["Date"].astype(str).str[:4].min()),
+            benchmark_ticker=ticker,
+            verbose=False,
         )
 
     (
@@ -442,7 +482,12 @@ def run_downloader_tool_check(ticker):
             module.SAVE_DIR = temp_dir
             module.dl = DummyDL()
             module.time.sleep = lambda *_args, **_kwargs: None
-            module.smart_download_vip_data([ticker], market_last_date='2024-01-03')
+            suppress_tool_output(
+                module.smart_download_vip_data,
+                [ticker],
+                market_last_date='2024-01-03',
+                verbose=False,
+            )
             csv_path = os.path.join(temp_dir, f"{ticker}.csv")
             downloaded_df = pd.read_csv(csv_path, index_col=0)
         finally:
@@ -451,6 +496,7 @@ def run_downloader_tool_check(ticker):
             module.time.sleep = original_sleep
 
     return downloaded_df, module_path
+
 
 def validate_one_ticker(ticker, base_params):
     params = make_consistency_params(base_params)
@@ -821,24 +867,30 @@ def main():
                 ) from e
 
         ticker_results = all_results[ticker_results_before:]
-        ticker_statuses = {row["status"] for row in ticker_results}
+        ticker_status = classify_ticker_status(ticker_results)
 
-        if "FAIL" in ticker_statuses:
+        if ticker_status == "FAIL":
             ticker_fail_count += 1
-        elif "PASS" in ticker_statuses:
+        elif ticker_status == "PASS":
             ticker_pass_count += 1
         else:
             ticker_skip_count += 1
 
-        if idx % VALIDATE_PROGRESS_EVERY == 0 or idx == total_tickers:
-            print(
-                f"\r進度: [{idx}/{total_tickers}] "
-                f"PASS股票:{ticker_pass_count} | SKIP股票:{ticker_skip_count} | FAIL股票:{ticker_fail_count}",
-                end="",
-                flush=True
-            )
+        print(
+            build_progress_line(
+                idx,
+                total_tickers,
+                ticker,
+                ticker_pass_count,
+                ticker_fail_count,
+                ticker_skip_count,
+            ),
+            end="",
+            flush=True,
+        )
 
     print(" " * 160, end="\r")
+    print()
 
     df_results = pd.DataFrame(all_results)
     df_summary = pd.DataFrame(summaries)

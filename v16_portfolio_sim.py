@@ -63,11 +63,23 @@ def print_yearly_return_report(yearly_return_rows):
     return df_yearly
 
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050"):
+def run_portfolio_simulation(
+    data_dir,
+    params,
+    max_positions=5,
+    enable_rotation=False,
+    start_year=2015,
+    benchmark_ticker="0050",
+    verbose=True,
+):
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"找不到資料夾 {data_dir}，請確認路徑或先下載資料！")
 
-    print(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
+    def vprint(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
+    vprint(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
     all_dfs, all_trade_logs, master_dates = {}, {}, set()
     load_issue_lines = []
     total_invalid_rows = 0
@@ -123,7 +135,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             ) from e
 
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
-            print(
+            vprint(
                 f"{C_GRAY}   預載入進度: [{count}/{total_files}] "
                 f"成功:{len(all_dfs)} | 資料不足:{total_skipped_insufficient}{C_RESET}",
                 end="\r",
@@ -132,10 +144,10 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     load_log_path = write_issue_log("portfolio_sim_load_issues", load_issue_lines) if load_issue_lines else None
 
-    print(" " * 160, end="\r")
+    vprint(" " * 160, end="\r")
 
     if load_log_path:
-        print(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
+        vprint(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
 
     if not all_dfs:
         raise RuntimeError("未能成功載入任何股票資料！")
@@ -143,7 +155,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     sorted_dates = sorted(list(master_dates))
     all_dfs_fast = {t: pack_prepared_stock_data(d) for t, d in all_dfs.items()}
 
-    print(
+    vprint(
         f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs)} 檔標的，"
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})，"
@@ -154,7 +166,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
 
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
 
-    print(" " * 120, end="\r")
+    vprint(" " * 120, end="\r")
 
     pf_profile = {}
     pf_result = unpack_portfolio_timeline_result(
