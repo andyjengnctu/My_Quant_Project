@@ -355,5 +355,8 @@ if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = get_market_last_date()
     target_tickers = get_or_update_universe()
-    if target_tickers:
-        smart_download_vip_data(target_tickers, market_date)
+
+    if not target_tickers:
+        raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
+
+    smart_download_vip_data(target_tickers, market_date)

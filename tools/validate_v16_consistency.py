@@ -19,6 +19,9 @@ from core.v16_portfolio_engine import (
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
 from core.v16_log_utils import format_exception_summary
+from contextlib import redirect_stdout, redirect_stderr
+import tempfile
+import io
 
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
@@ -67,41 +70,6 @@ def calc_validation_annual_return_pct(start_value, end_value, years):
     if end_value <= 0:
         return -100.0
     return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
-
-
-def load_module_from_candidates(module_name, relative_paths, required_attrs=None):
-    if required_attrs is None:
-        required_attrs = []
-
-    checked_paths = []
-    rejected_paths = []
-
-    for rel_path in relative_paths:
-        abs_path = os.path.join(PROJECT_ROOT, rel_path)
-        checked_paths.append(abs_path)
-
-        if not os.path.exists(abs_path):
-            continue
-
-        spec = importlib.util.spec_from_file_location(module_name, abs_path)
-        if spec is None or spec.loader is None:
-            rejected_paths.append(f"{abs_path} -> 無法建立 spec/loader")
-            continue
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
-        if missing_attrs:
-            rejected_paths.append(f"{abs_path} -> 缺少必要屬性: {missing_attrs}")
-            continue
-
-        return module, abs_path
-
-    detail_msg = "；".join(rejected_paths) if rejected_paths else "沒有任何可用候選檔"
-    raise FileNotFoundError(
-        f"找不到符合條件的模組。檢查路徑: {checked_paths}。原因: {detail_msg}"
-    )
 
 
 def load_params():
@@ -216,6 +184,193 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
 # # (AI註: 不應混入 portfolio 的歷史績效濾網，否則會把設計上的選股層差異誤判成執行層 bug)
 def build_execution_only_params(params):
     return make_consistency_params(params)
+
+# # (AI註: validate 補回工具級檢查，避免只驗核心邏輯而漏掉 portfolio_sim / scanner / downloader)
+MODULE_CACHE = {}
+
+def load_module_from_candidates(cache_key, candidate_files, required_attrs):
+    if cache_key in MODULE_CACHE:
+        return MODULE_CACHE[cache_key]
+
+    checked_paths = []
+    rejected_paths = []
+
+    for file_name in candidate_files:
+        module_path = os.path.join(PROJECT_ROOT, file_name)
+        checked_paths.append(module_path)
+
+        if not os.path.exists(module_path):
+            continue
+
+        spec = importlib.util.spec_from_file_location(cache_key, module_path)
+        if spec is None or spec.loader is None:
+            rejected_paths.append(f"{module_path} -> 無法建立 spec/loader")
+            continue
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
+        if missing_attrs:
+            rejected_paths.append(f"{module_path} -> 缺少必要屬性: {missing_attrs}")
+            continue
+
+        MODULE_CACHE[cache_key] = (module, module_path)
+        return module, module_path
+
+    detail_msg = "；".join(rejected_paths) if rejected_paths else "沒有任何可用候選檔"
+    raise FileNotFoundError(
+        f"找不到符合條件的模組。檢查路徑: {checked_paths}。原因: {detail_msg}"
+    )
+
+def suppress_tool_output(func, *args, **kwargs):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        return func(*args, **kwargs)
+
+def run_portfolio_sim_tool_check(ticker, file_path, params):
+    module, module_path = load_module_from_candidates(
+        "portfolio_sim_module",
+        ["v16_portfolio_sim.py"],
+        required_attrs=["run_portfolio_simulation"]
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_df = pd.read_csv(file_path)
+        temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
+        source_df.to_csv(temp_csv_path, index=False)
+
+        date_col = "Time" if "Time" in source_df.columns else "Date"
+        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
+        min_year = parsed_dates.dt.year.min()
+        if pd.isna(min_year):
+            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
+
+        result = suppress_tool_output(
+            module.run_portfolio_simulation,
+            data_dir=temp_dir,
+            params=copy.deepcopy(params),
+            max_positions=1,
+            enable_rotation=False,
+            start_year=int(min_year),
+            benchmark_ticker=ticker,
+            verbose=False,
+        )
+
+    (
+        _df_eq,
+        _df_tr,
+        tot_ret,
+        mdd,
+        trade_count,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        chase_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+        _pf_profile,
+    ) = result
+
+    return {
+        "module_path": module_path,
+        "total_return": tot_ret,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "normal_trade_count": normal_trade_count,
+        "chase_trade_count": chase_trade_count,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
+    }
+
+def run_scanner_tool_check(ticker, file_path, params):
+    module, module_path = load_module_from_candidates(
+        "vip_scanner_module",
+        ["v16_vip_scanner.py"],
+        required_attrs=["process_single_stock"]
+    )
+
+    result = suppress_tool_output(
+        module.process_single_stock,
+        file_path=file_path,
+        ticker=ticker,
+        params=copy.deepcopy(params)
+    )
+    return result, module_path
+
+def run_downloader_tool_check(ticker):
+    module, module_path = load_module_from_candidates(
+        "vip_downloader_module",
+        ["vip_smart_downloader.py"],
+        required_attrs=["smart_download_vip_data"]
+    )
+
+    class DummyDL:
+        def get_data(self, dataset, data_id, start_date):
+            if data_id != ticker:
+                raise ValueError(f"unexpected ticker: {data_id}")
+            return pd.DataFrame({
+                'date': ['2024-01-03', '2024-01-02'],
+                'open': [11.0, 10.0],
+                'max': [12.0, 11.0],
+                'min': [10.5, 9.5],
+                'close': [11.5, 10.5],
+                'trading_volume': [2000, 1000],
+            })
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_save_dir = module.SAVE_DIR
+        original_dl = module.dl
+        original_sleep = module.time.sleep
+        try:
+            module.SAVE_DIR = temp_dir
+            module.dl = DummyDL()
+            module.time.sleep = lambda *_args, **_kwargs: None
+            suppress_tool_output(
+                module.smart_download_vip_data,
+                [ticker],
+                market_last_date='2024-01-03',
+                verbose=False
+            )
+            csv_path = os.path.join(temp_dir, f"{ticker}.csv")
+            downloaded_df = pd.read_csv(csv_path, index_col=0)
+        finally:
+            module.SAVE_DIR = original_save_dir
+            module.dl = original_dl
+            module.time.sleep = original_sleep
+
+    return downloaded_df, module_path
 
 def run_single_backtest_check(ticker, df, params):
     stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True)
@@ -356,9 +511,15 @@ def validate_one_ticker(ticker, base_params):
 
     single_stats, standalone_logs = run_single_backtest_check(ticker, df, params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
+    portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
+    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
+    downloader_df, downloader_module_path = run_downloader_tool_check(ticker)
     export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
+    summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
+    summary["scanner_module_path"] = scanner_module_path
+    summary["downloader_module_path"] = downloader_module_path
     summary["export_module_path"] = export_module_path
     summary["debug_module_path"] = debug_module_path
     summary["single_trade_count"] = single_stats["trade_count"]
@@ -416,7 +577,54 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "single_vs_portfolio", ticker, "reserved_buy_fill_rate", expected_reserved_buy_fill_rate, portfolio_stats["reserved_buy_fill_rate"])
     add_check(results, "single_vs_portfolio", ticker, "annual_return_pct", expected_annual_return_pct, portfolio_stats["annual_return_pct"])
     add_check(results, "single_vs_portfolio", ticker, "bm_annual_return_pct", expected_bm_annual_return_pct, portfolio_stats["bm_annual_return_pct"])
+    add_check(results, "portfolio_sim", ticker, "total_return", portfolio_stats["total_return"], portfolio_sim_stats["total_return"])
+    add_check(results, "portfolio_sim", ticker, "mdd", portfolio_stats["mdd"], portfolio_sim_stats["mdd"])
+    add_check(results, "portfolio_sim", ticker, "trade_count", portfolio_stats["trade_count"], portfolio_sim_stats["trade_count"])
+    add_check(results, "portfolio_sim", ticker, "win_rate", portfolio_stats["win_rate"], portfolio_sim_stats["win_rate"])
+    add_check(results, "portfolio_sim", ticker, "pf_ev", portfolio_stats["pf_ev"], portfolio_sim_stats["pf_ev"])
+    add_check(results, "portfolio_sim", ticker, "pf_payoff", portfolio_stats["pf_payoff"], portfolio_sim_stats["pf_payoff"])
+    add_check(results, "portfolio_sim", ticker, "final_eq", portfolio_stats["final_eq"], portfolio_sim_stats["final_eq"])
+    add_check(results, "portfolio_sim", ticker, "avg_exp", portfolio_stats["avg_exp"], portfolio_sim_stats["avg_exp"])
+    add_check(results, "portfolio_sim", ticker, "max_exp", portfolio_stats["max_exp"], portfolio_sim_stats["max_exp"])
+    add_check(results, "portfolio_sim", ticker, "bm_ret", portfolio_stats["bm_ret"], portfolio_sim_stats["bm_ret"])
+    add_check(results, "portfolio_sim", ticker, "bm_mdd", portfolio_stats["bm_mdd"], portfolio_sim_stats["bm_mdd"])
+    add_check(results, "portfolio_sim", ticker, "total_missed", portfolio_stats["total_missed"], portfolio_sim_stats["total_missed"])
+    add_check(results, "portfolio_sim", ticker, "total_missed_sells", portfolio_stats["total_missed_sells"], portfolio_sim_stats["total_missed_sells"])
+    add_check(results, "portfolio_sim", ticker, "r_sq", portfolio_stats["r_sq"], portfolio_sim_stats["r_sq"])
+    add_check(results, "portfolio_sim", ticker, "m_win_rate", portfolio_stats["m_win_rate"], portfolio_sim_stats["m_win_rate"])
+    add_check(results, "portfolio_sim", ticker, "bm_r_sq", portfolio_stats["bm_r_sq"], portfolio_sim_stats["bm_r_sq"])
+    add_check(results, "portfolio_sim", ticker, "bm_m_win_rate", portfolio_stats["bm_m_win_rate"], portfolio_sim_stats["bm_m_win_rate"])
+    add_check(results, "portfolio_sim", ticker, "normal_trade_count", portfolio_stats["normal_trade_count"], portfolio_sim_stats["normal_trade_count"])
+    add_check(results, "portfolio_sim", ticker, "chase_trade_count", portfolio_stats["chase_trade_count"], portfolio_sim_stats["chase_trade_count"])
+    add_check(results, "portfolio_sim", ticker, "annual_trades", portfolio_stats["annual_trades"], portfolio_sim_stats["annual_trades"])
+    add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate", portfolio_stats["reserved_buy_fill_rate"], portfolio_sim_stats["reserved_buy_fill_rate"])
+    add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
+    add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct", portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
 
+    if scanner_result is None:
+        add_skip_result(
+            results,
+            "vip_scanner",
+            ticker,
+            "scanner_result_exists",
+            "scanner 未產生結果，略過工具一致性檢查。"
+        )
+    else:
+        if "ticker" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "ticker", str(ticker), str(scanner_result["ticker"]))
+        if "trade_count" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "trade_count", single_stats["trade_count"], scanner_result["trade_count"])
+        if "win_rate" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "win_rate", single_stats["win_rate"], scanner_result["win_rate"])
+        if "expected_value" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "expected_value", single_stats["expected_value"], scanner_result["expected_value"])
+        if "payoff_ratio" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "payoff_ratio", single_stats["payoff_ratio"], scanner_result["payoff_ratio"])
+
+    expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
+    actual_download_cols = list(downloader_df.columns)
+    add_check(results, "vip_downloader", ticker, "columns", expected_download_cols, actual_download_cols)
+    add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
     add_check(results, "single_vs_portfolio", ticker, "win_rate",
               single_stats["win_rate"], portfolio_stats["win_rate"])
     add_check(results, "single_vs_portfolio", ticker, "payoff_ratio",
