@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest
+from core.v16_core import run_v16_backtest, calc_position_size
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
@@ -185,6 +185,76 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
 def build_execution_only_params(params):
     return make_consistency_params(params)
 
+
+# # (AI註: scanner 必須用 production 門檻驗證；
+# # (AI註: 若套用 consistency 的寬鬆門檻，會驗到實際 scanner 不會出現的候選)
+def build_scanner_validation_params(base_params):
+    return copy.deepcopy(base_params)
+
+
+# # (AI註: 將 scanner 的 tuple 輸出正規化成 dict，
+# # (AI註: 避免 validate 誤把 tuple 當 dict，導致 vip_scanner 完全沒被驗到)
+def normalize_scanner_result(raw_result):
+    if raw_result is None:
+        return None
+
+    if isinstance(raw_result, dict):
+        return raw_result
+
+    if not isinstance(raw_result, tuple) or len(raw_result) != 7:
+        raise TypeError(
+            f"scanner 回傳格式異常: type={type(raw_result).__name__}, value={raw_result}"
+        )
+
+    status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = raw_result
+    return {
+        "status": status,
+        "proj_cost": proj_cost,
+        "expected_value": ev,
+        "sort_value": sort_value,
+        "message": msg,
+        "ticker": ticker,
+        "sanitize_issue": sanitize_issue,
+    }
+
+
+# # (AI註: 用 strict scanner 參數重跑一次核心回測，作為 scanner 工具的真實參考口徑)
+def run_scanner_reference_check(ticker, file_path, params):
+    try:
+        raw_df = pd.read_csv(file_path)
+        min_rows_needed = get_required_min_rows(params)
+        df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+        return run_v16_backtest(df.copy(), params)
+    except ValueError as e:
+        if is_insufficient_data_error(e):
+            return {"scanner_expected_status": "skip_insufficient"}
+        raise
+
+
+def derive_expected_scanner_status(scanner_ref_stats, params):
+    if scanner_ref_stats.get("scanner_expected_status") == "skip_insufficient":
+        return "skip_insufficient"
+
+    if not scanner_ref_stats or not scanner_ref_stats["is_candidate"]:
+        return None
+
+    if scanner_ref_stats["is_setup_today"]:
+        proj_qty = calc_position_size(
+            scanner_ref_stats["buy_limit"],
+            scanner_ref_stats["stop_loss"],
+            params.initial_capital,
+            params.fixed_risk,
+            params
+        )
+        return "buy" if proj_qty > 0 else "candidate"
+
+    chase_today = scanner_ref_stats.get("chase_today")
+    if chase_today is not None:
+        return "zone" if chase_today.get("qty", 0) > 0 else "candidate"
+
+    return "candidate"
+
+
 def suppress_tool_output(func, *args, **kwargs):
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
@@ -293,13 +363,13 @@ def run_scanner_tool_check(ticker, file_path, params):
         required_attrs=["process_single_stock"]
     )
 
-    result = suppress_tool_output(
+    raw_result = suppress_tool_output(
         module.process_single_stock,
         file_path=file_path,
         ticker=ticker,
         params=copy.deepcopy(params)
     )
-    return result, module_path
+    return normalize_scanner_result(raw_result), module_path
 
 def run_downloader_tool_check(ticker):
     module, module_path = load_module_from_candidates(
@@ -508,6 +578,7 @@ def run_debug_trade_log_check(ticker, df, params):
 
 def validate_one_ticker(ticker, base_params):
     params = make_consistency_params(base_params)
+    scanner_params = build_scanner_validation_params(base_params)
     file_path, df, sanitize_stats = load_clean_df(ticker, params)
 
     results = []
@@ -520,9 +591,10 @@ def validate_one_ticker(ticker, base_params):
     }
 
     single_stats, standalone_logs = run_single_backtest_check(ticker, df, params)
+    scanner_ref_stats = run_scanner_reference_check(ticker, file_path, scanner_params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
-    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
+    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
     downloader_df, downloader_module_path = run_downloader_tool_check(ticker)
     export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
@@ -617,25 +689,46 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
     add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct", portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
 
+    expected_scanner_status = derive_expected_scanner_status(scanner_ref_stats, scanner_params)
+
     if scanner_result is None:
-        add_skip_result(
+        add_check(
             results,
             "vip_scanner",
             ticker,
-            "scanner_result_exists",
-            "scanner 未產生結果，略過工具一致性檢查。"
+            "status",
+            expected_scanner_status,
+            None,
+            note="scanner 已實際執行；None 只在 strict production 門檻下無候選時才屬正確。"
         )
     else:
-        if "ticker" in scanner_result:
-            add_check(results, "vip_scanner", ticker, "ticker", str(ticker), str(scanner_result["ticker"]))
-        if "trade_count" in scanner_result:
-            add_check(results, "vip_scanner", ticker, "trade_count", single_stats["trade_count"], scanner_result["trade_count"])
-        if "win_rate" in scanner_result:
-            add_check(results, "vip_scanner", ticker, "win_rate", single_stats["win_rate"], scanner_result["win_rate"])
-        if "expected_value" in scanner_result:
-            add_check(results, "vip_scanner", ticker, "expected_value", single_stats["expected_value"], scanner_result["expected_value"])
-        if "payoff_ratio" in scanner_result:
-            add_check(results, "vip_scanner", ticker, "payoff_ratio", single_stats["payoff_ratio"], scanner_result["payoff_ratio"])
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "ticker",
+            str(ticker),
+            str(scanner_result["ticker"])
+        )
+
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "status",
+            expected_scanner_status,
+            scanner_result["status"]
+        )
+
+        if scanner_result["status"] in ("buy", "zone"):
+            add_check(
+                results,
+                "vip_scanner",
+                ticker,
+                "expected_value",
+                scanner_ref_stats["expected_value"],
+                scanner_result["expected_value"]
+            )
 
     expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
     actual_download_cols = list(downloader_df.columns)
