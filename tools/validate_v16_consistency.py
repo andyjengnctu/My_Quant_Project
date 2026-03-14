@@ -368,6 +368,8 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
 
     with tempfile.TemporaryDirectory() as temp_dir:
         source_df = pd.read_csv(file_path)
+        date_col = "Time" if "Time" in source_df.columns else "Date"
+        start_year = int(pd.to_datetime(source_df[date_col], errors="coerce").dt.year.min())
         temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
         source_df.to_csv(temp_csv_path, index=False)
         result = suppress_tool_output(
@@ -376,7 +378,7 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
             params=copy.deepcopy(params),
             max_positions=1,
             enable_rotation=False,
-            start_year=int(source_df["Date"].astype(str).str[:4].min()),
+            start_year=start_year,
             benchmark_ticker=ticker,
             verbose=False,
         )

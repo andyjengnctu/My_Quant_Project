@@ -219,8 +219,7 @@ def get_or_update_universe():
         screening_errors.append(("__INIT__", "yfinance", f"{type(e).__name__}: {e}"))
         screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
         append_downloader_issues("快篩失敗", screening_log_lines)
-        print(f"⚠️ 快篩初始化失敗，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
-        return []
+        raise RuntimeError(f"快篩初始化失敗，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}") from e
 
     for i, item in enumerate(tickers_info):
         pct = ((i + 1) / total_check) * 100
@@ -351,5 +350,6 @@ if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = get_market_last_date()
     target_tickers = get_or_update_universe()
-    if target_tickers:
-        smart_download_vip_data(target_tickers, market_date)
+    if not target_tickers:
+        raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩初始化、篩選條件或資料來源。")
+    smart_download_vip_data(target_tickers, market_date)
