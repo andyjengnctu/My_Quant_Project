@@ -15,6 +15,7 @@ from core.v16_config import (
     V16StrategyParams, SCORE_CALC_METHOD,
     MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE,
     MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT,
+    MAX_PORTFOLIO_MDD_PCT, MIN_MONTHLY_WIN_RATE, MIN_EQUITY_CURVE_R_SQUARED,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
@@ -546,7 +547,7 @@ def objective(trial):
 
     t0 = time.perf_counter()
     fail_reason = None
-    if mdd > 45.0:
+    if mdd > MAX_PORTFOLIO_MDD_PCT:
         fail_reason = f"回撤過大 ({mdd:.1f}%)"
     elif annual_trades < MIN_ANNUAL_TRADES:
         fail_reason = f"年化交易次數過低 ({annual_trades:.2f}次/年)"
@@ -563,9 +564,9 @@ def objective(trial):
         )
     elif win_rate < MIN_TRADE_WIN_RATE:
         fail_reason = f"實戰勝率偏低 ({win_rate:.2f}%)"
-    elif m_win_rate < 45.0:
+    elif m_win_rate < MIN_MONTHLY_WIN_RATE:
         fail_reason = f"月勝率偏低 ({m_win_rate:.0f}%)"
-    elif r_sq < 0.40:
+    elif r_sq < MIN_EQUITY_CURVE_R_SQUARED:
         fail_reason = f"曲線過度震盪 (R²={r_sq:.2f})"
     profile_row['filter_rules_sec'] = time.perf_counter() - t0
 

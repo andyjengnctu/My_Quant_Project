@@ -20,6 +20,9 @@ from core.v16_config import (
     MIN_BUY_FILL_RATE,
     MIN_TRADE_WIN_RATE,
     MIN_FULL_YEAR_RETURN_PCT,
+    MAX_PORTFOLIO_MDD_PCT,
+    MIN_MONTHLY_WIN_RATE,
+    MIN_EQUITY_CURVE_R_SQUARED,
 )
 from core.v16_data_utils import (
     sanitize_ohlcv_dataframe,
@@ -249,7 +252,7 @@ def spearman_rank_correlation_desc(train_scores, test_scores):
 
 # # (AI註: 與 optimizer 硬門檻完全一致，避免 overfitting 報告與訓練篩選口徑漂移)
 def evaluate_filter_pass(metrics):
-    if metrics['mdd'] > 45.0:
+    if metrics['mdd'] > MAX_PORTFOLIO_MDD_PCT:
         return False, f"回撤過大 ({metrics['mdd']:.2f}%)"
     if metrics['annual_trades'] < MIN_ANNUAL_TRADES:
         return False, f"年化交易次數過低 ({metrics['annual_trades']:.2f})"
@@ -263,9 +266,9 @@ def evaluate_filter_pass(metrics):
         return False, f"完整年度最差報酬過低 ({metrics['min_full_year_return_pct']:.2f}%)"
     if metrics['win_rate'] < MIN_TRADE_WIN_RATE:
         return False, f"實戰勝率偏低 ({metrics['win_rate']:.2f}%)"
-    if metrics['m_win_rate'] < 45.0:
+    if metrics['m_win_rate'] < MIN_MONTHLY_WIN_RATE:
         return False, f"月勝率偏低 ({metrics['m_win_rate']:.2f}%)"
-    if metrics['r_squared'] < 0.40:
+    if metrics['r_squared'] < MIN_EQUITY_CURVE_R_SQUARED:
         return False, f"曲線過度震盪 (R²={metrics['r_squared']:.3f})"
     return True, "PASS"
 
