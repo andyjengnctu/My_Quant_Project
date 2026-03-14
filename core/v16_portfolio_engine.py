@@ -227,6 +227,15 @@ def get_fast_close(data, *, pos=None, date=None):
     return get_fast_value(data, 'Close', pos=pos, date=date)
 
 
+# # (AI註: benchmark 起算必須與模擬起點對齊；若起點當日無資料，取起點當日或之前最近一筆收盤價，避免之後才開始算 benchmark)
+def get_fast_close_on_or_before(data, date):
+    dates = get_fast_dates(data)
+    pos = bisect.bisect_right(dates, date) - 1
+    if pos < 0:
+        return None, None
+    return get_fast_close(data, pos=pos), dates[pos]
+
+
 def build_normal_setup_index(all_dfs_fast):
     setup_index = {}
     for ticker, fast_df in all_dfs_fast.items():
@@ -415,8 +424,18 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     year_first_sim_date, year_last_sim_date = {}, {}
 
     current_month = sorted_dates[start_idx].month if start_idx < len(sorted_dates) else 1
-    current_bm_px = get_fast_close(benchmark_data, date=sorted_dates[start_idx]) if benchmark_data and start_idx < len(sorted_dates) and has_fast_date(benchmark_data, sorted_dates[start_idx]) else None
-    yesterday_bm_px, benchmark_start_price, bm_peak_price, bm_max_drawdown, bm_ret_pct = current_bm_px, None, None, 0.0, 0.0
+
+    current_bm_px = None
+    benchmark_start_price = None
+    bm_peak_price = None
+    if benchmark_data and start_idx < len(sorted_dates):
+        benchmark_start_price, benchmark_anchor_date = get_fast_close_on_or_before(benchmark_data, sorted_dates[start_idx])
+        if benchmark_start_price is not None:
+            bm_peak_price = benchmark_start_price
+            if benchmark_anchor_date == sorted_dates[start_idx]:
+                current_bm_px = benchmark_start_price
+
+    yesterday_bm_px, bm_max_drawdown, bm_ret_pct = current_bm_px, 0.0, 0.0
 
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_stats is not None else None
@@ -835,13 +854,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
 
-        if benchmark_data and has_fast_date(benchmark_data, today):
+        if benchmark_data and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
             current_bm_px = get_fast_close(benchmark_data, date=today)
-            if benchmark_start_price is None:
-                benchmark_start_price = current_bm_px
-                bm_peak_price = current_bm_px
-            if benchmark_start_price and benchmark_start_price > 0:
-                bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100
+            bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100 if benchmark_start_price > 0 else 0.0
+
             if bm_peak_price is not None:
                 if current_bm_px > bm_peak_price:
                     bm_peak_price = current_bm_px

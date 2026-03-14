@@ -125,6 +125,7 @@ def get_max_required_min_rows(params_list, base_min_rows=LOAD_DATA_MIN_ROWS, ext
 
 
 # # (AI註: 單一真理來源 - 統一所有模組的 OHLCV 清洗規則，禁止 optimizer / sim / scanner / tools 各自為政)
+# # (AI註: 保留 Volume<=0 的日期以避免壓縮時間序列；僅修正負成交量為 0，禁止把成交量異常日從歷史中抹掉)
 def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_cols=LOAD_DATA_REQUIRED_COLS):
     working = df.copy()
     working.columns = [c.capitalize() for c in working.columns]
@@ -141,6 +142,11 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         working[col] = pd.to_numeric(working[col], errors='coerce').astype('float64')
 
     working[date_col] = pd.to_datetime(working[date_col], errors='coerce')
+
+    negative_volume_mask = working['Volume'] < 0
+    negative_volume_corrected_count = int(negative_volume_mask.sum())
+    if negative_volume_corrected_count > 0:
+        working.loc[negative_volume_mask, 'Volume'] = 0.0
 
     invalid_mask = (
         working[date_col].isna() |
@@ -179,6 +185,7 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
         'invalid_row_count': invalid_row_count,
         'duplicate_date_count': duplicate_date_count,
         'zero_volume_row_count': zero_volume_row_count,
+        'negative_volume_corrected_count': negative_volume_corrected_count,
         'dropped_row_count': invalid_row_count + duplicate_date_count,
     }
     return working, stats

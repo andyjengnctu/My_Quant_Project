@@ -1,12 +1,14 @@
 import sys
 import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import warnings
 from core.v16_params_io import load_params_from_json
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
 
 # 🌟 依賴您的模組化架構：直接引入原本的參數檔與核心引擎
 from core.v16_config import V16StrategyParams, BUY_SORT_METHOD
