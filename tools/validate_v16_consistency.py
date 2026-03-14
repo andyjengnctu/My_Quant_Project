@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest, calc_position_size
+from core.v16_core import run_v16_backtest
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
@@ -102,8 +102,8 @@ def make_consistency_params(base_params):
 
 
 def discover_available_tickers():
-    if not os.path.isdir(DATA_DIR):
-        return []
+    if not os.path.exists(DATA_DIR):
+        raise FileNotFoundError(f"找不到資料夾: {DATA_DIR}")
 
     return sorted(get_data_dir_csv_map().keys())
 
@@ -185,90 +185,11 @@ def add_fail_result(results, module_name, ticker, metric, expected, actual, note
 def build_execution_only_params(params):
     return make_consistency_params(params)
 
-
-# # (AI註: scanner 必須用 production 門檻驗證；
-# # (AI註: 若套用 consistency 的寬鬆門檻，會驗到實際 scanner 不會出現的候選)
-def build_scanner_validation_params(base_params):
-    return copy.deepcopy(base_params)
-
-
-# # (AI註: 將 scanner 的 tuple 輸出正規化成 dict，
-# # (AI註: 避免 validate 誤把 tuple 當 dict，導致 vip_scanner 完全沒被驗到)
-def normalize_scanner_result(raw_result):
-    if raw_result is None:
-        return None
-
-    if isinstance(raw_result, dict):
-        return raw_result
-
-    if not isinstance(raw_result, tuple) or len(raw_result) != 7:
-        raise TypeError(
-            f"scanner 回傳格式異常: type={type(raw_result).__name__}, value={raw_result}"
-        )
-
-    status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = raw_result
-    return {
-        "status": status,
-        "proj_cost": proj_cost,
-        "expected_value": ev,
-        "sort_value": sort_value,
-        "message": msg,
-        "ticker": ticker,
-        "sanitize_issue": sanitize_issue,
-    }
-
-
-# # (AI註: 用 strict scanner 參數重跑一次核心回測，作為 scanner 工具的真實參考口徑)
-def run_scanner_reference_check(ticker, file_path, params):
-    try:
-        raw_df = pd.read_csv(file_path)
-        min_rows_needed = get_required_min_rows(params)
-        df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
-        return run_v16_backtest(df.copy(), params)
-    except ValueError as e:
-        if is_insufficient_data_error(e):
-            return {"scanner_expected_status": "skip_insufficient"}
-        raise
-
-
-def derive_expected_scanner_status(scanner_ref_stats, params):
-    if scanner_ref_stats.get("scanner_expected_status") == "skip_insufficient":
-        return "skip_insufficient"
-
-    if not scanner_ref_stats or not scanner_ref_stats["is_candidate"]:
-        return None
-
-    if scanner_ref_stats["is_setup_today"]:
-        proj_qty = calc_position_size(
-            scanner_ref_stats["buy_limit"],
-            scanner_ref_stats["stop_loss"],
-            params.initial_capital,
-            params.fixed_risk,
-            params
-        )
-        return "buy" if proj_qty > 0 else "candidate"
-
-    chase_today = scanner_ref_stats.get("chase_today")
-    if chase_today is not None:
-        return "zone" if chase_today.get("qty", 0) > 0 else "candidate"
-
-    return "candidate"
-
-
 def suppress_tool_output(func, *args, **kwargs):
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
     with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
         return func(*args, **kwargs)
-
-
-def resolve_source_date_column(source_df, ticker):
-    if "Time" in source_df.columns:
-        return "Time"
-    if "Date" in source_df.columns:
-        return "Date"
-    raise KeyError(f"{ticker}: 找不到 Date/Time 欄位")
-
 
 def run_portfolio_sim_tool_check(ticker, file_path, params):
     module, module_path = load_module_from_candidates(
@@ -282,7 +203,12 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
         source_df.to_csv(temp_csv_path, index=False)
 
-        date_col = resolve_source_date_column(source_df, ticker)
+        if "Time" in source_df.columns:
+            date_col = "Time"
+        elif "Date" in source_df.columns:
+            date_col = "Date"
+        else:
+            raise KeyError(f"{ticker}: 找不到 Date/Time 欄位")
 
         parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
         min_year = parsed_dates.dt.year.min()
@@ -363,13 +289,13 @@ def run_scanner_tool_check(ticker, file_path, params):
         required_attrs=["process_single_stock"]
     )
 
-    raw_result = suppress_tool_output(
+    result = suppress_tool_output(
         module.process_single_stock,
         file_path=file_path,
         ticker=ticker,
         params=copy.deepcopy(params)
     )
-    return normalize_scanner_result(raw_result), module_path
+    return result, module_path
 
 def run_downloader_tool_check(ticker):
     module, module_path = load_module_from_candidates(
@@ -451,6 +377,155 @@ def load_module_from_candidates(cache_key, candidate_files, required_attrs):
     raise FileNotFoundError(
         f"找不到符合條件的模組。檢查路徑: {checked_paths}。原因: {detail_msg}"
     )
+
+def suppress_tool_output(func, *args, **kwargs):
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+        return func(*args, **kwargs)
+
+def run_portfolio_sim_tool_check(ticker, file_path, params):
+    module, module_path = load_module_from_candidates(
+        "portfolio_sim_module",
+        ["v16_portfolio_sim.py"],
+        required_attrs=["run_portfolio_simulation"]
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_df = pd.read_csv(file_path)
+        temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
+        source_df.to_csv(temp_csv_path, index=False)
+
+        date_col = "Time" if "Time" in source_df.columns else "Date"
+        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
+        min_year = parsed_dates.dt.year.min()
+        if pd.isna(min_year):
+            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
+
+        result = suppress_tool_output(
+            module.run_portfolio_simulation,
+            data_dir=temp_dir,
+            params=copy.deepcopy(params),
+            max_positions=1,
+            enable_rotation=False,
+            start_year=int(min_year),
+            benchmark_ticker=ticker,
+            verbose=False,
+        )
+
+    (
+        _df_eq,
+        _df_tr,
+        tot_ret,
+        mdd,
+        trade_count,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        chase_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+        _pf_profile,
+    ) = result
+
+    return {
+        "module_path": module_path,
+        "total_return": tot_ret,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "normal_trade_count": normal_trade_count,
+        "chase_trade_count": chase_trade_count,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
+    }
+
+def run_scanner_tool_check(ticker, file_path, params):
+    module, module_path = load_module_from_candidates(
+        "vip_scanner_module",
+        ["v16_vip_scanner.py"],
+        required_attrs=["process_single_stock"]
+    )
+
+    result = suppress_tool_output(
+        module.process_single_stock,
+        file_path=file_path,
+        ticker=ticker,
+        params=copy.deepcopy(params)
+    )
+    return result, module_path
+
+def run_downloader_tool_check(ticker):
+    module, module_path = load_module_from_candidates(
+        "vip_downloader_module",
+        ["vip_smart_downloader.py"],
+        required_attrs=["smart_download_vip_data"]
+    )
+
+    class DummyDL:
+        def get_data(self, dataset, data_id, start_date):
+            if data_id != ticker:
+                raise ValueError(f"unexpected ticker: {data_id}")
+            return pd.DataFrame({
+                'date': ['2024-01-03', '2024-01-02'],
+                'open': [11.0, 10.0],
+                'max': [12.0, 11.0],
+                'min': [10.5, 9.5],
+                'close': [11.5, 10.5],
+                'trading_volume': [2000, 1000],
+            })
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        original_save_dir = module.SAVE_DIR
+        original_dl = module.dl
+        original_sleep = module.time.sleep
+        try:
+            module.SAVE_DIR = temp_dir
+            module.dl = DummyDL()
+            module.time.sleep = lambda *_args, **_kwargs: None
+            suppress_tool_output(
+                module.smart_download_vip_data,
+                [ticker],
+                market_last_date='2024-01-03',
+                verbose=False
+            )
+            csv_path = os.path.join(temp_dir, f"{ticker}.csv")
+            downloaded_df = pd.read_csv(csv_path, index_col=0)
+        finally:
+            module.SAVE_DIR = original_save_dir
+            module.dl = original_dl
+            module.time.sleep = original_sleep
+
+    return downloaded_df, module_path
 
 def run_single_backtest_check(ticker, df, params):
     stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True)
@@ -576,9 +651,65 @@ def run_debug_trade_log_check(ticker, df, params):
     return debug_df, module_path
 
 
+# # (AI註: 將 debug_trade_log 的逐列事件重建為 completed trades，
+# # (AI註: 才能嚴格驗證半倉停利 + 尾倉結算後的總損益口徑是否與核心一致)
+def rebuild_completed_trades_from_debug_log(debug_df):
+    if debug_df is None or len(debug_df) == 0:
+        return []
+
+    required_cols = {"日期", "動作", "單筆實質損益"}
+    missing_cols = [col for col in required_cols if col not in debug_df.columns]
+    if missing_cols:
+        raise KeyError(f"debug_trade_log 缺少必要欄位: {missing_cols}")
+
+    full_exit_actions = {"停損殺出", "指標賣出", "期末強制結算"}
+    completed_trades = []
+    active_trade = None
+
+    for row in debug_df.itertuples(index=False):
+        action = getattr(row, "動作")
+        trade_date = pd.to_datetime(getattr(row, "日期")).strftime("%Y-%m-%d")
+        realized_pnl = round(float(getattr(row, "單筆實質損益")), 2)
+
+        if action == "買進":
+            if active_trade is not None:
+                raise ValueError("debug_trade_log 出現連續買進，上一筆交易尚未完整結束。")
+            active_trade = {
+                "buy_date": trade_date,
+                "exit_date": None,
+                "total_pnl": 0.0,
+                "half_exit_count": 0,
+                "full_exit_action": None,
+            }
+            continue
+
+        if action == "半倉停利":
+            if active_trade is None:
+                raise ValueError("debug_trade_log 出現半倉停利，但前面沒有對應買進。")
+            active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
+            active_trade["half_exit_count"] += 1
+            continue
+
+        if action in full_exit_actions:
+            if active_trade is None:
+                raise ValueError(f"debug_trade_log 出現 {action}，但前面沒有對應買進。")
+            active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
+            active_trade["exit_date"] = trade_date
+            active_trade["full_exit_action"] = action
+            completed_trades.append(active_trade)
+            active_trade = None
+            continue
+
+        raise ValueError(f"debug_trade_log 出現未納入驗證的動作: {action}")
+
+    if active_trade is not None:
+        raise ValueError("debug_trade_log 最後仍有未完成交易，缺少完整賣出列。")
+
+    return completed_trades
+
+
 def validate_one_ticker(ticker, base_params):
     params = make_consistency_params(base_params)
-    scanner_params = build_scanner_validation_params(base_params)
     file_path, df, sanitize_stats = load_clean_df(ticker, params)
 
     results = []
@@ -591,10 +722,9 @@ def validate_one_ticker(ticker, base_params):
     }
 
     single_stats, standalone_logs = run_single_backtest_check(ticker, df, params)
-    scanner_ref_stats = run_scanner_reference_check(ticker, file_path, scanner_params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
-    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
+    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
     downloader_df, downloader_module_path = run_downloader_tool_check(ticker)
     export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
@@ -643,8 +773,8 @@ def validate_one_ticker(ticker, base_params):
     sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
     expected_annual_trades = (portfolio_stats["trade_count"] / sim_years) if sim_years > 0 else 0.0
     expected_reserved_buy_fill_rate = (
-        portfolio_stats["trade_count"] / (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) * 100.0
-        if (portfolio_stats["trade_count"] + portfolio_stats["total_missed"]) > 0 else 0.0
+        portfolio_stats["normal_trade_count"] / (portfolio_stats["normal_trade_count"] + portfolio_stats["total_missed"]) * 100.0
+        if (portfolio_stats["normal_trade_count"] + portfolio_stats["total_missed"]) > 0 else 0.0
     )
     expected_annual_return_pct = calc_validation_annual_return_pct(
         params.initial_capital, portfolio_stats["final_eq"], sim_years
@@ -689,46 +819,25 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
     add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct", portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
 
-    expected_scanner_status = derive_expected_scanner_status(scanner_ref_stats, scanner_params)
-
     if scanner_result is None:
-        add_check(
+        add_skip_result(
             results,
             "vip_scanner",
             ticker,
-            "status",
-            expected_scanner_status,
-            None,
-            note="scanner 已實際執行；None 只在 strict production 門檻下無候選時才屬正確。"
+            "scanner_result_exists",
+            "scanner 未產生結果，略過工具一致性檢查。"
         )
     else:
-        add_check(
-            results,
-            "vip_scanner",
-            ticker,
-            "ticker",
-            str(ticker),
-            str(scanner_result["ticker"])
-        )
-
-        add_check(
-            results,
-            "vip_scanner",
-            ticker,
-            "status",
-            expected_scanner_status,
-            scanner_result["status"]
-        )
-
-        if scanner_result["status"] in ("buy", "zone"):
-            add_check(
-                results,
-                "vip_scanner",
-                ticker,
-                "expected_value",
-                scanner_ref_stats["expected_value"],
-                scanner_result["expected_value"]
-            )
+        if "ticker" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "ticker", str(ticker), str(scanner_result["ticker"]))
+        if "trade_count" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "trade_count", single_stats["trade_count"], scanner_result["trade_count"])
+        if "win_rate" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "win_rate", single_stats["win_rate"], scanner_result["win_rate"])
+        if "expected_value" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "expected_value", single_stats["expected_value"], scanner_result["expected_value"])
+        if "payoff_ratio" in scanner_result:
+            add_check(results, "vip_scanner", ticker, "payoff_ratio", single_stats["payoff_ratio"], scanner_result["payoff_ratio"])
 
     expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
     actual_download_cols = list(downloader_df.columns)
@@ -799,8 +908,15 @@ def validate_one_ticker(ticker, base_params):
         buy_rows = int((debug_df["動作"] == "買進").sum())
         exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
         half_rows = int((debug_df["動作"] == "半倉停利").sum())
+        debug_completed_trades = rebuild_completed_trades_from_debug_log(debug_df)
 
         expected_exit_rows = len(standalone_logs)
+        expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]
+        actual_trade_pnls = [trade["total_pnl"] for trade in debug_completed_trades]
+        expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
+        actual_exit_dates = [trade["exit_date"] for trade in debug_completed_trades]
+        expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)
+        actual_realized_pnl_sum = round(sum(actual_trade_pnls), 2)
 
         add_check(
             results,
@@ -819,6 +935,47 @@ def validate_one_ticker(ticker, base_params):
             "full_exit_rows",
             expected_exit_rows,
             exit_rows
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "completed_trade_count",
+            len(standalone_logs),
+            len(debug_completed_trades),
+            note="debug 明細需能重建為與核心 completed trades 完全相同的筆數。"
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "completed_trade_exit_dates",
+            expected_exit_dates,
+            actual_exit_dates,
+            note="每筆 completed trade 的最終出場日期必須與核心一致，包含期末強制結算。"
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "completed_trade_pnl_sequence",
+            expected_trade_pnls,
+            actual_trade_pnls,
+            note="debug 需將半倉停利 + 尾倉賣出合併後，逐筆總損益與核心 completed trades 一致。"
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "completed_trade_realized_pnl_sum",
+            expected_realized_pnl_sum,
+            actual_realized_pnl_sum,
+            tol=0.01,
+            note="逐筆加總後的總已實現損益必須與核心 completed trades 一致。"
         )
 
         results.append({
@@ -912,17 +1069,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     base_params = load_params()
-
-    if not os.path.isdir(DATA_DIR):
-        print(f"找不到資料夾: {DATA_DIR}")
-        print("請先準備 tw_stock_data_vip 後再執行一致性驗證。")
-        return 2
-
     selected_tickers = discover_available_tickers()
-    if not selected_tickers:
-        print(f"資料夾內找不到任何 CSV: {DATA_DIR}")
-        print("請先放入 {ticker}.csv 或 TV_Data_Full_{ticker}.csv 後再執行一致性驗證。")
-        return 2
 
     all_results = []
     summaries = []

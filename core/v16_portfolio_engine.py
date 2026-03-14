@@ -716,7 +716,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
                 if cand['type'] == 'normal':
-                    total_missed_buys += 1
                     if t_volume > 0:
                         next_day_sizing_equity = (
                             calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
@@ -983,7 +982,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
     sim_years = calc_sim_years(sorted_dates, start_idx)
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
-    reserved_buy_fill_rate = (trade_count / (trade_count + total_missed_buys) * 100.0) if (trade_count + total_missed_buys) > 0 else 0.0
+    reserved_buy_fill_rate = (normal_trade_count / (normal_trade_count + total_missed_buys) * 100.0) if (normal_trade_count + total_missed_buys) > 0 else 0.0
     annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
