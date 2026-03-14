@@ -25,7 +25,6 @@ C_GREEN = '\033[92m'
 C_YELLOW = '\033[93m'
 C_RESET = '\033[0m'
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
 OUTPUT_FILE = "outputs/V16_All_Stocks_Stats_Report.xlsx"
 DEFAULT_EXPORT_MAX_WORKERS = 14
