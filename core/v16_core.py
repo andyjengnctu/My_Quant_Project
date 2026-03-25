@@ -215,14 +215,50 @@ def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
     return should_count_miss_buy(order_qty, is_worse_than_initial_stop=is_worse_than_initial_stop)
 
 
-# # (AI註: 單一真理來源 - 買進日一字漲停不可成交)
-def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+# # (AI註: 單一真理來源 - 漲跌停價與一字漲/跌停判斷統一由此處理，避免 core / portfolio / tool 各寫各的)
+def calc_limit_up_price(reference_price):
+    if pd.isna(reference_price) or reference_price <= 0:
+        return np.nan
+    return adjust_price_down_to_tick(reference_price * 1.10)
+
+
+def calc_limit_down_price(reference_price):
+    if pd.isna(reference_price) or reference_price <= 0:
+        return np.nan
+    return adjust_price_up_to_tick(reference_price * 0.90)
+
+
+def is_single_price_bar(t_open, t_high, t_low, t_close):
+    if pd.isna(t_open) or pd.isna(t_high) or pd.isna(t_low) or pd.isna(t_close):
+        return False
     return (
-        (t_open == t_high) and
-        (t_high == t_low) and
-        (t_low == t_close) and
-        (t_close > y_close)
+        np.isclose(t_open, t_high) and
+        np.isclose(t_high, t_low) and
+        np.isclose(t_low, t_close)
     )
+
+
+def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+    limit_up_price = calc_limit_up_price(y_close)
+    if pd.isna(limit_up_price):
+        return False
+    return is_single_price_bar(t_open, t_high, t_low, t_close) and np.isclose(t_close, limit_up_price)
+
+
+def is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+    limit_down_price = calc_limit_down_price(y_close)
+    if pd.isna(limit_down_price):
+        return False
+    return is_single_price_bar(t_open, t_high, t_low, t_close) and np.isclose(t_close, limit_down_price)
+
+
+# # (AI註: 單一真理來源 - 賣出被阻塞的原因統一由此判斷，避免零量 / 一字跌停口徑分裂)
+def get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close):
+    if pd.isna(t_volume) or t_volume <= 0:
+        return 'NO_VOLUME'
+    if is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+        return 'LOCKED_DOWN'
+    return None
 
 
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
@@ -368,22 +404,11 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         position['trailing_stop'] = max(position.get('trailing_stop', 0.0), new_trail)
         position['sl'] = max(position['initial_stop'], position['trailing_stop'])
 
-    # # (AI註: 零成交量日保留在時間序列中，但當日不可成交；
-    # # (AI註: 僅允許先用前一日已知資訊更新停損線，再禁止當日任何賣出事件)
-    if pd.isna(t_volume) or t_volume <= 0:
-        return position, freed_cash, pnl_realized, events
-
     # # (AI註: y_ind_sell 是 T-1 收盤後已知、T 日盤前即可決定的賣出指令，
     # # (AI註: 必須優先於 T 日盤中的 TP_HALF / STOP 判斷，避免出現不可能的事件序列)
     if y_ind_sell:
-        is_locked_down = (
-            (t_open == t_high) and
-            (t_high == t_low) and
-            (t_low == t_close) and
-            (t_close < y_close)
-        )
-
-        if not is_locked_down:
+        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)
+        if sell_block_reason is None:
             exec_price = adjust_long_sell_fill_price(t_open)
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
             freed_cash += net_price * position['qty']
@@ -393,7 +418,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             position['qty'] = 0
             events.append('IND_SELL')
         else:
-            events.append('LOCKED_DOWN')
+            events.extend(['MISSED_SELL', sell_block_reason])
 
         return position, freed_cash, pnl_realized, events
 
@@ -404,7 +429,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     if is_stop_hit and is_tp_hit:
         is_tp_hit = False
 
-    if is_tp_hit:
+    if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
         exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open))
         sell_qty = int(math.floor(position['qty'] * params.tp_percent))
         if sell_qty > 0 and position['qty'] > sell_qty:
@@ -418,14 +443,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             events.append('TP_HALF')
 
     if is_stop_hit:
-        is_locked_down = (
-            (t_open == t_high) and
-            (t_high == t_low) and
-            (t_low == t_close) and
-            (t_close < y_close)
-        )
-
-        if not is_locked_down:
+        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)
+        if sell_block_reason is None:
             exec_price = adjust_long_sell_fill_price(min(position['sl'], t_open))
             net_price = calc_net_sell_price(exec_price, position['qty'], params)
             freed_cash += net_price * position['qty']
@@ -435,7 +454,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             position['qty'] = 0
             events.append('STOP')
         else:
-            events.append('LOCKED_DOWN')
+            events.extend(['MISSED_SELL', sell_block_reason])
 
     return position, freed_cash, pnl_realized, events
 
@@ -624,7 +643,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                 else:
                     totalLoss += abs(total_pnl)
                     total_r_loss += abs(trade_r_mult)
-            elif 'LOCKED_DOWN' in events:
+            elif 'MISSED_SELL' in events:
                 missedSellCount += 1
             currentCapital += pnl_realized
 

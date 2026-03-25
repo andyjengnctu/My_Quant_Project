@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -577,14 +577,16 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     w_low = get_fast_value(w_data, 'Low', pos=w_pos)
                     w_close = get_fast_close(w_data, pos=w_pos)
                     w_y_close = get_fast_close(w_data, pos=w_y_pos)
-                    is_locked_down = (
-                        (w_open == w_high) and
-                        (w_high == w_low) and
-                        (w_low == w_close) and
-                        (w_close < w_y_close)
+                    sell_block_reason = get_exit_sell_block_reason(
+                        w_open,
+                        w_high,
+                        w_low,
+                        w_close,
+                        get_fast_value(w_data, 'Volume', pos=w_pos),
+                        w_y_close,
                     )
 
-                    if not is_locked_down:
+                    if sell_block_reason is None:
                         pos = portfolio[weakest_ticker]
                         est_sell_px = adjust_long_sell_fill_price(w_open)
                         est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
@@ -674,7 +676,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     })
 
                 tickers_to_remove.append(ticker)
-            elif 'LOCKED_DOWN' in events:
+            elif 'MISSED_SELL' in events:
                 total_missed_sells += 1
 
         for t in tickers_to_remove:
