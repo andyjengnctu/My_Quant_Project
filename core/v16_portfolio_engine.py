@@ -687,6 +687,29 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 tickers_to_remove.append(ticker)
             elif 'MISSED_SELL' in events:
                 total_missed_sells += 1
+                if not is_training:
+                    sell_block_reason = get_exit_sell_block_reason(
+                        get_fast_value(fast_df, 'Open', pos=t_pos),
+                        get_fast_value(fast_df, 'High', pos=t_pos),
+                        get_fast_value(fast_df, 'Low', pos=t_pos),
+                        get_fast_close(fast_df, pos=t_pos),
+                        get_fast_value(fast_df, 'Volume', pos=t_pos),
+                        get_fast_close(fast_df, pos=y_pos),
+                    )
+                    reason_note = {
+                        'NO_VOLUME': '零量，當日無法賣出',
+                        'LOCKED_DOWN': '一字跌停鎖死，當日無法賣出',
+                    }.get(sell_block_reason, '賣出受阻，當日無法賣出')
+                    trade_history.append({
+                        "Date": today.strftime('%Y-%m-%d'),
+                        "Ticker": ticker,
+                        "Type": "錯失賣出",
+                        "單筆損益": 0.0,
+                        "該筆總損益": pos['realized_pnl'],
+                        "R_Multiple": 0.0,
+                        "Risk": params.fixed_risk,
+                        "備註": reason_note,
+                    })
 
         for t in tickers_to_remove:
             del portfolio[t]
@@ -753,6 +776,20 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     })
             elif entry_result['count_as_missed_buy']:
                 total_missed_buys += 1
+                if not is_training:
+                    miss_buy_type = "錯失買進(延續候選)" if cand['type'] == 'extended' else "錯失買進(新訊號)"
+                    reserved_cost = calc_entry_price(cand['limit_px'], cand['qty'], params) * cand['qty']
+                    trade_history.append({
+                        "Date": today.strftime('%Y-%m-%d'),
+                        "Ticker": cand['ticker'],
+                        "Type": miss_buy_type,
+                        "單筆損益": 0.0,
+                        "該筆總損益": 0.0,
+                        "R_Multiple": 0.0,
+                        "Risk": params.fixed_risk,
+                        "備註": f"預掛限價 {cand['limit_px']:.2f} 未成交",
+                        "投入總金額": reserved_cost,
+                    })
         if profile_stats is not None:
             buy_sec += time.perf_counter() - t0
 

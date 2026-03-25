@@ -375,6 +375,10 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         _pf_profile,
     ) = result
 
+    portfolio_trade_types = _df_tr["Type"].fillna("") if _df_tr is not None and len(_df_tr) > 0 and "Type" in _df_tr.columns else pd.Series(dtype="object")
+    portfolio_missed_buy_rows = int(portfolio_trade_types.str.startswith("錯失買進").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_missed_sell_rows = int((portfolio_trade_types == "錯失賣出").sum()) if len(portfolio_trade_types) > 0 else 0
+
     return {
         "module_path": module_path,
         "total_return": tot_ret,
@@ -400,6 +404,8 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
         "bm_annual_return_pct": bm_annual_return_pct,
+        "portfolio_missed_buy_rows": portfolio_missed_buy_rows,
+        "portfolio_missed_sell_rows": portfolio_missed_sell_rows,
     }
 
 def run_scanner_tool_check(ticker, file_path, params):
@@ -788,6 +794,24 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "bm_mdd", portfolio_stats["bm_mdd"], portfolio_sim_stats["bm_mdd"])
     add_check(results, "portfolio_sim", ticker, "total_missed", portfolio_stats["total_missed"], portfolio_sim_stats["total_missed"])
     add_check(results, "portfolio_sim", ticker, "total_missed_sells", portfolio_stats["total_missed_sells"], portfolio_sim_stats["total_missed_sells"])
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_missed_buy_rows",
+        portfolio_stats["total_missed"],
+        portfolio_sim_stats["portfolio_missed_buy_rows"],
+        note="portfolio df_trades 中的錯失買進列數，必須與 total_missed 完全一致。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_missed_sell_rows",
+        portfolio_stats["total_missed_sells"],
+        portfolio_sim_stats["portfolio_missed_sell_rows"],
+        note="portfolio df_trades 中的錯失賣出列數，必須與 total_missed_sells 完全一致。"
+    )
     add_check(results, "portfolio_sim", ticker, "r_sq", portfolio_stats["r_sq"], portfolio_sim_stats["r_sq"])
     add_check(results, "portfolio_sim", ticker, "m_win_rate", portfolio_stats["m_win_rate"], portfolio_sim_stats["m_win_rate"])
     add_check(results, "portfolio_sim", ticker, "bm_r_sq", portfolio_stats["bm_r_sq"], portfolio_sim_stats["bm_r_sq"])
