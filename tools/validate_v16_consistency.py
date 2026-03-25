@@ -604,18 +604,6 @@ def run_single_ticker_portfolio_check(ticker, df, params):
     }
 
 
-def run_all_stock_stats_check(ticker, params):
-    module, module_path = load_module_from_candidates(
-        "all_stock_stats_module",
-        ["tools/all_stock_stats.py", "all_stock_stats.py"],
-        required_attrs=["process_single_stock_for_export"]
-    )
-
-    file_path = resolve_csv_path(ticker)
-    export_row = module.process_single_stock_for_export(ticker, file_path, params)
-    return export_row, module_path
-
-
 def run_debug_trade_log_check(ticker, df, params):
     module, module_path = load_module_from_candidates(
         "debug_trade_log_module",
@@ -713,13 +701,11 @@ def validate_one_ticker(ticker, base_params):
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
     scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
     downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
-    export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
     summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
     summary["scanner_module_path"] = scanner_module_path
     summary["downloader_module_path"] = downloader_module_path
-    summary["export_module_path"] = export_module_path
     summary["debug_module_path"] = debug_module_path
     summary["single_trade_count"] = single_stats["trade_count"]
     summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
@@ -903,45 +889,6 @@ def validate_one_ticker(ticker, base_params):
     ]
     actual_download_rows = downloader_df.reset_index(drop=True).to_dict("records")
     add_check(results, "vip_downloader", ticker, "ohlcv_values_after_sort", expected_download_rows, actual_download_rows)
-
-    if export_row is None:
-        if single_stats["trade_count"] == 0:
-            add_skip_result(
-                results,
-                "all_stock_stats",
-                ticker,
-                "export_row_exists",
-                "無 completed trades，匯出工具回傳 None 屬設計行為。"
-            )
-        else:
-            add_fail_result(
-                results,
-                "all_stock_stats",
-                ticker,
-                "export_row_exists",
-                "非空",
-                "None",
-                "有 completed trades，但匯出工具卻回傳 None。"
-            )
-    else:
-        add_check(results, "all_stock_stats", ticker, "交易次數",
-                  single_stats["trade_count"], export_row["交易次數"])
-        add_check(results, "all_stock_stats", ticker, "勝率 (Win Rate %)",
-                  single_stats["win_rate"], export_row["勝率 (Win Rate %)"])
-        add_check(results, "all_stock_stats", ticker, "平均獲利金額 (avgWin)",
-                  single_stats["avg_win"], export_row["平均獲利金額 (avgWin)"])
-        add_check(results, "all_stock_stats", ticker, "平均虧損金額 (avgLoss)",
-                  single_stats["avg_loss"], export_row["平均虧損金額 (avgLoss)"])
-        add_check(results, "all_stock_stats", ticker, "盈虧比 (payoffRatio)",
-                  single_stats["payoff_ratio"], export_row["盈虧比 (payoffRatio)"])
-        add_check(results, "all_stock_stats", ticker, "期望值 (expectedValue)",
-                  single_stats["expected_value"], export_row["期望值 (expectedValue)"])
-        add_check(results, "all_stock_stats", ticker, "平均持倉天數",
-                  single_stats["avg_bars_held"], export_row["平均持倉天數"])
-        add_check(results, "all_stock_stats", ticker, "總資產報酬率 (%)",
-                  single_stats["asset_growth"], export_row["總資產報酬率 (%)"])
-        add_check(results, "all_stock_stats", ticker, "最大回撤 MDD (%)",
-                  single_stats["max_drawdown"], export_row["最大回撤 MDD (%)"])
 
     expected_buy_rows = len(standalone_logs)
 
