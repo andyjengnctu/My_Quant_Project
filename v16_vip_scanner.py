@@ -82,14 +82,14 @@ def process_single_stock(file_path, ticker, params):
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
             return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
-        extended_candidate = stats.get('extended_candidate_today') or stats.get('chase_today')
+        extended_candidate = stats.get('extended_candidate_today')
         if extended_candidate is not None:
             proj_qty = extended_candidate['qty']
             if proj_qty == 0:
                 return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
-            limit_price = extended_candidate.get('limit_price', extended_candidate.get('chase_price'))
-            init_sl = extended_candidate.get('init_sl', extended_candidate.get('sl'))
+            limit_price = extended_candidate.get('limit_price')
+            init_sl = extended_candidate.get('init_sl')
             if limit_price is None or init_sl is None:
                 raise KeyError("extended candidate 缺少 limit_price/init_sl")
 

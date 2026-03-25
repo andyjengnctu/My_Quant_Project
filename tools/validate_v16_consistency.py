@@ -248,7 +248,7 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         )
         return "buy" if proj_qty > 0 else "candidate"
 
-    extended_candidate_today = scanner_ref_stats.get("extended_candidate_today") or scanner_ref_stats.get("chase_today")
+    extended_candidate_today = scanner_ref_stats.get("extended_candidate_today")
     if extended_candidate_today is not None:
         return "extended" if extended_candidate_today.get("qty", 0) > 0 else "candidate"
 
@@ -350,7 +350,6 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         "bm_m_win_rate": bm_m_win_rate,
         "normal_trade_count": normal_trade_count,
         "extended_trade_count": extended_trade_count,
-        "chase_trade_count": extended_trade_count,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
@@ -538,7 +537,6 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "bm_m_win_rate": bm_m_win_rate,
         "normal_trade_count": normal_trade_count,
         "extended_trade_count": extended_trade_count,
-        "chase_trade_count": extended_trade_count,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,

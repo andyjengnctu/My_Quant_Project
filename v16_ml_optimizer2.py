@@ -585,7 +585,7 @@ def objective(trial):
     profile_row['score_calc_sec'] = time.perf_counter() - t0
     profile_row['base_score'] = base_score
 
-    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("extended_trades", extended_trade_count); trial.set_user_attr("chase_trades", extended_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("reserved_buy_fill_rate", reserved_buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("full_year_count", full_year_count); trial.set_user_attr("min_full_year_return_pct", min_full_year_return_pct); trial.set_user_attr("yearly_return_rows", pf_profile.get("yearly_return_rows", [])); trial.set_user_attr("base_score", base_score)
+    trial.set_user_attr("pf_return", ret_pct); trial.set_user_attr("pf_mdd", mdd); trial.set_user_attr("pf_trades", t_count); trial.set_user_attr("final_equity", final_eq); trial.set_user_attr("avg_exposure", avg_exp); trial.set_user_attr("max_exposure", max_exp); trial.set_user_attr("bm_return", bm_ret); trial.set_user_attr("bm_mdd", bm_mdd); trial.set_user_attr("win_rate", win_rate); trial.set_user_attr("pf_ev", pf_ev); trial.set_user_attr("pf_payoff", pf_payoff); trial.set_user_attr("missed_buys", total_missed); trial.set_user_attr("missed_sells", total_missed_sells); trial.set_user_attr("normal_trades", normal_trade_count); trial.set_user_attr("extended_trades", extended_trade_count); trial.set_user_attr("annual_trades", annual_trades); trial.set_user_attr("reserved_buy_fill_rate", reserved_buy_fill_rate); trial.set_user_attr("annual_return_pct", annual_return_pct); trial.set_user_attr("bm_annual_return_pct", bm_annual_return_pct); trial.set_user_attr("full_year_count", full_year_count); trial.set_user_attr("min_full_year_return_pct", min_full_year_return_pct); trial.set_user_attr("yearly_return_rows", pf_profile.get("yearly_return_rows", [])); trial.set_user_attr("base_score", base_score)
     trial.set_user_attr("bm_min_full_year_return_pct", bm_min_full_year_return_pct)
     trial.set_user_attr("r_squared", r_sq)
     trial.set_user_attr("m_win_rate", m_win_rate)
@@ -637,7 +637,7 @@ def monitoring_callback(study, trial):
             sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
             win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
             r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
-            normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', attrs.get('chase_trades', 0)),
+            normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', 0),
             annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
             annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
             min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
@@ -681,7 +681,7 @@ if __name__ == "__main__":
                     sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
                     win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
                     r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
-                    normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', attrs.get('chase_trades', 0)),
+                    normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', 0),
                     annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
                     annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
                     min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)

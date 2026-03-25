@@ -209,21 +209,10 @@ def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_
     }
 
 
-# # (AI註: 相容舊介面 - chase 邏輯已改為延續候選，暫保留函式名避免其他工具直接壞掉)
-def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
+# # (AI註: 延續候選資格評估)
+def evaluate_extended_candidate_eligibility(close_price, original_limit, atr, sizing_capital, params):
     signal_state = create_signal_tracking_state(original_limit, atr, params)
-    plan = build_extended_entry_plan_from_signal(signal_state, close_price, sizing_capital, params)
-    if plan is None:
-        return None
-    return {
-        'chase_price': plan['limit_price'],
-        'sl': plan['init_sl'],
-        'tp': np.nan,
-        'rr': np.nan,
-        'qty': plan['qty'],
-        'orig_limit': original_limit,
-        'orig_atr': atr,
-    }
+    return build_extended_entry_plan_from_signal(signal_state, close_price, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
@@ -682,7 +671,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "buy_limit": buyLimit_today,
         "stop_loss": stopLoss_today,
         "extended_candidate_today": extended_candidate_today,
-        "chase_today": extended_candidate_today,
         "current_position": end_position_qty,
         "avg_bars_held": avg_bars_held
     }
