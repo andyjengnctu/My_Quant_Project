@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -344,53 +344,22 @@ def build_trade_stats_index(trade_logs):
 
 def get_pit_stats_from_index(stats_index, current_date, params):
     cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date)
-    trade_count = int(stats_index['cum_trade_count'][cutoff - 1]) if cutoff > 0 else 0
-    min_trades_req = getattr(params, 'min_history_trades', 0)
-    min_ev_req = getattr(params, 'min_history_ev', 0.0)
-    min_win_rate_req = getattr(params, 'min_history_win_rate', 0.30)
+    if cutoff <= 0:
+        return evaluate_history_candidate_metrics(0, 0, 0.0, 0.0, 0.0, params)
 
-    # # (AI註: 與單股回測完全一致；零樣本只有在所有歷史門檻都被明確放寬時才可通過)
-    allow_zero_history = (
-        (min_trades_req == 0) and
-        (min_ev_req <= 0) and
-        (min_win_rate_req <= 0)
-    )
-
-    if trade_count < min_trades_req:
-        return False, 0.0, 0.0, trade_count
-    if trade_count == 0:
-        return allow_zero_history, 0.0, 0.0, trade_count
-
+    trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
     win_count = int(stats_index['cum_win_count'][cutoff - 1])
-    win_rate = win_count / trade_count
-
-    if EV_CALC_METHOD == 'B':
-        avg_win_r = (
-            stats_index['cum_win_r_sum'][cutoff - 1] / win_count
-            if win_count > 0 else 0.0
-        )
-
-        loss_count = trade_count - win_count
-        loss_r_sum = stats_index['cum_loss_r_sum'][cutoff - 1] if loss_count > 0 else 0.0
-        avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
-
-        if avg_loss_r > 0:
-            payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
-        elif avg_win_r > 0:
-            payoff_for_ev = 99.9
-        else:
-            payoff_for_ev = 0.0
-
-        ev_to_sort = (win_rate * payoff_for_ev) - (1 - win_rate)
-    else:
-        ev_to_sort = stats_index['cum_total_r_sum'][cutoff - 1] / trade_count
-
-    is_candidate = (
-        (ev_to_sort > getattr(params, 'min_history_ev', 0.0))
-        and
-        (win_rate >= getattr(params, 'min_history_win_rate', 0.30))
+    total_r_sum = float(stats_index['cum_total_r_sum'][cutoff - 1])
+    win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
+    loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
+    return evaluate_history_candidate_metrics(
+        trade_count,
+        win_count,
+        total_r_sum,
+        win_r_sum,
+        loss_r_sum,
+        params,
     )
-    return is_candidate, ev_to_sort, win_rate, trade_count
 
 def is_extended_entry_type(entry_type):
     return entry_type == 'extended'

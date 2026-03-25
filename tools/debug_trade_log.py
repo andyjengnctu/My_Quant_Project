@@ -19,6 +19,7 @@ from core.v16_core import (
     build_normal_entry_plan,
     execute_pre_market_entry_plan,
     should_clear_extended_signal,
+    evaluate_history_candidate_metrics,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
 
@@ -56,11 +57,22 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     currentEquity = currentCapital
     trade_logs = []
 
+    tradeCount, fullWins = 0, 0
+    total_r_multiple, total_r_win, total_r_loss = 0.0, 0.0, 0.0
+
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j - 1]):
             continue
 
         pos_start_of_current_bar = position['qty']
+        is_candidate_so_far, _, _, _ = evaluate_history_candidate_metrics(
+            tradeCount,
+            fullWins,
+            total_r_multiple,
+            total_r_win,
+            total_r_loss,
+            params,
+        )
 
         if pos_start_of_current_bar > 0:
             prev_qty = position['qty']
@@ -129,6 +141,17 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
             currentCapital += pnl_realized
 
+            if 'STOP' in events or 'IND_SELL' in events:
+                total_pnl = position['realized_pnl']
+                trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0.0
+                tradeCount += 1
+                total_r_multiple += trade_r_mult
+                if total_pnl > 0:
+                    fullWins += 1
+                    total_r_win += trade_r_mult
+                else:
+                    total_r_loss += abs(trade_r_mult)
+
         isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
@@ -138,68 +161,69 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params)
-            entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
-                t_open=O[j],
-                t_high=H[j],
-                t_low=L[j],
-                t_close=C[j],
-                t_volume=V[j],
-                y_close=C[j - 1],
-                params=params,
-                entry_type='normal',
-            )
-            if entry_result['filled']:
-                position = entry_result['position']
-                buyTriggered = True
-                active_extended_signal = None
+            if is_candidate_so_far:
+                entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params)
+                entry_result = execute_pre_market_entry_plan(
+                    entry_plan=entry_plan,
+                    t_open=O[j],
+                    t_high=H[j],
+                    t_low=L[j],
+                    t_close=C[j],
+                    t_volume=V[j],
+                    y_close=C[j - 1],
+                    params=params,
+                    entry_type='normal',
+                )
+                if entry_result['filled']:
+                    position = entry_result['position']
+                    buyTriggered = True
+                    active_extended_signal = None
 
-                trade_logs.append({
-                    "日期": Dates[j].strftime('%Y-%m-%d'),
-                    "動作": "買進",
-                    "成交價": entry_result['buy_price'],
-                    "含息成本價": entry_result['entry_price'],
-                    "股數": entry_plan['qty'],
-                    "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
-                    "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": entry_result['tp_half'],
-                    "ATR(前日)": ATR_main[j - 1],
-                    "單筆實質損益": 0.0,
-                    "備註": ""
-                })
-            elif entry_result['count_as_missed_buy']:
-                reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
-                trade_logs.append({
-                    "日期": Dates[j].strftime('%Y-%m-%d'),
-                    "動作": "錯失買進(新訊號)",
-                    "成交價": np.nan,
-                    "含息成本價": np.nan,
-                    "股數": entry_plan['qty'],
-                    "投入總金額": reserved_cost,
-                    "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": np.nan,
-                    "ATR(前日)": ATR_main[j - 1],
-                    "單筆實質損益": 0.0,
-                    "備註": f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
-                })
-            elif entry_result['is_worse_than_initial_stop']:
-                reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
-                trade_logs.append({
-                    "日期": Dates[j].strftime('%Y-%m-%d'),
-                    "動作": "放棄進場(先達停損)",
-                    "成交價": entry_result['buy_price'],
-                    "含息成本價": np.nan,
-                    "股數": entry_plan['qty'],
-                    "投入總金額": reserved_cost,
-                    "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": np.nan,
-                    "ATR(前日)": ATR_main[j - 1],
-                    "單筆實質損益": 0.0,
-                    "備註": "不計 miss buy"
-                })
+                    trade_logs.append({
+                        "日期": Dates[j].strftime('%Y-%m-%d'),
+                        "動作": "買進",
+                        "成交價": entry_result['buy_price'],
+                        "含息成本價": entry_result['entry_price'],
+                        "股數": entry_plan['qty'],
+                        "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
+                        "設定停損價": entry_plan['init_sl'],
+                        "半倉停利價": entry_result['tp_half'],
+                        "ATR(前日)": ATR_main[j - 1],
+                        "單筆實質損益": 0.0,
+                        "備註": ""
+                    })
+                elif entry_result['count_as_missed_buy']:
+                    reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+                    trade_logs.append({
+                        "日期": Dates[j].strftime('%Y-%m-%d'),
+                        "動作": "錯失買進(新訊號)",
+                        "成交價": np.nan,
+                        "含息成本價": np.nan,
+                        "股數": entry_plan['qty'],
+                        "投入總金額": reserved_cost,
+                        "設定停損價": entry_plan['init_sl'],
+                        "半倉停利價": np.nan,
+                        "ATR(前日)": ATR_main[j - 1],
+                        "單筆實質損益": 0.0,
+                        "備註": f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
+                    })
+                elif entry_result['is_worse_than_initial_stop']:
+                    reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+                    trade_logs.append({
+                        "日期": Dates[j].strftime('%Y-%m-%d'),
+                        "動作": "放棄進場(先達停損)",
+                        "成交價": entry_result['buy_price'],
+                        "含息成本價": np.nan,
+                        "股數": entry_plan['qty'],
+                        "投入總金額": reserved_cost,
+                        "設定停損價": entry_plan['init_sl'],
+                        "半倉停利價": np.nan,
+                        "ATR(前日)": ATR_main[j - 1],
+                        "單筆實質損益": 0.0,
+                        "備註": "不計 miss buy"
+                    })
 
-        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0 and is_candidate_so_far:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j - 1], sizing_cap, params)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,

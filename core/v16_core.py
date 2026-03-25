@@ -142,6 +142,48 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     actual_total_cost = entry_price * qty
     return max(actual_total_cost * params.fixed_risk, 0.0)
 
+def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_r_sum, loss_r_sum, params):
+    min_trades_req = getattr(params, 'min_history_trades', 0)
+    min_ev_req = getattr(params, 'min_history_ev', 0.0)
+    min_win_rate_req = getattr(params, 'min_history_win_rate', 0.30)
+
+    allow_zero_history = (
+        (min_trades_req == 0) and
+        (min_ev_req <= 0) and
+        (min_win_rate_req <= 0)
+    )
+
+    if trade_count < min_trades_req:
+        return False, 0.0, 0.0, trade_count
+
+    if trade_count == 0:
+        return allow_zero_history, 0.0, 0.0, trade_count
+
+    win_rate = win_count / trade_count
+
+    if EV_CALC_METHOD == 'B':
+        avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
+        loss_count = trade_count - win_count
+        avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
+
+        if avg_loss_r > 0:
+            payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
+        elif avg_win_r > 0:
+            payoff_for_ev = 99.9
+        else:
+            payoff_for_ev = 0.0
+
+        expected_value = (win_rate * payoff_for_ev) - (1 - win_rate)
+    else:
+        expected_value = total_r_sum / trade_count
+
+    is_candidate = (
+        (win_rate >= min_win_rate_req)
+        and
+        (expected_value > min_ev_req)
+    )
+    return is_candidate, expected_value, win_rate, trade_count
+
 # # (AI註: 單一真理來源 - 正常單的 limit/sl/trail/qty 規格統一由此產生)
 def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
     if pd.isna(limit_price) or pd.isna(atr):
@@ -553,6 +595,14 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         if np.isnan(ATR_main[j-1]):
             continue
         pos_start_of_current_bar = position['qty']
+        is_candidate_so_far, _, _, _ = evaluate_history_candidate_metrics(
+            tradeCount,
+            fullWins,
+            total_r_multiple,
+            total_r_win,
+            total_r_loss,
+            params,
+        )
 
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
@@ -587,26 +637,27 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
-            entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
-                t_open=O[j],
-                t_high=H[j],
-                t_low=L[j],
-                t_close=C[j],
-                t_volume=V[j],
-                y_close=C[j-1],
-                params=params,
-                entry_type='normal',
-            )
-            if entry_result['filled']:
-                position = entry_result['position']
-                buyTriggered = True
-                active_extended_signal = None
-            elif entry_result['count_as_missed_buy']:
-                missedBuyCount += 1
+            if is_candidate_so_far:
+                entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+                entry_result = execute_pre_market_entry_plan(
+                    entry_plan=entry_plan,
+                    t_open=O[j],
+                    t_high=H[j],
+                    t_low=L[j],
+                    t_close=C[j],
+                    t_volume=V[j],
+                    y_close=C[j-1],
+                    params=params,
+                    entry_type='normal',
+                )
+                if entry_result['filled']:
+                    position = entry_result['position']
+                    buyTriggered = True
+                    active_extended_signal = None
+                elif entry_result['count_as_missed_buy']:
+                    missedBuyCount += 1
 
-        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0 and is_candidate_so_far:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
@@ -700,22 +751,14 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     buyLimit_today = adjust_long_buy_limit(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_long_stop_price(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
 
-    min_trades = getattr(params, 'min_history_trades', 0)
-    min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
-    min_ev = getattr(params, 'min_history_ev', 0.0)
-
-    allow_zero_history = (
-        (min_trades == 0) and
-        (min_win_rate <= 0) and
-        (min_ev <= 0)
+    isCandidate, _, _, _ = evaluate_history_candidate_metrics(
+        tradeCount,
+        fullWins,
+        total_r_multiple,
+        total_r_win,
+        total_r_loss,
+        params,
     )
-
-    if tradeCount < min_trades:
-        isCandidate = False
-    elif tradeCount == 0:
-        isCandidate = allow_zero_history
-    else:
-        isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
     extended_candidate_today = None
     if (not had_open_position_at_end) and active_extended_signal is not None:
