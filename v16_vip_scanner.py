@@ -77,22 +77,22 @@ def process_single_stock(file_path, ticker, params):
             est_target = adjust_long_target_price(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
 
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-            msg = f"[🚨 最新買訊] {ticker:<6} | {stat_str} | {buy_str}"
+            msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
             return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
-        elif stats.get('extended_candidate_today') is not None:
-            extended = stats['extended_candidate_today']
-            proj_qty = extended['qty']
+        extended_candidate = stats.get('extended_candidate_today') or stats.get('chase_today')
+        if extended_candidate is not None:
+            proj_qty = extended_candidate['qty']
             if proj_qty == 0:
                 return ('candidate', None, None, None, None, ticker, sanitize_issue)
-            proj_cost = calc_entry_price(extended['limit_price'], proj_qty, params) * proj_qty
+            proj_cost = calc_entry_price(extended_candidate['chase_price'], proj_qty, params) * proj_qty
 
-            zone_str = f"延續限價:{extended['limit_price']:>6.2f} | 停損:{extended['init_sl']:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 延續候選] {ticker:<5} | {stat_str} | {zone_str}"
+            extended_str = f"延續限價:{extended_candidate['chase_price']:>6.2f} | 停損:{extended_candidate['sl']:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
+            msg = f"{ticker:<6} | {stat_str} | {extended_str}"
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
-            return ('zone', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
+            return ('extended', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
         return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
@@ -126,7 +126,7 @@ def run_daily_scanner(data_dir):
     count_scanned, count_history_qualified = 0, 0
     count_skipped_insufficient = 0
     count_sanitized_candidates = 0
-    buy_list, in_zone_list = [], []
+    candidate_rows = []
     scanner_issue_lines = list(duplicate_file_issue_lines)
     start_time = time.time()
     max_workers = resolve_scanner_max_workers(params)
@@ -148,7 +148,7 @@ def run_daily_scanner(data_dir):
             if result and len(result) == 7:
                 status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
 
-                if status in ['buy', 'zone', 'candidate']:
+                if status in ['buy', 'extended', 'candidate']:
                     count_history_qualified += 1
                     if sanitize_issue is not None:
                         count_sanitized_candidates += 1
@@ -156,15 +156,13 @@ def run_daily_scanner(data_dir):
                 elif status == 'skip_insufficient':
                     count_skipped_insufficient += 1
 
-                if status == 'buy':
-                    buy_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
-                elif status == 'zone':
-                    in_zone_list.append({'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
+                if status in ['buy', 'extended']:
+                    candidate_rows.append({'kind': status, 'proj_cost': proj_cost, 'ev': ev, 'sort_value': sort_value, 'text': msg, 'ticker': ticker})
 
             if count_scanned % SCANNER_PROGRESS_EVERY == 0 or count_scanned == total_files:
                 print(
                     f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}] "
-                    f"最新買訊:{len(buy_list)} | 延續候選:{len(in_zone_list)}{C_RESET}",
+                    f"新訊號:{sum(1 for x in candidate_rows if x['kind'] == 'buy')} | 延續:{sum(1 for x in candidate_rows if x['kind'] == 'extended')}{C_RESET}",
                     end="\r",
                     flush=True
                 )
@@ -172,8 +170,7 @@ def run_daily_scanner(data_dir):
     scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines) if scanner_issue_lines else None
     elapsed_time = time.time() - start_time
 
-    buy_list.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
-    in_zone_list.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+    candidate_rows.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
     sort_title = get_buy_sort_title(BUY_SORT_METHOD)
 
     print(" " * 160, end="\r")
@@ -184,16 +181,16 @@ def run_daily_scanner(data_dir):
         f"候選清洗: {count_sanitized_candidates} 檔 | max_workers: {max_workers}"
     )
         
-    if buy_list or in_zone_list:
-        print(f"\n{C_RED}🔥 【第一優先：明日掛單清單 (最新買訊)】 {sort_title} 🔥{C_RESET}")
-        if buy_list:
-            for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_RED}無最新買訊。{C_RESET}")
-
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：延續候選清單】 {sort_title} ⚠️{C_RESET}")
-        if in_zone_list:
-            for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
-        else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")
+    if candidate_rows:
+        new_count = sum(1 for x in candidate_rows if x['kind'] == 'buy')
+        extended_count = sum(1 for x in candidate_rows if x['kind'] == 'extended')
+        print(f"\n{C_RED}🔥 【明日候選清單：新訊號 + 延續候選同池排序】 {sort_title} 🔥{C_RESET}")
+        print(f"{C_GRAY}   顏色區分：{C_RED}紅色=新訊號{C_GRAY} | {C_YELLOW}黃色=延續候選{C_RESET}")
+        print(f"{C_GRAY}   候選統計：新訊號 {new_count} 檔 | 延續候選 {extended_count} 檔{C_RESET}")
+        for item in candidate_rows:
+            prefix = "[新訊號]" if item['kind'] == 'buy' else "[延續候選]"
+            color = C_RED if item['kind'] == 'buy' else C_YELLOW
+            print(f"   {color}➤ {prefix} {item['text']}{C_RESET}")
     else:
         print(f"\n{C_GREEN}💤 今日無符合實戰買點的標的，保留現金，明日再戰！{C_RESET}")
 

@@ -156,11 +156,11 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     vprint(" " * 120, end="\r")
 
     pf_profile = {}
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct = run_portfolio_timeline(
         all_dfs_fast, all_trade_logs, sorted_dates, start_year, params, max_positions, enable_rotation,
         benchmark_ticker=benchmark_ticker, benchmark_data=benchmark_data, is_training=False, profile_stats=pf_profile, verbose=verbose
     )
-    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
+    return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
 if __name__ == "__main__":
@@ -177,7 +177,7 @@ if __name__ == "__main__":
     print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     start_time = time.time()
-    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
+    df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
         "tw_stock_data_vip", params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
@@ -199,7 +199,7 @@ if __name__ == "__main__":
         sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,
         benchmark_ticker=USER_BENCHMARK, max_exp=max_exp,
         r_sq=r_sq, m_win_rate=m_win_rate, bm_r_sq=bm_r_sq, bm_m_win_rate=bm_m_win_rate,
-        normal_trades=normal_trade_count, chase_trades=chase_trade_count,
+        normal_trades=normal_trade_count, extended_trades=extended_trade_count,
         annual_trades=annual_trades, reserved_buy_fill_rate=reserved_buy_fill_rate,
         annual_return_pct=annual_return_pct, bm_annual_return_pct=bm_annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct
