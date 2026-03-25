@@ -82,15 +82,15 @@ def process_single_stock(file_path, ticker, params):
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
             return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
-        elif stats.get('chase_today') is not None:
-            chase = stats['chase_today']
-            proj_qty = chase['qty']
+        elif stats.get('extended_candidate_today') is not None:
+            extended = stats['extended_candidate_today']
+            proj_qty = extended['qty']
             if proj_qty == 0:
                 return ('candidate', None, None, None, None, ticker, sanitize_issue)
-            proj_cost = calc_entry_price(chase['chase_price'], proj_qty, params) * proj_qty
+            proj_cost = calc_entry_price(extended['limit_price'], proj_qty, params) * proj_qty
 
-            zone_str = f"追買限價:{chase['chase_price']:>6.2f} | 停損:{chase['sl']:>6.2f} | 盈虧比:{chase['rr']:>4.2f} | 參考投入:{proj_cost:>7,.0f}"
-            msg = f"[⚠️ 遲到補車 (精準1R縮倉)] {ticker:<5} | {stat_str} | {zone_str}"
+            zone_str = f"延續限價:{extended['limit_price']:>6.2f} | 停損:{extended['init_sl']:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
+            msg = f"[⚠️ 延續候選] {ticker:<5} | {stat_str} | {zone_str}"
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
             return ('zone', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
@@ -164,7 +164,7 @@ def run_daily_scanner(data_dir):
             if count_scanned % SCANNER_PROGRESS_EVERY == 0 or count_scanned == total_files:
                 print(
                     f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}] "
-                    f"最新買訊:{len(buy_list)} | 追車:{len(in_zone_list)}{C_RESET}",
+                    f"最新買訊:{len(buy_list)} | 延續候選:{len(in_zone_list)}{C_RESET}",
                     end="\r",
                     flush=True
                 )
@@ -190,7 +190,7 @@ def run_daily_scanner(data_dir):
             for item in buy_list: print(f"   {C_RED}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_RED}無最新買訊。{C_RESET}")
 
-        print(f"\n{C_YELLOW}⚠️ 【第二優先：遲到安全追車清單 (已精準還原1R且縮倉)】 {sort_title} ⚠️{C_RESET}")
+        print(f"\n{C_YELLOW}⚠️ 【第二優先：延續候選清單】 {sort_title} ⚠️{C_RESET}")
         if in_zone_list:
             for item in in_zone_list: print(f"   {C_YELLOW}➤ {item['text']}{C_RESET}")
         else: print(f"   {C_YELLOW}無符合安全追買條件的標的。{C_RESET}")

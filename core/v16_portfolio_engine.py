@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, evaluate_chase_condition, run_v16_backtest, build_normal_entry_plan
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, create_signal_tracking_state, build_extended_entry_plan_from_signal, run_v16_backtest, build_normal_entry_plan, should_count_normal_miss_buy
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -415,9 +415,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     initial_capital = params.initial_capital
     cash = initial_capital
     portfolio = {}
-    pending_chases = {}
+    active_extended_signals = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
-    normal_trade_count, chase_trade_count = 0, 0
+    normal_trade_count, extended_trade_count = 0, 0
     peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [], []
@@ -459,14 +459,19 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         t0 = time.perf_counter() if profile_stats is not None else None
         candidates_today = []
+        new_signal_tickers_today = set()
 
         for ticker, y_pos, t_pos in sorted(normal_setup_index.get(today, []), key=lambda x: x[0]):
             if ticker in portfolio or ticker in sold_today:
                 continue
 
             fast_df = all_dfs_fast[ticker]
-            if ticker in pending_chases:
-                del pending_chases[ticker]
+            y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
+            y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+            signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params)
+            if signal_state is not None:
+                active_extended_signals[ticker] = signal_state
+                new_signal_tickers_today.add(ticker)
 
             is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
                 pit_stats_index[ticker], today, params
@@ -474,8 +479,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if not is_candidate:
                 continue
 
-            y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
-            y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
             entry_plan = build_normal_entry_plan(y_buy_limit, y_atr, sizing_equity, params)
             if entry_plan is None:
                 continue
@@ -503,8 +506,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 'init_trail': est_init_trail,
             })
 
-        for ticker in sorted(list(pending_chases.keys())):
-            if ticker in portfolio or ticker in sold_today:
+        for ticker in sorted(list(active_extended_signals.keys())):
+            if ticker in portfolio or ticker in sold_today or ticker in new_signal_tickers_today:
                 continue
 
             fast_df = all_dfs_fast.get(ticker)
@@ -516,34 +519,40 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 continue
             y_pos = t_pos - 1
 
-            chase = pending_chases[ticker]
-            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
-            if is_candidate:
-                est_qty = chase['qty']
-                if est_qty > 0:
-                    est_cost = calc_entry_price(chase['chase_price'], est_qty, params) * est_qty
-                    sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
-                    candidates_today.append({
-                        'ticker': ticker,
-                        'type': 'chase',
-                        'limit_px': chase['chase_price'],
-                        'ev': ev,
-                        'y_atr': chase['orig_atr'],
-                        'today_pos': t_pos,
-                        'yesterday_pos': y_pos,
-                        'qty': est_qty,
-                        'proj_cost': est_cost,
-                        'sort_value': sort_value,
-                        'hist_win_rate': win_rate,
-                        'hist_trade_count': trade_count,
-                        'chase_data': chase,
-                        'init_sl': chase['sl'],
-                        'init_trail': chase['sl'],
-                        'orig_limit': chase['orig_limit'],
-                    })
-            else:
-                del pending_chases[ticker]
+            signal_state = active_extended_signals[ticker]
+            y_low = get_fast_value(fast_df, 'Low', pos=y_pos)
+            if y_low <= signal_state['init_sl']:
+                del active_extended_signals[ticker]
+                continue
 
+            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
+            if not is_candidate:
+                continue
+
+            entry_plan = build_extended_entry_plan_from_signal(signal_state, get_fast_close(fast_df, pos=y_pos), sizing_equity, params)
+            if entry_plan is None:
+                continue
+
+            est_qty = entry_plan['qty']
+            est_cost = calc_entry_price(entry_plan['limit_price'], est_qty, params) * est_qty
+            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
+            candidates_today.append({
+                'ticker': ticker,
+                'type': 'extended',
+                'limit_px': entry_plan['limit_price'],
+                'ev': ev,
+                'y_atr': signal_state['orig_atr'],
+                'today_pos': t_pos,
+                'yesterday_pos': y_pos,
+                'qty': est_qty,
+                'proj_cost': est_cost,
+                'sort_value': sort_value,
+                'hist_win_rate': win_rate,
+                'hist_trade_count': trade_count,
+                'init_sl': entry_plan['init_sl'],
+                'init_trail': entry_plan['init_trail'],
+                'orig_limit': signal_state['orig_limit'],
+            })
         candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0
@@ -604,8 +613,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         total_pnl = pos['realized_pnl'] + pnl
                         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                         closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
-                        if pos.get('entry_type', 'normal') == 'chase':
-                            chase_trade_count += 1
+                        if pos.get('entry_type', 'normal') == 'extended':
+                            extended_trade_count += 1
                         else:
                             normal_trade_count += 1
 
@@ -665,7 +674,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
                 closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
                 if pos.get('entry_type', 'normal') == 'chase':
-                    chase_trade_count += 1
+                    extended_trade_count += 1
                 else:
                     normal_trade_count += 1
 
@@ -715,41 +724,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             is_normal_worse_than_sl = False
 
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
-                if cand['type'] == 'normal':
-                    if t_volume > 0:
-                        next_day_sizing_equity = (
-                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-                            if getattr(params, 'use_compounding', True) else initial_capital
-                        )
-                        chase_res = evaluate_chase_condition(
-                            t_close, cand['limit_px'], cand['y_atr'], next_day_sizing_equity, params
-                        )
-                        if chase_res:
-                            chase_res['orig_limit'] = cand['limit_px']
-                            chase_res['orig_atr'] = cand['y_atr']
-                            pending_chases[cand['ticker']] = chase_res
-
-                elif cand['type'] == 'chase':
-                    # # (AI註: chase 候選即使因滿倉/資金不足未買，也必須依當日收盤更新、失效或保留 pending_chase)
-                    if t_volume <= 0:
-                        pass
-                    elif cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
-                        next_day_sizing_equity = (
-                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-                            if getattr(params, 'use_compounding', True) else initial_capital
-                        )
-                        chase_res = evaluate_chase_condition(
-                            t_close, cand['orig_limit'], cand['y_atr'], next_day_sizing_equity, params
-                        )
-                        if chase_res:
-                            chase_res['orig_limit'] = cand['orig_limit']
-                            chase_res['orig_atr'] = cand['y_atr']
-                            pending_chases[cand['ticker']] = chase_res
-                        elif cand['ticker'] in pending_chases:
-                            del pending_chases[cand['ticker']]
-                    elif cand['ticker'] in pending_chases:
-                        del pending_chases[cand['ticker']]
-
                 continue
 
             available_cash -= cand['proj_cost']
@@ -766,10 +740,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     cash -= actual_total_cost
 
                     net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params)
-                    if cand['type'] == 'normal':
-                        tp_px = adjust_long_target_price(buy_price + (actual_cost_per_share - net_sl_per_share))
-                    else:
-                        tp_px = cand['chase_data']['tp']
+                    tp_px = adjust_long_target_price(buy_price + (actual_cost_per_share - net_sl_per_share))
 
                     initial_risk = calc_initial_risk_total(actual_cost_per_share, net_sl_per_share, qty, params)
                     portfolio[cand['ticker']] = {
@@ -787,8 +758,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     }
                     buyTriggered = True
 
-                    if cand['ticker'] in pending_chases:
-                        del pending_chases[cand['ticker']]
+                    if cand['ticker'] in active_extended_signals:
+                        del active_extended_signals[cand['ticker']]
                     if not is_training:
                         trade_history.append({
                             "Date": today.strftime('%Y-%m-%d'),
@@ -802,44 +773,29 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 elif cand['type'] == 'normal':
                     is_normal_worse_than_sl = True
 
-            if not buyTriggered:
-                if cand['type'] == 'normal':
+            if not buyTriggered and cand['type'] == 'normal':
+                count_as_missed_buy = should_count_normal_miss_buy(
+                    cand['qty'],
+                    is_worse_than_initial_stop=is_normal_worse_than_sl,
+                )
+                if count_as_missed_buy:
                     total_missed_buys += 1
-                    if not is_normal_worse_than_sl:
-                        if t_volume > 0:
-                            next_day_sizing_equity = (
-                                calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-                                if getattr(params, 'use_compounding', True) else initial_capital
-                            )
-                            chase_res = evaluate_chase_condition(
-                                t_close, cand['limit_px'], cand['y_atr'], next_day_sizing_equity, params
-                            )
-                            if chase_res:
-                                chase_res['orig_limit'] = cand['limit_px']
-                                chase_res['orig_atr'] = cand['y_atr']
-                                pending_chases[cand['ticker']] = chase_res
-                elif cand['type'] == 'chase':
-                    # # (AI註: 零成交量日不可用 stale close 更新續追；維持原 pending_chase 到下一個可交易日)
-                    if t_volume <= 0:
-                        pass
-                    elif cand['chase_data']['sl'] < t_close < cand['chase_data']['tp']:
-                        next_day_sizing_equity = (
-                            calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-                            if getattr(params, 'use_compounding', True) else initial_capital
-                        )
-                        chase_res = evaluate_chase_condition(
-                            t_close, cand['orig_limit'], cand['y_atr'], next_day_sizing_equity, params
-                        )
-                        if chase_res:
-                            chase_res['orig_limit'] = cand['orig_limit']
-                            chase_res['orig_atr'] = cand['y_atr']
-                            pending_chases[cand['ticker']] = chase_res
-                        elif cand['ticker'] in pending_chases:
-                            del pending_chases[cand['ticker']]
-                    elif cand['ticker'] in pending_chases:
-                        del pending_chases[cand['ticker']]
         if profile_stats is not None:
             buy_sec += time.perf_counter() - t0
+
+        for ticker in sorted(list(active_extended_signals.keys())):
+            if ticker in portfolio:
+                continue
+            fast_df = all_dfs_fast.get(ticker)
+            if fast_df is None:
+                del active_extended_signals[ticker]
+                continue
+            t_pos = get_fast_pos(fast_df, today)
+            if t_pos < 0:
+                continue
+            t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
+            if t_low <= active_extended_signals[ticker]['init_sl']:
+                del active_extended_signals[ticker]
 
         t0 = time.perf_counter() if profile_stats is not None else None
         today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
@@ -912,8 +868,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         total_pnl = pos['realized_pnl'] + pnl
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
         closed_trades_stats.append({'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')})
-        if pos.get('entry_type', 'normal') == 'chase':
-            chase_trade_count += 1
+        if pos.get('entry_type', 'normal') == 'extended':
+            extended_trade_count += 1
         else:
             normal_trade_count += 1
 
@@ -1019,6 +975,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
         profile_stats.update(yearly_stats)
         profile_stats.update(bm_yearly_stats)
+
+    chase_trade_count = extended_trade_count
 
     if is_training:
         return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, chase_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct

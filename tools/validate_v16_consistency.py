@@ -248,9 +248,9 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         )
         return "buy" if proj_qty > 0 else "candidate"
 
-    chase_today = scanner_ref_stats.get("chase_today")
-    if chase_today is not None:
-        return "zone" if chase_today.get("qty", 0) > 0 else "candidate"
+    extended_today = scanner_ref_stats.get("extended_candidate_today")
+    if extended_today is not None:
+        return "zone" if extended_today.get("qty", 0) > 0 else "candidate"
 
     return "candidate"
 
@@ -321,7 +321,7 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         bm_r_sq,
         bm_m_win_rate,
         normal_trade_count,
-        chase_trade_count,
+        extended_trade_count,
         annual_trades,
         reserved_buy_fill_rate,
         annual_return_pct,
@@ -349,7 +349,7 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         "bm_r_sq": bm_r_sq,
         "bm_m_win_rate": bm_m_win_rate,
         "normal_trade_count": normal_trade_count,
-        "chase_trade_count": chase_trade_count,
+        "extended_trade_count": extended_trade_count,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
@@ -510,7 +510,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         bm_r_sq,
         bm_m_win_rate,
         normal_trade_count,
-        chase_trade_count,
+        extended_trade_count,
         annual_trades,
         reserved_buy_fill_rate,
         annual_return_pct,
@@ -536,7 +536,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "bm_r_sq": bm_r_sq,
         "bm_m_win_rate": bm_m_win_rate,
         "normal_trade_count": normal_trade_count,
-        "chase_trade_count": chase_trade_count,
+        "extended_trade_count": extended_trade_count,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
@@ -691,9 +691,9 @@ def validate_one_ticker(ticker, base_params):
         results,
         "single_vs_portfolio",
         ticker,
-        "normal_plus_chase_trade_count",
+        "normal_plus_extended_trade_count",
         portfolio_stats["trade_count"],
-        portfolio_stats["normal_trade_count"] + portfolio_stats["chase_trade_count"],
+        portfolio_stats["normal_trade_count"] + portfolio_stats["extended_trade_count"],
         note="正常/追價完整交易數總和應等於總交易次數。"
     )
 
@@ -740,7 +740,7 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "bm_r_sq", portfolio_stats["bm_r_sq"], portfolio_sim_stats["bm_r_sq"])
     add_check(results, "portfolio_sim", ticker, "bm_m_win_rate", portfolio_stats["bm_m_win_rate"], portfolio_sim_stats["bm_m_win_rate"])
     add_check(results, "portfolio_sim", ticker, "normal_trade_count", portfolio_stats["normal_trade_count"], portfolio_sim_stats["normal_trade_count"])
-    add_check(results, "portfolio_sim", ticker, "chase_trade_count", portfolio_stats["chase_trade_count"], portfolio_sim_stats["chase_trade_count"])
+    add_check(results, "portfolio_sim", ticker, "extended_trade_count", portfolio_stats["extended_trade_count"], portfolio_sim_stats["extended_trade_count"])
     add_check(results, "portfolio_sim", ticker, "annual_trades", portfolio_stats["annual_trades"], portfolio_sim_stats["annual_trades"])
     add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate", portfolio_stats["reserved_buy_fill_rate"], portfolio_sim_stats["reserved_buy_fill_rate"])
     add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])

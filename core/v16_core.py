@@ -160,41 +160,71 @@ def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
         'qty': qty,
     }
 
-# # (AI註: 單一真理來源 - 實現「絕對精準 1R」，考量縮倉與雙邊手續費計算 RR)
+# # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
+def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
+    if order_qty is None or order_qty <= 0:
+        return False
+    if is_worse_than_initial_stop:
+        return False
+    return True
+
+# # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立)
+def create_signal_tracking_state(original_limit, atr, params):
+    if pd.isna(original_limit) or pd.isna(atr):
+        return None
+
+    init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
+    return {
+        'orig_limit': original_limit,
+        'orig_atr': atr,
+        'init_sl': init_sl,
+    }
+
+
+# # (AI註: 單一真理來源 - 延續候選每日盤前資格與掛單規格統一由此產生)
+def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_capital, params):
+    if signal_state is None or pd.isna(reference_price):
+        return None
+
+    original_limit = signal_state['orig_limit']
+    atr = signal_state['orig_atr']
+    init_sl = signal_state['init_sl']
+    limit_price = adjust_long_buy_limit(min(reference_price, original_limit))
+
+    if pd.isna(limit_price) or not (init_sl < limit_price <= original_limit):
+        return None
+
+    init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
+    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
+    if qty <= 0:
+        return None
+
+    return {
+        'limit_price': limit_price,
+        'init_sl': init_sl,
+        'init_trail': init_trail,
+        'qty': qty,
+        'orig_limit': original_limit,
+        'orig_atr': atr,
+    }
+
+
+# # (AI註: 相容舊介面 - chase 邏輯已改為延續候選，暫保留函式名避免其他工具直接壞掉)
 def evaluate_chase_condition(close_price, original_limit, atr, sizing_capital, params):
-    if pd.isna(close_price) or pd.isna(original_limit) or pd.isna(atr): return None
-    
-    planned_init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
-    
-    # 1. 精準還原原始策略 1R 目標價
-    orig_qty = calc_position_size(original_limit, planned_init_sl, sizing_capital, params.fixed_risk, params)
-    if orig_qty <= 0: return None
-    orig_entry_price = calc_entry_price(original_limit, orig_qty, params)
-    orig_net_sl = calc_net_sell_price(planned_init_sl, orig_qty, params)
-    orig_risk_per_share = orig_entry_price - orig_net_sl
-    original_tp = adjust_long_target_price(original_limit + orig_risk_per_share)
-    
-    if planned_init_sl < close_price < original_tp:
-        # 2. 確切計算追車縮減股數與實際成本盈虧比
-        chase_qty = calc_position_size(close_price, planned_init_sl, sizing_capital, params.fixed_risk, params)
-        if chase_qty <= 0: return None
-        
-        chase_entry_price = calc_entry_price(close_price, chase_qty, params)
-        chase_net_sl = calc_net_sell_price(planned_init_sl, chase_qty, params)
-        chase_risk_total = (chase_entry_price - chase_net_sl) * chase_qty
-        if chase_risk_total <= 0: return None
-        
-        chase_net_tp = calc_net_sell_price(original_tp, chase_qty, params)
-        chase_reward_total = (chase_net_tp - chase_entry_price) * chase_qty
-        
-        rr_threshold = getattr(params, 'min_chase_rr', 0.5) 
-        if chase_reward_total > 0 and (chase_reward_total / chase_risk_total) >= rr_threshold:
-            return {
-                'chase_price': close_price, 'sl': planned_init_sl, 'tp': original_tp, 
-                'rr': chase_reward_total / chase_risk_total, 'qty': chase_qty,
-                'orig_limit': original_limit, 'orig_atr': atr 
-            }
-    return None
+    signal_state = create_signal_tracking_state(original_limit, atr, params)
+    plan = build_extended_entry_plan_from_signal(signal_state, close_price, sizing_capital, params)
+    if plan is None:
+        return None
+    return {
+        'chase_price': plan['limit_price'],
+        'sl': plan['init_sl'],
+        'tp': np.nan,
+        'rr': np.nan,
+        'qty': plan['qty'],
+        'orig_limit': original_limit,
+        'orig_atr': atr,
+    }
+
 
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params):
@@ -423,7 +453,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         ATR_main, buyCondition, sellCondition, buy_limits = precomputed_signals
 
     position = {'qty': 0}
-    pending_chase = None
+    active_extended_signal = None
     currentCapital = params.initial_capital
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
     totalProfit, totalLoss = 0.0, 0.0
@@ -433,14 +463,14 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     currentEquity = currentCapital
 
     for j in range(1, len(C)):
-        if np.isnan(ATR_main[j-1]): continue
+        if np.isnan(ATR_main[j-1]):
+            continue
         pos_start_of_current_bar = position['qty']
-        
-        # 1. 執行 T 日的持倉結算
+
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
             position, freed_cash, pnl_realized, events = execute_bar_step(
-                position, ATR_main[j-1], sellCondition[j-1], C[j-1], 
+                position, ATR_main[j-1], sellCondition[j-1], C[j-1],
                 O[j], H[j], L[j], C[j], V[j], params
             )
             if 'STOP' in events or 'IND_SELL' in events:
@@ -460,98 +490,88 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             elif 'LOCKED_DOWN' in events:
                 missedSellCount += 1
             currentCapital += pnl_realized
-            
-        # 2. 處理 T 日進場
+
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
         buyTriggered = False
-        
-        if isSetup_prev:
-            # # (AI註: 單一真理來源 - 正常單的盤前 limit/sl/trail/qty 全部統一由 build_normal_entry_plan 產生)
-            sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+        sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
 
-            if entry_plan is None:
-                buyLimitPrice = buy_limits[j-1]
-                planned_init_sl = np.nan
-                planned_init_trail = np.nan
-                buyQty = 0
-            else:
+        if isSetup_prev:
+            signal_state = create_signal_tracking_state(buy_limits[j-1], ATR_main[j-1], params)
+            if signal_state is not None:
+                active_extended_signal = signal_state
+
+            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+            buyLimitPrice = buy_limits[j-1]
+            planned_init_sl = np.nan
+            planned_init_trail = np.nan
+            buyQty = 0
+            is_normal_worse_than_sl = False
+
+            if entry_plan is not None:
                 buyLimitPrice = entry_plan['limit_price']
                 planned_init_sl = entry_plan['init_sl']
                 planned_init_trail = entry_plan['init_trail']
                 buyQty = entry_plan['qty']
-            
-            if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
-                # 確保跳空暴跌沒擊穿盤前停損死線
-                if buyPrice > planned_init_sl:
-                    entryPrice = calc_entry_price(buyPrice, buyQty, params)
-                    net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
-                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
-                    
-                    position = {
-                        'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
-                        'initial_stop': planned_init_sl, 'trailing_stop': planned_init_trail,
-                        'tp_half': tp_half, 'sold_half': False, 'pure_buy_price': buyPrice,
-                        'realized_pnl': 0.0, 'initial_risk_total': init_risk
-                    }
-                    buyTriggered = True
-                    pending_chase = None
-                else:
-                    missedBuyCount += 1 # 放棄交易
-                    pending_chase = None
-            else:
-                missedBuyCount += 1
-                if V[j] > 0:
-                    chase_res = evaluate_chase_condition(C[j], buyLimitPrice, ATR_main[j-1], sizing_cap, params)
-                    pending_chase = chase_res if chase_res else None
-                else:
-                    pending_chase = None
 
-        elif pending_chase is not None and pos_start_of_current_bar == 0:
-            chase_limit = pending_chase['chase_price']
-            planned_init_sl = pending_chase['sl']
-            sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-            buyQty = pending_chase['qty']
-            
-            if V[j] > 0 and L[j] <= chase_limit and not is_locked_limit_up and buyQty > 0:
-                buyPrice = adjust_long_buy_fill_price(min(O[j], chase_limit))
-                if buyPrice > planned_init_sl:
-                    entryPrice = calc_entry_price(buyPrice, buyQty, params)
-                    net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                    init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
-                    
-                    position = {
-                        'qty': buyQty, 'entry': entryPrice, 'sl': planned_init_sl,
-                        'initial_stop': planned_init_sl, 'trailing_stop': planned_init_sl,
-                        'tp_half': pending_chase['tp'], 'sold_half': False, 'pure_buy_price': buyPrice,
-                        'realized_pnl': 0.0, 'initial_risk_total': init_risk
-                    }
-                    buyTriggered = True
-                    pending_chase = None
-            
-            # # (AI註: 統一續追邏輯)
+                if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up:
+                    buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
+                    if buyPrice > planned_init_sl:
+                        entryPrice = calc_entry_price(buyPrice, buyQty, params)
+                        net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
+                        tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
+                        init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
+
+                        position = {
+                            'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
+                            'initial_stop': planned_init_sl, 'trailing_stop': planned_init_trail,
+                            'tp_half': tp_half, 'sold_half': False, 'pure_buy_price': buyPrice,
+                            'realized_pnl': 0.0, 'initial_risk_total': init_risk
+                        }
+                        buyTriggered = True
+                        active_extended_signal = None
+                    else:
+                        is_normal_worse_than_sl = True
+
             if not buyTriggered:
-                # # (AI註: 零成交量日不可用當日 close 建立或更新 chase；保留既有 pending_chase 到下一個可交易日再判斷)
-                if V[j] <= 0:
-                    pass
-                elif pending_chase['sl'] < C[j] < pending_chase['tp']:
-                    chase_res = evaluate_chase_condition(
-                        C[j],
-                        pending_chase['orig_limit'],
-                        pending_chase['orig_atr'],
-                        sizing_cap,
-                        params
-                    )
-                    pending_chase = chase_res if chase_res else None
-                else:
-                    pending_chase = None
+                count_as_missed_buy = should_count_normal_miss_buy(
+                    buyQty,
+                    is_worse_than_initial_stop=is_normal_worse_than_sl,
+                )
+                if count_as_missed_buy:
+                    missedBuyCount += 1
+
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
+            entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
+            if entry_plan is not None:
+                extended_limit = entry_plan['limit_price']
+                planned_init_sl = entry_plan['init_sl']
+                planned_init_trail = entry_plan['init_trail']
+                buyQty = entry_plan['qty']
+
+                if V[j] > 0 and L[j] <= extended_limit and not is_locked_limit_up and buyQty > 0:
+                    buyPrice = adjust_long_buy_fill_price(min(O[j], extended_limit))
+                    if buyPrice > planned_init_sl:
+                        entryPrice = calc_entry_price(buyPrice, buyQty, params)
+                        net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
+                        tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
+                        init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
+
+                        position = {
+                            'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
+                            'initial_stop': planned_init_sl, 'trailing_stop': planned_init_trail,
+                            'tp_half': tp_half, 'sold_half': False, 'pure_buy_price': buyPrice,
+                            'realized_pnl': 0.0, 'initial_risk_total': init_risk
+                        }
+                        buyTriggered = True
+                        active_extended_signal = None
+
+        if not buyTriggered and position['qty'] == 0 and active_extended_signal is not None:
+            if L[j] <= active_extended_signal['init_sl']:
+                active_extended_signal = None
 
         currentEquity = currentCapital
         if position['qty'] > 0:
-            # # (AI註: 浮動權益也統一用保守可賣出價口徑，避免權益曲線 / MDD 比最終結算樂觀)
             floating_exec_price = adjust_long_sell_fill_price(C[j])
             floatingSellNet = calc_net_sell_price(floating_exec_price, position['qty'], params)
             floatingPnL = (floatingSellNet - position['entry']) * position['qty']
@@ -561,8 +581,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
         maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
-    # # (AI註: 保留「原始回測終點持倉狀態」給 scanner / validate 使用；
-    # # (AI註: 統計則另外做虛擬期末強制結算，避免 trade_count / EV / win_rate 少一筆)
     end_position_qty = position['qty']
     had_open_position_at_end = end_position_qty > 0
 
@@ -591,12 +609,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             totalLoss += abs(total_pnl)
             total_r_loss += abs(trade_r_mult)
 
-        # # (AI註: currentCapital 平常只累加已實現損益，
-        # # (AI註: 這裡只補上剩餘部位尚未實現的 pnl，不可加整筆賣出金額)
         currentCapital += pnl
         currentEquity = currentCapital
 
-        # # (AI註: 期末強制結算後補做一次 peak / drawdown 更新，避免 final closeout 對 MDD 漏算)
         peakCapital = max(peakCapital, currentEquity)
         currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
         maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
@@ -608,19 +623,20 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     lossCount = tradeCount - fullWins
     avgLoss = totalLoss / lossCount if lossCount > 0 else 0
     payoffRatio = (avgWin / avgLoss) if avgLoss > 0 else (99.9 if avgWin > 0 else 0.0)
-    
+
     if EV_CALC_METHOD == 'B':
         win_rate_dec = fullWins / tradeCount if tradeCount > 0 else 0
         avg_win_r = total_r_win / fullWins if fullWins > 0 else 0
         avg_loss_r = total_r_loss / lossCount if lossCount > 0 else 0
         payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
         expectedValue = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
-    else: expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
+    else:
+        expectedValue = (total_r_multiple / tradeCount) if tradeCount > 0 else 0.0
 
     finalEquity = currentEquity
     totalNetProfitPct = ((finalEquity - params.initial_capital) / params.initial_capital) * 100
     score = totalNetProfitPct / tradeCount if tradeCount > 0 else 0
-    
+
     isSetup_today = buyCondition[-1] and (not had_open_position_at_end)
     buyLimit_today = adjust_long_buy_limit(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_long_stop_price(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
@@ -629,8 +645,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     min_win_rate = getattr(params, 'min_history_win_rate', 0.30) * 100
     min_ev = getattr(params, 'min_history_ev', 0.0)
 
-    # # (AI註: 零樣本不可繞過 EV / 勝率門檻；
-    # # (AI註: 只有在使用者明確把三個門檻都放到完全寬鬆時，才允許零歷史直接通過)
     allow_zero_history = (
         (min_trades == 0) and
         (min_win_rate <= 0) and
@@ -644,8 +658,11 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     else:
         isCandidate = (winRate >= min_win_rate) and (expectedValue > min_ev)
 
-    # # (AI註: 解除 Scanner 分歧 - 回測內部 pending_chase 活著，就直接回傳給 Scanner)
-    chase_today = pending_chase if not had_open_position_at_end else None
+    extended_candidate_today = None
+    if (not had_open_position_at_end) and active_extended_signal is not None:
+        sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
+        extended_candidate_today = build_extended_entry_plan_from_signal(active_extended_signal, C[-1], sizing_cap, params)
+
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     stats_dict = {
@@ -664,10 +681,11 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today,
         "stop_loss": stopLoss_today,
-        "chase_today": chase_today,
+        "extended_candidate_today": extended_candidate_today,
+        "chase_today": extended_candidate_today,
         "current_position": end_position_qty,
         "avg_bars_held": avg_bars_held
     }
-    
+
     if return_logs: return stats_dict, trade_logs
     return stats_dict
