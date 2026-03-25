@@ -2,7 +2,7 @@
 import os
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD, MIN_FULL_YEAR_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE, SYSTEM_SCORE_DISPLAY_MULTIPLIER
 from core.v16_buy_sort import get_buy_sort_title
-from core.v16_portfolio_engine import calc_portfolio_score
+from core.v16_portfolio_engine import calc_portfolio_score, calc_romd
 
 C_RED = '\033[91m'
 C_YELLOW = '\033[93m'
@@ -42,8 +42,8 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     bm_mdd_str  = f"-{abs(bm_mdd):.2f}%"
     mdd_diff_str = f"少跌 {abs(mdd_diff):.2f}%" if mdd_diff > 0 else f"多跌 {abs(mdd_diff):.2f}%"
     
-    sys_romd = (sys_ret / (abs(sys_mdd) + 0.0001)) if sys_mdd != 0 else 0.0
-    bm_romd = (bm_ret / (abs(bm_mdd) + 0.0001)) if bm_mdd != 0 else 0.0
+    sys_romd = calc_romd(sys_ret, sys_mdd)
+    bm_romd = calc_romd(bm_ret, bm_mdd)
     romd_diff = sys_romd - bm_romd
     sys_romd_str = f"{sys_romd:.2f}"
     bm_romd_str = f"{bm_romd:.2f}"

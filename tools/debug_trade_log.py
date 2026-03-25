@@ -25,6 +25,13 @@ from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows,
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
 
+
+def extract_missed_sell_reason(events):
+    for evt in events:
+        if evt not in {'MISSED_SELL', 'TP_HALF', 'STOP', 'IND_SELL'}:
+            return evt
+    return ''
+
 C_CYAN = '\033[96m'
 C_GREEN = '\033[92m'
 C_YELLOW = '\033[93m'
@@ -128,6 +135,27 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "半倉停利價": np.nan,
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": final_leg_pnl
+                })
+            elif 'MISSED_SELL' in events:
+                missed_reason = extract_missed_sell_reason(events)
+                blocked_price = np.nan
+                if sellCondition[j - 1]:
+                    blocked_price = adjust_long_sell_fill_price(O[j]) if not pd.isna(O[j]) else np.nan
+                elif not pd.isna(active_stop_after_update) and not pd.isna(O[j]):
+                    blocked_price = adjust_long_sell_fill_price(min(active_stop_after_update, O[j]))
+
+                trade_logs.append({
+                    "日期": Dates[j].strftime('%Y-%m-%d'),
+                    "動作": "錯失賣出",
+                    "成交價": blocked_price,
+                    "含息成本價": np.nan,
+                    "股數": prev_qty,
+                    "投入總金額": 0.0,
+                    "設定停損價": active_stop_after_update,
+                    "半倉停利價": np.nan,
+                    "ATR(前日)": ATR_main[j - 1],
+                    "單筆實質損益": 0.0,
+                    "備註": missed_reason or "賣出條件成立但當日無法成交"
                 })
 
             currentCapital += pnl_realized

@@ -2,21 +2,25 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason, build_reference_order_estimate
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
 
+def calc_romd(return_pct, mdd_pct):
+    return return_pct / (abs(mdd_pct) + 0.0001)
+
+
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
     from core.v16_config import SCORE_CALC_METHOD
-    base_return = sys_ret if annual_return_pct is None else annual_return_pct
-    annualized_romd = base_return / (abs(sys_mdd) + 0.0001)
+    romd = calc_romd(sys_ret, sys_mdd)
     if SCORE_CALC_METHOD == 'LOG_R2':
-        return annualized_romd * (m_win_rate / 100.0) * r_sq
-    return annualized_romd
+        return romd * (m_win_rate / 100.0) * r_sq
+    return romd
 
 def calc_curve_stats(eq_list):
     r_squared, monthly_win_rate = 0.0, 0.0
+
     if len(eq_list) > 2:
         eq_array = np.array(eq_list)
         x = np.arange(len(eq_array))
@@ -28,10 +32,13 @@ def calc_curve_stats(eq_list):
                 if np.std(log_eq) > 0 and len(x_valid) > 1:
                     r_matrix = np.corrcoef(x_valid, log_eq)
                     r_squared = r_matrix[0, 1] ** 2 if not np.isnan(r_matrix[0, 1]) else 0.0
+
+    if len(eq_list) > 1:
         eq_series = pd.Series(eq_list)
         monthly_rets = eq_series.pct_change().dropna()
         if len(monthly_rets) > 0:
             monthly_win_rate = (len(monthly_rets[monthly_rets > 0]) / len(monthly_rets)) * 100
+
     return r_squared, monthly_win_rate
 
 # # (AI註: 只用完整年度做 min{r_y} > 0 的檢查；不把起始殘年與當前未完整年度算進去)
@@ -397,7 +404,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     normal_trade_count, extended_trade_count = 0, 0
     peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
-    monthly_equities, bm_monthly_equities = [], []
+    monthly_equities, bm_monthly_equities = [initial_capital], []
     yesterday_equity = initial_capital
     year_start_equity, year_end_equity = {}, {}
     year_first_sim_date, year_last_sim_date = {}, {}
@@ -413,6 +420,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             bm_peak_price = benchmark_start_price
             if benchmark_anchor_date == sorted_dates[start_idx]:
                 current_bm_px = benchmark_start_price
+
+    if benchmark_start_price is not None:
+        bm_monthly_equities.append(benchmark_start_price)
 
     yesterday_bm_px, bm_max_drawdown, bm_ret_pct = current_bm_px, 0.0, 0.0
 
