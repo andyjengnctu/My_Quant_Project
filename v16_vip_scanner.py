@@ -87,11 +87,23 @@ def process_single_stock(file_path, ticker, params):
             proj_qty = extended_candidate['qty']
             if proj_qty == 0:
                 return ('candidate', None, None, None, None, ticker, sanitize_issue)
-            proj_cost = calc_entry_price(extended_candidate['chase_price'], proj_qty, params) * proj_qty
 
-            extended_str = f"延續限價:{extended_candidate['chase_price']:>6.2f} | 停損:{extended_candidate['sl']:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
+            limit_price = extended_candidate.get('limit_price', extended_candidate.get('chase_price'))
+            init_sl = extended_candidate.get('init_sl', extended_candidate.get('sl'))
+            if limit_price is None or init_sl is None:
+                raise KeyError("extended candidate 缺少 limit_price/init_sl")
+
+            proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
+
+            extended_str = f"延續限價:{limit_price:>6.2f} | 停損:{init_sl:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
             msg = f"{ticker:<6} | {stat_str} | {extended_str}"
-            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
+            sort_value = calc_buy_sort_value(
+                BUY_SORT_METHOD,
+                stats['expected_value'],
+                proj_cost,
+                stats['win_rate'] / 100.0,
+                stats['trade_count']
+            )
             return ('extended', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
         return ('candidate', None, None, None, None, ticker, sanitize_issue)
