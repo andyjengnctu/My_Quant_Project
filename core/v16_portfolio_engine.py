@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, should_count_normal_miss_buy
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -404,10 +404,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     buy_sec = 0.0
     equity_mark_sec = 0.0
     build_trade_index_sec = 0.0
+    ticker_dates_sec = 0.0
+    closeout_sec = 0.0
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     start_dt = pd.to_datetime(f"{start_year}-01-01")
     start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
     start_idx = max(1, start_idx)
+    if profile_stats is not None:
+        ticker_dates_sec = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
     pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
@@ -723,14 +728,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             t_close = get_fast_close(fast_df, pos=t_pos)
             t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
             y_close = get_fast_close(fast_df, pos=y_pos)
-            is_locked_up = (
-                (t_open == t_high) and
-                (t_high == t_low) and
-                (t_low == t_close) and
-                (t_close > y_close)
-            )
-
-            is_normal_worse_than_sl = False
 
             if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
                 continue
@@ -738,56 +735,44 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             available_cash -= cand['proj_cost']
             pre_market_occupied += 1
 
-            buyTriggered = False
+            entry_plan = {
+                'limit_price': cand['limit_px'],
+                'init_sl': cand['init_sl'],
+                'init_trail': cand['init_trail'],
+                'qty': cand['qty'],
+            }
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=entry_plan,
+                t_open=t_open,
+                t_high=t_high,
+                t_low=t_low,
+                t_close=t_close,
+                t_volume=t_volume,
+                y_close=y_close,
+                params=params,
+                entry_type=cand['type'],
+            )
 
-            if t_volume > 0 and t_low <= cand['limit_px'] and not is_locked_up:
-                buy_price = adjust_long_buy_fill_price(min(t_open, cand['limit_px']))
-                if buy_price > cand['init_sl']:
-                    qty = cand['qty']
-                    actual_cost_per_share = calc_entry_price(buy_price, qty, params)
-                    actual_total_cost = actual_cost_per_share * qty
-                    cash -= actual_total_cost
+            if entry_result['filled']:
+                qty = cand['qty']
+                actual_total_cost = entry_result['entry_price'] * qty
+                cash -= actual_total_cost
+                portfolio[cand['ticker']] = entry_result['position']
 
-                    net_sl_per_share = calc_net_sell_price(cand['init_sl'], qty, params)
-                    tp_px = adjust_long_target_price(buy_price + (actual_cost_per_share - net_sl_per_share))
-
-                    initial_risk = calc_initial_risk_total(actual_cost_per_share, net_sl_per_share, qty, params)
-                    portfolio[cand['ticker']] = {
-                        'qty': qty,
-                        'entry': actual_cost_per_share,
-                        'sl': max(cand['init_sl'], cand['init_trail']),
-                        'initial_stop': cand['init_sl'],
-                        'trailing_stop': cand['init_trail'],
-                        'tp_half': tp_px,
-                        'sold_half': False,
-                        'pure_buy_price': buy_price,
-                        'realized_pnl': 0.0,
-                        'initial_risk_total': initial_risk,
-                        'entry_type': cand['type'],
-                    }
-                    buyTriggered = True
-
-                    if cand['ticker'] in active_extended_signals:
-                        del active_extended_signals[cand['ticker']]
-                    if not is_training:
-                        trade_history.append({
-                            "Date": today.strftime('%Y-%m-%d'),
-                            "Ticker": cand['ticker'],
-                            "Type": f"買進 (EV:{cand['ev']:.2f}R)",
-                            "單筆損益": 0.0,
-                            "該筆總損益": 0.0,
-                            "R_Multiple": 0.0,
-                            "Risk": params.fixed_risk
-                        })
-                elif cand['type'] == 'normal':
-                    is_normal_worse_than_sl = True
-
-            if not buyTriggered and cand['type'] == 'normal':
-                if should_count_normal_miss_buy(
-                    cand['qty'],
-                    is_worse_than_initial_stop=is_normal_worse_than_sl,
-                ):
-                    total_missed_buys += 1
+                if cand['ticker'] in active_extended_signals:
+                    del active_extended_signals[cand['ticker']]
+                if not is_training:
+                    trade_history.append({
+                        "Date": today.strftime('%Y-%m-%d'),
+                        "Ticker": cand['ticker'],
+                        "Type": f"買進 (EV:{cand['ev']:.2f}R)",
+                        "單筆損益": 0.0,
+                        "該筆總損益": 0.0,
+                        "R_Multiple": 0.0,
+                        "Risk": params.fixed_risk
+                    })
+            elif entry_result['count_as_missed_buy']:
+                total_missed_buys += 1
         if profile_stats is not None:
             buy_sec += time.perf_counter() - t0
 
@@ -805,7 +790,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 continue
 
             t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
-            if t_low <= active_extended_signals[ticker]['init_sl']:
+            if should_clear_extended_signal(active_extended_signals[ticker], t_low):
                 del active_extended_signals[ticker]
 
         t0 = time.perf_counter() if profile_stats is not None else None
@@ -865,6 +850,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     # # (AI註: 月底權益應以期末強制結算後的真實 final equity 為準，故移到 closeout 後再 append)
 
+    t0 = time.perf_counter() if profile_stats is not None else None
     final_cash = cash
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
 
@@ -894,6 +880,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 "R_Multiple": total_r,
                 "Risk": params.fixed_risk
             })
+
+    if profile_stats is not None:
+        closeout_sec = time.perf_counter() - t0
 
     today_equity = final_cash
     if last_date is not None and last_date.year in year_end_equity:
@@ -949,7 +938,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
     sim_years = calc_sim_years(sorted_dates, start_idx)
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
-    reserved_buy_fill_rate = (normal_trade_count / (normal_trade_count + total_missed_buys) * 100.0) if (normal_trade_count + total_missed_buys) > 0 else 0.0
+    total_reserved_entries = normal_trade_count + extended_trade_count
+    reserved_buy_fill_rate = (total_reserved_entries / (total_reserved_entries + total_missed_buys) * 100.0) if (total_reserved_entries + total_missed_buys) > 0 else 0.0
     annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
@@ -971,7 +961,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
-        profile_stats['portfolio_ticker_dates_sec'] = 0.0
+        profile_stats['portfolio_ticker_dates_sec'] = ticker_dates_sec
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec
         profile_stats['portfolio_candidate_scan_sec'] = candidate_scan_sec
@@ -979,7 +969,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['portfolio_settle_sec'] = settle_sec
         profile_stats['portfolio_buy_sec'] = buy_sec
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
-        profile_stats['portfolio_closeout_sec'] = 0.0
+        profile_stats['portfolio_closeout_sec'] = closeout_sec
         profile_stats['curve_stats_sec'] = curve_stats_sec
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct

@@ -588,6 +588,7 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         raise KeyError(f"debug_trade_log 缺少必要欄位: {missing_cols}")
 
     full_exit_actions = {"停損殺出", "指標賣出", "期末強制結算"}
+    ignored_actions = {"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"}
     completed_trades = []
     active_trade = None
 
@@ -596,7 +597,7 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         trade_date = pd.to_datetime(getattr(row, "日期")).strftime("%Y-%m-%d")
         realized_pnl = round(float(getattr(row, "單筆實質損益")), 2)
 
-        if action == "買進":
+        if action.startswith("買進"):
             if active_trade is not None:
                 raise ValueError("debug_trade_log 出現連續買進，上一筆交易尚未完整結束。")
             active_trade = {
@@ -606,6 +607,9 @@ def rebuild_completed_trades_from_debug_log(debug_df):
                 "half_exit_count": 0,
                 "full_exit_action": None,
             }
+            continue
+
+        if action in ignored_actions:
             continue
 
         if action == "半倉停利":
@@ -699,9 +703,10 @@ def validate_one_ticker(ticker, base_params):
 
     sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
     expected_annual_trades = (portfolio_stats["trade_count"] / sim_years) if sim_years > 0 else 0.0
+    total_reserved_entries = portfolio_stats["normal_trade_count"] + portfolio_stats["extended_trade_count"]
     expected_reserved_buy_fill_rate = (
-        portfolio_stats["normal_trade_count"] / (portfolio_stats["normal_trade_count"] + portfolio_stats["total_missed"]) * 100.0
-        if (portfolio_stats["normal_trade_count"] + portfolio_stats["total_missed"]) > 0 else 0.0
+        total_reserved_entries / (total_reserved_entries + portfolio_stats["total_missed"]) * 100.0
+        if (total_reserved_entries + portfolio_stats["total_missed"]) > 0 else 0.0
     )
     expected_annual_return_pct = calc_validation_annual_return_pct(
         params.initial_capital, portfolio_stats["final_eq"], sim_years
@@ -777,7 +782,7 @@ def validate_one_ticker(ticker, base_params):
             scanner_result["status"]
         )
 
-        if scanner_result["status"] in ("buy", "zone"):
+        if scanner_result["status"] in ("buy", "extended"):
             add_check(
                 results,
                 "vip_scanner",
@@ -853,7 +858,7 @@ def validate_one_ticker(ticker, base_params):
                 "理應有交易明細，但 debug 工具回傳空值。"
             )
     else:
-        buy_rows = int((debug_df["動作"] == "買進").sum())
+        buy_rows = int(debug_df["動作"].fillna("").str.startswith("買進").sum())
         exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
         half_rows = int((debug_df["動作"] == "半倉停利").sum())
         debug_completed_trades = rebuild_completed_trades_from_debug_log(debug_df)

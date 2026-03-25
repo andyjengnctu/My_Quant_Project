@@ -161,12 +161,110 @@ def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
     }
 
 # # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
-def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
+def should_count_miss_buy(order_qty, is_worse_than_initial_stop=False):
     if order_qty is None or order_qty <= 0:
         return False
     if is_worse_than_initial_stop:
         return False
     return True
+
+
+def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
+    return should_count_miss_buy(order_qty, is_worse_than_initial_stop=is_worse_than_initial_stop)
+
+
+# # (AI註: 單一真理來源 - 買進日一字漲停不可成交)
+def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+    return (
+        (t_open == t_high) and
+        (t_high == t_low) and
+        (t_low == t_close) and
+        (t_close > y_close)
+    )
+
+
+# # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
+def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, entry_type='normal'):
+    entry_price = calc_entry_price(buy_price, qty, params)
+    net_sl = calc_net_sell_price(init_sl, qty, params)
+    tp_half = adjust_long_target_price(buy_price + (entry_price - net_sl))
+    init_risk = calc_initial_risk_total(entry_price, net_sl, qty, params)
+
+    return {
+        'qty': qty,
+        'entry': entry_price,
+        'sl': max(init_sl, init_trail),
+        'initial_stop': init_sl,
+        'trailing_stop': init_trail,
+        'tp_half': tp_half,
+        'sold_half': False,
+        'pure_buy_price': buy_price,
+        'realized_pnl': 0.0,
+        'initial_risk_total': init_risk,
+        'entry_type': entry_type,
+    }
+
+
+# # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy / 先達停損放棄進場邏輯統一由此判斷)
+def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type='normal'):
+    result = {
+        'filled': False,
+        'count_as_missed_buy': False,
+        'is_worse_than_initial_stop': False,
+        'is_locked_limit_up': False,
+        'buy_price': np.nan,
+        'entry_price': np.nan,
+        'tp_half': np.nan,
+        'position': None,
+        'entry_type': entry_type,
+    }
+    if entry_plan is None:
+        return result
+
+    qty = entry_plan.get('qty', 0)
+    result['count_as_missed_buy'] = should_count_miss_buy(qty)
+    result['is_locked_limit_up'] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
+
+    if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or result['is_locked_limit_up']:
+        return result
+
+    limit_price = entry_plan['limit_price']
+    init_sl = entry_plan['init_sl']
+    init_trail = entry_plan['init_trail']
+
+    if t_low > limit_price:
+        return result
+
+    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price))
+    result['buy_price'] = buy_price
+
+    if buy_price <= init_sl:
+        result['is_worse_than_initial_stop'] = True
+        result['count_as_missed_buy'] = False
+        return result
+
+    position = build_position_from_entry_fill(
+        buy_price=buy_price,
+        qty=qty,
+        init_sl=init_sl,
+        init_trail=init_trail,
+        params=params,
+        entry_type=entry_type,
+    )
+    result['filled'] = True
+    result['count_as_missed_buy'] = False
+    result['position'] = position
+    result['entry_price'] = position['entry']
+    result['tp_half'] = position['tp_half']
+    return result
+
+
+# # (AI註: 單一真理來源 - 延續訊號何時失效統一由此判斷)
+def should_clear_extended_signal(signal_state, t_low):
+    if signal_state is None or pd.isna(t_low):
+        return False
+    return t_low <= signal_state['init_sl']
+
 
 # # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立)
 def create_signal_tracking_state(original_limit, atr, params):
@@ -481,7 +579,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             currentCapital += pnl_realized
 
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
-        is_locked_limit_up = (O[j] == H[j]) and (H[j] == L[j]) and (L[j] == C[j]) and (C[j] > C[j-1])
         buyTriggered = False
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
 
@@ -491,73 +588,46 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                 active_extended_signal = signal_state
 
             entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
-            buyLimitPrice = buy_limits[j-1]
-            planned_init_sl = np.nan
-            planned_init_trail = np.nan
-            buyQty = 0
-            is_normal_worse_than_sl = False
-
-            if entry_plan is not None:
-                buyLimitPrice = entry_plan['limit_price']
-                planned_init_sl = entry_plan['init_sl']
-                planned_init_trail = entry_plan['init_trail']
-                buyQty = entry_plan['qty']
-
-                if V[j] > 0 and L[j] <= buyLimitPrice and not is_locked_limit_up:
-                    buyPrice = adjust_long_buy_fill_price(min(O[j], buyLimitPrice))
-                    if buyPrice > planned_init_sl:
-                        entryPrice = calc_entry_price(buyPrice, buyQty, params)
-                        net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                        tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
-                        init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
-
-                        position = {
-                            'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
-                            'initial_stop': planned_init_sl, 'trailing_stop': planned_init_trail,
-                            'tp_half': tp_half, 'sold_half': False, 'pure_buy_price': buyPrice,
-                            'realized_pnl': 0.0, 'initial_risk_total': init_risk
-                        }
-                        buyTriggered = True
-                        active_extended_signal = None
-                    else:
-                        is_normal_worse_than_sl = True
-
-            if not buyTriggered:
-                count_as_missed_buy = should_count_normal_miss_buy(
-                    buyQty,
-                    is_worse_than_initial_stop=is_normal_worse_than_sl,
-                )
-                if count_as_missed_buy:
-                    missedBuyCount += 1
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=entry_plan,
+                t_open=O[j],
+                t_high=H[j],
+                t_low=L[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j-1],
+                params=params,
+                entry_type='normal',
+            )
+            if entry_result['filled']:
+                position = entry_result['position']
+                buyTriggered = True
+                active_extended_signal = None
+            elif entry_result['count_as_missed_buy']:
+                missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
-            if entry_plan is not None:
-                extended_limit = entry_plan['limit_price']
-                planned_init_sl = entry_plan['init_sl']
-                planned_init_trail = entry_plan['init_trail']
-                buyQty = entry_plan['qty']
-
-                if V[j] > 0 and L[j] <= extended_limit and not is_locked_limit_up and buyQty > 0:
-                    buyPrice = adjust_long_buy_fill_price(min(O[j], extended_limit))
-                    if buyPrice > planned_init_sl:
-                        entryPrice = calc_entry_price(buyPrice, buyQty, params)
-                        net_sl = calc_net_sell_price(planned_init_sl, buyQty, params)
-                        tp_half = adjust_long_target_price(buyPrice + (entryPrice - net_sl))
-                        init_risk = calc_initial_risk_total(entryPrice, net_sl, buyQty, params)
-
-                        position = {
-                            'qty': buyQty, 'entry': entryPrice, 'sl': max(planned_init_sl, planned_init_trail),
-                            'initial_stop': planned_init_sl, 'trailing_stop': planned_init_trail,
-                            'tp_half': tp_half, 'sold_half': False, 'pure_buy_price': buyPrice,
-                            'realized_pnl': 0.0, 'initial_risk_total': init_risk
-                        }
-                        buyTriggered = True
-                        active_extended_signal = None
-
-        if not buyTriggered and position['qty'] == 0 and active_extended_signal is not None:
-            if L[j] <= active_extended_signal['init_sl']:
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=entry_plan,
+                t_open=O[j],
+                t_high=H[j],
+                t_low=L[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j-1],
+                params=params,
+                entry_type='extended',
+            )
+            if entry_result['filled']:
+                position = entry_result['position']
+                buyTriggered = True
                 active_extended_signal = None
+            elif entry_result['count_as_missed_buy']:
+                missedBuyCount += 1
+
+        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j]):
+            active_extended_signal = None
 
         currentEquity = currentCapital
         if position['qty'] > 0:
