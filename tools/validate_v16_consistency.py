@@ -10,7 +10,9 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest, calc_position_size
+from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
+from core.v16_buy_sort import calc_buy_sort_value
+from core.v16_config import BUY_SORT_METHOD
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
@@ -254,6 +256,50 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
 
     return "candidate"
 
+def build_expected_scanner_payload(scanner_ref_stats, params):
+    status = derive_expected_scanner_status(scanner_ref_stats, params)
+    payload = {
+        "status": status,
+        "expected_value": None,
+        "proj_cost": None,
+        "sort_value": None,
+    }
+
+    if status not in ("buy", "extended"):
+        return payload
+
+    if status == "buy":
+        limit_price = scanner_ref_stats["buy_limit"]
+        stop_loss = scanner_ref_stats["stop_loss"]
+        proj_qty = calc_position_size(
+            limit_price,
+            stop_loss,
+            params.initial_capital,
+            params.fixed_risk,
+            params
+        )
+    else:
+        extended_candidate = scanner_ref_stats.get("extended_candidate_today")
+        if extended_candidate is None:
+            return payload
+        limit_price = extended_candidate["limit_price"]
+        proj_qty = extended_candidate.get("qty", 0)
+
+    proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
+    sort_value = calc_buy_sort_value(
+        BUY_SORT_METHOD,
+        scanner_ref_stats["expected_value"],
+        proj_cost,
+        scanner_ref_stats["win_rate"] / 100.0,
+        scanner_ref_stats["trade_count"],
+    )
+    payload.update({
+        "expected_value": scanner_ref_stats["expected_value"],
+        "proj_cost": proj_cost,
+        "sort_value": sort_value,
+    })
+    return payload
+
 
 def suppress_tool_output(func, *args, **kwargs):
     stdout_buffer = io.StringIO()
@@ -379,7 +425,15 @@ def run_downloader_tool_check(ticker):
     )
 
     class DummyDL:
+        def __init__(self):
+            self.calls = []
+
         def get_data(self, dataset, data_id, start_date):
+            self.calls.append({
+                "dataset": dataset,
+                "data_id": data_id,
+                "start_date": start_date,
+            })
             if data_id != ticker:
                 raise ValueError(f"unexpected ticker: {data_id}")
             return pd.DataFrame({
@@ -395,9 +449,10 @@ def run_downloader_tool_check(ticker):
         original_save_dir = module.SAVE_DIR
         original_dl = module.dl
         original_sleep = module.time.sleep
+        dummy_loader = DummyDL()
         try:
             module.SAVE_DIR = temp_dir
-            module.dl = DummyDL()
+            module.dl = dummy_loader
             module.time.sleep = lambda *_args, **_kwargs: None
             suppress_tool_output(
                 module.smart_download_vip_data,
@@ -412,7 +467,8 @@ def run_downloader_tool_check(ticker):
             module.dl = original_dl
             module.time.sleep = original_sleep
 
-    return downloaded_df, module_path
+    download_request = dummy_loader.calls[0] if dummy_loader.calls else None
+    return downloaded_df, module_path, download_request, module.FINMIND_PRICE_DATASET
 
 # # (AI註: validate 補回工具級檢查，避免只驗核心邏輯而漏掉 portfolio_sim / scanner / downloader)
 MODULE_CACHE = {}
@@ -656,7 +712,7 @@ def validate_one_ticker(ticker, base_params):
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
     scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
-    downloader_df, downloader_module_path = run_downloader_tool_check(ticker)
+    downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
     export_row, export_module_path = run_all_stock_stats_check(ticker, params)
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
@@ -751,7 +807,8 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
     add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct", portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
 
-    expected_scanner_status = derive_expected_scanner_status(scanner_ref_stats, scanner_params)
+    expected_scanner_payload = build_expected_scanner_payload(scanner_ref_stats, scanner_params)
+    expected_scanner_status = expected_scanner_payload["status"]
 
     if scanner_result is None:
         add_check(
@@ -781,21 +838,71 @@ def validate_one_ticker(ticker, base_params):
             expected_scanner_status,
             scanner_result["status"]
         )
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "expected_value",
+            expected_scanner_payload["expected_value"],
+            scanner_result["expected_value"]
+        )
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "proj_cost",
+            expected_scanner_payload["proj_cost"],
+            scanner_result["proj_cost"]
+        )
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "sort_value",
+            expected_scanner_payload["sort_value"],
+            scanner_result["sort_value"]
+        )
 
-        if scanner_result["status"] in ("buy", "extended"):
-            add_check(
-                results,
-                "vip_scanner",
-                ticker,
-                "expected_value",
-                scanner_ref_stats["expected_value"],
-                scanner_result["expected_value"]
-            )
+    extended_candidate = scanner_ref_stats.get("extended_candidate_today")
+    if extended_candidate is None:
+        add_skip_result(results, "vip_scanner", ticker, "extended_reference_price_in_range", "今日無延續候選，無需驗 A 版區間定義。")
+        add_skip_result(results, "vip_scanner", ticker, "extended_limit_price_in_range", "今日無延續候選，無需驗 A 版區間定義。")
+    else:
+        reference_price = float(df["Close"].iloc[-1])
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "extended_reference_price_in_range",
+            True,
+            bool(extended_candidate["init_sl"] < reference_price <= extended_candidate["orig_limit"]),
+        )
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "extended_limit_price_in_range",
+            True,
+            bool(extended_candidate["init_sl"] < extended_candidate["limit_price"] <= extended_candidate["orig_limit"]),
+        )
 
     expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
     actual_download_cols = list(downloader_df.columns)
     add_check(results, "vip_downloader", ticker, "columns", expected_download_cols, actual_download_cols)
     add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
+    add_check(results, "vip_downloader", ticker, "dataset", downloader_expected_dataset, None if downloader_request is None else downloader_request["dataset"])
+    add_check(results, "vip_downloader", ticker, "data_id", ticker, None if downloader_request is None else downloader_request["data_id"])
+    add_check(results, "vip_downloader", ticker, "start_date", "1990-01-01", None if downloader_request is None else downloader_request["start_date"])
+    expected_download_index = ["2024-01-02", "2024-01-03"]
+    actual_download_index = [str(idx).split(" ")[0] for idx in downloader_df.index.tolist()]
+    add_check(results, "vip_downloader", ticker, "date_index_sorted", expected_download_index, actual_download_index)
+    add_check(results, "vip_downloader", ticker, "index_name", "Date", downloader_df.index.name)
+    expected_download_rows = [
+        {"Open": 10.0, "High": 11.0, "Low": 9.5, "Close": 10.5, "Volume": 1000},
+        {"Open": 11.0, "High": 12.0, "Low": 10.5, "Close": 11.5, "Volume": 2000},
+    ]
+    actual_download_rows = downloader_df.reset_index(drop=True).to_dict("records")
+    add_check(results, "vip_downloader", ticker, "ohlcv_values_after_sort", expected_download_rows, actual_download_rows)
 
     if export_row is None:
         if single_stats["trade_count"] == 0:
