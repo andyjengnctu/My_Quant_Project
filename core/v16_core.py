@@ -209,22 +209,6 @@ def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
         return None
     return candidate_plan
 
-
-def build_reference_order_estimate(limit_price, init_sl, params):
-    if pd.isna(limit_price) or pd.isna(init_sl):
-        return None
-
-    qty = calc_position_size(limit_price, init_sl, params.initial_capital, params.fixed_risk, params)
-    entry_price = calc_entry_price(limit_price, qty, params) if qty > 0 else np.nan
-    proj_cost = entry_price * qty if qty > 0 else 0.0
-
-    return {
-        'qty': qty,
-        'entry_price': entry_price,
-        'proj_cost': proj_cost,
-        'is_orderable': qty > 0,
-    }
-
 # # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
 def should_count_miss_buy(order_qty, is_worse_than_initial_stop=False):
     if order_qty is None or order_qty <= 0:
@@ -421,6 +405,27 @@ def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_
 def evaluate_extended_candidate_eligibility(close_price, original_limit, atr, sizing_capital, params):
     signal_state = create_signal_tracking_state(original_limit, atr, params)
     return build_extended_candidate_plan_from_signal(signal_state, close_price, sizing_capital, params)
+
+
+def build_reference_order_estimate(limit_price, init_sl, params):
+    if pd.isna(limit_price) or pd.isna(init_sl):
+        return {
+            'qty': 0,
+            'cost': 0.0,
+        }
+
+    qty = calc_position_size(limit_price, init_sl, params.initial_capital, params.fixed_risk, params)
+    if qty <= 0:
+        return {
+            'qty': 0,
+            'cost': 0.0,
+        }
+
+    cost = calc_entry_price(limit_price, qty, params) * qty
+    return {
+        'qty': qty,
+        'cost': cost,
+    }
 
 
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
@@ -640,12 +645,21 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     peakCapital, maxDrawdownPct = currentCapital, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
+    missed_sell_dates = []
     currentEquity = currentCapital
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]):
             continue
         pos_start_of_current_bar = position['qty']
+        is_candidate_so_far, _, _, _ = evaluate_history_candidate_metrics(
+            tradeCount,
+            fullWins,
+            total_r_multiple,
+            total_r_win,
+            total_r_loss,
+            params,
+        )
 
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
@@ -669,9 +683,9 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     total_r_loss += abs(trade_r_mult)
             elif 'MISSED_SELL' in events:
                 missedSellCount += 1
+                missed_sell_dates.append(Dates[j].strftime('%Y-%m-%d'))
             currentCapital += pnl_realized
 
-        # # (AI註: 單股回測只驗證核心策略本身，不可用個股自身歷史績效卡住單股進場；歷史績效 filter 僅供投組/候選層使用)
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
@@ -681,26 +695,27 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
-            entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
-                t_open=O[j],
-                t_high=H[j],
-                t_low=L[j],
-                t_close=C[j],
-                t_volume=V[j],
-                y_close=C[j-1],
-                params=params,
-                entry_type='normal',
-            )
-            if entry_result['filled']:
-                position = entry_result['position']
-                buyTriggered = True
-                active_extended_signal = None
-            elif entry_result['count_as_missed_buy']:
-                missedBuyCount += 1
+            if is_candidate_so_far:
+                entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+                entry_result = execute_pre_market_entry_plan(
+                    entry_plan=entry_plan,
+                    t_open=O[j],
+                    t_high=H[j],
+                    t_low=L[j],
+                    t_close=C[j],
+                    t_volume=V[j],
+                    y_close=C[j-1],
+                    params=params,
+                    entry_type='normal',
+                )
+                if entry_result['filled']:
+                    position = entry_result['position']
+                    buyTriggered = True
+                    active_extended_signal = None
+                elif entry_result['count_as_missed_buy']:
+                    missedBuyCount += 1
 
-        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0 and is_candidate_so_far:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
@@ -744,12 +759,23 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         total_pnl = position['realized_pnl'] + pnl
         trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0.0
 
+        total_r_multiple += trade_r_mult
+        tradeCount += 1
+
         if return_logs:
             trade_logs.append({
                 'exit_date': Dates[-1],
                 'pnl': total_pnl,
                 'r_mult': trade_r_mult
             })
+
+        if total_pnl > 0:
+            fullWins += 1
+            totalProfit += total_pnl
+            total_r_win += trade_r_mult
+        else:
+            totalLoss += abs(total_pnl)
+            total_r_loss += abs(trade_r_mult)
 
         currentCapital += pnl
         currentEquity = currentCapital
@@ -783,7 +809,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     buyLimit_today = adjust_long_buy_limit(C[-1] + ATR_main[-1] * params.atr_buy_tol) if isSetup_today else np.nan
     stopLoss_today = adjust_long_stop_price(buyLimit_today - ATR_main[-1] * params.atr_times_init) if isSetup_today else np.nan
 
-    history_filter_passed, _, _, _ = evaluate_history_candidate_metrics(
+    isCandidate, _, _, _ = evaluate_history_candidate_metrics(
         tradeCount,
         fullWins,
         total_r_multiple,
@@ -797,8 +823,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
         extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, C[-1], sizing_cap, params)
 
-    has_candidate_signal_today = bool(isSetup_today or (extended_candidate_today is not None))
-    isCandidate = bool(history_filter_passed and has_candidate_signal_today)
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
     stats_dict = {
@@ -806,6 +830,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "trade_count": tradeCount,
         "missed_buys": missedBuyCount,
         "missed_sells": missedSellCount,
+        "missed_sell_dates": missed_sell_dates,
         "score": score,
         "win_rate": winRate,
         "avg_win": avgWin,
@@ -813,15 +838,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "payoff_ratio": payoffRatio,
         "expected_value": expectedValue,
         "max_drawdown": maxDrawdownPct,
-        "history_filter_passed": history_filter_passed,
-        "has_candidate_signal_today": has_candidate_signal_today,
         "is_candidate": isCandidate,
         "is_setup_today": isSetup_today,
         "buy_limit": buyLimit_today,
         "stop_loss": stopLoss_today,
         "extended_candidate_today": extended_candidate_today,
         "current_position": end_position_qty,
-        "had_open_position_at_end": had_open_position_at_end,
         "avg_bars_held": avg_bars_held
     }
 

@@ -17,7 +17,7 @@ BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
-# 'RoMD'   = 傳統報酬回撤比 = 總報酬率 / 最大回撤
+# 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
 SCORE_CALC_METHOD = 'RoMD'
 
 # 4. Optimizer / Overfitting / 驗證工具共用硬門檻
