@@ -633,6 +633,7 @@ def rebuild_completed_trades_from_debug_log(debug_df):
 
     full_exit_actions = {"停損殺出", "指標賣出", "期末強制結算"}
     ignored_actions = {"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"}
+    missed_sell_actions = {"錯失賣出"}
     completed_trades = []
     active_trade = None
 
@@ -661,6 +662,11 @@ def rebuild_completed_trades_from_debug_log(debug_df):
                 raise ValueError("debug_trade_log 出現半倉停利，但前面沒有對應買進。")
             active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
             active_trade["half_exit_count"] += 1
+            continue
+
+        if action in missed_sell_actions:
+            if active_trade is None:
+                raise ValueError(f"debug_trade_log 出現 {action}，但前面沒有對應買進。")
             continue
 
         if action in full_exit_actions:
@@ -912,9 +918,11 @@ def validate_one_ticker(ticker, base_params):
                 "理應有交易明細，但 debug 工具回傳空值。"
             )
     else:
-        buy_rows = int(debug_df["動作"].fillna("").str.startswith("買進").sum())
-        exit_rows = int(debug_df["動作"].isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
-        half_rows = int((debug_df["動作"] == "半倉停利").sum())
+        action_series = debug_df["動作"].fillna("")
+        buy_rows = int(action_series.str.startswith("買進").sum())
+        exit_rows = int(action_series.isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
+        half_rows = int((action_series == "半倉停利").sum())
+        missed_sell_rows = int((action_series == "錯失賣出").sum())
         debug_completed_trades = rebuild_completed_trades_from_debug_log(debug_df)
 
         expected_exit_rows = len(standalone_logs)
@@ -942,6 +950,16 @@ def validate_one_ticker(ticker, base_params):
             "full_exit_rows",
             expected_exit_rows,
             exit_rows
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "missed_sell_rows",
+            int(single_stats["missed_sells"]),
+            missed_sell_rows,
+            note="debug 明細中的錯失賣出筆數，必須與核心 missed_sells 完全一致。"
         )
 
         add_check(

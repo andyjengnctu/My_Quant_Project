@@ -130,6 +130,26 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": final_leg_pnl
                 })
+            elif 'MISSED_SELL' in events:
+                sell_block_reason = next((event for event in events if event in {'NO_VOLUME', 'LOCKED_DOWN'}), None)
+                reason_note = {
+                    'NO_VOLUME': '零量，當日無法賣出',
+                    'LOCKED_DOWN': '一字跌停鎖死，當日無法賣出',
+                }.get(sell_block_reason, '賣出受阻，當日無法賣出')
+
+                trade_logs.append({
+                    "日期": Dates[j].strftime('%Y-%m-%d'),
+                    "動作": "錯失賣出",
+                    "成交價": np.nan,
+                    "含息成本價": np.nan,
+                    "股數": prev_qty,
+                    "投入總金額": np.nan,
+                    "設定停損價": active_stop_after_update,
+                    "半倉停利價": np.nan,
+                    "ATR(前日)": ATR_main[j - 1],
+                    "單筆實質損益": 0.0,
+                    "備註": reason_note,
+                })
 
             currentCapital += pnl_realized
 
