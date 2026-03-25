@@ -946,6 +946,7 @@ def validate_one_ticker(ticker, base_params):
         buy_rows = int(action_series.str.startswith("買進").sum())
         exit_rows = int(action_series.isin(["停損殺出", "指標賣出", "期末強制結算"]).sum())
         half_rows = int((action_series == "半倉停利").sum())
+        missed_buy_rows = int(action_series.str.startswith("錯失買進").sum())
         missed_sell_rows = int((action_series == "錯失賣出").sum())
         debug_completed_trades = rebuild_completed_trades_from_debug_log(debug_df)
 
@@ -974,6 +975,16 @@ def validate_one_ticker(ticker, base_params):
             "full_exit_rows",
             expected_exit_rows,
             exit_rows
+        )
+
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "missed_buy_rows",
+            int(single_stats["missed_buys"]),
+            missed_buy_rows,
+            note="debug 明細中的錯失買進筆數，必須與核心 missed_buys 完全一致。"
         )
 
         add_check(
