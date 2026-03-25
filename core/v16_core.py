@@ -407,27 +407,6 @@ def evaluate_extended_candidate_eligibility(close_price, original_limit, atr, si
     return build_extended_candidate_plan_from_signal(signal_state, close_price, sizing_capital, params)
 
 
-def build_reference_order_estimate(limit_price, init_sl, params):
-    if pd.isna(limit_price) or pd.isna(init_sl):
-        return {
-            'qty': 0,
-            'cost': 0.0,
-        }
-
-    qty = calc_position_size(limit_price, init_sl, params.initial_capital, params.fixed_risk, params)
-    if qty <= 0:
-        return {
-            'qty': 0,
-            'cost': 0.0,
-        }
-
-    cost = calc_entry_price(limit_price, qty, params) * qty
-    return {
-        'qty': qty,
-        'cost': cost,
-    }
-
-
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params):
     freed_cash, pnl_realized = 0.0, 0.0
@@ -645,21 +624,12 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     peakCapital, maxDrawdownPct = currentCapital, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
-    missed_sell_dates = []
     currentEquity = currentCapital
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j-1]):
             continue
         pos_start_of_current_bar = position['qty']
-        is_candidate_so_far, _, _, _ = evaluate_history_candidate_metrics(
-            tradeCount,
-            fullWins,
-            total_r_multiple,
-            total_r_win,
-            total_r_loss,
-            params,
-        )
 
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
@@ -683,7 +653,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                     total_r_loss += abs(trade_r_mult)
             elif 'MISSED_SELL' in events:
                 missedSellCount += 1
-                missed_sell_dates.append(Dates[j].strftime('%Y-%m-%d'))
             currentCapital += pnl_realized
 
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
@@ -695,27 +664,26 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            if is_candidate_so_far:
-                entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
-                entry_result = execute_pre_market_entry_plan(
-                    entry_plan=entry_plan,
-                    t_open=O[j],
-                    t_high=H[j],
-                    t_low=L[j],
-                    t_close=C[j],
-                    t_volume=V[j],
-                    y_close=C[j-1],
-                    params=params,
-                    entry_type='normal',
-                )
-                if entry_result['filled']:
-                    position = entry_result['position']
-                    buyTriggered = True
-                    active_extended_signal = None
-                elif entry_result['count_as_missed_buy']:
-                    missedBuyCount += 1
+            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=entry_plan,
+                t_open=O[j],
+                t_high=H[j],
+                t_low=L[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j-1],
+                params=params,
+                entry_type='normal',
+            )
+            if entry_result['filled']:
+                position = entry_result['position']
+                buyTriggered = True
+                active_extended_signal = None
+            elif entry_result['count_as_missed_buy']:
+                missedBuyCount += 1
 
-        elif active_extended_signal is not None and pos_start_of_current_bar == 0 and is_candidate_so_far:
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
@@ -830,7 +798,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         "trade_count": tradeCount,
         "missed_buys": missedBuyCount,
         "missed_sells": missedSellCount,
-        "missed_sell_dates": missed_sell_dates,
         "score": score,
         "win_rate": winRate,
         "avg_win": avgWin,

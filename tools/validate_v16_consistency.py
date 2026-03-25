@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, build_reference_order_estimate
+from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
 from core.v16_buy_sort import calc_buy_sort_value
 from core.v16_config import BUY_SORT_METHOD
 from core.v16_portfolio_engine import (
@@ -241,21 +241,18 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         return None
 
     if scanner_ref_stats["is_setup_today"]:
-        reference_order = build_reference_order_estimate(
+        proj_qty = calc_position_size(
             scanner_ref_stats["buy_limit"],
             scanner_ref_stats["stop_loss"],
-            params,
+            params.initial_capital,
+            params.fixed_risk,
+            params
         )
-        return "buy" if reference_order["qty"] > 0 else "candidate"
+        return "buy" if proj_qty > 0 else "candidate"
 
     extended_candidate_today = scanner_ref_stats.get("extended_candidate_today")
     if extended_candidate_today is not None:
-        reference_order = build_reference_order_estimate(
-            extended_candidate_today["limit_price"],
-            extended_candidate_today["init_sl"],
-            params,
-        )
-        return "extended" if reference_order["qty"] > 0 else "candidate"
+        return "extended" if extended_candidate_today.get("qty", 0) > 0 else "candidate"
 
     return "candidate"
 
@@ -274,16 +271,21 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
     if status == "buy":
         limit_price = scanner_ref_stats["buy_limit"]
         stop_loss = scanner_ref_stats["stop_loss"]
-        reference_order = build_reference_order_estimate(limit_price, stop_loss, params)
+        proj_qty = calc_position_size(
+            limit_price,
+            stop_loss,
+            params.initial_capital,
+            params.fixed_risk,
+            params
+        )
     else:
         extended_candidate = scanner_ref_stats.get("extended_candidate_today")
         if extended_candidate is None:
             return payload
         limit_price = extended_candidate["limit_price"]
-        reference_order = build_reference_order_estimate(limit_price, extended_candidate["init_sl"], params)
+        proj_qty = extended_candidate.get("qty", 0)
 
-    proj_qty = reference_order["qty"]
-    proj_cost = reference_order["cost"]
+    proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
     sort_value = calc_buy_sort_value(
         BUY_SORT_METHOD,
         scanner_ref_stats["expected_value"],
@@ -630,7 +632,7 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         raise KeyError(f"debug_trade_log 缺少必要欄位: {missing_cols}")
 
     full_exit_actions = {"停損殺出", "指標賣出", "期末強制結算"}
-    ignored_actions = {"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)", "錯失賣出"}
+    ignored_actions = {"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"}
     completed_trades = []
     active_trade = None
 
@@ -677,22 +679,6 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         raise ValueError("debug_trade_log 最後仍有未完成交易，缺少完整賣出列。")
 
     return completed_trades
-
-
-def extract_missed_sell_events_from_debug_log(debug_df):
-    if debug_df is None or len(debug_df) == 0:
-        return []
-
-    required_cols = {"日期", "動作"}
-    missing_cols = [col for col in required_cols if col not in debug_df.columns]
-    if missing_cols:
-        raise KeyError(f"debug_trade_log 缺少必要欄位: {missing_cols}")
-
-    missed_sell_rows = debug_df[debug_df["動作"] == "錯失賣出"].copy()
-    if missed_sell_rows.empty:
-        return []
-
-    return [pd.to_datetime(value).strftime("%Y-%m-%d") for value in missed_sell_rows["日期"].tolist()]
 
 
 def validate_one_ticker(ticker, base_params):
@@ -997,27 +983,6 @@ def validate_one_ticker(ticker, base_params):
             actual_realized_pnl_sum,
             tol=0.01,
             note="逐筆加總後的總已實現損益必須與核心 completed trades 一致。"
-        )
-
-        expected_missed_sell_dates = list(single_stats.get("missed_sell_dates", []))
-        actual_missed_sell_dates = extract_missed_sell_events_from_debug_log(debug_df)
-        add_check(
-            results,
-            "debug_trade_log",
-            ticker,
-            "missed_sell_count",
-            len(expected_missed_sell_dates),
-            len(actual_missed_sell_dates),
-            note="debug_trade_log 的錯失賣出列數必須與核心 missed_sells 一致。"
-        )
-        add_check(
-            results,
-            "debug_trade_log",
-            ticker,
-            "missed_sell_dates",
-            expected_missed_sell_dates,
-            actual_missed_sell_dates,
-            note="debug_trade_log 的錯失賣出日期序列必須與核心一致。"
         )
 
         results.append({
