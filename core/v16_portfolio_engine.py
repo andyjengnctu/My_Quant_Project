@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_entry_plan, create_signal_tracking_state, build_extended_entry_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -436,6 +436,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         t0 = time.perf_counter() if profile_stats is not None else None
         candidates_today = []
+        orderable_candidates_today = []
         normal_setup_tickers_today = set()
 
         for ticker, y_pos, t_pos in sorted(normal_setup_index.get(today, []), key=lambda x: x[0]):
@@ -457,18 +458,17 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             if not is_candidate:
                 continue
 
-            entry_plan = build_normal_entry_plan(y_buy_limit, y_atr, sizing_equity, params)
-            if entry_plan is None:
+            candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params)
+            if candidate_plan is None:
                 continue
 
-            est_limit_px = entry_plan['limit_price']
-            est_init_sl = entry_plan['init_sl']
-            est_init_trail = entry_plan['init_trail']
-            est_qty = entry_plan['qty']
-
-            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty
+            est_limit_px = candidate_plan['limit_price']
+            est_init_sl = candidate_plan['init_sl']
+            est_init_trail = candidate_plan['init_trail']
+            est_qty = candidate_plan['qty']
+            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
-            candidates_today.append({
+            candidate_row = {
                 'ticker': ticker,
                 'type': 'normal',
                 'limit_px': est_limit_px,
@@ -483,7 +483,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 'hist_trade_count': trade_count,
                 'init_sl': est_init_sl,
                 'init_trail': est_init_trail,
-            })
+                'is_orderable': candidate_plan['is_orderable'],
+            }
+            candidates_today.append(candidate_row)
+            if candidate_row['is_orderable']:
+                orderable_candidates_today.append(candidate_row)
 
         for ticker in sorted(list(active_extended_signals.keys())):
             if ticker in portfolio or ticker in sold_today or ticker in normal_setup_tickers_today:
@@ -503,27 +507,27 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 continue
 
             reference_price = get_fast_close(fast_df, pos=y_pos)
-            entry_plan = build_extended_entry_plan_from_signal(
+            candidate_plan = build_extended_candidate_plan_from_signal(
                 active_extended_signals[ticker],
                 reference_price,
                 sizing_equity,
                 params,
             )
-            if entry_plan is None:
+            if candidate_plan is None:
                 continue
 
-            est_limit_px = entry_plan['limit_price']
-            est_init_sl = entry_plan['init_sl']
-            est_init_trail = entry_plan['init_trail']
-            est_qty = entry_plan['qty']
-            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty
+            est_limit_px = candidate_plan['limit_price']
+            est_init_sl = candidate_plan['init_sl']
+            est_init_trail = candidate_plan['init_trail']
+            est_qty = candidate_plan['qty']
+            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
-            candidates_today.append({
+            candidate_row = {
                 'ticker': ticker,
                 'type': 'extended',
                 'limit_px': est_limit_px,
                 'ev': ev,
-                'y_atr': entry_plan['orig_atr'],
+                'y_atr': candidate_plan['orig_atr'],
                 'today_pos': t_pos,
                 'yesterday_pos': y_pos,
                 'qty': est_qty,
@@ -534,16 +538,21 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 'signal_state': active_extended_signals[ticker],
                 'init_sl': est_init_sl,
                 'init_trail': est_init_trail,
-            })
+                'is_orderable': candidate_plan['is_orderable'],
+            }
+            candidates_today.append(candidate_row)
+            if candidate_row['is_orderable']:
+                orderable_candidates_today.append(candidate_row)
 
         candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+        orderable_candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0
 
         t0 = time.perf_counter() if profile_stats is not None else None
-        if len(portfolio) == max_positions and enable_rotation and candidates_today:
-            for cand_idx in range(len(candidates_today)):
-                cand = candidates_today[cand_idx]
+        if len(portfolio) == max_positions and enable_rotation and orderable_candidates_today:
+            for cand_idx in range(len(orderable_candidates_today)):
+                cand = orderable_candidates_today[cand_idx]
                 weakest_ticker = None
                 lowest_ret = float('inf')
 
@@ -689,7 +698,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         # # (AI註: 問題3 版本B - sold_today 也包含 rotation 當日賣出，名額必須凍結到下一交易日)
         pre_market_occupied = len(portfolio) + len(sold_today)
 
-        for cand in candidates_today:
+        for cand in orderable_candidates_today:
             fast_df = all_dfs_fast[cand['ticker']]
             t_pos = cand['today_pos']
             y_pos = cand['yesterday_pos']

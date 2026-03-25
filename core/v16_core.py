@@ -184,23 +184,30 @@ def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_
     )
     return is_candidate, expected_value, win_rate, trade_count
 
-# # (AI註: 單一真理來源 - 正常單的 limit/sl/trail/qty 規格統一由此產生)
-def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
+# # (AI註: 單一真理來源 - 正常候選的 limit/sl/trail/qty 規格統一由此產生；候選資格與可掛單分離)
+def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
     if pd.isna(limit_price) or pd.isna(atr):
         return None
 
     init_sl = adjust_long_stop_price(limit_price - atr * params.atr_times_init)
     init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
     qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
-    if qty <= 0:
-        return None
 
     return {
         'limit_price': limit_price,
         'init_sl': init_sl,
         'init_trail': init_trail,
         'qty': qty,
+        'is_orderable': qty > 0,
     }
+
+
+# # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
+def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params)
+    if candidate_plan is None or candidate_plan['qty'] <= 0:
+        return None
+    return candidate_plan
 
 # # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
 def should_count_miss_buy(order_qty, is_worse_than_initial_stop=False):
@@ -357,23 +364,23 @@ def create_signal_tracking_state(original_limit, atr, params):
     }
 
 
-# # (AI註: 單一真理來源 - 延續候選每日盤前資格與掛單規格統一由此產生)
-def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_capital, params):
+# # (AI註: 單一真理來源 - 延續候選每日盤前資格規格統一由此產生；必須仍在原始買入區間內)
+def build_extended_candidate_plan_from_signal(signal_state, reference_price, sizing_capital, params):
     if signal_state is None or pd.isna(reference_price):
         return None
 
     original_limit = signal_state['orig_limit']
     atr = signal_state['orig_atr']
     init_sl = signal_state['init_sl']
-    limit_price = adjust_long_buy_limit(min(reference_price, original_limit))
+    if not (init_sl < reference_price <= original_limit):
+        return None
 
+    limit_price = adjust_long_buy_limit(reference_price)
     if pd.isna(limit_price) or not (init_sl < limit_price <= original_limit):
         return None
 
     init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
     qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
-    if qty <= 0:
-        return None
 
     return {
         'limit_price': limit_price,
@@ -382,13 +389,22 @@ def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_
         'qty': qty,
         'orig_limit': original_limit,
         'orig_atr': atr,
+        'is_orderable': qty > 0,
     }
+
+
+# # (AI註: 單一真理來源 - 延續單實際掛單規格；僅接受可掛單候選)
+def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_capital, params):
+    candidate_plan = build_extended_candidate_plan_from_signal(signal_state, reference_price, sizing_capital, params)
+    if candidate_plan is None or candidate_plan['qty'] <= 0:
+        return None
+    return candidate_plan
 
 
 # # (AI註: 延續候選資格評估)
 def evaluate_extended_candidate_eligibility(close_price, original_limit, atr, sizing_capital, params):
     signal_state = create_signal_tracking_state(original_limit, atr, params)
-    return build_extended_entry_plan_from_signal(signal_state, close_price, sizing_capital, params)
+    return build_extended_candidate_plan_from_signal(signal_state, close_price, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - K棒推進與結算，徹底消滅 Portfolio 與 Backtest 分歧)
@@ -782,7 +798,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
     extended_candidate_today = None
     if (not had_open_position_at_end) and active_extended_signal is not None:
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
-        extended_candidate_today = build_extended_entry_plan_from_signal(active_extended_signal, C[-1], sizing_cap, params)
+        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, C[-1], sizing_cap, params)
 
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
 
