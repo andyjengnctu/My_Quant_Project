@@ -630,14 +630,6 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
         if np.isnan(ATR_main[j-1]):
             continue
         pos_start_of_current_bar = position['qty']
-        is_candidate_so_far, _, _, _ = evaluate_history_candidate_metrics(
-            tradeCount,
-            fullWins,
-            total_r_multiple,
-            total_r_win,
-            total_r_loss,
-            params,
-        )
 
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
@@ -663,6 +655,7 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
                 missedSellCount += 1
             currentCapital += pnl_realized
 
+        # # (AI註: 單股回測只驗證核心策略本身，不可用個股自身歷史績效卡住單股進場；歷史績效 filter 僅供投組/候選層使用)
         isSetup_prev = buyCondition[j-1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
         sizing_cap = currentCapital if getattr(params, 'use_compounding', True) else params.initial_capital
@@ -672,27 +665,26 @@ def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            if is_candidate_so_far:
-                entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
-                entry_result = execute_pre_market_entry_plan(
-                    entry_plan=entry_plan,
-                    t_open=O[j],
-                    t_high=H[j],
-                    t_low=L[j],
-                    t_close=C[j],
-                    t_volume=V[j],
-                    y_close=C[j-1],
-                    params=params,
-                    entry_type='normal',
-                )
-                if entry_result['filled']:
-                    position = entry_result['position']
-                    buyTriggered = True
-                    active_extended_signal = None
-                elif entry_result['count_as_missed_buy']:
-                    missedBuyCount += 1
+            entry_plan = build_normal_entry_plan(buy_limits[j-1], ATR_main[j-1], sizing_cap, params)
+            entry_result = execute_pre_market_entry_plan(
+                entry_plan=entry_plan,
+                t_open=O[j],
+                t_high=H[j],
+                t_low=L[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j-1],
+                params=params,
+                entry_type='normal',
+            )
+            if entry_result['filled']:
+                position = entry_result['position']
+                buyTriggered = True
+                active_extended_signal = None
+            elif entry_result['count_as_missed_buy']:
+                missedBuyCount += 1
 
-        elif active_extended_signal is not None and pos_start_of_current_bar == 0 and is_candidate_so_far:
+        elif active_extended_signal is not None and pos_start_of_current_bar == 0:
             entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j-1], sizing_cap, params)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
