@@ -330,7 +330,6 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         return None
 
     df_logs = pd.DataFrame(trade_logs)
-    df_logs['單筆實質損益'] = df_logs['單筆實質損益'].round(2)
     df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
 
     if export_excel:

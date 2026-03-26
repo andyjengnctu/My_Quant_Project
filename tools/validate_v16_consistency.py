@@ -375,8 +375,13 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
     ) = result
 
     portfolio_trade_types = _df_tr["Type"].fillna("") if _df_tr is not None and len(_df_tr) > 0 and "Type" in _df_tr.columns else pd.Series(dtype="object")
+    portfolio_buy_rows = int(portfolio_trade_types.str.startswith("買進").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_full_exit_rows = int(portfolio_trade_types.isin({"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"}).sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_half_take_profit_rows = int((portfolio_trade_types == "半倉停利").sum()) if len(portfolio_trade_types) > 0 else 0
     portfolio_missed_buy_rows = int(portfolio_trade_types.str.startswith("錯失買進").sum()) if len(portfolio_trade_types) > 0 else 0
     portfolio_missed_sell_rows = int((portfolio_trade_types == "錯失賣出").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_period_closeout_rows = int((portfolio_trade_types == "期末強制結算").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_completed_trades = rebuild_completed_trades_from_portfolio_trade_log(_df_tr)
 
     return {
         "module_path": module_path,
@@ -403,8 +408,13 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
         "bm_annual_return_pct": bm_annual_return_pct,
+        "portfolio_buy_rows": portfolio_buy_rows,
+        "portfolio_full_exit_rows": portfolio_full_exit_rows,
+        "portfolio_half_take_profit_rows": portfolio_half_take_profit_rows,
         "portfolio_missed_buy_rows": portfolio_missed_buy_rows,
         "portfolio_missed_sell_rows": portfolio_missed_sell_rows,
+        "portfolio_period_closeout_rows": portfolio_period_closeout_rows,
+        "portfolio_completed_trades": portfolio_completed_trades,
     }
 
 def run_scanner_tool_check(ticker, file_path, params):
@@ -629,31 +639,26 @@ def run_debug_trade_log_check(ticker, df, params):
     return debug_df, module_path
 
 
-# # (AI註: 將 debug_trade_log 的逐列事件重建為 completed trades，
-# # (AI註: 才能嚴格驗證半倉停利 + 尾倉結算後的總損益口徑是否與核心一致)
-def rebuild_completed_trades_from_debug_log(debug_df):
-    if debug_df is None or len(debug_df) == 0:
+def rebuild_completed_trades_from_event_log(df_logs, *, tool_name, date_col, action_col, pnl_col, buy_prefix, half_action, full_exit_actions, ignored_actions, missed_sell_actions):
+    if df_logs is None or len(df_logs) == 0:
         return []
 
-    required_cols = {"日期", "動作", "單筆實質損益"}
-    missing_cols = [col for col in required_cols if col not in debug_df.columns]
+    required_cols = {date_col, action_col, pnl_col}
+    missing_cols = [col for col in required_cols if col not in df_logs.columns]
     if missing_cols:
-        raise KeyError(f"debug_trade_log 缺少必要欄位: {missing_cols}")
+        raise KeyError(f"{tool_name} 缺少必要欄位: {missing_cols}")
 
-    full_exit_actions = {"停損殺出", "指標賣出", "期末強制結算"}
-    ignored_actions = {"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"}
-    missed_sell_actions = {"錯失賣出"}
     completed_trades = []
     active_trade = None
 
-    for row in debug_df.itertuples(index=False):
-        action = getattr(row, "動作")
-        trade_date = pd.to_datetime(getattr(row, "日期")).strftime("%Y-%m-%d")
-        realized_pnl = round(float(getattr(row, "單筆實質損益")), 2)
+    for row in df_logs.itertuples(index=False):
+        action = str(getattr(row, action_col))
+        trade_date = pd.to_datetime(getattr(row, date_col)).strftime("%Y-%m-%d")
+        realized_pnl = float(getattr(row, pnl_col))
 
-        if action.startswith("買進"):
+        if action.startswith(buy_prefix):
             if active_trade is not None:
-                raise ValueError("debug_trade_log 出現連續買進，上一筆交易尚未完整結束。")
+                raise ValueError(f"{tool_name} 出現連續買進，上一筆交易尚未完整結束。")
             active_trade = {
                 "buy_date": trade_date,
                 "exit_date": None,
@@ -666,21 +671,21 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         if action in ignored_actions:
             continue
 
-        if action == "半倉停利":
+        if action == half_action:
             if active_trade is None:
-                raise ValueError("debug_trade_log 出現半倉停利，但前面沒有對應買進。")
-            active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
+                raise ValueError(f"{tool_name} 出現{half_action}，但前面沒有對應買進。")
+            active_trade["total_pnl"] += realized_pnl
             active_trade["half_exit_count"] += 1
             continue
 
         if action in missed_sell_actions:
             if active_trade is None:
-                raise ValueError(f"debug_trade_log 出現 {action}，但前面沒有對應買進。")
+                raise ValueError(f"{tool_name} 出現 {action}，但前面沒有對應買進。")
             continue
 
         if action in full_exit_actions:
             if active_trade is None:
-                raise ValueError(f"debug_trade_log 出現 {action}，但前面沒有對應買進。")
+                raise ValueError(f"{tool_name} 出現 {action}，但前面沒有對應買進。")
             active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
             active_trade["exit_date"] = trade_date
             active_trade["full_exit_action"] = action
@@ -688,12 +693,46 @@ def rebuild_completed_trades_from_debug_log(debug_df):
             active_trade = None
             continue
 
-        raise ValueError(f"debug_trade_log 出現未納入驗證的動作: {action}")
+        raise ValueError(f"{tool_name} 出現未納入驗證的動作: {action}")
 
     if active_trade is not None:
-        raise ValueError("debug_trade_log 最後仍有未完成交易，缺少完整賣出列。")
+        raise ValueError(f"{tool_name} 最後仍有未完成交易，缺少完整賣出列。")
 
     return completed_trades
+
+
+# # (AI註: 將 debug_trade_log 的逐列事件重建為 completed trades，
+# # (AI註: 才能嚴格驗證半倉停利 + 尾倉結算後的總損益口徑是否與核心一致)
+def rebuild_completed_trades_from_debug_log(debug_df):
+    return rebuild_completed_trades_from_event_log(
+        debug_df,
+        tool_name="debug_trade_log",
+        date_col="日期",
+        action_col="動作",
+        pnl_col="單筆實質損益",
+        buy_prefix="買進",
+        half_action="半倉停利",
+        full_exit_actions={"停損殺出", "指標賣出", "期末強制結算"},
+        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"},
+        missed_sell_actions={"錯失賣出"},
+    )
+
+
+# # (AI註: portfolio_sim 的 df_trades 也必須能重建成 completed trades，
+# # (AI註: 否則即使 aggregate 指標一致，逐筆明細仍可能漂移而不自知)
+def rebuild_completed_trades_from_portfolio_trade_log(df_trades):
+    return rebuild_completed_trades_from_event_log(
+        df_trades,
+        tool_name="portfolio_sim df_trades",
+        date_col="Date",
+        action_col="Type",
+        pnl_col="單筆損益",
+        buy_prefix="買進",
+        half_action="半倉停利",
+        full_exit_actions={"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"},
+        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)"},
+        missed_sell_actions={"錯失賣出"},
+    )
 
 
 def validate_one_ticker(ticker, base_params):
@@ -719,7 +758,7 @@ def validate_one_ticker(ticker, base_params):
     downloader_error = None
     try:
         downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
-    except (FileNotFoundError, ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+    except Exception as e:
         downloader_error = f"{type(e).__name__}: {e}"
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
@@ -777,6 +816,9 @@ def validate_one_ticker(ticker, base_params):
     expected_bm_annual_return_pct = calc_validation_annual_return_pct(
         100.0, 100.0 * (1.0 + portfolio_stats["bm_ret"] / 100.0), sim_years
     )
+    expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
+    expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]
+    expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)
 
     add_check(results, "single_vs_portfolio", ticker, "annual_trades", expected_annual_trades, portfolio_stats["annual_trades"])
     add_check(results, "single_vs_portfolio", ticker, "reserved_buy_fill_rate", expected_reserved_buy_fill_rate, portfolio_stats["reserved_buy_fill_rate"])
@@ -820,6 +862,70 @@ def validate_one_ticker(ticker, base_params):
         portfolio_stats["total_missed_sells"],
         portfolio_sim_stats["portfolio_missed_sell_rows"],
         note="portfolio df_trades 中的錯失賣出列數，必須與 total_missed_sells 完全一致。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_buy_rows",
+        len(standalone_logs),
+        portfolio_sim_stats["portfolio_buy_rows"],
+        note="portfolio df_trades 中的買進列數，必須與核心 completed trades 筆數一致。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_full_exit_rows",
+        len(standalone_logs),
+        portfolio_sim_stats["portfolio_full_exit_rows"],
+        note="portfolio df_trades 中的完整賣出列數，必須與核心 completed trades 筆數一致，包含期末強制結算。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_period_closeout_rows",
+        1 if single_stats["current_position"] > 0 else 0,
+        portfolio_sim_stats["portfolio_period_closeout_rows"],
+        note="若單股回測期末仍持有部位，portfolio df_trades 必須恰有一列期末強制結算；否則必須為 0。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_completed_trade_count",
+        len(standalone_logs),
+        len(portfolio_sim_stats["portfolio_completed_trades"]),
+        note="portfolio df_trades 必須能重建成與核心 completed trades 完全相同的筆數。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_completed_trade_exit_dates",
+        expected_exit_dates,
+        [trade["exit_date"] for trade in portfolio_sim_stats["portfolio_completed_trades"]],
+        note="portfolio df_trades 重建出的逐筆最終出場日期，必須與核心 completed trades 完全一致。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_completed_trade_pnl_sequence",
+        expected_trade_pnls,
+        [trade["total_pnl"] for trade in portfolio_sim_stats["portfolio_completed_trades"]],
+        note="portfolio df_trades 必須將半倉停利 + 尾倉賣出正確合併，逐筆總損益 sequence 與核心一致。"
+    )
+    add_check(
+        results,
+        "portfolio_sim",
+        ticker,
+        "df_trades_completed_trade_realized_pnl_sum",
+        expected_realized_pnl_sum,
+        round(sum(trade["total_pnl"] for trade in portfolio_sim_stats["portfolio_completed_trades"]), 2),
+        tol=0.01,
+        note="portfolio df_trades 重建後的 completed trades 總已實現損益，必須與核心一致。"
     )
     add_check(results, "portfolio_sim", ticker, "r_sq", portfolio_stats["r_sq"], portfolio_sim_stats["r_sq"])
     add_check(results, "portfolio_sim", ticker, "m_win_rate", portfolio_stats["m_win_rate"], portfolio_sim_stats["m_win_rate"])
@@ -971,11 +1077,8 @@ def validate_one_ticker(ticker, base_params):
         debug_completed_trades = rebuild_completed_trades_from_debug_log(debug_df)
 
         expected_exit_rows = len(standalone_logs)
-        expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]
         actual_trade_pnls = [trade["total_pnl"] for trade in debug_completed_trades]
-        expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
         actual_exit_dates = [trade["exit_date"] for trade in debug_completed_trades]
-        expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)
         actual_realized_pnl_sum = round(sum(actual_trade_pnls), 2)
 
         add_check(
@@ -1180,7 +1283,7 @@ def main():
             results, summary = validate_one_ticker(ticker, base_params)
             all_results.extend(results)
             summaries.append(summary)
-        except (FileNotFoundError, ImportError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
+        except Exception as e:
             if is_insufficient_data_error(e):
                 add_skip_result(
                     all_results,
@@ -1189,10 +1292,24 @@ def main():
                     "validation_runtime",
                     f"資料不足，跳過驗證。({type(e).__name__}: {e})"
                 )
+                summaries.append({
+                    "ticker": ticker,
+                    "validation_runtime": f"SKIP: {format_exception_summary(e)}",
+                })
             else:
-                raise RuntimeError(
-                    f"一致性驗證執行失敗: ticker={ticker} | {format_exception_summary(e)}"
-                ) from e
+                add_fail_result(
+                    all_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    "no exception",
+                    format_exception_summary(e),
+                    "單一 ticker 的 runtime / import side effect / 路徑權限問題，不可讓整體 validate 中斷。"
+                )
+                summaries.append({
+                    "ticker": ticker,
+                    "validation_runtime": f"FAIL: {format_exception_summary(e)}",
+                })
 
         ticker_results = all_results[ticker_results_before:]
         ticker_statuses = {row["status"] for row in ticker_results}
