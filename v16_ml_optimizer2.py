@@ -1,22 +1,19 @@
 import os
-import sys
 import time
 import json
 import traceback
 import csv
 import optuna
-import numpy as np
 import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 
 from core.v16_config import (
-    V16StrategyParams, SCORE_CALC_METHOD,
+    V16StrategyParams,
     MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE,
     MIN_TRADE_WIN_RATE, MIN_FULL_YEAR_RETURN_PCT,
     MAX_PORTFOLIO_MDD_PCT, MIN_MONTHLY_WIN_RATE, MIN_EQUITY_CURVE_R_SQUARED,
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER
 )
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, get_fast_dates, run_portfolio_timeline, calc_portfolio_score
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
@@ -725,12 +722,12 @@ if __name__ == "__main__":
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
     
     if os.path.exists(db_file):
-        choice = input(f"\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
+        choice = input("\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
         if choice == '2': 
             os.remove(db_file)
             print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
             
-    user_input = input(f"👉 請輸入訓練次數 (預設 50000，輸入 0 則直接提取匯出參數): ").strip()
+    user_input = input("👉 請輸入訓練次數 (預設 50000，輸入 0 則直接提取匯出參數): ").strip()
     N_TRIALS = int(user_input) if user_input != "" else 50000
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     

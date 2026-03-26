@@ -19,7 +19,6 @@ from core.v16_core import (
     build_normal_entry_plan,
     execute_pre_market_entry_plan,
     should_clear_extended_signal,
-    evaluate_history_candidate_metrics,
     can_execute_half_take_profit,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
@@ -60,7 +59,6 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     position = {'qty': 0}
     active_extended_signal = None
     currentCapital = params.initial_capital
-    currentEquity = currentCapital
     trade_logs = []
 
     tradeCount, fullWins = 0, 0
@@ -304,13 +302,6 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j]):
             active_extended_signal = None
-
-        currentEquity = currentCapital
-        if position['qty'] > 0:
-            floating_exec_price = adjust_long_sell_fill_price(C[j])
-            floatingSellNet = calc_net_sell_price(floating_exec_price, position['qty'], params)
-            floatingPnL = (floatingSellNet - position['entry']) * position['qty']
-            currentEquity = currentCapital + floatingPnL
 
     if position['qty'] > 0:
         exec_sell_price = adjust_long_sell_fill_price(C[-1])
