@@ -142,14 +142,11 @@ class V16StrategyParams:
 
         try:
             validate_strategy_param_ranges(_build_strategy_param_snapshot(self))
-        except Exception:
+        except ValueError:
             if had_old_value:
                 object.__setattr__(self, name, old_value)
-            else:
-                try:
-                    object.__delattr__(self, name)
-                except AttributeError:
-                    pass
+            elif hasattr(self, name):
+                object.__delattr__(self, name)
             raise
 
 
