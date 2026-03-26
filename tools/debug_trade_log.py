@@ -20,6 +20,7 @@ from core.v16_core import (
     execute_pre_market_entry_plan,
     should_clear_extended_signal,
     evaluate_history_candidate_metrics,
+    can_execute_half_take_profit,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
 
@@ -41,8 +42,8 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
     return params
 
 
-def get_debug_tp_half_price(tp_half, params):
-    return tp_half if params.tp_percent > 0 else np.nan
+def get_debug_tp_half_price(tp_half, qty, params):
+    return tp_half if can_execute_half_take_profit(qty, params.tp_percent) else np.nan
 
 
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
@@ -203,7 +204,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "股數": entry_plan['qty'],
                     "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
                     "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], params),
+                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": 0.0,
                     "備註": ""
@@ -265,7 +266,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "股數": entry_plan['qty'],
                     "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
                     "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], params),
+                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": 0.0,
                     "備註": ""

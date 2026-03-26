@@ -9,8 +9,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price
+from core.v16_params_io import load_params_from_json, build_params_from_mapping, params_to_json_dict
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit
 from core.v16_buy_sort import calc_buy_sort_value
 from core.v16_config import BUY_SORT_METHOD, V16StrategyParams
 from core.v16_portfolio_engine import (
@@ -1557,6 +1557,41 @@ def build_synthetic_same_day_sell_block_case(base_params):
     }
 
 
+def build_synthetic_unexecutable_half_tp_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.initial_capital = 130.0
+    params.fixed_risk = 1.0
+
+    df = build_synthetic_baseline_frame("2024-01-01", 320)
+    trigger_idx = 270
+    set_synthetic_bar(df, trigger_idx, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, trigger_idx + 1, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df, trigger_idx + 2, open_price=104.3, high_price=107.5, low_price=104.0, close_price=106.5)
+    set_synthetic_bar(df, trigger_idx + 3, open_price=106.5, high_price=107.0, low_price=106.1, close_price=106.8)
+    set_synthetic_bar(df, trigger_idx + 4, open_price=106.6, high_price=107.1, low_price=106.2, close_price=106.9)
+    for idx in range(trigger_idx + 5, len(df)):
+        base_close = 106.8 + (idx - (trigger_idx + 5)) * 0.01
+        set_synthetic_bar(df, idx, open_price=base_close - 0.2, high_price=base_close + 0.3, low_price=base_close - 0.4, close_price=base_close)
+
+    return {
+        "case_id": "SYNTH_UNEXECUTABLE_HALF_TP",
+        "params": params,
+        "frames": {"9601": df},
+        "benchmark_ticker": "9601",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9601",
+    }
+
+
+def build_synthetic_param_guardrail_case(base_params):
+    return {
+        "case_id": "SYNTH_PARAM_GUARDRAIL",
+        "base_payload": params_to_json_dict(make_consistency_params(base_params)),
+    }
+
+
 def validate_synthetic_half_tp_full_year_case(base_params):
     case = build_synthetic_half_tp_full_year_case(base_params)
     results = []
@@ -1687,6 +1722,96 @@ def validate_synthetic_same_day_sell_block_case(base_params):
     return results, summary
 
 
+def validate_synthetic_unexecutable_half_tp_case(base_params):
+    case = build_synthetic_unexecutable_half_tp_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_unexecutable_half_tp", case["case_id"], core_stats, sim_stats)
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "expected_half_take_profit_rows", 0, sim_stats["portfolio_half_take_profit_rows"])
+
+        primary_ticker = case["primary_ticker"]
+        primary_path = os.path.join(temp_dir, f"{primary_ticker}.csv")
+        debug_raw_df = pd.read_csv(primary_path)
+        debug_input_df, _debug_sanitize_stats = sanitize_ohlcv_dataframe(
+            debug_raw_df,
+            primary_ticker,
+            min_rows=get_required_min_rows(case["params"]),
+        )
+        debug_df, _debug_module_path = run_debug_trade_log_check(primary_ticker, debug_input_df, case["params"])
+        half_rows = int((debug_df["動作"].fillna("") == "半倉停利").sum()) if debug_df is not None and len(debug_df) > 0 else 0
+        buy_rows = debug_df[debug_df["動作"].fillna("").str.startswith("買進")].copy() if debug_df is not None and len(debug_df) > 0 else pd.DataFrame()
+        half_tp_price_is_nan = bool(buy_rows["半倉停利價"].isna().all()) if len(buy_rows) > 0 else False
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_half_take_profit_rows", 0, half_rows)
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_buy_row_half_tp_price_is_nan", True, half_tp_price_is_nan)
+
+    scanner_case = build_synthetic_half_tp_full_year_case(base_params)
+    scanner_case["params"].initial_capital = 130.0
+    scanner_case["params"].fixed_risk = 1.0
+    scanner_case["frames"][scanner_case["primary_ticker"]] = scanner_case["frames"][scanner_case["primary_ticker"]].iloc[:271].copy()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, scanner_case["frames"])
+        scanner_ticker = scanner_case["primary_ticker"]
+        scanner_path = os.path.join(temp_dir, f"{scanner_ticker}.csv")
+        scanner_ref_stats = run_scanner_reference_check(scanner_ticker, scanner_path, scanner_case["params"])
+        scanner_result, _scanner_module_path = run_scanner_tool_check(scanner_ticker, scanner_path, scanner_case["params"])
+        proj_qty = calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], scanner_case["params"]) if scanner_ref_stats.get("is_setup_today") else 0
+        scanner_message = "" if scanner_result is None or scanner_result.get("message") is None else str(scanner_result.get("message"))
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "scanner_projected_qty", 1, proj_qty)
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "scanner_half_tp_executable", False, can_execute_half_take_profit(proj_qty, scanner_case["params"].tp_percent))
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "scanner_tool_status", "buy", None if scanner_result is None else scanner_result["status"])
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "scanner_message_marks_unexecutable_half_tp", True, "半倉停利:股數不足" in scanner_message)
+
+    summary["half_take_profit_rows"] = 0
+    summary["projected_qty"] = 1
+    return results, summary
+
+
+def validate_synthetic_param_guardrail_case(base_params):
+    case = build_synthetic_param_guardrail_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    valid_params = build_params_from_mapping(case["base_payload"])
+    add_check(results, "synthetic_param_guardrail", case["case_id"], "valid_payload_loads", True, isinstance(valid_params, V16StrategyParams))
+
+    invalid_cases = [
+        ("tp_percent_ge_1_rejected", {**case["base_payload"], "tp_percent": 1.0}, "tp_percent"),
+        ("fixed_risk_zero_rejected", {**case["base_payload"], "fixed_risk": 0.0}, "fixed_risk"),
+        ("min_history_win_rate_gt_1_rejected", {**case["base_payload"], "min_history_win_rate": 1.1}, "min_history_win_rate"),
+        ("vol_long_len_lt_short_rejected", {**case["base_payload"], "vol_short_len": 10, "vol_long_len": 5}, "vol_long_len"),
+    ]
+
+    for metric_name, payload, expected_field in invalid_cases:
+        try:
+            build_params_from_mapping(payload)
+            add_fail_result(
+                results,
+                "synthetic_param_guardrail",
+                case["case_id"],
+                metric_name,
+                f"ValueError containing {expected_field}",
+                "loaded_ok",
+                "非法參數不應成功載入。"
+            )
+        except ValueError as e:
+            add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
+
+    summary["guardrail_cases"] = len(invalid_cases)
+    return results, summary
+
+
 def run_synthetic_consistency_suite(base_params):
     all_results = []
     summaries = []
@@ -1695,6 +1820,8 @@ def run_synthetic_consistency_suite(base_params):
         validate_synthetic_extended_miss_buy_case,
         validate_synthetic_competing_candidates_case,
         validate_synthetic_same_day_sell_block_case,
+        validate_synthetic_unexecutable_half_tp_case,
+        validate_synthetic_param_guardrail_case,
     ]
 
     for validator in validators:

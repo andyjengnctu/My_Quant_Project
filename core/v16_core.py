@@ -140,6 +140,26 @@ def calc_reference_candidate_qty(bPrice, stopPrice, params):
     return calc_position_size(bPrice, stopPrice, params.initial_capital, params.fixed_risk, params)
 
 
+# # (AI註: 單一真理來源 - 半倉停利可執行股數統一由此計算，避免核心/掃描/除錯工具各自判斷)
+def calc_half_take_profit_sell_qty(position_qty, tp_percent):
+    if pd.isna(position_qty) or pd.isna(tp_percent):
+        return 0
+
+    position_qty = int(position_qty)
+    tp_percent = float(tp_percent)
+    if position_qty <= 0 or tp_percent <= 0.0:
+        return 0
+
+    sell_qty = int(math.floor(position_qty * tp_percent))
+    if sell_qty <= 0 or position_qty <= sell_qty:
+        return 0
+    return sell_qty
+
+
+def can_execute_half_take_profit(position_qty, tp_percent):
+    return calc_half_take_profit_sell_qty(position_qty, tp_percent) > 0
+
+
 # # (AI註: 單一真理來源 - 統一 initial_risk_total 的計算與 fallback 口徑，禁止散落 magic number)
 def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:
@@ -456,7 +476,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         return position, freed_cash, pnl_realized, events
 
     is_stop_hit = t_low <= position['sl']
-    is_tp_hit = t_high >= position['tp_half'] and not position['sold_half']
+    half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
+    is_tp_hit = t_high >= position['tp_half'] and not position['sold_half'] and half_sell_qty > 0
 
     # # (AI註: 同棒同時碰停損與半倉停利時，維持最壞情境，優先視為停損)
     if is_stop_hit and is_tp_hit:
@@ -464,16 +485,15 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
 
     if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
         exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open))
-        sell_qty = int(math.floor(position['qty'] * params.tp_percent))
-        if sell_qty > 0 and position['qty'] > sell_qty:
-            net_price = calc_net_sell_price(exec_price, sell_qty, params)
-            freed_cash = net_price * sell_qty
-            pnl = (net_price - position['entry']) * sell_qty
-            pnl_realized += pnl
-            position['realized_pnl'] += pnl
-            position['qty'] -= sell_qty
-            position['sold_half'] = True
-            events.append('TP_HALF')
+        sell_qty = half_sell_qty
+        net_price = calc_net_sell_price(exec_price, sell_qty, params)
+        freed_cash = net_price * sell_qty
+        pnl = (net_price - position['entry']) * sell_qty
+        pnl_realized += pnl
+        position['realized_pnl'] += pnl
+        position['qty'] -= sell_qty
+        position['sold_half'] = True
+        events.append('TP_HALF')
 
     if is_stop_hit:
         sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)

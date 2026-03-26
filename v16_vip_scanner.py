@@ -7,7 +7,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import BUY_SORT_METHOD
-from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, adjust_long_target_price, calc_net_sell_price
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, adjust_long_target_price, calc_net_sell_price, can_execute_half_take_profit
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
@@ -81,14 +81,15 @@ def process_single_stock(file_path, ticker, params):
 
             proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
 
-            actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
-            net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
-            est_target = adjust_long_target_price(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
-
-            if params.tp_percent > 0:
+            if can_execute_half_take_profit(proj_qty, params.tp_percent):
+                actual_cost_per_share = calc_entry_price(stats['buy_limit'], proj_qty, params)
+                net_sl_per_share = calc_net_sell_price(stats['stop_loss'], proj_qty, params)
+                est_target = adjust_long_target_price(stats['buy_limit'] + (actual_cost_per_share - net_sl_per_share))
                 buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利(預估):{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-            else:
+            elif params.tp_percent <= 0:
                 buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 半倉停利:關閉 | 參考投入:{proj_cost:>7,.0f}"
+            else:
+                buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 半倉停利:股數不足 | 參考投入:{proj_cost:>7,.0f}"
             msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
             sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
