@@ -40,6 +40,11 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json
     print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params
 
+
+def get_debug_tp_half_price(tp_half, params):
+    return tp_half if params.tp_percent > 0 else np.nan
+
+
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
@@ -198,7 +203,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "股數": entry_plan['qty'],
                     "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
                     "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": entry_result['tp_half'],
+                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], params),
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": 0.0,
                     "備註": ""
@@ -260,7 +265,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
                     "股數": entry_plan['qty'],
                     "投入總金額": entry_result['entry_price'] * entry_plan['qty'],
                     "設定停損價": entry_plan['init_sl'],
-                    "半倉停利價": entry_result['tp_half'],
+                    "半倉停利價": get_debug_tp_half_price(entry_result['tp_half'], params),
                     "ATR(前日)": ATR_main[j - 1],
                     "單筆實質損益": 0.0,
                     "備註": ""

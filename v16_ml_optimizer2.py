@@ -90,6 +90,9 @@ OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
 OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
 
+# # (AI註: 方案B - None=照常搜尋 tp_percent；數值=暫時固定該 tp_percent 並跳過搜尋)
+OPTIMIZER_FIXED_TP_PERCENT = None
+
 PROFILE_FIELDS = [
     "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
     "prep_worker_copy_sum_sec", "prep_worker_generate_signals_sum_sec", "prep_worker_assign_sum_sec",
@@ -117,6 +120,37 @@ def record_optimizer_prep_failures(trial_number, insufficient_failures):
 
 
 # # (AI註: 訓練結束時再印一次資料不足摘要，避免訓練過程被重複警示干擾)
+def resolve_optimizer_tp_percent(trial):
+    if OPTIMIZER_FIXED_TP_PERCENT is None:
+        return trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01)
+
+    fixed_tp_percent = float(OPTIMIZER_FIXED_TP_PERCENT)
+    trial.set_user_attr("fixed_tp_percent", fixed_tp_percent)
+    return fixed_tp_percent
+
+
+# # (AI註: 單一真理來源 - 顯示/匯出最佳參數時統一補回固定模式缺少的 tp_percent)
+def build_optimizer_trial_params(param_mapping, user_attrs=None):
+    resolved_params = dict(param_mapping)
+    if "tp_percent" in resolved_params:
+        resolved_params["tp_percent"] = float(resolved_params["tp_percent"])
+        return resolved_params
+
+    fixed_tp_percent = None if user_attrs is None else user_attrs.get("fixed_tp_percent")
+    if fixed_tp_percent is None:
+        fixed_tp_percent = OPTIMIZER_FIXED_TP_PERCENT
+    if fixed_tp_percent is None:
+        raise ValueError("最佳 trial 缺少 tp_percent，且目前未設定 OPTIMIZER_FIXED_TP_PERCENT，無法還原完整參數。")
+
+    resolved_params["tp_percent"] = float(fixed_tp_percent)
+    return resolved_params
+
+
+def build_best_params_payload_from_trial(best_trial):
+    resolved_params = build_optimizer_trial_params(best_trial.params, best_trial.user_attrs)
+    return params_to_json_dict(V16StrategyParams(**resolved_params, use_compounding=True))
+
+
 def print_optimizer_prep_summary():
     insufficient_total = OPTIMIZER_PREP_SUMMARY["insufficient_count_total"]
 
@@ -390,7 +424,7 @@ def objective(trial):
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
         high_len = trial.suggest_int("high_len", OPTIMIZER_HIGH_LEN_MIN, OPTIMIZER_HIGH_LEN_MAX, step=OPTIMIZER_HIGH_LEN_STEP), 
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
+        tp_percent = resolve_optimizer_tp_percent(trial), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
         bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
         bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
@@ -638,7 +672,8 @@ def monitoring_callback(study, trial):
     
     if study.best_trial.number == trial.number and trial.value is not None and trial.value > -9000:
         print()
-        attrs, p = trial.user_attrs, trial.params
+        attrs = trial.user_attrs
+        p = build_optimizer_trial_params(trial.params, attrs)
         mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
         print(f"\n{C_RED}🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試){C_RESET}")
         
@@ -680,7 +715,8 @@ if __name__ == "__main__":
         try:
             best_trial = study.best_trial
             if best_trial.value is not None and best_trial.value > -9000:
-                attrs, p = best_trial.user_attrs, best_trial.params
+                attrs = best_trial.user_attrs
+                p = build_optimizer_trial_params(best_trial.params, attrs)
                 mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
                 
                 print(f"\n{C_CYAN}📜 【歷史突破紀錄還原】{C_RESET}")
@@ -705,7 +741,7 @@ if __name__ == "__main__":
     if N_TRIALS == 0:
         try:
             if study.best_value is not None and study.best_value > -9000:
-                best_params_payload = params_to_json_dict(V16StrategyParams(**study.best_params, use_compounding=True))
+                best_params_payload = build_best_params_payload_from_trial(study.best_trial)
                 with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
                     json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
                 print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
