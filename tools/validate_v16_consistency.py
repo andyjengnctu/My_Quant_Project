@@ -2090,15 +2090,32 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
     return report_path
 
 
-def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time, real_summary_count):
+def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time, real_summary_count, real_tickers):
     synthetic_summary_count = 0
+    synthetic_ticker_set = set()
     if not df_summary.empty and "synthetic" in df_summary.columns:
         synthetic_mask = df_summary["synthetic"].fillna(False).astype(bool)
         synthetic_summary_count = int(synthetic_mask.sum())
+        synthetic_ticker_set = {
+            normalize_ticker_text(ticker)
+            for ticker in df_summary.loc[synthetic_mask, "ticker"].dropna().tolist()
+        }
 
     system_summary_count = max(len(df_summary) - real_summary_count - synthetic_summary_count, 0)
 
-    failed_tickers = int(df_failed["ticker"].nunique()) if not df_failed.empty else 0
+    real_ticker_set = {normalize_ticker_text(ticker) for ticker in real_tickers}
+    failed_ticker_series = (
+        df_failed["ticker"].fillna("").map(normalize_ticker_text)
+        if not df_failed.empty else pd.Series(dtype="object")
+    )
+    failed_real_mask = failed_ticker_series.isin(real_ticker_set) if not df_failed.empty else pd.Series(dtype=bool)
+    failed_synthetic_mask = failed_ticker_series.isin(synthetic_ticker_set) if not df_failed.empty else pd.Series(dtype=bool)
+    failed_system_mask = ~(failed_real_mask | failed_synthetic_mask) if not df_failed.empty else pd.Series(dtype=bool)
+
+    failed_real_tickers = int(failed_ticker_series[failed_real_mask].nunique()) if not df_failed.empty else 0
+    failed_synthetic_cases = int(failed_ticker_series[failed_synthetic_mask].nunique()) if not df_failed.empty else 0
+    failed_system_items = int(failed_ticker_series[failed_system_mask].nunique()) if not df_failed.empty else 0
+
     pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
     skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
     fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
@@ -2115,7 +2132,9 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     print(f"PASS 數: {pass_count}")
     print(f"SKIP 數: {skip_count}")
     print(f"FAIL 數: {fail_count}")
-    print(f"有問題股票數: {failed_tickers}")
+    print(f"有問題真實股票數: {failed_real_tickers}")
+    print(f"有問題 synthetic case 數: {failed_synthetic_cases}")
+    print(f"有問題 system 項目數: {failed_system_items}")
     print(f"完整 CSV: {csv_path}")
     print(f"問題 Excel: {xlsx_path if xlsx_path else '無，因為沒有 failed 項'}")
 
@@ -2132,17 +2151,33 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     if remain_count > 0:
         print(f"\n... 尚有 {remain_count} 筆 FAIL 未顯示，請直接查看 CSV / Excel。")
 
-    failed_summary = (
-        df_failed.groupby("ticker", dropna=False)
+    failed_real_summary = (
+        df_failed.loc[failed_real_mask]
+        .groupby("ticker", dropna=False)
         .agg(failed_checks=("passed", "size"))
         .reset_index()
         .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
         .head(MAX_CONSOLE_FAIL_PREVIEW)
+        if not df_failed.empty else pd.DataFrame()
     )
 
-    if not failed_summary.empty:
-        print("\n失敗股票前覽：")
-        print(failed_summary.to_string(index=False))
+    if not failed_real_summary.empty:
+        print("\n失敗真實股票前覽：")
+        print(failed_real_summary.to_string(index=False))
+
+    failed_non_real_summary = (
+        df_failed.loc[~failed_real_mask]
+        .groupby("ticker", dropna=False)
+        .agg(failed_checks=("passed", "size"))
+        .reset_index()
+        .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        .head(MAX_CONSOLE_FAIL_PREVIEW)
+        if not df_failed.empty else pd.DataFrame()
+    )
+
+    if not failed_non_real_summary.empty:
+        print("\n失敗 synthetic/system 前覽：")
+        print(failed_non_real_summary.to_string(index=False))
 
 
 def main():
@@ -2314,7 +2349,8 @@ def main():
         csv_path=csv_path,
         xlsx_path=xlsx_path,
         elapsed_time=elapsed_time,
-        real_summary_count=total_tickers
+        real_summary_count=total_tickers,
+        real_tickers=selected_tickers
     )
 
     return 1 if (not df_failed.empty or real_data_unavailable_reason is not None) else 0
