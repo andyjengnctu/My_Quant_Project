@@ -1988,14 +1988,17 @@ def main():
     start_time = time.time()
 
     selected_tickers = []
+    real_data_unavailable_reason = None
     if not os.path.isdir(DATA_DIR):
-        print(f"找不到資料夾: {DATA_DIR}")
-        print("將只執行 synthetic coverage suite。")
+        real_data_unavailable_reason = f"找不到資料夾: {DATA_DIR}"
+        print(real_data_unavailable_reason)
+        print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
     else:
         selected_tickers = discover_available_tickers()
         if not selected_tickers:
-            print(f"資料夾內找不到任何 CSV: {DATA_DIR}")
-            print("將只執行 synthetic coverage suite。")
+            real_data_unavailable_reason = f"資料夾內找不到任何 CSV: {DATA_DIR}"
+            print(real_data_unavailable_reason)
+            print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
 
     ticker_pass_count = 0
     ticker_skip_count = 0
@@ -2081,6 +2084,22 @@ def main():
             "synthetic": True,
         })
 
+    if real_data_unavailable_reason is not None:
+        add_fail_result(
+            all_results,
+            "system",
+            "REAL_DATA_COVERAGE",
+            "real_data_scan_required",
+            "至少 1 檔真實股票完成 validate",
+            real_data_unavailable_reason,
+            "最嚴格檢查不可只靠 synthetic coverage suite；若真實資料缺失，本次結果只能視為工具與合成案例檢查，不可視為完整通過。"
+        )
+        summaries.append({
+            "ticker": "REAL_DATA_COVERAGE",
+            "validation_runtime": f"FAIL: {real_data_unavailable_reason}",
+            "synthetic": False,
+        })
+
     df_results = pd.DataFrame(all_results)
     df_summary = pd.DataFrame(summaries)
     df_failed = df_results[df_results["status"] == "FAIL"].copy() if not df_results.empty else pd.DataFrame()
@@ -2131,7 +2150,7 @@ def main():
         elapsed_time=elapsed_time
     )
 
-    return 1 if not df_failed.empty else 0
+    return 1 if (not df_failed.empty or real_data_unavailable_reason is not None) else 0
 
 
 if __name__ == "__main__":
