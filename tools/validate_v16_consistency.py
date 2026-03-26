@@ -18,6 +18,7 @@ from core.v16_portfolio_engine import (
     pack_prepared_stock_data,
     get_fast_dates,
     run_portfolio_timeline,
+    find_sim_start_idx,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
 from core.v16_log_utils import format_exception_summary
@@ -46,14 +47,12 @@ def get_data_dir_csv_map():
     return CSV_PATH_CACHE
 
 
-# # (AI註: consistency test 與 portfolio engine 共用相同口徑：實際模擬起訖日換算年數)
+# # (AI註: consistency test 與 portfolio engine 共用相同模擬起點，避免完整年度/年化交易次數驗證口徑漂移)
 def calc_validation_sim_years(sorted_dates, start_year):
     if not sorted_dates:
         return 0.0
 
-    start_dt = pd.to_datetime(f"{start_year}-01-01")
-    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
-    start_idx = max(1, start_idx)
+    start_idx = find_sim_start_idx(sorted_dates, start_year)
     if start_idx >= len(sorted_dates):
         return 0.0
 
@@ -499,7 +498,11 @@ def load_module_from_candidates(cache_key, candidate_files, required_attrs):
             continue
 
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except (FileNotFoundError, ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+            rejected_paths.append(f"{module_path} -> 載入失敗: {type(e).__name__}: {e}")
+            continue
 
         missing_attrs = [attr for attr in required_attrs if not hasattr(module, attr)]
         if missing_attrs:
@@ -712,12 +715,18 @@ def validate_one_ticker(ticker, base_params):
     portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
     scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
-    downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
+    downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = None, None, None, None
+    downloader_error = None
+    try:
+        downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
+    except (FileNotFoundError, ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+        downloader_error = f"{type(e).__name__}: {e}"
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
     summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
     summary["scanner_module_path"] = scanner_module_path
     summary["downloader_module_path"] = downloader_module_path
+    summary["downloader_error"] = downloader_error
     summary["debug_module_path"] = debug_module_path
     summary["single_trade_count"] = single_stats["trade_count"]
     summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
@@ -902,23 +911,34 @@ def validate_one_ticker(ticker, base_params):
             bool(extended_candidate["init_sl"] < extended_candidate["limit_price"] <= extended_candidate["orig_limit"]),
         )
 
-    expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
-    actual_download_cols = list(downloader_df.columns)
-    add_check(results, "vip_downloader", ticker, "columns", expected_download_cols, actual_download_cols)
-    add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
-    add_check(results, "vip_downloader", ticker, "dataset", downloader_expected_dataset, None if downloader_request is None else downloader_request["dataset"])
-    add_check(results, "vip_downloader", ticker, "data_id", ticker, None if downloader_request is None else downloader_request["data_id"])
-    add_check(results, "vip_downloader", ticker, "start_date", "1990-01-01", None if downloader_request is None else downloader_request["start_date"])
-    expected_download_index = ["2024-01-02", "2024-01-03"]
-    actual_download_index = [str(idx).split(" ")[0] for idx in downloader_df.index.tolist()]
-    add_check(results, "vip_downloader", ticker, "date_index_sorted", expected_download_index, actual_download_index)
-    add_check(results, "vip_downloader", ticker, "index_name", "Date", downloader_df.index.name)
-    expected_download_rows = [
-        {"Open": 10.0, "High": 11.0, "Low": 9.5, "Close": 10.5, "Volume": 1000},
-        {"Open": 11.0, "High": 12.0, "Low": 10.5, "Close": 11.5, "Volume": 2000},
-    ]
-    actual_download_rows = downloader_df.reset_index(drop=True).to_dict("records")
-    add_check(results, "vip_downloader", ticker, "ohlcv_values_after_sort", expected_download_rows, actual_download_rows)
+    if downloader_error is not None:
+        add_fail_result(
+            results,
+            "vip_downloader",
+            ticker,
+            "tool_runtime",
+            "tool loads and runs",
+            downloader_error,
+            note="downloader 工具失敗時，validate 應保留其他模組結果，不可整體中斷。"
+        )
+    else:
+        expected_download_cols = ["Open", "High", "Low", "Close", "Volume"]
+        actual_download_cols = list(downloader_df.columns)
+        add_check(results, "vip_downloader", ticker, "columns", expected_download_cols, actual_download_cols)
+        add_check(results, "vip_downloader", ticker, "row_count", 2, len(downloader_df))
+        add_check(results, "vip_downloader", ticker, "dataset", downloader_expected_dataset, None if downloader_request is None else downloader_request["dataset"])
+        add_check(results, "vip_downloader", ticker, "data_id", ticker, None if downloader_request is None else downloader_request["data_id"])
+        add_check(results, "vip_downloader", ticker, "start_date", "1990-01-01", None if downloader_request is None else downloader_request["start_date"])
+        expected_download_index = ["2024-01-02", "2024-01-03"]
+        actual_download_index = [str(idx).split(" ")[0] for idx in downloader_df.index.tolist()]
+        add_check(results, "vip_downloader", ticker, "date_index_sorted", expected_download_index, actual_download_index)
+        add_check(results, "vip_downloader", ticker, "index_name", "Date", downloader_df.index.name)
+        expected_download_rows = [
+            {"Open": 10.0, "High": 11.0, "Low": 9.5, "Close": 10.5, "Volume": 1000},
+            {"Open": 11.0, "High": 12.0, "Low": 10.5, "Close": 11.5, "Volume": 2000},
+        ]
+        actual_download_rows = downloader_df.reset_index(drop=True).to_dict("records")
+        add_check(results, "vip_downloader", ticker, "ohlcv_values_after_sort", expected_download_rows, actual_download_rows)
 
     expected_buy_rows = len(standalone_logs)
 

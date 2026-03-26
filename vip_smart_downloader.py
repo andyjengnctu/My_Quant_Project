@@ -75,11 +75,6 @@ VERBOSE_UNIVERSE_FETCH_ERRORS = False
 VERBOSE_LAST_DATE_CHECK_ERRORS = False
 VERBOSE_DOWNLOAD_ERRORS = False
 
-if not os.path.exists(SAVE_DIR):
-    os.makedirs(SAVE_DIR)
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-
 dl = None
 
 
@@ -103,13 +98,29 @@ def get_finmind_loader():
     return dl
 
 
+# # (AI註: 將執行期目錄建立延後到實際執行，避免被 import 時產生副作用)
+def ensure_runtime_dirs():
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
 DOWNLOADER_SESSION_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
-DOWNLOADER_ISSUE_LOG_PATH = build_timestamped_log_path(
-    "downloader_issues",
-    log_dir=OUTPUT_DIR,
-    timestamp=DOWNLOADER_SESSION_TS
-)
+DOWNLOADER_ISSUE_LOG_PATH = None
+
+
+# # (AI註: session log path 改為 lazy init；只有真的要寫 log 時才建立輸出目錄)
+def get_downloader_issue_log_path():
+    global DOWNLOADER_ISSUE_LOG_PATH
+    if DOWNLOADER_ISSUE_LOG_PATH is None:
+        ensure_runtime_dirs()
+        DOWNLOADER_ISSUE_LOG_PATH = build_timestamped_log_path(
+            "downloader_issues",
+            log_dir=OUTPUT_DIR,
+            timestamp=DOWNLOADER_SESSION_TS
+        )
+    return DOWNLOADER_ISSUE_LOG_PATH
+
 
 # # (AI註: 將下載器的非致命問題統一寫入單一 session log，避免每種類別各自爆檔)
 def append_downloader_issues(section, lines):
@@ -117,7 +128,7 @@ def append_downloader_issues(section, lines):
         return
 
     append_issue_log(
-        DOWNLOADER_ISSUE_LOG_PATH,
+        get_downloader_issue_log_path(),
         [f"[{section}] {line}" for line in lines]
     )
 
@@ -161,6 +172,8 @@ def get_market_last_date():
     return fallback_str
 
 def get_or_update_universe():
+    ensure_runtime_dirs()
+
     if os.path.exists(LIST_FILE):
         file_mod_time = datetime.fromtimestamp(os.path.getmtime(LIST_FILE))
         if datetime.now() - file_mod_time < timedelta(days=RESCAN_DAYS):
@@ -252,16 +265,17 @@ def get_or_update_universe():
 
     if universe_fetch_errors:
         append_downloader_issues("名單來源失敗", universe_fetch_errors)
-        print(f"⚠️ 名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
+        print(f"⚠️ 名單來源失敗 {len(universe_fetch_errors)} 筆，詳細已寫入: {get_downloader_issue_log_path()}")
 
     if screening_errors:
         screening_log_lines = [f"{sid} ({yf_t}) -> {err}" for sid, yf_t, err in screening_errors]
         append_downloader_issues("快篩失敗", screening_log_lines)
-        print(f"⚠️ 快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
+        print(f"⚠️ 快篩失敗 {len(screening_errors)} 檔，詳細已寫入: {get_downloader_issue_log_path()}")
 
     return qualified_tickers
 
 def smart_download_vip_data(tickers, market_last_date, verbose=True):
+    ensure_runtime_dirs()
     total = len(tickers)
 
     def vprint(*args, **kwargs):
@@ -349,7 +363,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
         append_downloader_issues("下載失敗", download_log_lines)
 
     if last_date_check_errors or download_errors:
-        vprint(f"⚠️ 非致命問題詳細已寫入: {DOWNLOADER_ISSUE_LOG_PATH}")
+        vprint(f"⚠️ 非致命問題詳細已寫入: {get_downloader_issue_log_path()}")
 
 if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")

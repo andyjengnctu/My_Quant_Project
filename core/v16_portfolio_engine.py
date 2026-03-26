@@ -123,6 +123,15 @@ def build_benchmark_full_year_return_stats(sorted_dates, benchmark_data, yearly_
         "bm_yearly_return_rows": bm_yearly_rows
     }
 
+# # (AI註: 模擬起點索引單一真理來源；避免 engine / validate 各自複製起點規則導致完整年度判斷漂移)
+def find_sim_start_idx(sorted_dates, start_year):
+    if not sorted_dates:
+        return 0
+
+    start_dt = pd.to_datetime(f"{start_year}-01-01")
+    return next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
+
+
 # # (AI註: 年化報酬率與年化交易次數共用同一個回測期間口徑，避免統計不一致)
 def calc_sim_years(sorted_dates, start_idx):
     if not sorted_dates or start_idx >= len(sorted_dates):
@@ -377,9 +386,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     closeout_sec = 0.0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    start_dt = pd.to_datetime(f"{start_year}-01-01")
-    start_idx = next((i for i, d in enumerate(sorted_dates) if d >= start_dt), len(sorted_dates))
-    start_idx = max(1, start_idx)
+    start_idx = find_sim_start_idx(sorted_dates, start_year)
     if profile_stats is not None:
         ticker_dates_sec = time.perf_counter() - t0
 
