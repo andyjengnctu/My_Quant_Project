@@ -27,6 +27,7 @@ from core.v16_data_utils import (
     discover_unique_csv_inputs,
 )
 from core.v16_log_utils import write_issue_log, format_exception_summary
+from core.v16_params_io import params_to_json_dict
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -692,8 +693,10 @@ if __name__ == "__main__":
 
     if N_TRIALS == 0:
         try:
-            if study.best_value and study.best_value > -9000:
-                with open("models/v16_best_params.json", "w") as f: json.dump(study.best_params, f, indent=4)
+            if study.best_value is not None and study.best_value > -9000:
+                best_params_payload = params_to_json_dict(V16StrategyParams(**study.best_params, use_compounding=True))
+                with open("models/v16_best_params.json", "w", encoding="utf-8") as f:
+                    json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
                 print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
             else: print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")
         except ValueError: print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
