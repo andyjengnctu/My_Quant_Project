@@ -303,6 +303,7 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j]):
             active_extended_signal = None
 
+    
     if position['qty'] > 0:
         exec_sell_price = adjust_long_sell_fill_price(C[-1])
         sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)

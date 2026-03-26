@@ -2070,7 +2070,6 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     return results, summary
 
 
-
 def validate_synthetic_param_guardrail_case(base_params):
     case = build_synthetic_param_guardrail_case(base_params)
     results = []

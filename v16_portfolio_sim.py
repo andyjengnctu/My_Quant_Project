@@ -43,22 +43,6 @@ def is_insufficient_data_error(exc):
     return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
 
-def read_cli_value(prompt, default_value, cast_func=None, normalize_func=None):
-    try:
-        raw_value = input(prompt)
-    except EOFError:
-        raw_value = ""
-
-    raw_value = raw_value.strip()
-    if raw_value == "":
-        return default_value
-
-    if normalize_func is not None:
-        raw_value = normalize_func(raw_value)
-
-    return cast_func(raw_value) if cast_func is not None else raw_value
-
-
 # # (AI註: 只顯示年度報酬，不再在 portfolio_sim 內維持股票集中度相關報表)
 def print_yearly_return_report(yearly_return_rows):
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
@@ -192,20 +176,23 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
+def _safe_prompt(prompt_text, default_value):
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-    USER_ROTATION = read_cli_value(
-        "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
-        False,
-        cast_func=lambda value: value == 'Y',
-        normalize_func=str.upper,
-    )
-    USER_MAX_POS = read_cli_value("👉 2. 最大持倉數量 (預設 10): ", 10, cast_func=int)
-    USER_START_YEAR = read_cli_value("👉 3. 開始回測年份 (預設 2015): ", 2015, cast_func=int)
-    USER_BENCHMARK = read_cli_value("👉 4. 大盤比較標的 (預設 0050): ", "0050")
+    USER_ROTATION = _safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
+    USER_MAX_POS = int(_safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
+    USER_START_YEAR = int(_safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
+    USER_BENCHMARK = _safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
 
     ensure_runtime_dirs()
     params = load_strict_params(BEST_PARAMS_PATH)
