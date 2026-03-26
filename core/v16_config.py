@@ -20,14 +20,15 @@ BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 # 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
 SCORE_CALC_METHOD = 'RoMD'
 
-# 4. Optimizer / Overfitting / 驗證工具共用硬門檻
-MIN_ANNUAL_TRADES = 5.0
-MIN_BUY_FILL_RATE = 80.0
-MIN_TRADE_WIN_RATE = 40.0
-MIN_FULL_YEAR_RETURN_PCT = -20.0
-MAX_PORTFOLIO_MDD_PCT = 45.0
-MIN_MONTHLY_WIN_RATE = 45.0
-MIN_EQUITY_CURVE_R_SQUARED = 0.40
+# 4-1. Optimizer 投組績效門檻 
+MIN_FULL_YEAR_RETURN_PCT = -20.0     # 最低完整年度報酬率下限（%），避免某些完整年度虧損過深
+MIN_ANNUAL_TRADES = 5.0              # 最低年化交易次數門檻，避免交易過少導致樣本不足與統計不穩定
+MIN_BUY_FILL_RATE = 80.0             # 最低保留後買進成交率門檻（%），避免盤前保留很多但實際難成交
+
+MIN_TRADE_WIN_RATE = 40.0            # 最低完整交易勝率門檻（%），限制 round-trip 交易勝率不可過低
+MAX_PORTFOLIO_MDD_PCT = 45.0         # 投組最大回撤上限（%），限制整體權益曲線最大跌幅不可過大
+MIN_MONTHLY_WIN_RATE = 45.0          # 最低月勝率門檻（%），避免只靠少數大賺月份撐起總報酬
+MIN_EQUITY_CURVE_R_SQUARED = 0.40    # 權益曲線最小 R² 門檻，要求整體走勢具備基本平滑與趨勢一致性
 # ==========================================
 
 # # (AI註: 僅影響顯示，不改實際排序與優化邏輯)

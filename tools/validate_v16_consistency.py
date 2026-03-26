@@ -12,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
 from core.v16_params_io import load_params_from_json
 from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price
 from core.v16_buy_sort import calc_buy_sort_value
-from core.v16_config import BUY_SORT_METHOD
+from core.v16_config import BUY_SORT_METHOD, V16StrategyParams
 from core.v16_portfolio_engine import (
     prep_stock_data_and_trades,
     pack_prepared_stock_data,
@@ -20,7 +20,7 @@ from core.v16_portfolio_engine import (
     run_portfolio_timeline,
     find_sim_start_idx,
 )
-from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
+from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map, discover_unique_csv_inputs
 from core.v16_log_utils import format_exception_summary
 from contextlib import redirect_stdout, redirect_stderr
 import tempfile
@@ -191,6 +191,141 @@ def build_execution_only_params(params):
     return make_consistency_params(params)
 
 
+# # (AI註: 將年度報酬明細正規化，避免 Timestamp / numpy scalar 造成 validate 誤判)
+def normalize_yearly_return_rows(rows):
+    normalized = []
+    for row in rows or []:
+        normalized.append({
+            "year": int(row.get("year", 0)),
+            "year_return_pct": float(row.get("year_return_pct", 0.0)),
+            "is_full_year": bool(row.get("is_full_year", False)),
+            "start_date": str(row.get("start_date", "")),
+            "end_date": str(row.get("end_date", "")),
+        })
+    return normalized
+
+
+# # (AI註: 年度統計需同時驗欄位值與 yearly rows 內部一致性，避免只有 aggregate 對、明細卻漂移)
+def extract_yearly_profile_fields(profile_stats):
+    yearly_rows = normalize_yearly_return_rows(profile_stats.get("yearly_return_rows", []))
+    bm_yearly_rows = normalize_yearly_return_rows(profile_stats.get("bm_yearly_return_rows", []))
+    return {
+        "full_year_count": int(profile_stats.get("full_year_count", 0)),
+        "min_full_year_return_pct": float(profile_stats.get("min_full_year_return_pct", 0.0)),
+        "yearly_return_rows": yearly_rows,
+        "bm_full_year_count": int(profile_stats.get("bm_full_year_count", 0)),
+        "bm_min_full_year_return_pct": float(profile_stats.get("bm_min_full_year_return_pct", 0.0)),
+        "bm_yearly_return_rows": bm_yearly_rows,
+    }
+
+
+def calc_expected_full_year_metrics(yearly_rows):
+    full_year_rows = [row for row in (yearly_rows or []) if row["is_full_year"]]
+    return {
+        "full_year_count": len(full_year_rows),
+        "min_full_year_return_pct": float(min((row["year_return_pct"] for row in full_year_rows), default=0.0)),
+    }
+
+
+def summarize_portfolio_trade_output(df_trades):
+    portfolio_trade_types = df_trades["Type"].fillna("") if df_trades is not None and len(df_trades) > 0 and "Type" in df_trades.columns else pd.Series(dtype="object")
+    portfolio_buy_rows = int(portfolio_trade_types.str.startswith("買進").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_full_exit_rows = int(portfolio_trade_types.isin({"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"}).sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_half_take_profit_rows = int((portfolio_trade_types == "半倉停利").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_missed_buy_rows = int(portfolio_trade_types.str.startswith("錯失買進").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_missed_sell_rows = int((portfolio_trade_types == "錯失賣出").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_period_closeout_rows = int((portfolio_trade_types == "期末強制結算").sum()) if len(portfolio_trade_types) > 0 else 0
+    portfolio_completed_trades = rebuild_completed_trades_from_portfolio_trade_log(df_trades)
+    return {
+        "portfolio_buy_rows": portfolio_buy_rows,
+        "portfolio_full_exit_rows": portfolio_full_exit_rows,
+        "portfolio_half_take_profit_rows": portfolio_half_take_profit_rows,
+        "portfolio_missed_buy_rows": portfolio_missed_buy_rows,
+        "portfolio_missed_sell_rows": portfolio_missed_sell_rows,
+        "portfolio_period_closeout_rows": portfolio_period_closeout_rows,
+        "portfolio_completed_trades": portfolio_completed_trades,
+    }
+
+
+def build_portfolio_stats_payload(*, module_path, df_trades, total_return, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, profile_stats):
+    payload = {
+        "module_path": module_path,
+        "total_return": total_return,
+        "mdd": mdd,
+        "trade_count": trade_count,
+        "win_rate": win_rate,
+        "pf_ev": pf_ev,
+        "pf_payoff": pf_payoff,
+        "final_eq": final_eq,
+        "avg_exp": avg_exp,
+        "max_exp": max_exp,
+        "bm_ret": bm_ret,
+        "bm_mdd": bm_mdd,
+        "total_missed": total_missed,
+        "total_missed_sells": total_missed_sells,
+        "r_sq": r_sq,
+        "m_win_rate": m_win_rate,
+        "bm_r_sq": bm_r_sq,
+        "bm_m_win_rate": bm_m_win_rate,
+        "normal_trade_count": normal_trade_count,
+        "extended_trade_count": extended_trade_count,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "annual_return_pct": annual_return_pct,
+        "bm_annual_return_pct": bm_annual_return_pct,
+        "df_trades": df_trades.copy() if isinstance(df_trades, pd.DataFrame) else pd.DataFrame(),
+    }
+    payload.update(summarize_portfolio_trade_output(payload["df_trades"]))
+    payload.update(extract_yearly_profile_fields(profile_stats or {}))
+    return payload
+
+
+def make_synthetic_validation_params(base_params, *, tp_percent=None):
+    params = make_consistency_params(base_params)
+    params.high_len = 3
+    params.atr_len = 2
+    params.atr_buy_tol = 0.1
+    params.atr_times_init = 1.0
+    params.atr_times_trail = 1.5
+    params.use_bb = False
+    params.use_vol = False
+    params.use_kc = False
+    params.min_history_trades = 0
+    params.min_history_ev = -1e9
+    params.min_history_win_rate = 0.0
+    if tp_percent is not None:
+        params.tp_percent = tp_percent
+    return params
+
+
+def build_synthetic_baseline_frame(start_date, periods, base_price=100.0, volume=1000):
+    dates = pd.bdate_range(start_date, periods=periods)
+    df = pd.DataFrame({
+        "Date": dates.strftime("%Y-%m-%d"),
+        "Open": [base_price - 0.5] * periods,
+        "High": [base_price + 0.5] * periods,
+        "Low": [base_price - 1.0] * periods,
+        "Close": [base_price] * periods,
+        "Volume": [volume] * periods,
+    })
+    return df
+
+
+def set_synthetic_bar(df, idx, *, open_price, high_price, low_price, close_price, volume=1000):
+    df.loc[idx, ["Open", "High", "Low", "Close", "Volume"]] = [
+        float(open_price),
+        float(high_price),
+        float(low_price),
+        float(close_price),
+        float(volume),
+    ]
+
+
+def write_synthetic_csv_bundle(temp_dir, frames_by_ticker):
+    for ticker, frame in frames_by_ticker.items():
+        frame.to_csv(os.path.join(temp_dir, f"{ticker}.csv"), index=False)
+
+
 # # (AI註: scanner 必須用 production 門檻驗證；
 # # (AI註: 若套用 consistency 的寬鬆門檻，會驗到實際 scanner 不會出現的候選)
 def build_scanner_validation_params(base_params):
@@ -319,35 +454,23 @@ def resolve_source_date_column(source_df, ticker):
     raise KeyError(f"{ticker}: 找不到 Date/Time 欄位")
 
 
-def run_portfolio_sim_tool_check(ticker, file_path, params):
+def run_portfolio_sim_tool_check_for_dir(data_dir, params, *, max_positions, enable_rotation, start_year, benchmark_ticker):
     module, module_path = load_module_from_candidates(
         "portfolio_sim_module",
         ["v16_portfolio_sim.py"],
         required_attrs=["run_portfolio_simulation"]
     )
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        source_df = pd.read_csv(file_path)
-        temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
-        source_df.to_csv(temp_csv_path, index=False)
-
-        date_col = resolve_source_date_column(source_df, ticker)
-
-        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
-        min_year = parsed_dates.dt.year.min()
-        if pd.isna(min_year):
-            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
-
-        result = suppress_tool_output(
-            module.run_portfolio_simulation,
-            data_dir=temp_dir,
-            params=copy.deepcopy(params),
-            max_positions=1,
-            enable_rotation=False,
-            start_year=int(min_year),
-            benchmark_ticker=ticker,
-            verbose=False,
-        )
+    result = suppress_tool_output(
+        module.run_portfolio_simulation,
+        data_dir=data_dir,
+        params=copy.deepcopy(params),
+        max_positions=max_positions,
+        enable_rotation=enable_rotation,
+        start_year=start_year,
+        benchmark_ticker=benchmark_ticker,
+        verbose=False,
+    )
 
     (
         _df_eq,
@@ -375,51 +498,61 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
         reserved_buy_fill_rate,
         annual_return_pct,
         bm_annual_return_pct,
-        _pf_profile,
+        pf_profile,
     ) = result
 
-    portfolio_trade_types = _df_tr["Type"].fillna("") if _df_tr is not None and len(_df_tr) > 0 and "Type" in _df_tr.columns else pd.Series(dtype="object")
-    portfolio_buy_rows = int(portfolio_trade_types.str.startswith("買進").sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_full_exit_rows = int(portfolio_trade_types.isin({"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"}).sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_half_take_profit_rows = int((portfolio_trade_types == "半倉停利").sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_missed_buy_rows = int(portfolio_trade_types.str.startswith("錯失買進").sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_missed_sell_rows = int((portfolio_trade_types == "錯失賣出").sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_period_closeout_rows = int((portfolio_trade_types == "期末強制結算").sum()) if len(portfolio_trade_types) > 0 else 0
-    portfolio_completed_trades = rebuild_completed_trades_from_portfolio_trade_log(_df_tr)
+    return build_portfolio_stats_payload(
+        module_path=module_path,
+        df_trades=_df_tr,
+        total_return=tot_ret,
+        mdd=mdd,
+        trade_count=trade_count,
+        win_rate=win_rate,
+        pf_ev=pf_ev,
+        pf_payoff=pf_payoff,
+        final_eq=final_eq,
+        avg_exp=avg_exp,
+        max_exp=max_exp,
+        bm_ret=bm_ret,
+        bm_mdd=bm_mdd,
+        total_missed=total_missed,
+        total_missed_sells=total_missed_sells,
+        r_sq=r_sq,
+        m_win_rate=m_win_rate,
+        bm_r_sq=bm_r_sq,
+        bm_m_win_rate=bm_m_win_rate,
+        normal_trade_count=normal_trade_count,
+        extended_trade_count=extended_trade_count,
+        annual_trades=annual_trades,
+        reserved_buy_fill_rate=reserved_buy_fill_rate,
+        annual_return_pct=annual_return_pct,
+        bm_annual_return_pct=bm_annual_return_pct,
+        profile_stats=pf_profile,
+    )
 
-    return {
-        "module_path": module_path,
-        "total_return": tot_ret,
-        "mdd": mdd,
-        "trade_count": trade_count,
-        "win_rate": win_rate,
-        "pf_ev": pf_ev,
-        "pf_payoff": pf_payoff,
-        "final_eq": final_eq,
-        "avg_exp": avg_exp,
-        "max_exp": max_exp,
-        "bm_ret": bm_ret,
-        "bm_mdd": bm_mdd,
-        "total_missed": total_missed,
-        "total_missed_sells": total_missed_sells,
-        "r_sq": r_sq,
-        "m_win_rate": m_win_rate,
-        "bm_r_sq": bm_r_sq,
-        "bm_m_win_rate": bm_m_win_rate,
-        "normal_trade_count": normal_trade_count,
-        "extended_trade_count": extended_trade_count,
-        "annual_trades": annual_trades,
-        "reserved_buy_fill_rate": reserved_buy_fill_rate,
-        "annual_return_pct": annual_return_pct,
-        "bm_annual_return_pct": bm_annual_return_pct,
-        "portfolio_buy_rows": portfolio_buy_rows,
-        "portfolio_full_exit_rows": portfolio_full_exit_rows,
-        "portfolio_half_take_profit_rows": portfolio_half_take_profit_rows,
-        "portfolio_missed_buy_rows": portfolio_missed_buy_rows,
-        "portfolio_missed_sell_rows": portfolio_missed_sell_rows,
-        "portfolio_period_closeout_rows": portfolio_period_closeout_rows,
-        "portfolio_completed_trades": portfolio_completed_trades,
-    }
+
+# # (AI註: portfolio_sim 工具檢查改委派到通用 data_dir 版本，
+# # (AI註: 後續 synthetic 多檔案例也能共用，避免 validate 自己重做一套解析邏輯)
+def run_portfolio_sim_tool_check(ticker, file_path, params):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_df = pd.read_csv(file_path)
+        temp_csv_path = os.path.join(temp_dir, os.path.basename(file_path))
+        source_df.to_csv(temp_csv_path, index=False)
+
+        date_col = resolve_source_date_column(source_df, ticker)
+        parsed_dates = pd.to_datetime(source_df[date_col], errors="coerce")
+        min_year = parsed_dates.dt.year.min()
+        if pd.isna(min_year):
+            raise ValueError(f"{ticker}: 日期欄位 {date_col} 無任何可解析日期")
+
+        return run_portfolio_sim_tool_check_for_dir(
+            temp_dir,
+            params,
+            max_positions=1,
+            enable_rotation=False,
+            start_year=int(min_year),
+            benchmark_ticker=ticker,
+        )
 
 def run_scanner_tool_check(ticker, file_path, params):
     module, module_path = load_module_from_candidates(
@@ -548,6 +681,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         raise ValueError(f"{ticker}: pack_prepared_stock_data 後沒有任何有效日期")
 
     start_year = int(pd.Timestamp(sorted_dates[0]).year)
+    profile_stats = {}
 
     result = run_portfolio_timeline(
         all_dfs_fast=all_dfs_fast,
@@ -560,6 +694,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         benchmark_ticker=ticker,
         benchmark_data=fast_data,
         is_training=True,
+        profile_stats=profile_stats,
         verbose=False
     )
 
@@ -596,7 +731,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         bm_annual_return_pct,
     ) = result
 
-    return {
+    payload = {
         "total_return": total_return,
         "mdd": mdd,
         "trade_count": trade_count,
@@ -625,6 +760,8 @@ def run_single_ticker_portfolio_check(ticker, df, params):
         "standalone_logs": standalone_logs,
         "prep_df": prep_df,
     }
+    payload.update(extract_yearly_profile_fields(profile_stats))
+    return payload
 
 
 def run_debug_trade_log_check(ticker, df, params):
@@ -774,6 +911,9 @@ def validate_one_ticker(ticker, base_params):
     summary["single_trade_count"] = single_stats["trade_count"]
     summary["portfolio_trade_count"] = portfolio_stats["trade_count"]
     summary["open_position_exists"] = bool(single_stats["current_position"] > 0)
+    summary["has_extended_candidate_today"] = bool(scanner_ref_stats.get("extended_candidate_today") is not None)
+    summary["has_missed_buy"] = bool(single_stats["missed_buys"] > 0)
+    summary["portfolio_half_take_profit_rows"] = int(portfolio_sim_stats["portfolio_half_take_profit_rows"])
 
     add_check(results, "single_vs_portfolio", ticker, "asset_growth_vs_total_return",
               single_stats["asset_growth"], portfolio_stats["total_return"])
@@ -823,11 +963,19 @@ def validate_one_ticker(ticker, base_params):
     expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
     expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]
     expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)
+    expected_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["yearly_return_rows"])
+    expected_bm_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["bm_yearly_return_rows"])
 
     add_check(results, "single_vs_portfolio", ticker, "annual_trades", expected_annual_trades, portfolio_stats["annual_trades"])
     add_check(results, "single_vs_portfolio", ticker, "reserved_buy_fill_rate", expected_reserved_buy_fill_rate, portfolio_stats["reserved_buy_fill_rate"])
     add_check(results, "single_vs_portfolio", ticker, "annual_return_pct", expected_annual_return_pct, portfolio_stats["annual_return_pct"])
     add_check(results, "single_vs_portfolio", ticker, "bm_annual_return_pct", expected_bm_annual_return_pct, portfolio_stats["bm_annual_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "full_year_count", expected_full_year_metrics["full_year_count"], portfolio_stats["full_year_count"])
+    add_check(results, "single_vs_portfolio", ticker, "min_full_year_return_pct", expected_full_year_metrics["min_full_year_return_pct"], portfolio_stats["min_full_year_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "yearly_return_rows", portfolio_stats["yearly_return_rows"], portfolio_stats["yearly_return_rows"], note="年度報酬明細需保留完整列內容，供後續與 portfolio_sim 對照。")
+    add_check(results, "single_vs_portfolio", ticker, "bm_full_year_count", expected_bm_full_year_metrics["full_year_count"], portfolio_stats["bm_full_year_count"])
+    add_check(results, "single_vs_portfolio", ticker, "bm_min_full_year_return_pct", expected_bm_full_year_metrics["min_full_year_return_pct"], portfolio_stats["bm_min_full_year_return_pct"])
+    add_check(results, "single_vs_portfolio", ticker, "bm_yearly_return_rows", portfolio_stats["bm_yearly_return_rows"], portfolio_stats["bm_yearly_return_rows"], note="Benchmark 年度報酬明細需保留完整列內容，供後續與 portfolio_sim 對照。")
 
     add_check(results, "single_vs_portfolio", ticker, "win_rate",
               single_stats["win_rate"], portfolio_stats["win_rate"])
@@ -941,6 +1089,12 @@ def validate_one_ticker(ticker, base_params):
     add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate", portfolio_stats["reserved_buy_fill_rate"], portfolio_sim_stats["reserved_buy_fill_rate"])
     add_check(results, "portfolio_sim", ticker, "annual_return_pct", portfolio_stats["annual_return_pct"], portfolio_sim_stats["annual_return_pct"])
     add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct", portfolio_stats["bm_annual_return_pct"], portfolio_sim_stats["bm_annual_return_pct"])
+    add_check(results, "portfolio_sim", ticker, "full_year_count", portfolio_stats["full_year_count"], portfolio_sim_stats["full_year_count"])
+    add_check(results, "portfolio_sim", ticker, "min_full_year_return_pct", portfolio_stats["min_full_year_return_pct"], portfolio_sim_stats["min_full_year_return_pct"])
+    add_check(results, "portfolio_sim", ticker, "yearly_return_rows", portfolio_stats["yearly_return_rows"], portfolio_sim_stats["yearly_return_rows"])
+    add_check(results, "portfolio_sim", ticker, "bm_full_year_count", portfolio_stats["bm_full_year_count"], portfolio_sim_stats["bm_full_year_count"])
+    add_check(results, "portfolio_sim", ticker, "bm_min_full_year_return_pct", portfolio_stats["bm_min_full_year_return_pct"], portfolio_sim_stats["bm_min_full_year_return_pct"])
+    add_check(results, "portfolio_sim", ticker, "bm_yearly_return_rows", portfolio_stats["bm_yearly_return_rows"], portfolio_sim_stats["bm_yearly_return_rows"])
 
     expected_scanner_payload = build_expected_scanner_payload(scanner_ref_stats, scanner_params)
     expected_scanner_status = expected_scanner_payload["status"]
@@ -1165,19 +1319,392 @@ def validate_one_ticker(ticker, base_params):
             note="逐筆加總後的總已實現損益必須與核心 completed trades 一致。"
         )
 
-        results.append({
-            "ticker": ticker,
-            "module": "debug_trade_log",
-            "metric": "half_take_profit_rows",
-            "expected": "資訊欄位",
-            "actual": half_rows,
-            "abs_diff": None,
-            "passed": True,
-            "status": "PASS",
-            "note": "半倉停利筆數只供人工檢查，不直接對應 completed trades。"
-        })
+        add_check(
+            results,
+            "debug_trade_log",
+            ticker,
+            "half_take_profit_rows",
+            int(portfolio_sim_stats["portfolio_half_take_profit_rows"]),
+            half_rows,
+            note="debug 與 portfolio_sim 的半倉停利列數必須一致，避免半倉現金回收口徑漂移。"
+        )
 
     return results, summary
+
+
+def run_portfolio_core_check_for_dir(data_dir, params, *, max_positions, enable_rotation, start_year, benchmark_ticker):
+    csv_inputs, _duplicate_issue_lines = discover_unique_csv_inputs(data_dir)
+    if not csv_inputs:
+        raise ValueError(f"synthetic data_dir 無任何 CSV: {data_dir}")
+
+    all_dfs_fast = {}
+    all_trade_logs = {}
+    master_dates = set()
+
+    for ticker, file_path in csv_inputs:
+        raw_df = pd.read_csv(file_path)
+        min_rows_needed = get_required_min_rows(params)
+        df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+        prep_df, standalone_logs = prep_stock_data_and_trades(df, params)
+        fast_df = pack_prepared_stock_data(prep_df)
+        all_dfs_fast[ticker] = fast_df
+        all_trade_logs[ticker] = standalone_logs
+        master_dates.update(prep_df.index)
+
+    sorted_dates = sorted(master_dates)
+    if not sorted_dates:
+        raise ValueError(f"{data_dir}: synthetic prep 後沒有任何有效日期")
+
+    benchmark_data = all_dfs_fast.get(benchmark_ticker)
+    profile_stats = {}
+    result = run_portfolio_timeline(
+        all_dfs_fast=all_dfs_fast,
+        all_standalone_logs=all_trade_logs,
+        sorted_dates=sorted_dates,
+        start_year=start_year,
+        params=params,
+        max_positions=max_positions,
+        enable_rotation=enable_rotation,
+        benchmark_ticker=benchmark_ticker,
+        benchmark_data=benchmark_data,
+        is_training=False,
+        profile_stats=profile_stats,
+        verbose=False,
+    )
+
+    (
+        _df_eq,
+        _df_tr,
+        tot_ret,
+        mdd,
+        trade_count,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        extended_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+    ) = result
+
+    return build_portfolio_stats_payload(
+        module_path="core/v16_portfolio_engine.py",
+        df_trades=_df_tr,
+        total_return=tot_ret,
+        mdd=mdd,
+        trade_count=trade_count,
+        win_rate=win_rate,
+        pf_ev=pf_ev,
+        pf_payoff=pf_payoff,
+        final_eq=final_eq,
+        avg_exp=avg_exp,
+        max_exp=max_exp,
+        bm_ret=bm_ret,
+        bm_mdd=bm_mdd,
+        total_missed=total_missed,
+        total_missed_sells=total_missed_sells,
+        r_sq=r_sq,
+        m_win_rate=m_win_rate,
+        bm_r_sq=bm_r_sq,
+        bm_m_win_rate=bm_m_win_rate,
+        normal_trade_count=normal_trade_count,
+        extended_trade_count=extended_trade_count,
+        annual_trades=annual_trades,
+        reserved_buy_fill_rate=reserved_buy_fill_rate,
+        annual_return_pct=annual_return_pct,
+        bm_annual_return_pct=bm_annual_return_pct,
+        profile_stats=profile_stats,
+    )
+
+
+def add_portfolio_stats_equality_checks(results, module_name, ticker, expected_stats, actual_stats):
+    metric_names = [
+        "total_return", "mdd", "trade_count", "win_rate", "pf_ev", "pf_payoff",
+        "final_eq", "avg_exp", "max_exp", "bm_ret", "bm_mdd", "total_missed",
+        "total_missed_sells", "r_sq", "m_win_rate", "bm_r_sq", "bm_m_win_rate",
+        "normal_trade_count", "extended_trade_count", "annual_trades",
+        "reserved_buy_fill_rate", "annual_return_pct", "bm_annual_return_pct",
+        "full_year_count", "min_full_year_return_pct", "yearly_return_rows",
+        "bm_full_year_count", "bm_min_full_year_return_pct", "bm_yearly_return_rows",
+        "portfolio_buy_rows", "portfolio_full_exit_rows", "portfolio_half_take_profit_rows",
+        "portfolio_missed_buy_rows", "portfolio_missed_sell_rows", "portfolio_period_closeout_rows",
+    ]
+    for metric in metric_names:
+        add_check(results, module_name, ticker, metric, expected_stats[metric], actual_stats[metric])
+
+    add_check(results, module_name, ticker, "portfolio_completed_trade_count", len(expected_stats["portfolio_completed_trades"]), len(actual_stats["portfolio_completed_trades"]))
+    add_check(
+        results,
+        module_name,
+        ticker,
+        "portfolio_completed_trade_exit_dates",
+        [trade["exit_date"] for trade in expected_stats["portfolio_completed_trades"]],
+        [trade["exit_date"] for trade in actual_stats["portfolio_completed_trades"]],
+    )
+    add_check(
+        results,
+        module_name,
+        ticker,
+        "portfolio_completed_trade_pnl_sequence",
+        [trade["total_pnl"] for trade in expected_stats["portfolio_completed_trades"]],
+        [trade["total_pnl"] for trade in actual_stats["portfolio_completed_trades"]],
+    )
+
+
+def build_synthetic_half_tp_full_year_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    df = build_synthetic_baseline_frame("2024-01-01", 320)
+    trigger_idx = 270
+    set_synthetic_bar(df, trigger_idx, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, trigger_idx + 1, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df, trigger_idx + 2, open_price=104.3, high_price=107.5, low_price=104.0, close_price=106.5)
+    set_synthetic_bar(df, trigger_idx + 3, open_price=106.5, high_price=107.0, low_price=106.1, close_price=106.8)
+    set_synthetic_bar(df, trigger_idx + 4, open_price=106.6, high_price=107.1, low_price=106.2, close_price=106.9)
+    for idx in range(trigger_idx + 5, len(df)):
+        base_close = 106.8 + (idx - (trigger_idx + 5)) * 0.01
+        set_synthetic_bar(df, idx, open_price=base_close - 0.2, high_price=base_close + 0.3, low_price=base_close - 0.4, close_price=base_close)
+    return {
+        "case_id": "SYNTH_HALF_TP_FULL_YEAR",
+        "params": params,
+        "frames": {"9201": df},
+        "benchmark_ticker": "9201",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9201",
+    }
+
+
+def build_synthetic_extended_miss_buy_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    df = build_synthetic_baseline_frame("2024-01-01", 56)
+    set_synthetic_bar(df, 54, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, 55, open_price=103.8, high_price=104.0, low_price=103.6, close_price=103.9, volume=0)
+    return {
+        "case_id": "SYNTH_EXTENDED_MISS_BUY",
+        "params": params,
+        "frames": {"9301": df},
+        "benchmark_ticker": "9301",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9301",
+    }
+
+
+def build_synthetic_competing_candidates_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    def build_frame():
+        df = build_synthetic_baseline_frame("2024-01-01", 60)
+        set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+        set_synthetic_bar(df, 56, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+        set_synthetic_bar(df, 57, open_price=104.8, high_price=105.3, low_price=104.4, close_price=105.0)
+        set_synthetic_bar(df, 58, open_price=105.3, high_price=105.8, low_price=105.0, close_price=105.5)
+        set_synthetic_bar(df, 59, open_price=105.8, high_price=106.3, low_price=105.6, close_price=106.0)
+        return df
+
+    return {
+        "case_id": "SYNTH_COMPETING_CANDIDATES",
+        "params": params,
+        "frames": {"9401": build_frame(), "9402": build_frame()},
+        "benchmark_ticker": "9401",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9402",
+    }
+
+
+def build_synthetic_same_day_sell_block_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    df_a = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df_a, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_a, 56, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_a, 57, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5)
+    set_synthetic_bar(df_a, 58, open_price=101.4, high_price=101.9, low_price=101.1, close_price=101.6)
+    set_synthetic_bar(df_a, 59, open_price=101.5, high_price=102.0, low_price=101.2, close_price=101.7)
+
+    df_b = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df_b, 56, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_b, 57, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_b, 58, open_price=104.0, high_price=104.4, low_price=103.7, close_price=103.9)
+    set_synthetic_bar(df_b, 59, open_price=103.8, high_price=104.1, low_price=103.5, close_price=103.7)
+
+    return {
+        "case_id": "SYNTH_SAME_DAY_SELL_BLOCK",
+        "params": params,
+        "frames": {"9501": df_a, "9502": df_b},
+        "benchmark_ticker": "9501",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9501",
+    }
+
+
+def validate_synthetic_half_tp_full_year_case(base_params):
+    case = build_synthetic_half_tp_full_year_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_half_tp_full_year", case["case_id"], core_stats, sim_stats)
+        add_check(results, "synthetic_half_tp_full_year", case["case_id"], "expected_half_take_profit_rows", 1, sim_stats["portfolio_half_take_profit_rows"])
+        add_check(results, "synthetic_half_tp_full_year", case["case_id"], "has_yearly_return_rows", True, bool(sim_stats["yearly_return_rows"]))
+
+        primary_path = os.path.join(temp_dir, f"{case['primary_ticker']}.csv")
+        debug_raw_df = pd.read_csv(primary_path)
+        debug_input_df, _debug_sanitize_stats = sanitize_ohlcv_dataframe(
+            debug_raw_df,
+            case["primary_ticker"],
+            min_rows=get_required_min_rows(case["params"]),
+        )
+        debug_df, _debug_module_path = run_debug_trade_log_check(case["primary_ticker"], debug_input_df, case["params"])
+        half_rows = int((debug_df["動作"].fillna("") == "半倉停利").sum()) if debug_df is not None and len(debug_df) > 0 else 0
+        add_check(results, "synthetic_half_tp_full_year", case["case_id"], "debug_half_take_profit_rows", 1, half_rows)
+
+    summary["half_take_profit_rows"] = 1
+    summary["full_year_count"] = True
+    return results, summary
+
+
+def validate_synthetic_extended_miss_buy_case(base_params):
+    case = build_synthetic_extended_miss_buy_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_extended_miss_buy", case["case_id"], core_stats, sim_stats)
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_trade_count", 0, sim_stats["trade_count"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_missed_buy_count", 1, sim_stats["total_missed"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "expected_df_trades_missed_buy_rows", 1, sim_stats["portfolio_missed_buy_rows"])
+
+        primary_ticker = case["primary_ticker"]
+        primary_path = os.path.join(temp_dir, f"{primary_ticker}.csv")
+        scanner_ref_stats = run_scanner_reference_check(primary_ticker, primary_path, case["params"])
+        scanner_result, _scanner_module_path = run_scanner_tool_check(primary_ticker, primary_path, case["params"])
+        expected_payload = build_expected_scanner_payload(scanner_ref_stats, case["params"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_expected_status", "extended", expected_payload["status"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_tool_status", "extended", None if scanner_result is None else scanner_result["status"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "has_extended_candidate_today", True, bool(scanner_ref_stats.get("extended_candidate_today") is not None))
+
+    summary["extended_candidate"] = True
+    summary["missed_buy"] = True
+    return results, summary
+
+
+def validate_synthetic_competing_candidates_case(base_params):
+    case = build_synthetic_competing_candidates_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_competing_candidates", case["case_id"], core_stats, sim_stats)
+
+        buy_df = sim_stats["df_trades"]
+        buy_rows = buy_df[buy_df["Type"].fillna("").str.startswith("買進")].copy() if not buy_df.empty else pd.DataFrame()
+        selected_ticker = buy_rows.iloc[0]["Ticker"] if len(buy_rows) > 0 else None
+        rejected_buy_count = int(((buy_df["Ticker"] == "9401") & buy_df["Type"].fillna("").str.startswith("買進")).sum()) if not buy_df.empty else 0
+        add_check(results, "synthetic_competing_candidates", case["case_id"], "selected_buy_row_count", 1, len(buy_rows))
+        add_check(results, "synthetic_competing_candidates", case["case_id"], "selected_ticker_when_sort_ties", "9402", selected_ticker)
+        add_check(results, "synthetic_competing_candidates", case["case_id"], "non_selected_ticker_has_no_buy_row", 0, rejected_buy_count)
+
+    summary["selected_ticker"] = "9402"
+    return results, summary
+
+
+def validate_synthetic_same_day_sell_block_case(base_params):
+    case = build_synthetic_same_day_sell_block_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_same_day_sell_block", case["case_id"], core_stats, sim_stats)
+
+        df_trades = sim_stats["df_trades"]
+        sell_rows = df_trades[(df_trades["Ticker"] == "9501") & (df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"]))].copy() if not df_trades.empty else pd.DataFrame()
+        sell_date = sell_rows.iloc[0]["Date"] if len(sell_rows) > 0 else None
+        blocked_same_day_buy = bool(((df_trades["Date"] == sell_date) & (df_trades["Ticker"] == "9502") & df_trades["Type"].fillna("").str.startswith("買進")).any()) if sell_date is not None else None
+        later_buy_rows = df_trades[(df_trades["Ticker"] == "9502") & df_trades["Type"].fillna("").str.startswith("買進")].copy() if not df_trades.empty else pd.DataFrame()
+        later_buy_date = later_buy_rows.iloc[0]["Date"] if len(later_buy_rows) > 0 else None
+
+        add_check(results, "synthetic_same_day_sell_block", case["case_id"], "has_sell_row", True, sell_date is not None)
+        add_check(results, "synthetic_same_day_sell_block", case["case_id"], "same_day_sell_blocks_new_buy", False, blocked_same_day_buy)
+        add_check(results, "synthetic_same_day_sell_block", case["case_id"], "later_reentry_is_next_day_or_after", True, (later_buy_date is not None and later_buy_date > sell_date) if sell_date is not None else False)
+
+    summary["same_day_sell_block"] = True
+    return results, summary
+
+
+def run_synthetic_consistency_suite(base_params):
+    all_results = []
+    summaries = []
+    validators = [
+        validate_synthetic_half_tp_full_year_case,
+        validate_synthetic_extended_miss_buy_case,
+        validate_synthetic_competing_candidates_case,
+        validate_synthetic_same_day_sell_block_case,
+    ]
+
+    for validator in validators:
+        results, summary = validator(base_params)
+        all_results.extend(results)
+        summaries.append(summary)
+
+    return all_results, summaries
+
+
 
 
 def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp):
@@ -1333,6 +1860,27 @@ def main():
 
     print(" " * 160, end="\r")
     print()
+
+    print("開始執行 synthetic coverage suite...")
+    try:
+        synthetic_results, synthetic_summaries = run_synthetic_consistency_suite(base_params)
+        all_results.extend(synthetic_results)
+        summaries.extend(synthetic_summaries)
+    except Exception as e:
+        add_fail_result(
+            all_results,
+            "synthetic_suite",
+            "SYNTHETIC_SUITE",
+            "runtime",
+            "suite runs successfully",
+            format_exception_summary(e),
+            "synthetic coverage suite 失敗時不可靜默略過，否則 miss buy / half TP / 多檔互動覆蓋會出現假象。"
+        )
+        summaries.append({
+            "ticker": "SYNTHETIC_SUITE",
+            "validation_runtime": f"FAIL: {format_exception_summary(e)}",
+            "synthetic": True,
+        })
 
     df_results = pd.DataFrame(all_results)
     df_summary = pd.DataFrame(summaries)
