@@ -1585,6 +1585,66 @@ def build_synthetic_unexecutable_half_tp_case(base_params):
     }
 
 
+def build_synthetic_rotation_t_plus_one_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    df_weak = build_synthetic_baseline_frame("2024-01-01", 140)
+    set_synthetic_bar(df_weak, 20, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_weak, 21, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_weak, 22, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5)
+    set_synthetic_bar(df_weak, 23, open_price=101.4, high_price=101.9, low_price=101.1, close_price=101.6)
+
+    set_synthetic_bar(df_weak, 70, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_weak, 71, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    for idx in range(72, len(df_weak)):
+        set_synthetic_bar(df_weak, idx, open_price=104.2, high_price=104.5, low_price=103.9, close_price=104.2)
+
+    df_strong = build_synthetic_baseline_frame("2024-01-01", 140)
+    winning_bars = {
+        20: (103.0, 104.5, 102.8, 104.0),
+        21: (103.8, 105.0, 103.4, 104.2),
+        22: (104.05535005017578, 105.7658272705768, 103.9476570515015, 105.31105462881263),
+        23: (105.19304226445999, 105.8322019147044, 104.84077547539177, 105.58924143223415),
+        24: (105.59205354572458, 106.13076304128805, 105.04437370111694, 105.78073381761503),
+        25: (105.63103762243249, 106.23421634010937, 105.1143070306091, 105.4853284286143),
+        26: (105.72662799887804, 107.34936535415748, 104.99919808701634, 106.7596940685349),
+        27: (106.87008442768416, 107.19759311749098, 105.99576001905243, 106.53506299183323),
+        28: (106.6015951758995, 106.77584050530604, 106.27455989056097, 106.71541978046501),
+        29: (106.934605737128, 108.57791123422221, 106.42921391453338, 107.99794741355976),
+        30: (107.70637243365817, 108.48096410976757, 107.3199586072383, 107.64917818953965),
+        31: (107.75007011027877, 108.6877340308841, 107.15427120325072, 108.44843990554953),
+        32: (108.29478643168181, 108.74458662542872, 106.93073528853994, 107.45129695383561),
+        33: (107.491803398208, 107.9735796931008, 107.14966760580265, 107.26430786070408),
+        34: (107.23308960356542, 107.84483201087816, 106.3789400006742, 106.86084768224212),
+        35: (107.12054797677827, 107.05288044504564, 105.75719784311111, 106.06196222862346),
+    }
+    for idx, (o, h, l, c) in winning_bars.items():
+        set_synthetic_bar(df_strong, idx, open_price=o, high_price=h, low_price=l, close_price=c)
+
+    for idx in range(36, 100):
+        set_synthetic_bar(df_strong, idx, open_price=100.0, high_price=100.4, low_price=99.6, close_price=100.0)
+
+    set_synthetic_bar(df_strong, 100, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_strong, 101, open_price=103.8, high_price=104.0, low_price=103.7, close_price=103.9, volume=0)
+    set_synthetic_bar(df_strong, 102, open_price=103.9, high_price=104.1, low_price=103.8, close_price=104.0)
+    set_synthetic_bar(df_strong, 103, open_price=104.2, high_price=104.6, low_price=104.0, close_price=104.4)
+    set_synthetic_bar(df_strong, 104, open_price=104.3, high_price=104.7, low_price=104.1, close_price=104.4)
+    for idx in range(105, len(df_strong)):
+        set_synthetic_bar(df_strong, idx, open_price=104.4, high_price=104.7, low_price=104.2, close_price=104.4)
+
+    return {
+        "case_id": "SYNTH_ROTATION_T_PLUS_ONE",
+        "params": params,
+        "frames": {"9701": df_weak, "9702": df_strong},
+        "benchmark_ticker": "9701",
+        "max_positions": 1,
+        "enable_rotation": True,
+        "start_year": 2024,
+        "weak_ticker": "9701",
+        "strong_ticker": "9702",
+    }
+
+
 def build_synthetic_param_guardrail_case(base_params):
     return {
         "case_id": "SYNTH_PARAM_GUARDRAIL",
@@ -1778,6 +1838,110 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
     return results, summary
 
 
+def validate_synthetic_rotation_t_plus_one_case(base_params):
+    case = build_synthetic_rotation_t_plus_one_case(base_params)
+    results = []
+    summary = {"ticker": case["case_id"], "synthetic": True}
+
+    rotation_sell_type = "汰弱賣出(Open, T+1再評估買進)"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir,
+            case["params"],
+            max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"],
+            start_year=case["start_year"],
+            benchmark_ticker=case["benchmark_ticker"],
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir,
+            case["params"],
+            max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"],
+            start_year=case["start_year"],
+            benchmark_ticker=case["benchmark_ticker"],
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_rotation_t_plus_one", case["case_id"], core_stats, sim_stats)
+
+        df_trades = sim_stats["df_trades"].copy()
+        if df_trades.empty:
+            add_fail_result(
+                results,
+                "synthetic_rotation_t_plus_one",
+                case["case_id"],
+                "df_trades_exists",
+                "non-empty",
+                "empty",
+                "rotation synthetic case 應產生 trade history。"
+            )
+            return results, summary
+
+        rotation_rows = df_trades[
+            (df_trades["Ticker"] == case["weak_ticker"]) &
+            (df_trades["Type"].fillna("") == rotation_sell_type)
+        ].copy()
+        rotation_sell_date = rotation_rows.iloc[0]["Date"] if len(rotation_rows) > 0 else None
+
+        same_day_reentry = bool(
+            (
+                (df_trades["Date"] == rotation_sell_date) &
+                (df_trades["Ticker"] == case["strong_ticker"]) &
+                df_trades["Type"].fillna("").str.startswith("買進")
+            ).any()
+        ) if rotation_sell_date is not None else False
+
+        post_rotation_df = (
+            df_trades[pd.to_datetime(df_trades["Date"]) > pd.to_datetime(rotation_sell_date)].copy()
+            if rotation_sell_date is not None else pd.DataFrame()
+        )
+
+        extended_miss_rows = post_rotation_df[
+            (post_rotation_df["Ticker"] == case["strong_ticker"]) &
+            (post_rotation_df["Type"].fillna("") == "錯失買進(延續候選)")
+        ].copy()
+        extended_miss_date = extended_miss_rows.iloc[0]["Date"] if len(extended_miss_rows) > 0 else None
+
+        delayed_buy_rows = post_rotation_df[
+            (post_rotation_df["Ticker"] == case["strong_ticker"]) &
+            post_rotation_df["Type"].fillna("").str.startswith("買進")
+        ].copy()
+        delayed_buy_date = delayed_buy_rows.iloc[0]["Date"] if len(delayed_buy_rows) > 0 else None
+
+        add_check(results, "synthetic_rotation_t_plus_one", case["case_id"], "rotation_sell_row_count", 1, len(rotation_rows))
+        add_check(results, "synthetic_rotation_t_plus_one", case["case_id"], "rotation_same_day_reentry_blocked", False, same_day_reentry)
+        add_check(results, "synthetic_rotation_t_plus_one", case["case_id"], "rotation_has_post_sell_extended_miss_buy", True, extended_miss_date is not None)
+        add_check(
+            results,
+            "synthetic_rotation_t_plus_one",
+            case["case_id"],
+            "rotation_extended_miss_occurs_after_sell",
+            True,
+            (extended_miss_date is not None and rotation_sell_date is not None and extended_miss_date > rotation_sell_date)
+        )
+        add_check(
+            results,
+            "synthetic_rotation_t_plus_one",
+            case["case_id"],
+            "rotation_delayed_buy_occurs_after_sell",
+            True,
+            (delayed_buy_date is not None and rotation_sell_date is not None and delayed_buy_date > rotation_sell_date)
+        )
+        add_check(
+            results,
+            "synthetic_rotation_t_plus_one",
+            case["case_id"],
+            "rotation_delayed_buy_occurs_after_extended_miss",
+            True,
+            (delayed_buy_date is not None and extended_miss_date is not None and delayed_buy_date > extended_miss_date)
+        )
+
+    summary["rotation_sell"] = True
+    summary["delayed_reentry"] = True
+    return results, summary
+
+
 def validate_synthetic_param_guardrail_case(base_params):
     case = build_synthetic_param_guardrail_case(base_params)
     results = []
@@ -1886,6 +2050,7 @@ def run_synthetic_consistency_suite(base_params):
         validate_synthetic_competing_candidates_case,
         validate_synthetic_same_day_sell_block_case,
         validate_synthetic_unexecutable_half_tp_case,
+        validate_synthetic_rotation_t_plus_one_case,
         validate_synthetic_param_guardrail_case,
     ]
 
