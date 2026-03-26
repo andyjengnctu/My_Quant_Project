@@ -36,6 +36,26 @@ VALIDATE_PROGRESS_EVERY = 25
 MAX_CONSOLE_FAIL_PREVIEW = 20
 
 
+VALIDATION_RECOVERABLE_EXCEPTIONS = (
+    AssertionError,
+    ArithmeticError,
+    AttributeError,
+    ImportError,
+    LookupError,
+    NameError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    pd.errors.EmptyDataError,
+    pd.errors.ParserError,
+)
+
+MODULE_LOAD_RECOVERABLE_EXCEPTIONS = VALIDATION_RECOVERABLE_EXCEPTIONS + (
+    SyntaxError,
+)
+
+
 CSV_PATH_CACHE = None
 CSV_DUPLICATE_ISSUES = None
 CSV_PATH_CACHE_DATA_DIR = None
@@ -647,7 +667,7 @@ def load_module_from_candidates(cache_key, candidate_files, required_attrs):
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
-        except Exception as e:
+        except MODULE_LOAD_RECOVERABLE_EXCEPTIONS as e:
             rejected_paths.append(f"{module_path} -> 載入失敗: {type(e).__name__}: {e}")
             continue
 
@@ -899,7 +919,7 @@ def validate_one_ticker(ticker, base_params):
     downloader_error = None
     try:
         downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
-    except Exception as e:
+    except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
         downloader_error = f"{type(e).__name__}: {e}"
     debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
 
@@ -2433,7 +2453,7 @@ def main():
             results, summary = validate_one_ticker(ticker, base_params)
             all_results.extend(results)
             summaries.append(summary)
-        except Exception as e:
+        except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
             if is_insufficient_data_error(e):
                 add_skip_result(
                     all_results,
@@ -2486,7 +2506,7 @@ def main():
         synthetic_results, synthetic_summaries = run_synthetic_consistency_suite(base_params)
         all_results.extend(synthetic_results)
         summaries.extend(synthetic_summaries)
-    except Exception as e:
+    except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
         add_fail_result(
             all_results,
             "synthetic_suite",
