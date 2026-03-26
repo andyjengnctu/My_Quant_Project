@@ -2,7 +2,7 @@ import json
 import os
 from dataclasses import fields
 
-from core.v16_config import V16StrategyParams
+from core.v16_config import V16StrategyParams, strategy_params_to_dict, validate_strategy_param_ranges
 from core.v16_log_utils import format_exception_summary
 
 
@@ -79,36 +79,8 @@ def _validate_param_payload(data):
         raise ValueError(f"參數檔缺少必要欄位: {missing_keys}")
 
 
-def _validate_param_ranges(coerced_values):
-    def ensure(field_name, condition, rule_text):
-        if not condition:
-            raise ValueError(f"參數 {field_name} 驗證失敗: {rule_text}，收到 {coerced_values[field_name]!r}")
-
-    ensure('high_len', coerced_values['high_len'] >= 1, '需 >= 1')
-    ensure('atr_len', coerced_values['atr_len'] >= 1, '需 >= 1')
-    ensure('atr_buy_tol', coerced_values['atr_buy_tol'] >= 0.0, '需 >= 0')
-    ensure('atr_times_init', coerced_values['atr_times_init'] > 0.0, '需 > 0')
-    ensure('atr_times_trail', coerced_values['atr_times_trail'] > 0.0, '需 > 0')
-    ensure('tp_percent', 0.0 <= coerced_values['tp_percent'] < 1.0, '需滿足 0 <= tp_percent < 1')
-    ensure('bb_len', coerced_values['bb_len'] >= 1, '需 >= 1')
-    ensure('bb_mult', coerced_values['bb_mult'] > 0.0, '需 > 0')
-    ensure('kc_len', coerced_values['kc_len'] >= 1, '需 >= 1')
-    ensure('kc_mult', coerced_values['kc_mult'] > 0.0, '需 > 0')
-    ensure('vol_short_len', coerced_values['vol_short_len'] >= 1, '需 >= 1')
-    ensure('vol_long_len', coerced_values['vol_long_len'] >= 1, '需 >= 1')
-    ensure('vol_long_len', coerced_values['vol_long_len'] >= coerced_values['vol_short_len'], '需 >= vol_short_len')
-    ensure('initial_capital', coerced_values['initial_capital'] > 0.0, '需 > 0')
-    ensure('fixed_risk', 0.0 < coerced_values['fixed_risk'] <= 1.0, '需滿足 0 < fixed_risk <= 1')
-    ensure('buy_fee', coerced_values['buy_fee'] >= 0.0, '需 >= 0')
-    ensure('sell_fee', coerced_values['sell_fee'] >= 0.0, '需 >= 0')
-    ensure('tax_rate', coerced_values['tax_rate'] >= 0.0, '需 >= 0')
-    ensure('min_fee', coerced_values['min_fee'] >= 0.0, '需 >= 0')
-    ensure('min_history_trades', coerced_values['min_history_trades'] >= 0, '需 >= 0')
-    ensure('min_history_win_rate', 0.0 <= coerced_values['min_history_win_rate'] <= 1.0, '需滿足 0 <= min_history_win_rate <= 1')
-
-
 def params_to_json_dict(params):
-    return {field_name: getattr(params, field_name) for field_name in PARAM_FIELD_NAMES}
+    return strategy_params_to_dict(params)
 
 
 def build_params_from_mapping(data):
@@ -120,7 +92,7 @@ def build_params_from_mapping(data):
             data[field_name],
             PARAM_FIELD_TYPES[field_name],
         )
-    _validate_param_ranges(coerced_values)
+    validate_strategy_param_ranges(coerced_values)
     return V16StrategyParams(**coerced_values)
 
 

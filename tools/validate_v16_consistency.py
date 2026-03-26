@@ -1808,7 +1808,28 @@ def validate_synthetic_param_guardrail_case(base_params):
         except ValueError as e:
             add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
 
-    summary["guardrail_cases"] = len(invalid_cases)
+        try:
+            V16StrategyParams(**payload)
+            add_fail_result(
+                results,
+                "synthetic_param_guardrail",
+                case["case_id"],
+                f"direct_dataclass_{metric_name}",
+                f"ValueError containing {expected_field}",
+                "loaded_ok",
+                "直接建立 V16StrategyParams 也不應繞過 guardrail。"
+            )
+        except ValueError as e:
+            add_check(
+                results,
+                "synthetic_param_guardrail",
+                case["case_id"],
+                f"direct_dataclass_{metric_name}",
+                True,
+                expected_field in str(e)
+            )
+
+    summary["guardrail_cases"] = len(invalid_cases) * 2
     return results, summary
 
 

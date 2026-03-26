@@ -1,5 +1,5 @@
 # core/v16_config.py
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 # ==========================================
 # 🌟 全域戰略切換開關 (System-Wide Strategy Switches)
@@ -34,41 +34,80 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40    # 權益曲線最小 R² 門檻，要求整
 # # (AI註: 僅影響顯示，不改實際排序與優化邏輯)
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
+
+# # (AI註: 單一真理來源 - 直接建立 dataclass、JSON 載入、optimizer 固定覆寫都共用同一套數值 guardrail)
+def validate_strategy_param_ranges(param_values):
+    def ensure(field_name, condition, rule_text):
+        if not condition:
+            raise ValueError(f"參數 {field_name} 驗證失敗: {rule_text}，收到 {param_values[field_name]!r}")
+
+    ensure('high_len', param_values['high_len'] >= 1, '需 >= 1')
+    ensure('atr_len', param_values['atr_len'] >= 1, '需 >= 1')
+    ensure('atr_buy_tol', param_values['atr_buy_tol'] >= 0.0, '需 >= 0')
+    ensure('atr_times_init', param_values['atr_times_init'] > 0.0, '需 > 0')
+    ensure('atr_times_trail', param_values['atr_times_trail'] > 0.0, '需 > 0')
+    ensure('tp_percent', 0.0 <= param_values['tp_percent'] < 1.0, '需滿足 0 <= tp_percent < 1')
+    ensure('bb_len', param_values['bb_len'] >= 1, '需 >= 1')
+    ensure('bb_mult', param_values['bb_mult'] > 0.0, '需 > 0')
+    ensure('kc_len', param_values['kc_len'] >= 1, '需 >= 1')
+    ensure('kc_mult', param_values['kc_mult'] > 0.0, '需 > 0')
+    ensure('vol_short_len', param_values['vol_short_len'] >= 1, '需 >= 1')
+    ensure('vol_long_len', param_values['vol_long_len'] >= 1, '需 >= 1')
+    ensure('vol_long_len', param_values['vol_long_len'] >= param_values['vol_short_len'], '需 >= vol_short_len')
+    ensure('initial_capital', param_values['initial_capital'] > 0.0, '需 > 0')
+    ensure('fixed_risk', 0.0 < param_values['fixed_risk'] <= 1.0, '需滿足 0 < fixed_risk <= 1')
+    ensure('buy_fee', param_values['buy_fee'] >= 0.0, '需 >= 0')
+    ensure('sell_fee', param_values['sell_fee'] >= 0.0, '需 >= 0')
+    ensure('tax_rate', param_values['tax_rate'] >= 0.0, '需 >= 0')
+    ensure('min_fee', param_values['min_fee'] >= 0.0, '需 >= 0')
+    ensure('min_history_trades', param_values['min_history_trades'] >= 0, '需 >= 0')
+    ensure('min_history_win_rate', 0.0 <= param_values['min_history_win_rate'] <= 1.0, '需滿足 0 <= min_history_win_rate <= 1')
+    return param_values
+
+
 @dataclass
 class V16StrategyParams:
     # 1. 核心指標參數
-    high_len: int = 201              
-    atr_len: int = 14                
-    
+    high_len: int = 201
+    atr_len: int = 14
+
     # 2. 停損停利與進場風控
-    atr_buy_tol: float = 1.5         
-    atr_times_init: float = 2.0      
-    atr_times_trail: float = 3.5     
+    atr_buy_tol: float = 1.5
+    atr_times_init: float = 2.0
+    atr_times_trail: float = 3.5
     tp_percent: float = 0.5
 
     # 3. 三大濾網開關與參數
     use_bb: bool = True
     bb_len: int = 20
     bb_mult: float = 2.0
-    
+
     use_kc: bool = False
     kc_len: int = 20
     kc_mult: float = 2.0
-    
+
     use_vol: bool = True
     vol_short_len: int = 5
     vol_long_len: int = 19
 
     # 4. 資金管理參數
-    initial_capital: float = 1000000    
-    fixed_risk: float = 0.01            
-    buy_fee: float = 0.001425 * 0.28    
-    sell_fee: float = 0.001425 * 0.28   
-    tax_rate: float = 0.003             
-    min_fee: float = 20                 
-    use_compounding: bool = True        
+    initial_capital: float = 1000000
+    fixed_risk: float = 0.01
+    buy_fee: float = 0.001425 * 0.28
+    sell_fee: float = 0.001425 * 0.28
+    tax_rate: float = 0.003
+    min_fee: float = 20
+    use_compounding: bool = True
 
     # 5. 歷史績效濾網 (AI 將接管這些設定)
-    min_history_trades: int = 0         
-    min_history_ev: float = 0.0         
+    min_history_trades: int = 0
+    min_history_ev: float = 0.0
     min_history_win_rate: float = 0.30
+
+    def __post_init__(self):
+        validate_strategy_param_ranges(strategy_params_to_dict(self))
+
+
+# # (AI註: 統一由 dataclass 欄位快照成 dict，避免 params_io / optimizer 各自手抄欄位)
+def strategy_params_to_dict(params):
+    return {field.name: getattr(params, field.name) for field in fields(V16StrategyParams)}

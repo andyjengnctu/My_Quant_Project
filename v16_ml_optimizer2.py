@@ -748,14 +748,23 @@ if __name__ == "__main__":
             print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
 
     if N_TRIALS == 0:
-        try:
-            if study.best_value is not None and study.best_value > -9000:
-                best_params_payload = build_best_params_payload_from_trial(study.best_trial)
-                with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
-                    json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
-                print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
-            else: print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")
-        except ValueError: print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
+        completed_trials = [trial for trial in study.trials if trial.value is not None]
+        if len(study.trials) == 0:
+            print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
+        elif not completed_trials:
+            print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無已完成紀錄，無法匯出。{C_RESET}\n")
+        else:
+            try:
+                best_trial = study.best_trial
+                if best_trial.value is not None and best_trial.value > -9000:
+                    best_params_payload = build_best_params_payload_from_trial(best_trial)
+                    with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
+                        json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
+                    print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
+                else:
+                    print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")
+            except ValueError as e:
+                print(f"\n{C_YELLOW}⚠️ 匯出最佳參數失敗: {type(e).__name__}: {e}{C_RESET}\n")
     else:
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         try:
