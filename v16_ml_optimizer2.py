@@ -47,13 +47,23 @@ warnings.filterwarnings(
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-os.makedirs("outputs", exist_ok=True)
-os.makedirs("models", exist_ok=True)
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
+DB_FILE_PATH = os.path.join(MODELS_DIR, "v16_portfolio_ai_10pos_overnight.db")
+
+
+# # (AI註: 將目錄建立延後到實際執行期，避免被 import 時污染呼叫端工作目錄)
+def ensure_runtime_dirs():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
 
 TRAIN_MAX_POSITIONS = 10         
 TRAIN_START_YEAR = 2015         
 TRAIN_ENABLE_ROTATION = False   
-DATA_DIR = "tw_stock_data_vip"
 RAW_DATA_CACHE = {}             
 CURRENT_SESSION_TRIAL, N_TRIALS = 0, 0  
 # # (AI註: Windows / Python 3.14 下 ProcessPool + 大量 dataframe IPC 容易不穩，先保守降平行度)
@@ -70,8 +80,8 @@ OPTIMIZER_PREP_SUMMARY = {
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
-PROFILE_CSV_PATH = os.path.join("outputs", f"optimizer_profile_{OPTIMIZER_SESSION_TS}.csv")
-PROFILE_SUMMARY_PATH = os.path.join("outputs", f"optimizer_profile_summary_{OPTIMIZER_SESSION_TS}.json")
+PROFILE_CSV_PATH = os.path.join(OUTPUT_DIR, f"optimizer_profile_{OPTIMIZER_SESSION_TS}.csv")
+PROFILE_SUMMARY_PATH = os.path.join(OUTPUT_DIR, f"optimizer_profile_summary_{OPTIMIZER_SESSION_TS}.json")
 PROFILE_ROWS = []
 
 # # (AI註: 問題6 - optimizer 搜尋空間與資料最低長度共用單一常數，避免 raw cache 與 trial worker 各自為政)
@@ -121,6 +131,7 @@ def print_optimizer_prep_summary():
 def init_profile_output_files():
     if not ENABLE_OPTIMIZER_PROFILING:
         return
+    ensure_runtime_dirs()
     with open(PROFILE_CSV_PATH, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
         writer.writeheader()
@@ -275,7 +286,7 @@ def load_all_raw_data():
     )
 
     if load_issues:
-        issue_path = write_issue_log("optimizer_load_issues", load_issues)
+        issue_path = write_issue_log("optimizer_load_issues", load_issues, log_dir=OUTPUT_DIR)
         print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入: {issue_path}{C_RESET}")
 
 def worker_prep_data(ticker, df, params):
@@ -649,7 +660,7 @@ if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    load_all_raw_data(); db_file = "models/v16_portfolio_ai_10pos_overnight.db"; DB_NAME = f"sqlite:///{db_file}"
+    ensure_runtime_dirs(); load_all_raw_data(); db_file = DB_FILE_PATH; DB_NAME = f"sqlite:///{db_file}"
     init_profile_output_files()
     if ENABLE_OPTIMIZER_PROFILING:
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
@@ -695,7 +706,7 @@ if __name__ == "__main__":
         try:
             if study.best_value is not None and study.best_value > -9000:
                 best_params_payload = params_to_json_dict(V16StrategyParams(**study.best_params, use_compounding=True))
-                with open("models/v16_best_params.json", "w", encoding="utf-8") as f:
+                with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
                     json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
                 print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
             else: print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")

@@ -28,6 +28,7 @@ def calc_curve_stats(eq_list):
                 if np.std(log_eq) > 0 and len(x_valid) > 1:
                     r_matrix = np.corrcoef(x_valid, log_eq)
                     r_squared = r_matrix[0, 1] ** 2 if not np.isnan(r_matrix[0, 1]) else 0.0
+    if len(eq_list) > 1:
         eq_series = pd.Series(eq_list)
         monthly_rets = eq_series.pct_change().dropna()
         if len(monthly_rets) > 0:
@@ -404,7 +405,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     normal_trade_count, extended_trade_count = 0, 0
     peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
-    monthly_equities, bm_monthly_equities = [], []
+    monthly_equities, bm_monthly_equities = [initial_capital], []
     yesterday_equity = initial_capital
     year_start_equity, year_end_equity = {}, {}
     year_first_sim_date, year_last_sim_date = {}, {}
@@ -418,6 +419,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         benchmark_start_price, benchmark_anchor_date = get_fast_close_on_or_before(benchmark_data, sorted_dates[start_idx])
         if benchmark_start_price is not None:
             bm_peak_price = benchmark_start_price
+            bm_monthly_equities.append(benchmark_start_price)
             if benchmark_anchor_date == sorted_dates[start_idx]:
                 current_bm_px = benchmark_start_price
 

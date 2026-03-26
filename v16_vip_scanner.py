@@ -19,8 +19,18 @@ warnings.simplefilter("default")
 # # (AI註: 相同 RuntimeWarning 只顯示一次；保留可見性，但避免掃描輸出被重複洗版)
 warnings.filterwarnings("once", category=RuntimeWarning)
 
-os.makedirs("outputs", exist_ok=True)
-os.makedirs("models", exist_ok=True)
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
+
+
+# # (AI註: 將目錄建立延後到實際執行期，避免被 import 時污染呼叫端工作目錄)
+def ensure_runtime_dirs():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(MODELS_DIR, exist_ok=True)
+
 
 SCANNER_PROGRESS_EVERY = 25
 DEFAULT_SCANNER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1) // 2))
@@ -115,6 +125,7 @@ def process_single_stock(file_path, ticker, params):
         ) from e
     
 def run_daily_scanner(data_dir):
+    ensure_runtime_dirs()
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -127,7 +138,7 @@ def run_daily_scanner(data_dir):
     if total_files == 0:
         raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
-    params = load_strict_params("models/v16_best_params.json")
+    params = load_strict_params(BEST_PARAMS_PATH)
     print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
         
     print_scanner_header(params)
@@ -178,7 +189,7 @@ def run_daily_scanner(data_dir):
                     flush=True
                 )
 
-    scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines) if scanner_issue_lines else None
+    scanner_issue_log_path = write_issue_log("scanner_issues", scanner_issue_lines, log_dir=OUTPUT_DIR) if scanner_issue_lines else None
     elapsed_time = time.time() - start_time
 
     candidate_rows.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
