@@ -1,5 +1,5 @@
 # core/v16_config.py
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 
 # ==========================================
 # 🌟 全域戰略切換開關 (System-Wide Strategy Switches)
@@ -107,7 +107,41 @@ class V16StrategyParams:
     def __post_init__(self):
         validate_strategy_param_ranges(strategy_params_to_dict(self))
 
+    def __setattr__(self, name, value):
+        field_names = {field.name for field in fields(type(self))}
+        if name not in field_names:
+            object.__setattr__(self, name, value)
+            return
+
+        had_old_value = hasattr(self, name)
+        old_value = getattr(self, name) if had_old_value else MISSING
+        object.__setattr__(self, name, value)
+
+        try:
+            validate_strategy_param_ranges(_build_strategy_param_snapshot(self))
+        except Exception:
+            if had_old_value:
+                object.__setattr__(self, name, old_value)
+            else:
+                try:
+                    object.__delattr__(self, name)
+                except AttributeError:
+                    pass
+            raise
+
 
 # # (AI註: 統一由 dataclass 欄位快照成 dict，避免 params_io / optimizer 各自手抄欄位)
 def strategy_params_to_dict(params):
     return {field.name: getattr(params, field.name) for field in fields(V16StrategyParams)}
+
+
+def _build_strategy_param_snapshot(instance):
+    snapshot = {}
+    for field in fields(type(instance)):
+        if hasattr(instance, field.name):
+            snapshot[field.name] = getattr(instance, field.name)
+        elif field.default is not MISSING:
+            snapshot[field.name] = field.default
+        elif field.default_factory is not MISSING:  # type: ignore[attr-defined]
+            snapshot[field.name] = field.default_factory()
+    return snapshot

@@ -121,9 +121,14 @@ def record_optimizer_prep_failures(trial_number, insufficient_failures):
 
 # # (AI註: 訓練結束時再印一次資料不足摘要，避免訓練過程被重複警示干擾)
 def validate_optimizer_param_overrides(param_mapping):
-    params_probe = V16StrategyParams(**param_mapping, use_compounding=True)
-    validated = build_params_from_mapping(params_to_json_dict(params_probe))
-    return params_to_json_dict(validated)
+    if not isinstance(param_mapping, dict):
+        raise TypeError(f"optimizer override 必須是 dict，收到 {type(param_mapping).__name__}")
+
+    base_payload = params_to_json_dict(V16StrategyParams())
+    merged_payload = dict(base_payload)
+    merged_payload.update(param_mapping)
+    validated = build_params_from_mapping(merged_payload)
+    return {key: getattr(validated, key) for key in param_mapping}
 
 
 # # (AI註: 方案B固定值也必須共用參數 guardrail，避免直接繞過 JSON 載入驗證)
@@ -157,7 +162,9 @@ def build_optimizer_trial_params(param_mapping, user_attrs=None):
 
 def build_best_params_payload_from_trial(best_trial):
     resolved_params = build_optimizer_trial_params(best_trial.params, best_trial.user_attrs)
-    return params_to_json_dict(V16StrategyParams(**resolved_params, use_compounding=True))
+    base_payload = params_to_json_dict(V16StrategyParams())
+    base_payload.update(resolved_params)
+    return params_to_json_dict(build_params_from_mapping(base_payload))
 
 
 def print_optimizer_prep_summary():

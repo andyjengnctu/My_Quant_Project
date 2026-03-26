@@ -1882,7 +1882,13 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
 
 
 def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time):
-    total_tickers = len(df_summary)
+    synthetic_summary_count = 0
+    real_summary_count = len(df_summary)
+    if not df_summary.empty and "synthetic" in df_summary.columns:
+        synthetic_mask = df_summary["synthetic"].fillna(False).astype(bool)
+        synthetic_summary_count = int(synthetic_mask.sum())
+        real_summary_count = int((~synthetic_mask).sum())
+
     failed_tickers = int(df_failed["ticker"].nunique()) if not df_failed.empty else 0
     pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
     skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
@@ -1892,7 +1898,9 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     print("一致性回歸摘要")
     print("================================================================================")
     print(f"耗時: {elapsed_time:.2f} 秒")
-    print(f"成功進入 summary 的股票數: {total_tickers}")
+    print(f"成功進入 summary 的真實股票數: {real_summary_count}")
+    print(f"synthetic case 數: {synthetic_summary_count}")
+    print(f"summary 總列數: {len(df_summary)}")
     print(f"總檢查數: {len(df_results)}")
     print(f"PASS 數: {pass_count}")
     print(f"SKIP 數: {skip_count}")
