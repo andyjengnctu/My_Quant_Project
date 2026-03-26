@@ -500,7 +500,7 @@ def load_module_from_candidates(cache_key, candidate_files, required_attrs):
         module = importlib.util.module_from_spec(spec)
         try:
             spec.loader.exec_module(module)
-        except (FileNotFoundError, ImportError, OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError) as e:
+        except Exception as e:
             rejected_paths.append(f"{module_path} -> 載入失敗: {type(e).__name__}: {e}")
             continue
 

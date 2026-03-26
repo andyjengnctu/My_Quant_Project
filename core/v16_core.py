@@ -99,10 +99,14 @@ def adjust_long_buy_limit_array(prices):
     return round_to_tick_array(prices, direction="down")
 
 def calc_entry_price(bPrice, bQty, params):
+    if pd.isna(bPrice) or pd.isna(bQty) or bPrice <= 0 or bQty <= 0:
+        return np.nan
     fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
     return bPrice + (fee / bQty)
 
 def calc_net_sell_price(sPrice, sQty, params):
+    if pd.isna(sPrice) or pd.isna(sQty) or sPrice <= 0 or sQty <= 0:
+        return np.nan
     fee = max(sPrice * sQty * params.sell_fee, params.min_fee)
     tax = sPrice * sQty * params.tax_rate
     return sPrice - ((fee + tax) / sQty)
@@ -276,6 +280,9 @@ def get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close
 
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
 def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, entry_type='normal'):
+    if pd.isna(buy_price) or buy_price <= 0 or qty <= 0:
+        raise ValueError(f"build_position_from_entry_fill 需要有效 buy_price/qty，收到 buy_price={buy_price!r}, qty={qty!r}")
+
     entry_price = calc_entry_price(buy_price, qty, params)
     net_sl = calc_net_sell_price(init_sl, qty, params)
     tp_half = adjust_long_target_price(buy_price + (entry_price - net_sl))
@@ -315,6 +322,10 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     qty = entry_plan.get('qty', 0)
     result['count_as_missed_buy'] = should_count_miss_buy(qty)
     result['is_locked_limit_up'] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
+
+    if qty <= 0:
+        result['count_as_missed_buy'] = False
+        return result
 
     if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or result['is_locked_limit_up']:
         return result

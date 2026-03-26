@@ -124,8 +124,9 @@ def process_single_stock(file_path, ticker, params):
             f"scanner 處理失敗: ticker={ticker} | {format_exception_summary(e)}"
         ) from e
     
-def run_daily_scanner(data_dir):
+def run_daily_scanner(data_dir=None):
     ensure_runtime_dirs()
+    data_dir = DEFAULT_DATA_DIR if data_dir is None else data_dir
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"{C_CYAN}🚀 啟動【v16 尊爵版】極速平行掃描儀 | 時間: {datetime.now().strftime('%Y-%m-%d %H:%M')}{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -225,4 +226,4 @@ def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
 if __name__ == "__main__":
-    run_daily_scanner("tw_stock_data_vip")
+    run_daily_scanner()
