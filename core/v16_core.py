@@ -641,7 +641,9 @@ def generate_signals(df, params):
         buy_limits[valid_buy_mask] = adjust_long_buy_limit_array(raw_buy_limits[valid_buy_mask])
     return ATR_main, buyCondition, sellCondition, buy_limits
 
-def run_v16_backtest(df, params: V16StrategyParams = V16StrategyParams(), return_logs=False, precomputed_signals=None):
+def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None):
+    if params is None:
+        params = V16StrategyParams()
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
     L = df['Low'].to_numpy(dtype=np.float64, copy=False)
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)

@@ -1793,7 +1793,17 @@ def validate_synthetic_param_guardrail_case(base_params):
         ("vol_long_len_lt_short_rejected", {**case["base_payload"], "vol_short_len": 10, "vol_long_len": 5}, "vol_long_len"),
     ]
 
-    for metric_name, payload, expected_field in invalid_cases:
+    runtime_valid_payload = {**case["base_payload"], "optimizer_max_workers": 3, "scanner_max_workers": 4}
+    runtime_params = build_params_from_mapping(runtime_valid_payload)
+    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_optimizer_max_workers_loads", 3, getattr(runtime_params, "optimizer_max_workers", None))
+    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_scanner_max_workers_loads", 4, getattr(runtime_params, "scanner_max_workers", None))
+
+    runtime_invalid_cases = [
+        ("optimizer_max_workers_zero_rejected", {**case["base_payload"], "optimizer_max_workers": 0}, "optimizer_max_workers"),
+        ("scanner_max_workers_zero_rejected", {**case["base_payload"], "scanner_max_workers": 0}, "scanner_max_workers"),
+    ]
+
+    for metric_name, payload, expected_field in invalid_cases + runtime_invalid_cases:
         try:
             build_params_from_mapping(payload)
             add_fail_result(
@@ -1808,6 +1818,7 @@ def validate_synthetic_param_guardrail_case(base_params):
         except ValueError as e:
             add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
 
+    for metric_name, payload, expected_field in invalid_cases:
         try:
             V16StrategyParams(**payload)
             add_fail_result(
@@ -1829,7 +1840,40 @@ def validate_synthetic_param_guardrail_case(base_params):
                 expected_field in str(e)
             )
 
-    summary["guardrail_cases"] = len(invalid_cases) * 2
+    runtime_mutation_params = V16StrategyParams()
+    try:
+        runtime_mutation_params.optimizer_max_workers = 0
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case["case_id"],
+            "direct_runtime_attr_guardrail",
+            "ValueError containing optimizer_max_workers",
+            "setattr_ok",
+            "runtime worker 設定直接改欄位也不應繞過 guardrail。"
+        )
+    except ValueError as e:
+        add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_attr_guardrail", True, "optimizer_max_workers" in str(e))
+
+    mutation_params = V16StrategyParams()
+    try:
+        mutation_params.tp_precent = 0.3
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case["case_id"],
+            "unknown_attr_typo_rejected",
+            "AttributeError containing tp_precent",
+            "setattr_ok",
+            "未知屬性 typo 不應靜默掛到 params 物件上。"
+        )
+    except AttributeError as e:
+        add_check(results, "synthetic_param_guardrail", case["case_id"], "unknown_attr_typo_rejected", True, "tp_precent" in str(e))
+
+    default_params_arg = run_v16_backtest.__defaults__[0] if run_v16_backtest.__defaults__ else None
+    add_check(results, "synthetic_param_guardrail", case["case_id"], "run_v16_backtest_default_params_is_none", True, default_params_arg is None)
+
+    summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + 4
     return results, summary
 
 

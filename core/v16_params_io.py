@@ -2,13 +2,21 @@ import json
 import os
 from dataclasses import fields
 
-from core.v16_config import V16StrategyParams, strategy_params_to_dict, validate_strategy_param_ranges
+from core.v16_config import (
+    RUNTIME_PARAM_DEFAULTS,
+    V16StrategyParams,
+    normalize_runtime_param_value,
+    strategy_params_to_dict,
+    validate_strategy_param_ranges,
+)
 from core.v16_log_utils import format_exception_summary
 
 
 PARAM_FIELDS = tuple(fields(V16StrategyParams))
 PARAM_FIELD_TYPES = {field.name: field.type for field in PARAM_FIELDS}
 PARAM_FIELD_NAMES = tuple(field.name for field in PARAM_FIELDS)
+RUNTIME_PARAM_TYPES = {field_name: int for field_name in RUNTIME_PARAM_DEFAULTS}
+RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
 
 
 # # (AI註: 參數載入時先做型別收斂，避免錯型別延後到回測/優化流程才爆炸)
@@ -70,7 +78,8 @@ def _validate_param_payload(data):
     if not isinstance(data, dict):
         raise ValueError(f"參數檔根層必須是 object/dict，收到 {type(data).__name__}")
 
-    unknown_keys = sorted(set(data) - set(PARAM_FIELD_NAMES))
+    allowed_keys = set(PARAM_FIELD_NAMES) | set(RUNTIME_PARAM_NAMES)
+    unknown_keys = sorted(set(data) - allowed_keys)
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")
 
@@ -80,7 +89,7 @@ def _validate_param_payload(data):
 
 
 def params_to_json_dict(params):
-    return strategy_params_to_dict(params)
+    return strategy_params_to_dict(params, include_runtime=True)
 
 
 def build_params_from_mapping(data):
@@ -93,7 +102,23 @@ def build_params_from_mapping(data):
             PARAM_FIELD_TYPES[field_name],
         )
     validate_strategy_param_ranges(coerced_values)
-    return V16StrategyParams(**coerced_values)
+    params = V16StrategyParams(**coerced_values)
+
+    for field_name in RUNTIME_PARAM_NAMES:
+        if field_name not in data:
+            continue
+        raw_value = data[field_name]
+        if raw_value is None:
+            setattr(params, field_name, None)
+            continue
+        coerced_value = _coerce_param_value(
+            field_name,
+            raw_value,
+            RUNTIME_PARAM_TYPES[field_name],
+        )
+        setattr(params, field_name, normalize_runtime_param_value(field_name, coerced_value))
+
+    return params
 
 
 def load_params_from_json(json_file):

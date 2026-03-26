@@ -1,5 +1,6 @@
 # core/v16_config.py
 from dataclasses import MISSING, dataclass, fields
+from typing import Any
 
 # ==========================================
 # 🌟 全域戰略切換開關 (System-Wide Strategy Switches)
@@ -35,6 +36,12 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40    # 權益曲線最小 R² 門檻，要求整
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
 
+RUNTIME_PARAM_DEFAULTS = {
+    'optimizer_max_workers': None,
+    'scanner_max_workers': None,
+}
+
+
 # # (AI註: 單一真理來源 - 直接建立 dataclass、JSON 載入、optimizer 固定覆寫都共用同一套數值 guardrail)
 def validate_strategy_param_ranges(param_values):
     def ensure(field_name, condition, rule_text):
@@ -63,6 +70,17 @@ def validate_strategy_param_ranges(param_values):
     ensure('min_history_trades', param_values['min_history_trades'] >= 0, '需 >= 0')
     ensure('min_history_win_rate', 0.0 <= param_values['min_history_win_rate'] <= 1.0, '需滿足 0 <= min_history_win_rate <= 1')
     return param_values
+
+
+# # (AI註: runtime 工具參數獨立驗證，但仍集中在 config 這個單一真理來源)
+def normalize_runtime_param_value(field_name: str, raw_value: Any):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise ValueError(f"參數 {field_name} 需要 int 或 None，收到 {raw_value!r}")
+    if raw_value < 1:
+        raise ValueError(f"參數 {field_name} 驗證失敗: 需 >= 1，收到 {raw_value!r}")
+    return raw_value
 
 
 @dataclass
@@ -108,10 +126,15 @@ class V16StrategyParams:
         validate_strategy_param_ranges(strategy_params_to_dict(self))
 
     def __setattr__(self, name, value):
-        field_names = {field.name for field in fields(type(self))}
-        if name not in field_names:
-            object.__setattr__(self, name, value)
+        field_names = type(self).__dataclass_fields__
+
+        if name in RUNTIME_PARAM_DEFAULTS:
+            normalized_value = normalize_runtime_param_value(name, value)
+            object.__setattr__(self, name, normalized_value)
             return
+
+        if name not in field_names:
+            raise AttributeError(f"未知參數欄位: {name}")
 
         had_old_value = hasattr(self, name)
         old_value = getattr(self, name) if had_old_value else MISSING
@@ -131,8 +154,13 @@ class V16StrategyParams:
 
 
 # # (AI註: 統一由 dataclass 欄位快照成 dict，避免 params_io / optimizer 各自手抄欄位)
-def strategy_params_to_dict(params):
-    return {field.name: getattr(params, field.name) for field in fields(V16StrategyParams)}
+def strategy_params_to_dict(params, include_runtime=False):
+    payload = {field.name: getattr(params, field.name) for field in fields(V16StrategyParams)}
+    if include_runtime:
+        for field_name in RUNTIME_PARAM_DEFAULTS:
+            if hasattr(params, field_name):
+                payload[field_name] = getattr(params, field_name)
+    return payload
 
 
 def _build_strategy_param_snapshot(instance):
