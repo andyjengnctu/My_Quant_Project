@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json, build_params_from_mapping, params_to_json_dict
-from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit, resize_candidate_plan_to_capital, build_cash_capped_entry_plan
 from core.v16_buy_sort import calc_buy_sort_value
 from core.v16_config import BUY_SORT_METHOD, V16StrategyParams
 from core.v16_portfolio_engine import (
@@ -1942,6 +1942,114 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
     return results, summary
 
 
+def validate_synthetic_proj_cost_cash_capped_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.initial_capital = 1_000_000.0
+    params.fixed_risk = 0.01
+
+    case_id = "SYNTH_PROJ_COST_CASH_CAPPED_ORDER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    sizing_equity = 1_000_000.0
+    available_cash = 50_000.0
+    candidate_rows = [
+        {"ticker": "9801", "limit_px": 10.0, "init_sl": 9.5, "init_trail": 9.0},
+        {"ticker": "9802", "limit_px": 14.0, "init_sl": 13.3, "init_trail": 12.8},
+    ]
+
+    estimated_rank_rows = []
+    for cand in candidate_rows:
+        est_plan = resize_candidate_plan_to_capital(
+            {
+                "limit_price": cand["limit_px"],
+                "init_sl": cand["init_sl"],
+                "init_trail": cand["init_trail"],
+            },
+            sizing_equity,
+            params,
+        )
+        est_reserved_cost = calc_entry_price(est_plan["limit_price"], est_plan["qty"], params) * est_plan["qty"]
+        estimated_rank_rows.append({
+            "ticker": cand["ticker"],
+            "reserved_cost": est_reserved_cost,
+        })
+
+    estimated_rank_rows.sort(key=lambda x: (x["reserved_cost"], x["ticker"]), reverse=True)
+    stale_top_ticker = estimated_rank_rows[0]["ticker"]
+
+    cash_capped_rank_rows = []
+    for cand in candidate_rows:
+        cash_capped_plan = build_cash_capped_entry_plan(
+            {
+                "limit_price": cand["limit_px"],
+                "init_sl": cand["init_sl"],
+                "init_trail": cand["init_trail"],
+            },
+            available_cash,
+            params,
+        )
+        if cash_capped_plan is None:
+            continue
+
+        cash_capped_rank_rows.append({
+            "ticker": cand["ticker"],
+            "reserved_cost": cash_capped_plan["reserved_cost"],
+            "qty": cash_capped_plan["qty"],
+        })
+
+    cash_capped_rank_rows.sort(key=lambda x: (x["reserved_cost"], x["ticker"]), reverse=True)
+    cash_capped_top_ticker = cash_capped_rank_rows[0]["ticker"] if cash_capped_rank_rows else None
+    cash_capped_top_reserved_cost = cash_capped_rank_rows[0]["reserved_cost"] if cash_capped_rank_rows else None
+    cash_capped_top_qty = cash_capped_rank_rows[0]["qty"] if cash_capped_rank_rows else None
+
+    add_check(
+        results,
+        "synthetic_proj_cost_cash_capped",
+        case_id,
+        "stale_proj_cost_top_ticker",
+        "9802",
+        stale_top_ticker,
+    )
+    add_check(
+        results,
+        "synthetic_proj_cost_cash_capped",
+        case_id,
+        "cash_capped_proj_cost_top_ticker",
+        "9801",
+        cash_capped_top_ticker,
+    )
+    add_check(
+        results,
+        "synthetic_proj_cost_cash_capped",
+        case_id,
+        "proj_cost_order_reversal_detected",
+        True,
+        stale_top_ticker != cash_capped_top_ticker,
+    )
+    add_check(
+        results,
+        "synthetic_proj_cost_cash_capped",
+        case_id,
+        "cash_capped_reserved_cost_within_available_cash",
+        True,
+        cash_capped_top_reserved_cost is not None and cash_capped_top_reserved_cost <= available_cash,
+    )
+    add_check(
+        results,
+        "synthetic_proj_cost_cash_capped",
+        case_id,
+        "cash_capped_qty_positive",
+        True,
+        cash_capped_top_qty is not None and cash_capped_top_qty > 0,
+    )
+
+    summary["stale_top_ticker"] = stale_top_ticker
+    summary["cash_capped_top_ticker"] = cash_capped_top_ticker
+    summary["available_cash"] = available_cash
+    return results, summary
+
+
 def validate_synthetic_param_guardrail_case(base_params):
     case = build_synthetic_param_guardrail_case(base_params)
     results = []
@@ -2051,6 +2159,7 @@ def run_synthetic_consistency_suite(base_params):
         validate_synthetic_same_day_sell_block_case,
         validate_synthetic_unexecutable_half_tp_case,
         validate_synthetic_rotation_t_plus_one_case,
+        validate_synthetic_proj_cost_cash_capped_case,
         validate_synthetic_param_guardrail_case,
     ]
 
