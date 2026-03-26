@@ -1,6 +1,7 @@
 # core/v16_display.py
 import os
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD, SCORE_CALC_METHOD, MIN_FULL_YEAR_RETURN_PCT, MIN_ANNUAL_TRADES, MIN_BUY_FILL_RATE, SYSTEM_SCORE_DISPLAY_MULTIPLIER
+from core.v16_buy_sort import get_buy_sort_title
 from core.v16_portfolio_engine import calc_portfolio_score
 
 C_RED = '\033[91m'
@@ -15,13 +16,13 @@ def get_p(params, key, default=None):
     return getattr(params, key, default)
 
 def print_scanner_header(params):
-    print(f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]")
+    print(f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]")
     print(f"   ➤ 核心風控: 創高 {get_p(params, 'high_len', 201)}日 | ATR {get_p(params, 'atr_len', 14)}日 | 掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f}倍")
     print(f"   ➤ 停損停利: 初始 -{get_p(params, 'atr_times_init', 2.0):.1f}倍 | 追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f}倍 | 半倉 {get_p(params, 'tp_percent', 0.5)*100:.0f}%")
     # 🚀 FIX: 對齊 0 預設值
     print(f"   ➤ 歷史濾網: 交易 >= {get_p(params, 'min_history_trades', 0)} 次 | 勝率 >= {get_p(params, 'min_history_win_rate', 0.30)*100:.0f}% | 期望值 >= {get_p(params, 'min_history_ev', 0.0):.2f}R")
 
-def print_strategy_dashboard(params, title, mode_display, max_pos, trades, missed_b, missed_s, final_eq, avg_exp, sys_ret, bm_ret, sys_mdd, bm_mdd, win_rate, payoff, ev, benchmark_ticker="0050", max_exp=None, r_sq=0.0, m_win_rate=0.0, bm_r_sq=0.0, bm_m_win_rate=0.0, normal_trades=None, chase_trades=None, annual_trades=0.0, buy_fill_rate=0.0, annual_return_pct=0.0, bm_annual_return_pct=0.0, min_full_year_return_pct=0.0, bm_min_full_year_return_pct=0.0):
+def print_strategy_dashboard(params, title, mode_display, max_pos, trades, missed_b, missed_s, final_eq, avg_exp, sys_ret, bm_ret, sys_mdd, bm_mdd, win_rate, payoff, ev, benchmark_ticker="0050", max_exp=None, r_sq=0.0, m_win_rate=0.0, bm_r_sq=0.0, bm_m_win_rate=0.0, normal_trades=None, extended_trades=None, annual_trades=0.0, reserved_buy_fill_rate=0.0, annual_return_pct=0.0, bm_annual_return_pct=0.0, min_full_year_return_pct=0.0, bm_min_full_year_return_pct=0.0):
     
     alpha = sys_ret - bm_ret
     annual_alpha = annual_return_pct - bm_annual_return_pct
@@ -73,14 +74,14 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
 
     exp_str = f" (最高 {max_exp:>.2f} %)" if max_exp is not None else ""
     normal_trades = trades if normal_trades is None else normal_trades
-    chase_trades = 0 if chase_trades is None else chase_trades
-    trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 追價:{chase_trades})"
+    extended_trades = 0 if extended_trades is None else extended_trades
+    trade_split_str = f"{trades} 筆 (正常:{normal_trades} | 延續:{extended_trades})"
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{BUY_SORT_METHOD}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}")
+    print(f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | 評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | 系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}")
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
     print(f"總交易次數: {trade_split_str} | 年化交易次數: {annual_trades:.2f} 次/年")
-    print(f"錯失次數: 買 {missed_b} | 賣 {missed_s} | 買進成交率: {buy_fill_rate:.2f}% | 最終資產: {final_eq:,.0f} 元")
+    print(f"錯失次數: 買 {missed_b} | 賣 {missed_s} | 保留後買進成交率: {reserved_buy_fill_rate:.2f}% | 最終資產: {final_eq:,.0f} 元")
     print(f"平均資金水位: {avg_exp:.2f} %{exp_str}")
     print(f"--------------------------------------------------------------------------------")
     print(f"| 指標項目         | V16 尊爵系統   | 同期大盤 ({benchmark_ticker:<4}) | 差異 (Alpha)   |")
@@ -100,5 +101,5 @@ def print_strategy_dashboard(params, title, mode_display, max_pos, trades, misse
     print(f"濾網: 布林(BB) {bb_str} | 阿肯那(KC) {kc_str} | 均量 {vol_str}")
     # 🚀 FIX: 對齊 0 預設值
     print(f"歷史: 交易 >= {get_p(params, 'min_history_trades', 0)} 次 | 勝率 >= {get_p(params, 'min_history_win_rate', 0.3)*100:.0f}% | EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R")
-    print(f"門檻: 完整年度最差報酬 > {MIN_FULL_YEAR_RETURN_PCT:.2f}% | 年化交易次數 >= {MIN_ANNUAL_TRADES:.2f} 次/年 | 買進成交率 >= {MIN_BUY_FILL_RATE:.2f}%")
+    print(f"門檻: 完整年度最差報酬 > {MIN_FULL_YEAR_RETURN_PCT:.2f}% | 年化交易次數 >= {MIN_ANNUAL_TRADES:.2f} 次/年 | 保留後買進成交率 >= {MIN_BUY_FILL_RATE:.2f}%")
     print(f"{C_CYAN}================================================================================{C_RESET}\n")

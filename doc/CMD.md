@@ -1,0 +1,5 @@
+# 打包
+git archive -o test-branch-1.zip test-branch-1
+
+# 重現環境
+python -m pip install -r requirements/requirements-lock.txt

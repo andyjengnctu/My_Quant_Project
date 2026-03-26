@@ -12,18 +12,22 @@ EV_CALC_METHOD = 'A'
 # 2. 買入優先序切換開關
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'EV'        = 優先買入期望值最高的標的 (單筆質量極大化)
-BUY_SORT_METHOD = 'EV'
+# 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
+BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
 # 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
 SCORE_CALC_METHOD = 'RoMD'
 
-# 4. Optimizer 穩定性 / 可執行性硬門檻
+# 4. Optimizer / Overfitting / 驗證工具共用硬門檻
 MIN_ANNUAL_TRADES = 5.0
 MIN_BUY_FILL_RATE = 80.0
 MIN_TRADE_WIN_RATE = 40.0
-MIN_FULL_YEAR_RETURN_PCT = -10.0
+MIN_FULL_YEAR_RETURN_PCT = -20.0
+MAX_PORTFOLIO_MDD_PCT = 45.0
+MIN_MONTHLY_WIN_RATE = 45.0
+MIN_EQUITY_CURVE_R_SQUARED = 0.40
 # ==========================================
 
 # # (AI註: 僅影響顯示，不改實際排序與優化邏輯)
@@ -40,7 +44,6 @@ class V16StrategyParams:
     atr_times_init: float = 2.0      
     atr_times_trail: float = 3.5     
     tp_percent: float = 0.5
-    min_chase_rr: float = 0.5        # <--- (AI註: 新增：遲到追車的最低盈虧比門檻)          
 
     # 3. 三大濾網開關與參數
     use_bb: bool = True
