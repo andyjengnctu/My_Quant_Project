@@ -390,7 +390,7 @@ def objective(trial):
         atr_times_trail = trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1), 
         atr_buy_tol = trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
         high_len = trial.suggest_int("high_len", OPTIMIZER_HIGH_LEN_MIN, OPTIMIZER_HIGH_LEN_MAX, step=OPTIMIZER_HIGH_LEN_STEP), 
-        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.0, step=0.01), 
+        tp_percent = trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01), 
         use_bb = ai_use_bb, use_kc = ai_use_kc, use_vol = ai_use_vol,
         bb_len = trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
         bb_mult = trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
