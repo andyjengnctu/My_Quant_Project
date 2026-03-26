@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, resize_candidate_plan_to_capital, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, resize_candidate_plan_to_capital, build_cash_capped_entry_plan, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -729,8 +729,50 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         t0 = time.perf_counter() if profile_stats is not None else None
         # # (AI註: 問題3 版本B - sold_today 也包含 rotation 當日賣出，名額必須凍結到下一交易日)
         pre_market_occupied = len(portfolio) + len(sold_today)
+        remaining_orderable_candidates = list(orderable_candidates_today)
 
-        for cand in orderable_candidates_today:
+        while remaining_orderable_candidates and pre_market_occupied < max_positions:
+            chosen_idx = 0
+            chosen_entry_plan = None
+
+            if BUY_SORT_METHOD == 'PROJ_COST':
+                chosen_key = None
+                for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
+                    probe_entry_plan = build_cash_capped_entry_plan(
+                        {
+                            'limit_price': probe_cand['limit_px'],
+                            'init_sl': probe_cand['init_sl'],
+                            'init_trail': probe_cand['init_trail'],
+                        },
+                        available_cash,
+                        params,
+                    )
+                    if probe_entry_plan is None:
+                        continue
+
+                    probe_key = (probe_entry_plan['reserved_cost'], probe_cand['ticker'])
+                    if chosen_key is None or probe_key > chosen_key:
+                        chosen_key = probe_key
+                        chosen_idx = cand_idx
+                        chosen_entry_plan = probe_entry_plan
+
+                if chosen_entry_plan is None:
+                    break
+
+            cand = remaining_orderable_candidates.pop(chosen_idx)
+            if chosen_entry_plan is None:
+                chosen_entry_plan = build_cash_capped_entry_plan(
+                    {
+                        'limit_price': cand['limit_px'],
+                        'init_sl': cand['init_sl'],
+                        'init_trail': cand['init_trail'],
+                    },
+                    available_cash,
+                    params,
+                )
+                if chosen_entry_plan is None:
+                    continue
+
             fast_df = all_dfs_fast[cand['ticker']]
             t_pos = cand['today_pos']
             y_pos = cand['yesterday_pos']
@@ -741,30 +783,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
             y_close = get_fast_close(fast_df, pos=y_pos)
 
-            if pre_market_occupied >= max_positions:
-                continue
-
-            entry_plan = resize_candidate_plan_to_capital(
-                {
-                    'limit_price': cand['limit_px'],
-                    'init_sl': cand['init_sl'],
-                    'init_trail': cand['init_trail'],
-                },
-                available_cash,
-                params,
-            )
-            if entry_plan is None or entry_plan['qty'] <= 0:
-                continue
-
-            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
-            if reserved_cost > available_cash:
-                continue
-
+            reserved_cost = chosen_entry_plan['reserved_cost']
             available_cash -= reserved_cost
             pre_market_occupied += 1
 
             entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
+                entry_plan=chosen_entry_plan,
                 t_open=t_open,
                 t_high=t_high,
                 t_low=t_low,
@@ -776,7 +800,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             )
 
             if entry_result['filled']:
-                qty = entry_plan['qty']
+                qty = chosen_entry_plan['qty']
                 actual_total_cost = entry_result['entry_price'] * qty
                 cash -= actual_total_cost
                 portfolio[cand['ticker']] = entry_result['position']
@@ -805,7 +829,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         "該筆總損益": 0.0,
                         "R_Multiple": 0.0,
                         "Risk": params.fixed_risk,
-                        "備註": f"預掛限價 {entry_plan['limit_price']:.2f} 未成交",
+                        "備註": f"預掛限價 {chosen_entry_plan['limit_price']:.2f} 未成交",
                         "投入總金額": reserved_cost,
                     })
         if profile_stats is not None:

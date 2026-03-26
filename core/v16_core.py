@@ -231,6 +231,20 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     return resized_plan
 
 
+# # (AI註: 單一真理來源 - 盤前依當下可用現金重算有效掛單規格與保留資金)
+def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
+    resized_plan = resize_candidate_plan_to_capital(candidate_plan, available_cash, params)
+    if resized_plan is None or resized_plan['qty'] <= 0:
+        return None
+
+    reserved_cost = calc_entry_price(resized_plan['limit_price'], resized_plan['qty'], params) * resized_plan['qty']
+    if pd.isna(reserved_cost) or reserved_cost > available_cash:
+        return None
+
+    resized_plan['reserved_cost'] = reserved_cost
+    return resized_plan
+
+
 # # (AI註: 單一真理來源 - 正常候選的 limit/sl/trail/qty 規格統一由此產生；候選資格與可掛單分離)
 def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
     if pd.isna(limit_price) or pd.isna(atr):
