@@ -130,6 +130,12 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
         qty -= 1
     return 0
 
+
+# # (AI註: scanner / consistency tool 的候選顯示統一用 initial_capital 估算，避免被單股回測複利資本污染)
+def calc_reference_candidate_qty(bPrice, stopPrice, params):
+    return calc_position_size(bPrice, stopPrice, params.initial_capital, params.fixed_risk, params)
+
+
 # # (AI註: 單一真理來源 - 統一 initial_risk_total 的計算與 fallback 口徑，禁止散落 magic number)
 def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:

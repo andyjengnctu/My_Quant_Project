@@ -7,7 +7,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from core.v16_config import BUY_SORT_METHOD
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price, adjust_long_target_price, calc_net_sell_price
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, adjust_long_target_price, calc_net_sell_price
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
@@ -63,10 +63,9 @@ def process_single_stock(file_path, ticker, params):
             )
 
         stat_str = f"勝率:{stats['win_rate']:>5.1f}% | 期望值:{stats['expected_value']:>5.2f}R | 交易:{stats['trade_count']:>3}次 | MDD:{stats['max_drawdown']:>5.1f}%"
-        reference_capital = params.initial_capital
 
         if stats['is_setup_today']:
-            proj_qty = calc_position_size(stats['buy_limit'], stats['stop_loss'], reference_capital, params.fixed_risk, params)
+            proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params)
             if proj_qty == 0:
                 return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
@@ -84,14 +83,14 @@ def process_single_stock(file_path, ticker, params):
 
         extended_candidate = stats.get('extended_candidate_today')
         if extended_candidate is not None:
-            proj_qty = extended_candidate['qty']
-            if proj_qty == 0:
-                return ('candidate', None, None, None, None, ticker, sanitize_issue)
-
             limit_price = extended_candidate.get('limit_price')
             init_sl = extended_candidate.get('init_sl')
             if limit_price is None or init_sl is None:
                 raise KeyError("extended candidate 缺少 limit_price/init_sl")
+
+            proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
+            if proj_qty == 0:
+                return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
             proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
 

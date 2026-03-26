@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_core import run_v16_backtest, calc_position_size, calc_entry_price
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price
 from core.v16_buy_sort import calc_buy_sort_value
 from core.v16_config import BUY_SORT_METHOD
 from core.v16_portfolio_engine import (
@@ -241,18 +241,21 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         return None
 
     if scanner_ref_stats["is_setup_today"]:
-        proj_qty = calc_position_size(
+        proj_qty = calc_reference_candidate_qty(
             scanner_ref_stats["buy_limit"],
             scanner_ref_stats["stop_loss"],
-            params.initial_capital,
-            params.fixed_risk,
             params
         )
         return "buy" if proj_qty > 0 else "candidate"
 
     extended_candidate_today = scanner_ref_stats.get("extended_candidate_today")
     if extended_candidate_today is not None:
-        return "extended" if extended_candidate_today.get("qty", 0) > 0 else "candidate"
+        limit_price = extended_candidate_today.get("limit_price")
+        init_sl = extended_candidate_today.get("init_sl")
+        if limit_price is None or init_sl is None:
+            return "candidate"
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
+        return "extended" if proj_qty > 0 else "candidate"
 
     return "candidate"
 
@@ -271,19 +274,16 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
     if status == "buy":
         limit_price = scanner_ref_stats["buy_limit"]
         stop_loss = scanner_ref_stats["stop_loss"]
-        proj_qty = calc_position_size(
-            limit_price,
-            stop_loss,
-            params.initial_capital,
-            params.fixed_risk,
-            params
-        )
+        proj_qty = calc_reference_candidate_qty(limit_price, stop_loss, params)
     else:
         extended_candidate = scanner_ref_stats.get("extended_candidate_today")
         if extended_candidate is None:
             return payload
         limit_price = extended_candidate["limit_price"]
-        proj_qty = extended_candidate.get("qty", 0)
+        init_sl = extended_candidate.get("init_sl")
+        if init_sl is None:
+            return payload
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
 
     proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
     sort_value = calc_buy_sort_value(
