@@ -1910,29 +1910,27 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     base_params = load_params()
-
-    if not os.path.isdir(DATA_DIR):
-        print(f"找不到資料夾: {DATA_DIR}")
-        print("請先準備 tw_stock_data_vip 後再執行一致性驗證。")
-        return 2
-
-    selected_tickers = discover_available_tickers()
-    if not selected_tickers:
-        print(f"資料夾內找不到任何 CSV: {DATA_DIR}")
-        print("請先放入 {ticker}.csv 或 TV_Data_Full_{ticker}.csv 後再執行一致性驗證。")
-        return 2
-
     all_results = []
     summaries = []
+    start_time = time.time()
+
+    selected_tickers = []
+    if not os.path.isdir(DATA_DIR):
+        print(f"找不到資料夾: {DATA_DIR}")
+        print("將只執行 synthetic coverage suite。")
+    else:
+        selected_tickers = discover_available_tickers()
+        if not selected_tickers:
+            print(f"資料夾內找不到任何 CSV: {DATA_DIR}")
+            print("將只執行 synthetic coverage suite。")
 
     ticker_pass_count = 0
     ticker_skip_count = 0
     ticker_fail_count = 0
 
     total_tickers = len(selected_tickers)
-    start_time = time.time()
-
-    print(f"開始自動掃描 {total_tickers} 檔股票...")
+    if total_tickers > 0:
+        print(f"開始自動掃描 {total_tickers} 檔股票...")
 
     for idx, ticker in enumerate(selected_tickers, start=1):
         ticker_results_before = len(all_results)
@@ -1985,8 +1983,9 @@ def main():
             flush=True
         )
 
-    print(" " * 160, end="\r")
-    print()
+    if total_tickers > 0:
+        print(" " * 160, end="\r")
+        print()
 
     print("開始執行 synthetic coverage suite...")
     try:

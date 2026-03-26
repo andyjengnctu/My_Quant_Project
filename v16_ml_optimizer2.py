@@ -27,7 +27,7 @@ from core.v16_data_utils import (
     discover_unique_csv_inputs,
 )
 from core.v16_log_utils import write_issue_log, format_exception_summary
-from core.v16_params_io import params_to_json_dict
+from core.v16_params_io import build_params_from_mapping, params_to_json_dict
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -120,30 +120,39 @@ def record_optimizer_prep_failures(trial_number, insufficient_failures):
 
 
 # # (AI註: 訓練結束時再印一次資料不足摘要，避免訓練過程被重複警示干擾)
+def validate_optimizer_param_overrides(param_mapping):
+    params_probe = V16StrategyParams(**param_mapping, use_compounding=True)
+    validated = build_params_from_mapping(params_to_json_dict(params_probe))
+    return params_to_json_dict(validated)
+
+
+# # (AI註: 方案B固定值也必須共用參數 guardrail，避免直接繞過 JSON 載入驗證)
 def resolve_optimizer_tp_percent(trial):
     if OPTIMIZER_FIXED_TP_PERCENT is None:
         return trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01)
 
     fixed_tp_percent = float(OPTIMIZER_FIXED_TP_PERCENT)
+    validated_params = validate_optimizer_param_overrides({"tp_percent": fixed_tp_percent})
+    fixed_tp_percent = float(validated_params["tp_percent"])
     trial.set_user_attr("fixed_tp_percent", fixed_tp_percent)
     return fixed_tp_percent
 
 
-# # (AI註: 單一真理來源 - 顯示/匯出最佳參數時統一補回固定模式缺少的 tp_percent)
+# # (AI註: 單一真理來源 - 顯示/匯出最佳參數時統一補回固定模式缺少的 tp_percent，並套用同一組 guardrail)
 def build_optimizer_trial_params(param_mapping, user_attrs=None):
     resolved_params = dict(param_mapping)
     if "tp_percent" in resolved_params:
         resolved_params["tp_percent"] = float(resolved_params["tp_percent"])
-        return resolved_params
+    else:
+        fixed_tp_percent = None if user_attrs is None else user_attrs.get("fixed_tp_percent")
+        if fixed_tp_percent is None:
+            fixed_tp_percent = OPTIMIZER_FIXED_TP_PERCENT
+        if fixed_tp_percent is None:
+            raise ValueError("最佳 trial 缺少 tp_percent，且目前未設定 OPTIMIZER_FIXED_TP_PERCENT，無法還原完整參數。")
+        resolved_params["tp_percent"] = float(fixed_tp_percent)
 
-    fixed_tp_percent = None if user_attrs is None else user_attrs.get("fixed_tp_percent")
-    if fixed_tp_percent is None:
-        fixed_tp_percent = OPTIMIZER_FIXED_TP_PERCENT
-    if fixed_tp_percent is None:
-        raise ValueError("最佳 trial 缺少 tp_percent，且目前未設定 OPTIMIZER_FIXED_TP_PERCENT，無法還原完整參數。")
-
-    resolved_params["tp_percent"] = float(fixed_tp_percent)
-    return resolved_params
+    validated_params = validate_optimizer_param_overrides(resolved_params)
+    return {key: validated_params[key] for key in resolved_params}
 
 
 def build_best_params_payload_from_trial(best_trial):
