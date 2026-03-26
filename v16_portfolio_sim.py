@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import warnings
 import webbrowser
@@ -44,21 +43,20 @@ def is_insufficient_data_error(exc):
     return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
 
-def prompt_with_default(prompt_text, default_value, cast_func=None, normalizer=None):
-    if not sys.stdin.isatty():
-        print(f"{C_GRAY}ℹ️ 非互動環境，{prompt_text} 自動採用預設值: {default_value}{C_RESET}")
-        return default_value
+def read_cli_value(prompt, default_value, cast_func=None, normalize_func=None):
+    try:
+        raw_value = input(prompt)
+    except EOFError:
+        raw_value = ""
 
-    raw_value = input(prompt_text).strip()
+    raw_value = raw_value.strip()
     if raw_value == "":
         return default_value
 
-    if normalizer is not None:
-        raw_value = normalizer(raw_value)
+    if normalize_func is not None:
+        raw_value = normalize_func(raw_value)
 
-    if cast_func is None:
-        return raw_value
-    return cast_func(raw_value)
+    return cast_func(raw_value) if cast_func is not None else raw_value
 
 
 # # (AI註: 只顯示年度報酬，不再在 portfolio_sim 內維持股票集中度相關報表)
@@ -199,15 +197,15 @@ if __name__ == "__main__":
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-    USER_ROTATION = prompt_with_default(
+    USER_ROTATION = read_cli_value(
         "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
         False,
         cast_func=lambda value: value == 'Y',
-        normalizer=lambda value: value.upper(),
+        normalize_func=str.upper,
     )
-    USER_MAX_POS = prompt_with_default("👉 2. 最大持倉數量 (預設 10): ", 10, cast_func=int)
-    USER_START_YEAR = prompt_with_default("👉 3. 開始回測年份 (預設 2015): ", 2015, cast_func=int)
-    USER_BENCHMARK = prompt_with_default("👉 4. 大盤比較標的 (預設 0050): ", "0050")
+    USER_MAX_POS = read_cli_value("👉 2. 最大持倉數量 (預設 10): ", 10, cast_func=int)
+    USER_START_YEAR = read_cli_value("👉 3. 開始回測年份 (預設 2015): ", 2015, cast_func=int)
+    USER_BENCHMARK = read_cli_value("👉 4. 大盤比較標的 (預設 0050): ", "0050")
 
     ensure_runtime_dirs()
     params = load_strict_params(BEST_PARAMS_PATH)
