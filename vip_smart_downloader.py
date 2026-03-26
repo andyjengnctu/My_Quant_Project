@@ -9,7 +9,11 @@ from core.v16_log_utils import append_issue_log, build_timestamped_log_path
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
-LIST_FILE = os.path.join(SAVE_DIR, "universe_list.txt")
+
+
+# # (AI註: 單一真理來源 - universe 名單路徑必須即時依 SAVE_DIR 推導，避免目錄重導後仍寫回舊路徑)
+def get_universe_list_file_path():
+    return os.path.join(SAVE_DIR, "universe_list.txt")
 
 MIN_VOLUME = 1_000_000
 MIN_MARKET_CAP = 10_000_000_000
@@ -174,10 +178,12 @@ def get_market_last_date():
 def get_or_update_universe():
     ensure_runtime_dirs()
 
-    if os.path.exists(LIST_FILE):
-        file_mod_time = datetime.fromtimestamp(os.path.getmtime(LIST_FILE))
+    list_file = get_universe_list_file_path()
+
+    if os.path.exists(list_file):
+        file_mod_time = datetime.fromtimestamp(os.path.getmtime(list_file))
         if datetime.now() - file_mod_time < timedelta(days=RESCAN_DAYS):
-            with open(LIST_FILE, 'r') as f:
+            with open(list_file, 'r') as f:
                 cached_tickers = [line.strip() for line in f if line.strip()]
             if cached_tickers:
                 print(f"✅ 名單有效 (更新於: {file_mod_time.strftime('%Y-%m-%d')})，直接讀取。")
@@ -257,7 +263,7 @@ def get_or_update_universe():
 
     qualified_tickers = list(dict.fromkeys(qualified_tickers))
 
-    with open(LIST_FILE, 'w') as f:
+    with open(list_file, 'w') as f:
         for t in qualified_tickers:
             f.write(f"{t}\n")
 

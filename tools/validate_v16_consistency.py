@@ -38,12 +38,16 @@ MAX_CONSOLE_FAIL_PREVIEW = 20
 
 CSV_PATH_CACHE = None
 CSV_DUPLICATE_ISSUES = None
+CSV_PATH_CACHE_DATA_DIR = None
 
 
 def get_data_dir_csv_map():
-    global CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES
-    if CSV_PATH_CACHE is None:
-        CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES = discover_unique_csv_map(DATA_DIR)
+    global CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES, CSV_PATH_CACHE_DATA_DIR
+
+    resolved_data_dir = os.path.abspath(DATA_DIR)
+    if (CSV_PATH_CACHE is None) or (CSV_PATH_CACHE_DATA_DIR != resolved_data_dir):
+        CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES = discover_unique_csv_map(resolved_data_dir)
+        CSV_PATH_CACHE_DATA_DIR = resolved_data_dir
     return CSV_PATH_CACHE
 
 
