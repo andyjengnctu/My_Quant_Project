@@ -214,6 +214,23 @@ def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_
     )
     return is_candidate, expected_value, win_rate, trade_count
 
+# # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
+def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
+    if candidate_plan is None:
+        return None
+
+    limit_price = candidate_plan.get('limit_price')
+    init_sl = candidate_plan.get('init_sl')
+    if pd.isna(limit_price) or pd.isna(init_sl):
+        return None
+
+    resized_plan = dict(candidate_plan)
+    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
+    resized_plan['qty'] = qty
+    resized_plan['is_orderable'] = qty > 0
+    return resized_plan
+
+
 # # (AI註: 單一真理來源 - 正常候選的 limit/sl/trail/qty 規格統一由此產生；候選資格與可掛單分離)
 def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
     if pd.isna(limit_price) or pd.isna(atr):
@@ -221,15 +238,12 @@ def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
 
     init_sl = adjust_long_stop_price(limit_price - atr * params.atr_times_init)
     init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
-    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
-
-    return {
+    base_plan = {
         'limit_price': limit_price,
         'init_sl': init_sl,
         'init_trail': init_trail,
-        'qty': qty,
-        'is_orderable': qty > 0,
     }
+    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
@@ -417,17 +431,14 @@ def build_extended_candidate_plan_from_signal(signal_state, reference_price, siz
         return None
 
     init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
-    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
-
-    return {
+    base_plan = {
         'limit_price': limit_price,
         'init_sl': init_sl,
         'init_trail': init_trail,
-        'qty': qty,
         'orig_limit': original_limit,
         'orig_atr': atr,
-        'is_orderable': qty > 0,
     }
+    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - 延續單實際掛單規格；僅接受可掛單候選)

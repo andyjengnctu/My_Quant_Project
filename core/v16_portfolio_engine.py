@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import bisect
 import time
-from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
+from core.v16_core import generate_signals, adjust_long_stop_price, adjust_long_sell_fill_price, adjust_long_buy_fill_price, adjust_long_target_price, calc_net_sell_price, calc_position_size, calc_entry_price, calc_initial_risk_total, execute_bar_step, run_v16_backtest, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal, resize_candidate_plan_to_capital, execute_pre_market_entry_plan, should_clear_extended_signal, evaluate_history_candidate_metrics, get_exit_sell_block_reason
 from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
 from core.v16_buy_sort import calc_buy_sort_value
 
@@ -741,18 +741,28 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
             y_close = get_fast_close(fast_df, pos=y_pos)
 
-            if pre_market_occupied >= max_positions or cand['proj_cost'] > available_cash:
+            if pre_market_occupied >= max_positions:
                 continue
 
-            available_cash -= cand['proj_cost']
+            entry_plan = resize_candidate_plan_to_capital(
+                {
+                    'limit_price': cand['limit_px'],
+                    'init_sl': cand['init_sl'],
+                    'init_trail': cand['init_trail'],
+                },
+                available_cash,
+                params,
+            )
+            if entry_plan is None or entry_plan['qty'] <= 0:
+                continue
+
+            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+            if reserved_cost > available_cash:
+                continue
+
+            available_cash -= reserved_cost
             pre_market_occupied += 1
 
-            entry_plan = {
-                'limit_price': cand['limit_px'],
-                'init_sl': cand['init_sl'],
-                'init_trail': cand['init_trail'],
-                'qty': cand['qty'],
-            }
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
                 t_open=t_open,
@@ -766,7 +776,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             )
 
             if entry_result['filled']:
-                qty = cand['qty']
+                qty = entry_plan['qty']
                 actual_total_cost = entry_result['entry_price'] * qty
                 cash -= actual_total_cost
                 portfolio[cand['ticker']] = entry_result['position']
@@ -787,7 +797,6 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 total_missed_buys += 1
                 if not is_training:
                     miss_buy_type = "錯失買進(延續候選)" if cand['type'] == 'extended' else "錯失買進(新訊號)"
-                    reserved_cost = calc_entry_price(cand['limit_px'], cand['qty'], params) * cand['qty']
                     trade_history.append({
                         "Date": today.strftime('%Y-%m-%d'),
                         "Ticker": cand['ticker'],
@@ -796,7 +805,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         "該筆總損益": 0.0,
                         "R_Multiple": 0.0,
                         "Risk": params.fixed_risk,
-                        "備註": f"預掛限價 {cand['limit_px']:.2f} 未成交",
+                        "備註": f"預掛限價 {entry_plan['limit_price']:.2f} 未成交",
                         "投入總金額": reserved_cost,
                     })
         if profile_stats is not None:
