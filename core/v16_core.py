@@ -210,7 +210,7 @@ def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_
     is_candidate = (
         (win_rate >= min_win_rate_req)
         and
-        (expected_value > min_ev_req)
+        (expected_value >= min_ev_req)
     )
     return is_candidate, expected_value, win_rate, trade_count
 

@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json, build_params_from_mapping, params_to_json_dict
-from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit, resize_candidate_plan_to_capital, build_cash_capped_entry_plan
+from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit, resize_candidate_plan_to_capital, build_cash_capped_entry_plan, evaluate_history_candidate_metrics
 from core.v16_buy_sort import calc_buy_sort_value
 from core.v16_config import BUY_SORT_METHOD, V16StrategyParams
 from core.v16_portfolio_engine import (
@@ -1962,6 +1962,35 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
     return results, summary
 
 
+def validate_synthetic_history_ev_threshold_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 1
+    params.min_history_ev = 0.5
+    params.min_history_win_rate = 0.5
+
+    case_id = "SYNTH_HISTORY_EV_THRESHOLD"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    is_candidate, expected_value, win_rate, trade_count = evaluate_history_candidate_metrics(
+        trade_count=1,
+        win_count=1,
+        total_r_sum=0.5,
+        win_r_sum=0.5,
+        loss_r_sum=0.0,
+        params=params,
+    )
+
+    add_check(results, "synthetic_history_ev_threshold", case_id, "expected_value_equals_threshold", 0.5, expected_value)
+    add_check(results, "synthetic_history_ev_threshold", case_id, "win_rate_equals_threshold", 1.0, win_rate)
+    add_check(results, "synthetic_history_ev_threshold", case_id, "trade_count_preserved", 1, trade_count)
+    add_check(results, "synthetic_history_ev_threshold", case_id, "candidate_allowed_when_ev_equals_threshold", True, is_candidate)
+
+    summary["candidate_allowed"] = bool(is_candidate)
+    summary["expected_value"] = expected_value
+    return results, summary
+
+
 def validate_synthetic_proj_cost_cash_capped_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     params.initial_capital = 1_000_000.0
@@ -2083,6 +2112,7 @@ def validate_synthetic_param_guardrail_case(base_params):
         ("fixed_risk_zero_rejected", {**case["base_payload"], "fixed_risk": 0.0}, "fixed_risk"),
         ("min_history_win_rate_gt_1_rejected", {**case["base_payload"], "min_history_win_rate": 1.1}, "min_history_win_rate"),
         ("vol_long_len_lt_short_rejected", {**case["base_payload"], "vol_short_len": 10, "vol_long_len": 5}, "vol_long_len"),
+        ("use_bb_string_type_rejected", {**case["base_payload"], "use_bb": "abc"}, "use_bb"),
     ]
 
     runtime_valid_payload = {**case["base_payload"], "optimizer_max_workers": 3, "scanner_max_workers": 4}
@@ -2147,6 +2177,27 @@ def validate_synthetic_param_guardrail_case(base_params):
     except ValueError as e:
         add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_attr_guardrail", True, "optimizer_max_workers" in str(e))
 
+    invalid_direct_setattr_cases = [
+        ("direct_setattr_use_bb_string_rejected", "use_bb", "abc", "use_bb"),
+        ("direct_setattr_high_len_string_rejected", "high_len", "10", "high_len"),
+    ]
+
+    for metric_name, field_name, invalid_value, expected_field in invalid_direct_setattr_cases:
+        mutation_target = V16StrategyParams()
+        try:
+            setattr(mutation_target, field_name, invalid_value)
+            add_fail_result(
+                results,
+                "synthetic_param_guardrail",
+                case["case_id"],
+                metric_name,
+                f"ValueError containing {expected_field}",
+                "setattr_ok",
+                "直接改 dataclass 欄位不應繞過型別 guardrail。"
+            )
+        except ValueError as e:
+            add_check(results, "synthetic_param_guardrail", case["case_id"], metric_name, True, expected_field in str(e))
+
     mutation_params = V16StrategyParams()
     try:
         mutation_params.tp_precent = 0.3
@@ -2165,7 +2216,7 @@ def validate_synthetic_param_guardrail_case(base_params):
     default_params_arg = run_v16_backtest.__defaults__[0] if run_v16_backtest.__defaults__ else None
     add_check(results, "synthetic_param_guardrail", case["case_id"], "run_v16_backtest_default_params_is_none", True, default_params_arg is None)
 
-    summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + 4
+    summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + len(invalid_direct_setattr_cases) + 4
     return results, summary
 
 
@@ -2180,6 +2231,7 @@ def run_synthetic_consistency_suite(base_params):
         validate_synthetic_unexecutable_half_tp_case,
         validate_synthetic_rotation_t_plus_one_case,
         validate_synthetic_proj_cost_cash_capped_case,
+        validate_synthetic_history_ev_threshold_case,
         validate_synthetic_param_guardrail_case,
     ]
 

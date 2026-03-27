@@ -83,6 +83,29 @@ def normalize_runtime_param_value(field_name: str, raw_value: Any):
     return raw_value
 
 
+# # (AI註: dataclass 直接建構 / 直接 setattr 也必須走同一套型別 guardrail，避免錯型別延後到策略流程才爆炸)
+def normalize_strategy_param_value(field_name: str, raw_value: Any, expected_type: Any):
+    if expected_type is bool:
+        if isinstance(raw_value, bool):
+            return raw_value
+        raise ValueError(f"參數 {field_name} 需要 bool，收到 {raw_value!r}")
+
+    if expected_type is int:
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(f"參數 {field_name} 需要 int，收到 {raw_value!r}")
+        return raw_value
+
+    if expected_type is float:
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError(f"參數 {field_name} 需要 float，收到 {raw_value!r}")
+        return float(raw_value)
+
+    if not isinstance(raw_value, expected_type):
+        raise ValueError(f"參數 {field_name} 需要 {expected_type.__name__}，收到 {raw_value!r}")
+
+    return raw_value
+
+
 @dataclass
 class V16StrategyParams:
     # 1. 核心指標參數
@@ -123,22 +146,33 @@ class V16StrategyParams:
     min_history_win_rate: float = 0.30
 
     def __post_init__(self):
-        validate_strategy_param_ranges(strategy_params_to_dict(self))
+        snapshot = _build_strategy_param_snapshot(self)
+        field_types = {field.name: field.type for field in fields(type(self))}
+
+        for field_name, expected_type in field_types.items():
+            normalized_value = normalize_strategy_param_value(field_name, snapshot[field_name], expected_type)
+            object.__setattr__(self, field_name, normalized_value)
+            snapshot[field_name] = normalized_value
+
+        validate_strategy_param_ranges(snapshot)
 
     def __setattr__(self, name, value):
-        field_names = type(self).__dataclass_fields__
+        field_map = type(self).__dataclass_fields__
 
         if name in RUNTIME_PARAM_DEFAULTS:
             normalized_value = normalize_runtime_param_value(name, value)
             object.__setattr__(self, name, normalized_value)
             return
 
-        if name not in field_names:
+        if name not in field_map:
             raise AttributeError(f"未知參數欄位: {name}")
+
+        expected_type = field_map[name].type
+        normalized_value = normalize_strategy_param_value(name, value, expected_type)
 
         had_old_value = hasattr(self, name)
         old_value = getattr(self, name) if had_old_value else MISSING
-        object.__setattr__(self, name, value)
+        object.__setattr__(self, name, normalized_value)
 
         try:
             validate_strategy_param_ranges(_build_strategy_param_snapshot(self))

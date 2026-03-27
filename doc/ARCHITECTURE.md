@@ -25,7 +25,8 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔；檔案樹、用途與依賴原則說明
 │  ├─ CMD.md                          # 常用指令與操作說明
 │  ├─ FINMIND_API_TOKEN.md            # API token 說明
-│  └─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
+│  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
+│  └─ ToDo.md                         # 待辦事項與後續整理筆記
 ├─ models/
 │  ├─ v16_all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄
 │  ├─ v16_all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄
