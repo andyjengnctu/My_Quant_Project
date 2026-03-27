@@ -2,9 +2,10 @@ import pandas as pd
 import os
 import time
 import requests
-from datetime import datetime, timedelta
+from datetime import timedelta
 from io import StringIO
 from core.v16_log_utils import append_issue_log, build_timestamped_log_path
+from core.v16_runtime_utils import get_taipei_now, get_taipei_file_mtime
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,7 +110,7 @@ def ensure_runtime_dirs():
 
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
-DOWNLOADER_SESSION_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
+DOWNLOADER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 DOWNLOADER_ISSUE_LOG_PATH = None
 
 
@@ -139,7 +140,7 @@ def append_downloader_issues(section, lines):
 def get_market_last_date():
     print("🕵️‍♂️ 正在確認最新交易日...")
     try:
-        search_start = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+        search_start = (get_taipei_now() - timedelta(days=15)).strftime("%Y-%m-%d")
         loader = get_finmind_loader()
         df = loader.get_data(dataset='TaiwanStockPrice', data_id='0050', start_date=search_start)
         if df is not None and not df.empty:
@@ -164,7 +165,7 @@ def get_market_last_date():
         append_downloader_issues("最新交易日(YF備援)失敗", [f"{type(e).__name__}: {e}"])
         print(f"⚠️ YFinance 備援失敗: {type(e).__name__}: {e}")
 
-    fallback_date = datetime.now()
+    fallback_date = get_taipei_now()
     if fallback_date.hour < 14:
         fallback_date -= timedelta(days=1)
 
@@ -181,8 +182,8 @@ def get_or_update_universe():
     list_file = get_universe_list_file_path()
 
     if os.path.exists(list_file):
-        file_mod_time = datetime.fromtimestamp(os.path.getmtime(list_file))
-        if datetime.now() - file_mod_time < timedelta(days=RESCAN_DAYS):
+        file_mod_time = get_taipei_file_mtime(list_file)
+        if get_taipei_now() - file_mod_time < timedelta(days=RESCAN_DAYS):
             with open(list_file, 'r') as f:
                 cached_tickers = [line.strip() for line in f if line.strip()]
             if cached_tickers:
@@ -372,7 +373,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
         vprint(f"⚠️ 非致命問題詳細已寫入: {get_downloader_issue_log_path()}")
 
 if __name__ == "__main__":
-    print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = get_market_last_date()
     target_tickers = get_or_update_universe()
 

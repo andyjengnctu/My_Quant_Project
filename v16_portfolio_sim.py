@@ -80,7 +80,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
             print(*args, **kwargs)
 
     vprint(f"{C_CYAN}📦 正在預載入歷史軌跡，構建真實時間軸...{C_RESET}")
-    all_dfs, all_trade_logs, master_dates = {}, {}, set()
+    all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
     load_issue_lines = []
     total_invalid_rows = 0
     total_duplicate_dates = 0
@@ -122,8 +122,9 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
                 )
 
             df, logs = prep_stock_data_and_trades(df, params)
-            all_dfs[ticker], all_trade_logs[ticker] = df, logs
             master_dates.update(df.index)
+            all_dfs_fast[ticker] = pack_prepared_stock_data(df)
+            all_trade_logs[ticker] = logs
 
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:
             if is_insufficient_data_error(e):
@@ -137,7 +138,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
             vprint(
                 f"{C_GRAY}   預載入進度: [{count}/{total_files}] "
-                f"成功:{len(all_dfs)} | 資料不足:{total_skipped_insufficient}{C_RESET}",
+                f"成功:{len(all_dfs_fast)} | 資料不足:{total_skipped_insufficient}{C_RESET}",
                 end="\r",
                 flush=True
             )
@@ -149,14 +150,13 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     if load_log_path:
         vprint(f"{C_YELLOW}⚠️ 預載入摘要已寫入: {load_log_path}{C_RESET}")
 
-    if not all_dfs:
+    if not all_dfs_fast:
         raise RuntimeError("未能成功載入任何股票資料！")
 
     sorted_dates = sorted(list(master_dates))
-    all_dfs_fast = {t: pack_prepared_stock_data(d) for t, d in all_dfs.items()}
 
     vprint(
-        f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs)} 檔標的，"
+        f"\n{C_GREEN}✅ 預處理完成！共載入 {len(all_dfs_fast)} 檔標的，"
         f"移除 {total_dropped_rows} 列資料 "
         f"(異常OHLCV={total_invalid_rows}, 重複日期={total_duplicate_dates})，"
         f"候選清洗 {total_sanitize_issue_tickers} 檔，"

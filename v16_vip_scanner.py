@@ -11,6 +11,7 @@ from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_e
 from core.v16_display import print_scanner_header, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
+from core.v16_runtime_utils import get_process_pool_executor_kwargs
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -158,7 +159,9 @@ def run_daily_scanner(data_dir=None):
     start_time = time.time()
     max_workers = resolve_scanner_max_workers(params)
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
+
+    with ProcessPoolExecutor(max_workers=max_workers, **process_pool_kwargs) as executor:
         futures = {
             executor.submit(
                 process_single_stock,
@@ -206,6 +209,7 @@ def run_daily_scanner(data_dir=None):
         f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
         f"歷史及格候選: {count_history_qualified} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
         f"候選清洗: {count_sanitized_candidates} 檔 | max_workers: {max_workers}"
+        f" | start_method: {pool_start_method or 'default'}"
     )
         
     if candidate_rows:

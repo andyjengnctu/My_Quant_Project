@@ -24,6 +24,7 @@ from core.v16_data_utils import (
     discover_unique_csv_inputs,
 )
 from core.v16_log_utils import write_issue_log, format_exception_summary
+from core.v16_runtime_utils import get_process_pool_executor_kwargs
 from core.v16_params_io import build_params_from_mapping, params_to_json_dict
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -476,7 +477,10 @@ def objective(trial):
     prep_mode = "parallel"
 
     try:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
+        trial.set_user_attr("prep_start_method", pool_start_method or "default")
+
+        with ProcessPoolExecutor(max_workers=max_workers, **process_pool_kwargs) as executor:
             futures = [executor.submit(worker_prep_data, ticker, df, ai_params) for ticker, df in RAW_DATA_CACHE.items()]
             for future in as_completed(futures):
                 result = future.result()

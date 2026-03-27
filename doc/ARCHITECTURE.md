@@ -20,7 +20,8 @@ project/
 │  ├─ v16_display.py                  # 顯示與輸出格式整理
 │  ├─ v16_log_utils.py                # logging 與輸出輔助工具
 │  ├─ v16_params_io.py                # 參數讀寫、json 載入/匯出
-│  └─ v16_portfolio_engine.py         # 投組核心流程、候選池、資金/名額保留、timeline 與統計口徑
+│  ├─ v16_portfolio_engine.py         # 投組核心流程、候選池、資金/名額保留、timeline 與統計口徑
+│  └─ v16_runtime_utils.py            # 執行期共用工具：ProcessPool 啟動方法、Asia/Taipei 時間工具
 ├─ doc/
 │  ├─ ARCHITECTURE.md                 # 本檔；檔案樹、用途與依賴原則說明
 │  ├─ CMD.md                          # 常用指令與操作說明
