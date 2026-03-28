@@ -22,13 +22,20 @@ from core.v16_portfolio_engine import (
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map, discover_unique_csv_inputs
 from core.v16_log_utils import format_exception_summary
+from core.v16_dataset_profiles import (
+    DEFAULT_VALIDATE_DATASET_PROFILE,
+    build_validate_dataset_prompt,
+    get_dataset_dir,
+    get_dataset_profile_label,
+    normalize_dataset_profile_key,
+)
 from contextlib import redirect_stdout, redirect_stderr
 import tempfile
 import io
 
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
-DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "v16_best_params.json")
 
 FLOAT_TOL = 1e-6
@@ -69,6 +76,47 @@ def get_data_dir_csv_map():
         CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES = discover_unique_csv_map(resolved_data_dir)
         CSV_PATH_CACHE_DATA_DIR = resolved_data_dir
     return CSV_PATH_CACHE
+
+
+def set_active_data_dir(data_dir):
+    global DATA_DIR, CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES, CSV_PATH_CACHE_DATA_DIR
+
+    DATA_DIR = os.path.abspath(data_dir)
+    CSV_PATH_CACHE = None
+    CSV_DUPLICATE_ISSUES = None
+    CSV_PATH_CACHE_DATA_DIR = None
+
+
+def _safe_prompt(prompt_text, default_value):
+    if not sys.stdin or not sys.stdin.isatty():
+        return default_value
+
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
+def resolve_validate_dataset_profile_key(argv, environ):
+    cli_value = None
+    for arg in argv[1:]:
+        if arg.startswith("--dataset="):
+            cli_value = arg.split("=", 1)[1]
+            break
+
+    if cli_value is not None:
+        return normalize_dataset_profile_key(cli_value), "CLI"
+
+    env_value = environ.get("V16_VALIDATE_DATASET")
+    if env_value:
+        return normalize_dataset_profile_key(env_value), "ENV"
+
+    selected_value = _safe_prompt(
+        build_validate_dataset_prompt(DEFAULT_VALIDATE_DATASET_PROFILE),
+        DEFAULT_VALIDATE_DATASET_PROFILE,
+    )
+    return normalize_dataset_profile_key(selected_value), "UI"
 
 
 # # (AI註: consistency test 與 portfolio engine 共用相同模擬起點，避免完整年度/年化交易次數驗證口徑漂移)
@@ -2275,7 +2323,7 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
     synthetic_summary_count = 0
     synthetic_ticker_set = set()
     if not df_summary.empty and "synthetic" in df_summary.columns:
-        synthetic_mask = df_summary["synthetic"].fillna(False).astype(bool)
+        synthetic_mask = df_summary["synthetic"].astype("boolean").fillna(False).astype(bool)
         synthetic_summary_count = int(synthetic_mask.sum())
         synthetic_ticker_set = {
             normalize_ticker_text(ticker)
@@ -2363,6 +2411,14 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
+    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+    set_active_data_dir(selected_data_dir)
+    print(
+        f"驗證資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+    )
 
     base_params = load_params()
     all_results = []

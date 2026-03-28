@@ -1,6 +1,6 @@
 # 忽略所有 CSV 數據 (這是那 586 個檔案的主因)
 tw_stock_data_vip/
-testing_csv/
+tw_stock_data_vip_reduced/
 *.csv
 
 # 忽略 AI 記憶資料庫
