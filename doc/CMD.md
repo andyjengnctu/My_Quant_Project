@@ -22,7 +22,8 @@ set V16_DATASET_PROFILE=full
 
 # optimizer 架構
 python apps/ml_optimizer.py --dataset full            # 正式入口
-# apps/ml_optimizer.py 為薄入口；tools/optimizer/main.py 負責 CLI/啟動，session.py 負責 session 狀態 façade，prep.py / raw_cache.py / trial_inputs.py 負責原始資料快取、worker 預處理與 trial 輸入整合，objective.py / objective_profiles.py / objective_filters.py / objective_runner.py 負責 trial 參數、初始 profile、filter rules 與 objective runner，callbacks.py 負責 monitoring / 展示，runtime.py 負責記憶庫流程/匯出
+# apps/ml_optimizer.py 為薄入口，從 tools.optimizer 套件 façade 匯入 main
+# tools/optimizer/__init__.py 統一匯出 optimizer 公開介面；main.py 負責 CLI/啟動，session.py 提供 session façade，prep.py / objective.py 為 façade，實作分散於 raw_cache.py / trial_inputs.py / objective_profiles.py / objective_filters.py / objective_runner.py / callbacks.py / runtime.py
 
 # validate 架構
 python apps/validate_consistency.py --dataset reduced    # 正式入口
@@ -39,7 +40,7 @@ python apps/validate_consistency.py --dataset reduced    # 正式入口
 python apps/smart_downloader.py
 ```
 
-下載正式入口為 `apps/smart_downloader.py`；`tools/downloader/main.py` 只負責總流程協調，`runtime.py` 管理共用設定 / lazy loader / issue log，`universe.py` 負責市場日期與海選，`sync.py` 負責 VIP 資料下載與最新日期跳過。
+下載正式入口為 `apps/smart_downloader.py`；入口層從 `tools.downloader` 套件 façade 匯入 `main` 與 `smart_download_vip_data`。`tools/downloader/main.py` 只負責總流程協調，`runtime.py` 管理共用設定 / lazy loader / issue log，`universe.py` 負責市場日期與海選，`sync.py` 負責 VIP 資料下載與最新日期跳過。
 
 
 ## 交易除錯
@@ -74,11 +75,16 @@ python tools/debug/trade_log.py
 
 
 # apps 入口層
-# apps/portfolio_sim.py 為薄入口；tools/portfolio_sim/main.py 負責 CLI/互動流程，runtime.py 為 façade，runtime_common.py 負責共用路徑/參數載入/runtime 目錄/不足資料判定，simulation_runner.py 負責預載入與 timeline 執行，reporting.py 負責年度報酬 / Excel / Plotly 輸出
-# apps/vip_scanner.py 為薄入口；tools/scanner/main.py 為 façade，scan_runner.py 負責 CLI/平行掃描，worker.py 為 façade，runtime_common.py 負責共用路徑/runtime 目錄/參數載入/worker 數判定，stock_processor.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
+# apps/portfolio_sim.py 為薄入口，從 tools.portfolio_sim 套件 façade 匯入公開介面；main.py 負責 CLI/互動流程，runtime.py 為 façade，runtime_common.py 負責共用路徑/參數載入/runtime 目錄/不足資料判定，simulation_runner.py 負責預載入與 timeline 執行，reporting.py 負責年度報酬 / Excel / Plotly 輸出
+# apps/vip_scanner.py 為薄入口，從 tools.scanner 套件 façade 匯入公開介面；main.py 為 façade，scan_runner.py 負責 CLI/平行掃描，worker.py 為 façade，runtime_common.py 負責共用路徑/runtime 目錄/參數載入/worker 數判定，stock_processor.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
 
 # display 架構
 # core/v16_display.py 為 façade；v16_display_common.py 負責 ANSI 色彩/表格與共用 helper，v16_scanner_display.py 負責 scanner header，v16_strategy_dashboard.py 負責策略 dashboard 與對比表
 
 
 - 單股核心已拆分為 `core/v16_position_step.py` 與 `core/v16_backtest_finalize.py`，對外仍由 `core/v16_core.py` 提供 façade。
+
+# 命名 / 結構收尾原則
+# apps/* 僅從對應子系統套件 façade 匯入公開介面，避免入口層直接依賴更深子模組
+# tools/*/__init__.py 與 façade 檔維持穩定公開介面；子模組可繼續細拆，但外部匯入路徑應盡量不變
+# core/ 既有 v16_* 名稱暫作歷史核心相容名稱；新增非必要模組不再擴散版本前綴

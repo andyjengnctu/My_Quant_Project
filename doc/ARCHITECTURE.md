@@ -8,7 +8,7 @@
 project/
 ├─ .gitignore                         # Git 忽略規則
 ├─ apps/
-│  ├─ __init__.py                     # apps 套件初始化檔
+│  ├─ __init__.py                     # apps 套件 façade；統一匯出正式入口
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
@@ -21,7 +21,7 @@ project/
 │  ├─ v16_core.py                     # 單股策略核心：K棒推進與單股回測總控
 │  ├─ v16_price_utils.py              # 跳價/成交價/成本/股數/漲跌停與賣出阻塞判斷單一口徑
 │  ├─ v16_signal_utils.py             # 單股技術指標與訊號生成
-│  ├─ v16_trade_plans.py              # 單股候選/掛單/延續訊號 façade
+│  ├─ v16_trade_plans.py              # 單股候選/掛單/延續訊號 façade（保留穩定匯入路徑）
 │  ├─ v16_history_filters.py          # 歷史績效候選門檻
 │  ├─ v16_entry_plans.py              # 候選規格、盤前掛單規格、成交後部位建立
 │  ├─ v16_extended_signals.py         # 延續訊號狀態、延續候選與延續掛單規格
@@ -68,22 +68,27 @@ project/
    │  ├─ universe.py                  # 最新交易日判定、universe 快取與海選
    │  └─ sync.py                      # VIP 資料下載與最新日期跳過邏輯
    ├─ portfolio_sim/
-   │  ├─ __init__.py                  # portfolio_sim 子套件初始化檔
+   │  ├─ __init__.py                  # portfolio_sim 子套件 façade；統一匯出模擬公開介面
    │  ├─ main.py                      # portfolio_sim CLI 主控與互動流程
-   │  ├─ runtime.py                   # portfolio_sim 預載入/時間軸模擬執行期流程
+   │  ├─ runtime.py                   # portfolio_sim runtime façade
+   │  ├─ runtime_common.py            # portfolio_sim 共用路徑/參數/目錄與不足資料判定
+   │  ├─ simulation_runner.py         # portfolio_sim 預載入與 timeline 執行
    │  └─ reporting.py                 # portfolio_sim 年度報酬、Excel 與 Plotly 輸出
    ├─ scanner/
-   │  ├─ __init__.py                  # scanner 子套件初始化檔
-   │  ├─ main.py                      # scanner CLI 主控與平行掃描流程
-   │  ├─ worker.py                    # 單股掃描 worker、候選排序值與參考投入計算
+   │  ├─ __init__.py                  # scanner 子套件 façade；統一匯出掃描公開介面
+   │  ├─ main.py                      # scanner CLI façade
+   │  ├─ scan_runner.py               # scanner CLI 主控與平行掃描流程
+   │  ├─ worker.py                    # scanner worker façade
+   │  ├─ runtime_common.py            # scanner 共用路徑/參數/目錄與 worker 數判定
+   │  ├─ stock_processor.py           # 單股掃描 worker、候選排序值與參考投入計算
    │  └─ reporting.py                 # scanner 啟動/摘要/候選清單輸出
    ├─ debug/
-   │  ├─ __init__.py                  # debug 子套件初始化檔
+   │  ├─ __init__.py                  # debug 子套件 façade；統一匯出 debug 公開介面
    │  ├─ backtest.py                  # 交易回放與明細列建構
    │  ├─ reporting.py                 # debug 報表輸出與虧損摘要
    │  └─ trade_log.py                 # 交易除錯入口、資料集解析與對外包裝
    ├─ optimizer/
-   │  ├─ __init__.py                  # optimizer 子套件初始化檔
+   │  ├─ __init__.py                  # optimizer 子套件 façade；統一匯出 optimizer 公開介面
    │  ├─ main.py                      # 最佳化主流程、study 控制與歷史最佳還原
    │  ├─ prep.py                      # optimizer 預處理 façade：統一匯出原始資料快取與 trial 輸入準備
    │  ├─ raw_cache.py                 # optimizer 原始資料快取、資料清洗與載入摘要
@@ -96,7 +101,7 @@ project/
    │  ├─ profile.py                   # optimizer profiling CSV/JSON 輸出與摘要
    │  └─ study_utils.py               # trial / study / 參數還原共用工具
    └─ validate/
-      ├─ __init__.py                  # validate 子套件初始化檔
+      ├─ __init__.py                  # validate 子套件 façade；統一匯出 validate 公開介面
       ├─ check_result_utils.py        # validate 檢查結果記錄、ticker 正規化與共用失敗/跳過判定
       ├─ checks.py                    # validate checks façade：統一匯出結果/統計/scanner 預期 helpers
       ├─ main.py                      # 一致性驗證總控；資料集解析、真實掃描協調與結果彙整
@@ -138,6 +143,13 @@ project/
 - `apps/` 與 `tools/` 可依賴 `core/`，但不得在外層重寫核心規則。
 - 顯示、輸出、CLI、下載流程不得反向影響核心交易規則。
 - 參數驗證、交易規則、統計口徑應集中管理，不得在多處重複實作。
+
+## 命名與 façade 規則
+
+- `apps/` 只保留正式入口檔，檔名以功能語意為主；入口層應優先從對應子系統套件 `__init__.py` 匯入，而不是直接依賴更深子模組。
+- `tools/*/__init__.py` 與必要 façade 檔負責提供穩定公開介面；子模組可繼續細拆，但對外匯入路徑應盡量維持穩定。
+- `core/` 內既有 `v16_*` 命名目前視為歷史核心相容名稱；新拆出的非必要模組應優先用職責語意命名，不再新增新的版本前綴。
+- 當 façade 或套件公開介面調整時，應同步更新 `doc/CMD.md` 與本文件中的檔案樹與說明。
 
 ## 維護要求
 
