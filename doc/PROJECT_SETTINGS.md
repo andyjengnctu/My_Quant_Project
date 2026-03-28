@@ -6,7 +6,7 @@
 ## A. 執行紀律（強制）
 
 1. 每次開始前，必須先回報：ZIP 檔名、SHA256、全新解壓目錄、已讀 `/doc/PROJECT_SETTINGS.md`。
-2. 每次開始前，必須先盤點必要資產：`<repo>/models/best_params.json`、optimizer DB、`requirements` 所需套件。測試資料規則以 D 節為準。
+2. 每次開始前，必須先盤點必要資產：`<repo>/models/best_params.json`、optimizer DB、`requirements` 所需套件。測試資料規則與搜尋順序以 D 節為準。
 3. 使用者要求「再檢查」、「最嚴格檢查」或「一次修好」時，必須先完成完整問題盤點，再開始修補；不得邊測邊修。
 4. 若判定本輪仍有問題，必須提出本輪 ZIP 的實際檔案證據與行號，不得直接歸因於使用者。
 5. 不得把 assistant 自己的解壓、暫存、容器、套件、資料遺失或測試操作問題歸因於使用者。
@@ -41,19 +41,11 @@
 
 ## D. 測試資料與環境規則
 
-1. `tw_stock_data_vip_reduced` 為獨立測試資料，不包含於程式包 ZIP。
-2. 本輪使用者上傳的所有檔案，包含程式 ZIP、資料 ZIP、單一檔案與附件，全部都屬於本輪專案資料；在回報缺測試資料前，必須先檢查本輪所有上傳檔案。
-3. 若本輪任一上傳檔案包含 `data/tw_stock_data_vip_reduced`，即視為本輪正式測試資料來源；不得忽略該檔而直接回報找不到測試資料。
-4. 若本輪上傳檔案未提供可用測試資料，才檢查已可直接使用的 `/data/tw_stock_data_vip_reduced`。
-5. 驗證一律以 `tw_stock_data_vip_reduced` 為準；除非使用者明確要求，否則不做 `tw_stock_data_vip` full dataset 測試。
-6. 程式包 ZIP 不包含測試資料屬正常設計，不得視為缺檔、專案缺陷或使用者未提供資料。
-7. 只有在以下條件全部成立時，才可回報 reduced 測試資料未取得：
-   - 已檢查本輪所有上傳檔案
-   - 已確認本輪不存在可用的資料 ZIP 或測試資料附件
-   - 已確認 `/data/tw_stock_data_vip_reduced` 不存在或不可用
-8. 若回報 reduced 測試資料未取得，必須同時列出本輪已檢查的上傳檔清單；未列清單，不得宣稱缺測試資料。
-9. 若 reduced 測試資料最終不可用，只需在驗證結果中寫「reduced 動態驗證未執行」；不得解讀為程式包缺檔、專案缺陷或使用者未提供資料。
-10. 若需外部套件，應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
+1. `tw_stock_data_vip_reduced` 為獨立測試資料，不包含於程式包 ZIP；測試資料固定來自本投資專案的專案資料 `data.zip`。
+2. reduced 驗證前，必須先由 `data.zip` 取得 `tw_stock_data_vip_reduced`。
+3. 驗證一律以 `tw_stock_data_vip_reduced` 為準，不做 `tw_stock_data_vip` full dataset 測試。
+4. 只有在已確認 `data.zip` 中不存在或不可用 `tw_stock_data_vip_reduced` 時，才可寫「reduced 動態驗證未執行」；不得解讀為程式包缺檔、專案缺陷或使用者未提供資料。
+5. 若需外部套件，應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
 
 ## E. Coding 原則
 
