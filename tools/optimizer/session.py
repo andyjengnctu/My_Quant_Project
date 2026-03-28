@@ -102,4 +102,4 @@ class OptimizerSession:
         return run_optimizer_objective(self, trial)
 
     def monitoring_callback(self, study, trial):
-        run_optimizer_monitoring_callback(self, study, trial)
+        return run_optimizer_monitoring_callback(self, study, trial)

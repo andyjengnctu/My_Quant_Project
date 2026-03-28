@@ -15,7 +15,7 @@ from core.v16_portfolio_stats import calc_portfolio_score
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
 
 
-def build_optimizer_trial_params_for_trial(session, trial):
+def build_trial_params(session, trial):
     ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
     ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
     ai_use_vol = trial.suggest_categorical("use_vol", [True, False])
@@ -32,12 +32,7 @@ def build_optimizer_trial_params_for_trial(session, trial):
         atr_times_init=trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
         atr_times_trail=trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1),
         atr_buy_tol=trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
-        high_len=trial.suggest_int(
-            "high_len",
-            session.optimizer_high_len_min,
-            session.optimizer_high_len_max,
-            step=session.optimizer_high_len_step,
-        ),
+        high_len=trial.suggest_int("high_len", session.optimizer_high_len_min, session.optimizer_high_len_max, step=session.optimizer_high_len_step),
         tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
         use_bb=ai_use_bb,
         use_kc=ai_use_kc,
@@ -100,7 +95,7 @@ def build_initial_profile_row(trial_number, prep_wall_sec, prep_profile):
     }
 
 
-def apply_optimizer_filter_rules(metrics):
+def apply_filter_rules(metrics):
     if metrics["mdd"] > MAX_PORTFOLIO_MDD_PCT:
         return f"回撤過大 ({metrics['mdd']:.1f}%)"
     if metrics["annual_trades"] < MIN_ANNUAL_TRADES:
@@ -127,7 +122,7 @@ def apply_optimizer_filter_rules(metrics):
 
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
-    ai_params = build_optimizer_trial_params_for_trial(session, trial)
+    ai_params = build_trial_params(session, trial)
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,
         params=ai_params,
@@ -237,7 +232,7 @@ def run_optimizer_objective(session, trial):
         "r_sq": r_sq,
     }
     filter_start = time.perf_counter()
-    fail_reason = apply_optimizer_filter_rules(metrics)
+    fail_reason = apply_filter_rules(metrics)
     profile_row["filter_rules_sec"] = time.perf_counter() - filter_start
     if fail_reason is not None:
         trial.set_user_attr("fail_reason", fail_reason)

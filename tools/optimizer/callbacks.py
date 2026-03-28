@@ -47,10 +47,7 @@ def run_optimizer_monitoring_callback(session, study, trial):
         attrs = trial.user_attrs
         params = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
         mode_display = "啟用 (汰弱換強)" if session.train_enable_rotation else "關閉 (穩定鎖倉)"
-        print(
-            f"\n{session.colors['red']}🏆 破紀錄！發現更強的投資組合參數！ "
-            f"(累積第 {trial.number + 1} 次測試){session.colors['reset']}"
-        )
+        print(f"\n{session.colors['red']}🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試){session.colors['reset']}")
         session.print_strategy_dashboard(
             params=params,
             title="績效與風險對比表",
