@@ -22,7 +22,7 @@ set V16_DATASET_PROFILE=full
 
 # optimizer 架構
 python apps/ml_optimizer.py --dataset full            # 正式入口
-# apps/ml_optimizer.py 為薄入口；主流程在 tools/optimizer/main.py
+# apps/ml_optimizer.py 為薄入口；tools/optimizer/main.py 負責 CLI/啟動，session.py 負責 objective/callback，runtime.py 負責記憶庫流程/匯出
 
 # validate 架構
 python apps/validate_consistency.py --dataset reduced    # 正式入口
