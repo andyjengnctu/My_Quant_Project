@@ -29,6 +29,7 @@ project/
 │  ├─ FINMIND_API_TOKEN.md            # API token 說明
 │  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
 │  └─ ToDo.md                         # 待辦事項與後續整理筆記
+├─ tw_stock_data_vip/                 # 完整版測試資料集
 ├─ tw_stock_data_vip_reduced/         # 縮減版測試資料集（供 validate 預設使用）
 ├─ models/
 │  ├─ v16_all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄
