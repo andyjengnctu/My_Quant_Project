@@ -11,7 +11,7 @@ project/
 │  ├─ __init__.py                     # apps 套件初始化檔
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口
-│  ├─ smart_downloader.py             # 資料下載正式入口
+│  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
 │  ├─ validate_consistency.py         # 一致性驗證正式入口
 │  └─ vip_scanner.py                  # 掃描器正式入口
 ├─ core/
@@ -46,6 +46,9 @@ project/
 │  └─ requirements.txt                # 主要相依套件清單
 └─ tools/
    ├─ __init__.py                     # tools 套件初始化檔
+   ├─ downloader/
+   │  ├─ __init__.py                  # downloader 子套件初始化檔
+   │  └─ main.py                      # 下載主流程、名單快篩與資料輸出
    ├─ debug/
    │  ├─ __init__.py                  # debug 子套件初始化檔
    │  └─ trade_log.py                 # 交易除錯工具

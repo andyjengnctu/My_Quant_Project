@@ -162,7 +162,7 @@ def run_scanner_tool_check(ticker, file_path, params):
 def run_downloader_tool_check(ticker):
     module, module_path = load_module_from_candidates(
         "vip_downloader_module",
-        ["apps/smart_downloader.py"],
+        ["tools/downloader/main.py"],
         required_attrs=["smart_download_vip_data"]
     )
 
