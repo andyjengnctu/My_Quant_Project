@@ -9,7 +9,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.data_utils import get_required_min_rows_from_high_len
+from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     get_dataset_dir,
@@ -22,6 +22,7 @@ from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
 from tools.optimizer.runtime import (
     create_optimizer_study,
+    ensure_optimizer_db_usable,
     export_best_params_if_requested,
     maybe_print_history_best,
     print_trial_count_or_exit,
@@ -133,6 +134,12 @@ def main(argv=None, environ=None):
     if trial_count_exit is not None:
         return trial_count_exit
 
+    if session.n_trials > 0:
+        csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+        if not csv_inputs:
+            print(f"{C_RED}❌ 資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。{C_RESET}", file=sys.stderr)
+            return 1
+
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -146,7 +153,12 @@ def main(argv=None, environ=None):
         if not os.path.exists(db_file):
             print(f"\n{C_YELLOW}⚠️ 記憶庫不存在，無法匯出。{C_RESET}\n")
             return 0
-        study = create_optimizer_study(db_name)
+        try:
+            ensure_optimizer_db_usable(db_file)
+            study = create_optimizer_study(db_name)
+        except RuntimeError as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
         try:
             return export_best_params_if_requested(
                 study,
@@ -159,25 +171,12 @@ def main(argv=None, environ=None):
 
     try:
         prompt_existing_db_policy(db_file, COLORS)
-    except ValueError as exc:
+        ensure_optimizer_db_usable(db_file)
+        study = create_optimizer_study(db_name)
+    except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
-    try:
-        session.load_raw_data(
-            selected_data_dir,
-            load_all_raw_data=load_all_raw_data,
-            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
-
-    session.profile_recorder.init_output_files()
-    if session.profile_recorder.enabled:
-        print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
-
-    study = create_optimizer_study(db_name)
     try:
         maybe_print_history_best(
             study,
@@ -186,6 +185,16 @@ def main(argv=None, environ=None):
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
         )
+
+        session.load_raw_data(
+            selected_data_dir,
+            load_all_raw_data=load_all_raw_data,
+            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
+        )
+
+        session.profile_recorder.init_output_files()
+        if session.profile_recorder.enabled:
+            print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         try:
@@ -198,6 +207,9 @@ def main(argv=None, environ=None):
         session.print_optimizer_prep_summary()
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
     finally:
         close_study_storage(study)
 

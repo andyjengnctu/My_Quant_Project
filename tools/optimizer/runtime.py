@@ -1,8 +1,12 @@
 import json
 import os
+import sqlite3
 import sys
 
 import optuna
+from sqlalchemy.exc import SQLAlchemyError
+
+from core.log_utils import format_exception_summary
 
 from core.display import print_strategy_dashboard
 from core.runtime_utils import safe_prompt_choice
@@ -29,12 +33,30 @@ def prompt_existing_db_policy(db_file, colors):
 
 
 def create_optimizer_study(db_name):
-    return optuna.create_study(
-        study_name="portfolio_optimization_overnight",
-        storage=db_name,
-        load_if_exists=True,
-        direction="maximize",
-    )
+    try:
+        return optuna.create_study(
+            study_name="portfolio_optimization_overnight",
+            storage=db_name,
+            load_if_exists=True,
+            direction="maximize",
+        )
+    except (sqlite3.Error, SQLAlchemyError, RuntimeError, ValueError, OSError) as exc:
+        raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc)}") from exc
+
+
+def ensure_optimizer_db_usable(db_file):
+    if not os.path.exists(db_file):
+        return
+
+    conn = None
+    try:
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA schema_version;").fetchone()
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        raise RuntimeError(f"Optimizer 記憶庫檔案損壞或不可讀: {format_exception_summary(exc)}") from exc
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation, train_max_positions, colors):

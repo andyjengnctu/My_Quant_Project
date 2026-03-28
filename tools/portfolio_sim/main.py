@@ -3,6 +3,7 @@ import sys
 import warnings
 import time
 
+from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int
@@ -31,8 +32,17 @@ def main(argv=None, env=None):
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         if not os.path.isdir(selected_data_dir):
             raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請確認路徑或先下載資料！")
+        csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+        if not csv_inputs:
+            raise FileNotFoundError(f"資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。")
     except (ValueError, FileNotFoundError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        return 1
+
+    try:
+        params = load_strict_params(BEST_PARAMS_PATH)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -42,6 +52,7 @@ def main(argv=None, env=None):
         f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
+    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     try:
         rotation_choice = safe_prompt_choice(
@@ -70,9 +81,6 @@ def main(argv=None, env=None):
 
     ensure_runtime_dirs()
     try:
-        params = load_strict_params(BEST_PARAMS_PATH)
-        print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-
         start_time = time.time()
         result = run_portfolio_simulation(
             selected_data_dir,

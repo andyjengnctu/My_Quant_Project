@@ -119,7 +119,11 @@ def main():
         print(f"❌ {e}", file=sys.stderr)
         return 1
 
-    base_params = load_params()
+    try:
+        base_params = load_params()
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
     all_results = []
     summaries = []
     start_time = time.time()

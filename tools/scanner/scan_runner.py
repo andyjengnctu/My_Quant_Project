@@ -13,7 +13,7 @@ from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_
 from .stock_processor import process_single_stock
 
 
-def run_daily_scanner(data_dir):
+def run_daily_scanner(data_dir, params):
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"找不到資料夾 {data_dir}。")
 
@@ -24,7 +24,6 @@ def run_daily_scanner(data_dir):
     if total_files == 0:
         raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
-    params = load_strict_params(BEST_PARAMS_PATH)
     print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
 
     print_scanner_header(params)
@@ -104,16 +103,20 @@ def main(argv=None, env=None):
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         if not os.path.isdir(selected_data_dir):
             raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}。")
+        csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+        if not csv_inputs:
+            raise FileNotFoundError(f"資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。")
+        params = load_strict_params(BEST_PARAMS_PATH)
         print(
             f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
             f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
         )
-    except (ValueError, FileNotFoundError) as e:
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
         import sys
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
     try:
-        run_daily_scanner(selected_data_dir)
+        run_daily_scanner(selected_data_dir, params)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
