@@ -46,3 +46,9 @@ python tools/debug/trade_log.py
 ```
 
 `tools/debug/trade_log.py` 為 debug 正式入口；交易回放主邏輯在 `tools/debug/backtest.py`，輸出摘要在 `tools/debug/reporting.py`。
+
+
+# portfolio engine 架構
+# run_portfolio_timeline() 正式總控仍在 core/v16_portfolio_engine.py
+# 快取市場資料/PIT 索引在 core/v16_portfolio_fast_data.py
+# 曲線/年度/年化統計與分數在 core/v16_portfolio_stats.py

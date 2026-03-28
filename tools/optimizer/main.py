@@ -28,7 +28,8 @@ from core.v16_dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.v16_display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.v16_portfolio_engine import calc_portfolio_score, run_portfolio_timeline
+from core.v16_portfolio_engine import run_portfolio_timeline
+from core.v16_portfolio_stats import calc_portfolio_score
 from core.v16_runtime_utils import safe_prompt_choice
 from tools.optimizer.prep import (
     is_insufficient_data_message,

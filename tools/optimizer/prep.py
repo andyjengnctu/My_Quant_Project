@@ -13,7 +13,7 @@ from core.v16_data_utils import (
 )
 from core.v16_display import C_CYAN, C_GRAY, C_GREEN, C_RESET, C_YELLOW
 from core.v16_log_utils import format_exception_summary, write_issue_log
-from core.v16_portfolio_engine import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
+from core.v16_portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
 from core.v16_runtime_utils import get_process_pool_executor_kwargs
 
 

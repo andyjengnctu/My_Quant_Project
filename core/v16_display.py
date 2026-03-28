@@ -15,7 +15,7 @@ from core.v16_config import (
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
 )
 from core.v16_buy_sort import get_buy_sort_title
-from core.v16_portfolio_engine import calc_portfolio_score
+from core.v16_portfolio_stats import calc_portfolio_score
 
 C_RED = '\033[91m'
 C_YELLOW = '\033[93m'

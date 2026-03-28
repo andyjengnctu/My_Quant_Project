@@ -13,7 +13,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
-from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
+from core.v16_portfolio_engine import run_portfolio_timeline
+from core.v16_portfolio_fast_data import prep_stock_data_and_trades, pack_prepared_stock_data
 from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary

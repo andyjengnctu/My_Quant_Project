@@ -19,11 +19,8 @@ from core.v16_data_utils import (
     sanitize_ohlcv_dataframe,
 )
 from core.v16_params_io import build_params_from_mapping, params_to_json_dict
-from core.v16_portfolio_engine import (
-    pack_prepared_stock_data,
-    prep_stock_data_and_trades,
-    run_portfolio_timeline,
-)
+from core.v16_portfolio_engine import run_portfolio_timeline
+from core.v16_portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_and_trades
 
 from .checks import (
     add_check,

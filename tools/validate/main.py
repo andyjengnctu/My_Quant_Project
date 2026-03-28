@@ -21,13 +21,9 @@ from core.v16_dataset_profiles import (
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map
 from core.v16_log_utils import format_exception_summary
 from core.v16_params_io import load_params_from_json
-from core.v16_portfolio_engine import (
-    find_sim_start_idx,
-    get_fast_dates,
-    pack_prepared_stock_data,
-    prep_stock_data_and_trades,
-    run_portfolio_timeline,
-)
+from core.v16_portfolio_engine import run_portfolio_timeline
+from core.v16_portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
+from core.v16_portfolio_stats import find_sim_start_idx
 from core.v16_runtime_utils import is_interactive_stdin, safe_prompt
 from tools.validate.checks import (
     add_check,
