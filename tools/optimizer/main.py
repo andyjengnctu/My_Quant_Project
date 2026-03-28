@@ -120,38 +120,9 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-
     db_file = build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
     db_name = f"sqlite:///{db_file}"
-
     ensure_runtime_dirs()
-    try:
-        session.load_raw_data(
-            selected_data_dir,
-            load_all_raw_data=load_all_raw_data,
-            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
-
-    print(
-        f"{C_GRAY}📁 使用資料集: {dataset_label} | "
-        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
-    )
-    print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
-    session.profile_recorder.init_output_files()
-    if session.profile_recorder.enabled:
-        print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
-
-    try:
-        prompt_existing_db_policy(db_file, COLORS)
-    except ValueError as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
 
     trial_count_exit = print_trial_count_or_exit(
         session,
@@ -162,6 +133,50 @@ def main(argv=None, environ=None):
     if trial_count_exit is not None:
         return trial_count_exit
 
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(
+        f"{C_GRAY}📁 使用資料集: {dataset_label} | "
+        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+    )
+    print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
+
+    if session.n_trials == 0:
+        if not os.path.exists(db_file):
+            print(f"\n{C_YELLOW}⚠️ 記憶庫不存在，無法匯出。{C_RESET}\n")
+            return 0
+        study = create_optimizer_study(db_name)
+        try:
+            return export_best_params_if_requested(
+                study,
+                best_params_path=BEST_PARAMS_PATH,
+                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                colors=COLORS,
+            )
+        finally:
+            close_study_storage(study)
+
+    try:
+        prompt_existing_db_policy(db_file, COLORS)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
+    try:
+        session.load_raw_data(
+            selected_data_dir,
+            load_all_raw_data=load_all_raw_data,
+            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
+    session.profile_recorder.init_output_files()
+    if session.profile_recorder.enabled:
+        print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
+
     study = create_optimizer_study(db_name)
     try:
         maybe_print_history_best(
@@ -171,14 +186,6 @@ def main(argv=None, environ=None):
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
         )
-
-        if session.n_trials == 0:
-            return export_best_params_if_requested(
-                study,
-                best_params_path=BEST_PARAMS_PATH,
-                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                colors=COLORS,
-            )
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         try:
@@ -193,6 +200,7 @@ def main(argv=None, environ=None):
         return 0
     finally:
         close_study_storage(study)
+
 
 
 if __name__ == "__main__":

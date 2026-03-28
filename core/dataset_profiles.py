@@ -81,9 +81,17 @@ def extract_dataset_cli_value(argv: Optional[Iterable[str]]):
     args = list(argv)
     for idx, arg in enumerate(args[1:], start=1):
         if arg.startswith("--dataset="):
-            return arg.split("=", 1)[1].strip()
-        if arg == "--dataset" and idx + 1 < len(args):
-            return args[idx + 1].strip()
+            value = arg.split("=", 1)[1].strip()
+            if value == "":
+                raise ValueError("--dataset= 不能為空，請使用 reduced 或 full")
+            return value
+        if arg == "--dataset":
+            if idx + 1 >= len(args):
+                raise ValueError("--dataset 缺少值，請使用 reduced 或 full")
+            value = str(args[idx + 1]).strip()
+            if value == "":
+                raise ValueError("--dataset 缺少值，請使用 reduced 或 full")
+            return value
     return None
 
 
