@@ -393,7 +393,7 @@ def main():
         try:
             file_path, _duplicate_file_issue_lines = resolve_unique_csv_path(DATA_DIR, ticker)
         except FileNotFoundError as e:
-            raise FileNotFoundError(f"找不到 {ticker} 的歷史資料 CSV。") from e
+            raise FileNotFoundError(str(e)) from e
 
     print(f"📥 讀取 {file_path}...")
     raw_df = pd.read_csv(file_path)
