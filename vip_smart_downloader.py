@@ -4,12 +4,13 @@ import time
 import requests
 from datetime import timedelta
 from io import StringIO
+from core.v16_dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
 from core.v16_log_utils import append_issue_log, build_timestamped_log_path
 from core.v16_runtime_utils import get_taipei_now, get_taipei_file_mtime
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SAVE_DIR = os.path.join(BASE_DIR, "tw_stock_data_vip")
+SAVE_DIR = get_dataset_dir(BASE_DIR, DATASET_PROFILE_FULL)
 
 
 # # (AI註: 單一真理來源 - universe 名單路徑必須即時依 SAVE_DIR 推導，避免目錄重導後仍寫回舊路徑)

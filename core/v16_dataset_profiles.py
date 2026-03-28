@@ -7,6 +7,7 @@ DEFAULT_DATASET_PROFILE = DATASET_PROFILE_FULL
 DEFAULT_VALIDATE_DATASET_PROFILE = DATASET_PROFILE_REDUCED
 DEFAULT_DATASET_ENV_VAR = "V16_DATASET_PROFILE"
 VALIDATE_DATASET_ENV_VAR = "V16_VALIDATE_DATASET"
+DATASET_ROOT_DIR_NAME = "data"
 
 DATASET_PROFILE_SPECS: Dict[str, Dict[str, str]] = {
     DATASET_PROFILE_REDUCED: {
@@ -53,9 +54,13 @@ def normalize_dataset_profile_key(value, default=DEFAULT_DATASET_PROFILE):
     return normalized
 
 
+def get_dataset_root_dir(project_root):
+    return os.path.join(project_root, DATASET_ROOT_DIR_NAME)
+
+
 def get_dataset_dir(project_root, profile_key):
     normalized_key = normalize_dataset_profile_key(profile_key)
-    return os.path.join(project_root, DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
+    return os.path.join(get_dataset_root_dir(project_root), DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
 
 
 def get_dataset_profile_label(profile_key):
