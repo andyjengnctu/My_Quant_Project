@@ -1,13 +1,13 @@
 import os
 
-from core.v16_config import V16StrategyParams
-from core.v16_dataset_profiles import (
+from core.config import V16StrategyParams
+from core.dataset_profiles import (
     DATASET_PROFILE_FULL,
     DEFAULT_DATASET_PROFILE,
     normalize_dataset_profile_key,
 )
-from core.v16_params_io import build_params_from_mapping, params_to_json_dict
-from core.v16_runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_int
+from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_int
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
 DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
@@ -33,7 +33,7 @@ def resolve_optimizer_trial_count(environ):
 def build_optimizer_db_file_path(dataset_profile_key, models_dir):
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
     suffix = "" if normalized_key == DATASET_PROFILE_FULL else f"_{normalized_key}"
-    return os.path.join(models_dir, f"v16_portfolio_ai_10pos_overnight{suffix}.db")
+    return os.path.join(models_dir, f"portfolio_ai_10pos_overnight{suffix}.db")
 
 
 def validate_optimizer_param_overrides(param_mapping):

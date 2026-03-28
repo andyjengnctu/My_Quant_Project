@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from core.v16_price_utils import adjust_long_buy_limit_array
+from core.price_utils import adjust_long_buy_limit_array
 
 
 def tv_rma(source, length):

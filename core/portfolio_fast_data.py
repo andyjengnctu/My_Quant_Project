@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 
-from core.v16_core import (
+from core.backtest_core import (
     adjust_long_sell_fill_price,
     calc_net_sell_price,
     evaluate_history_candidate_metrics,

@@ -2,7 +2,7 @@ import csv
 import json
 import os
 
-from core.v16_display import C_CYAN, C_GRAY, C_RESET
+from core.display import C_CYAN, C_GRAY, C_RESET
 
 PROFILE_FIELDS = [
     "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",

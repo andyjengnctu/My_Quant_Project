@@ -1,11 +1,11 @@
 import os
 
-from core.v16_params_io import load_params_from_json
+from core.params_io import load_params_from_json
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
+BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "best_params.json")
 LOAD_PROGRESS_EVERY = 50
 
 

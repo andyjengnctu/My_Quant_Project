@@ -1,4 +1,4 @@
-from core.v16_config import (
+from core.config import (
     MAX_PORTFOLIO_MDD_PCT,
     MIN_ANNUAL_TRADES,
     MIN_BUY_FILL_RATE,

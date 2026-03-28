@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.v16_core import (
+from core.backtest_core import (
     build_extended_entry_plan_from_signal,
     build_normal_entry_plan,
     calc_entry_price,

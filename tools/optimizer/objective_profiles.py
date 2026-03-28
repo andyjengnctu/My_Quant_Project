@@ -1,4 +1,4 @@
-from core.v16_config import V16StrategyParams
+from core.config import V16StrategyParams
 
 
 def build_trial_params(session, trial):

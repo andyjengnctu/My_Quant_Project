@@ -2,9 +2,9 @@ import os
 
 import pandas as pd
 
-from core.v16_data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
-from core.v16_portfolio_engine import run_portfolio_timeline
-from core.v16_portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_and_trades
+from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
+from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_and_trades
 
 from .checks import add_check, build_portfolio_stats_payload, make_synthetic_validation_params
 from .synthetic_fixtures import (
@@ -110,7 +110,7 @@ def run_portfolio_core_check_for_dir(data_dir, params, *, max_positions, enable_
     ) = result
 
     return build_portfolio_stats_payload(
-        module_path="core/v16_portfolio_engine.py",
+        module_path="core/portfolio_engine.py",
         df_trades=_df_tr,
         total_return=tot_ret,
         mdd=mdd,

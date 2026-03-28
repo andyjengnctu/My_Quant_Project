@@ -1,6 +1,6 @@
 import pandas as pd
 
-from core.v16_portfolio_engine import find_sim_start_idx
+from core.portfolio_engine import find_sim_start_idx
 
 from .trade_rebuild import rebuild_completed_trades_from_portfolio_trade_log
 

@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from core.v16_data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 
 
 def resolve_csv_path(project_root, data_dir, csv_map_getter, ticker):

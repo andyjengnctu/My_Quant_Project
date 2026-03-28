@@ -1,4 +1,4 @@
-from core.v16_core import (
+from core.backtest_core import (
     build_cash_capped_entry_plan,
     calc_entry_price,
     resize_candidate_plan_to_capital,

@@ -1,12 +1,12 @@
-from core.v16_buy_sort import calc_buy_sort_value
-from core.v16_config import BUY_SORT_METHOD
-from core.v16_core import (
+from core.buy_sort import calc_buy_sort_value
+from core.config import BUY_SORT_METHOD
+from core.backtest_core import (
     build_extended_candidate_plan_from_signal,
     build_normal_candidate_plan,
     calc_entry_price,
     create_signal_tracking_state,
 )
-from core.v16_portfolio_fast_data import (
+from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_pos,
     get_fast_value,

@@ -1,7 +1,7 @@
 import pandas as pd
 import time
-from core.v16_config import EV_CALC_METHOD
-from core.v16_portfolio_fast_data import (
+from core.config import EV_CALC_METHOD
+from core.portfolio_fast_data import (
     build_normal_setup_index,
     build_trade_stats_index,
     calc_mark_to_market_equity,
@@ -10,7 +10,7 @@ from core.v16_portfolio_fast_data import (
     has_fast_date,
     is_extended_entry_type,
 )
-from core.v16_portfolio_stats import (
+from core.portfolio_stats import (
     build_benchmark_full_year_return_stats,
     build_full_year_return_stats,
     calc_annual_return_pct,
@@ -18,9 +18,9 @@ from core.v16_portfolio_stats import (
     calc_sim_years,
     find_sim_start_idx,
 )
-from core.v16_portfolio_stats import calc_portfolio_score
-from core.v16_portfolio_candidates import build_daily_candidates
-from core.v16_portfolio_ops import (
+from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_candidates import build_daily_candidates
+from core.portfolio_ops import (
     cleanup_extended_signals_for_day,
     closeout_open_positions,
     execute_reserved_entries_for_day,

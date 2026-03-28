@@ -1,4 +1,4 @@
-from core.v16_config import EV_CALC_METHOD
+from core.config import EV_CALC_METHOD
 
 
 def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_r_sum, loss_r_sum, params):

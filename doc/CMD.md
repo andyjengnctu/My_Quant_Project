@@ -53,23 +53,23 @@ python tools/debug/trade_log.py
 
 
 # portfolio engine 架構
-# run_portfolio_timeline() 正式總控與最終整合仍在 core/v16_portfolio_engine.py
-# 當日候選池掃描、normal/extended 候選規格與排序在 core/v16_portfolio_candidates.py
-# 快取市場資料/PIT 索引在 core/v16_portfolio_fast_data.py
-# 日內操作 façade 在 core/v16_portfolio_ops.py
-# 盤前買進執行/延續訊號清理在 core/v16_portfolio_entries.py
-# 汰弱換股/持倉結算/期末結算在 core/v16_portfolio_exits.py
-# 曲線/年度/年化統計與分數在 core/v16_portfolio_stats.py
+# run_portfolio_timeline() 正式總控與最終整合仍在 core/portfolio_engine.py
+# 當日候選池掃描、normal/extended 候選規格與排序在 core/portfolio_candidates.py
+# 快取市場資料/PIT 索引在 core/portfolio_fast_data.py
+# 日內操作 façade 在 core/portfolio_ops.py
+# 盤前買進執行/延續訊號清理在 core/portfolio_entries.py
+# 汰弱換股/持倉結算/期末結算在 core/portfolio_exits.py
+# 曲線/年度/年化統計與分數在 core/portfolio_stats.py
 
 
 # single-stock core 架構
-# core/v16_core.py：單股 K 棒推進與回測總控
-# core/v16_price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷
-# core/v16_signal_utils.py：技術指標與訊號生成
-# core/v16_trade_plans.py：候選/掛單/延續訊號 façade
-# core/v16_history_filters.py：歷史績效候選門檻
-# core/v16_entry_plans.py：候選規格、盤前掛單規格、成交後部位建立
-# core/v16_extended_signals.py：延續訊號狀態、延續候選與延續掛單規格
+# core/backtest_core.py：單股 K 棒推進與回測總控
+# core/price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷
+# core/signal_utils.py：技術指標與訊號生成
+# core/trade_plans.py：候選/掛單/延續訊號 façade
+# core/history_filters.py：歷史績效候選門檻
+# core/entry_plans.py：候選規格、盤前掛單規格、成交後部位建立
+# core/extended_signals.py：延續訊號狀態、延續候選與延續掛單規格
 
 - validate 子模組已再拆分：`synthetic_history_cases.py`、`synthetic_guardrail_cases.py`、`synthetic_frame_utils.py`、`synthetic_case_builders.py`。
 
@@ -79,12 +79,12 @@ python tools/debug/trade_log.py
 # apps/vip_scanner.py 為薄入口，從 tools.scanner 套件 façade 匯入公開介面；main.py 為 façade，scan_runner.py 負責 CLI/平行掃描，worker.py 為 façade，runtime_common.py 負責共用路徑/runtime 目錄/參數載入/worker 數判定，stock_processor.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
 
 # display 架構
-# core/v16_display.py 為 façade；v16_display_common.py 負責 ANSI 色彩/表格與共用 helper，v16_scanner_display.py 負責 scanner header，v16_strategy_dashboard.py 負責策略 dashboard 與對比表
+# core/display.py 為 façade；display_common.py 負責 ANSI 色彩/表格與共用 helper，scanner_display.py 負責 scanner header，strategy_dashboard.py 負責策略 dashboard 與對比表
 
 
-- 單股核心已拆分為 `core/v16_position_step.py` 與 `core/v16_backtest_finalize.py`，對外仍由 `core/v16_core.py` 提供 façade。
+- 單股核心已拆分為 `core/position_step.py` 與 `core/backtest_finalize.py`，對外仍由 `core/backtest_core.py` 提供 façade。
 
 # 命名 / 結構收尾原則
 # apps/* 僅從對應子系統套件 façade 匯入公開介面，避免入口層直接依賴更深子模組
 # tools/*/__init__.py 與 façade 檔維持穩定公開介面；子模組可繼續細拆，但外部匯入路徑應盡量不變
-# core/ 既有 v16_* 名稱暫作歷史核心相容名稱；新增非必要模組不再擴散版本前綴
+# 模組檔名已完成版本前綴移除；既有函式／類別識別字若仍含版本字樣，屬另案處理範圍

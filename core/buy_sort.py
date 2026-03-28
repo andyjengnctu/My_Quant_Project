@@ -1,4 +1,4 @@
-from core.v16_config import BUY_SORT_METHOD
+from core.config import BUY_SORT_METHOD
 
 
 def calc_buy_sort_value(method, ev, proj_cost, win_rate, trade_count):

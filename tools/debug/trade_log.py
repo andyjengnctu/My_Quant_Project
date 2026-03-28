@@ -8,15 +8,15 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from core.v16_data_utils import get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
-from core.v16_dataset_profiles import (
+from core.data_utils import get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
+from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     get_dataset_dir,
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
 )
-from core.v16_params_io import load_params_from_json
-from core.v16_runtime_utils import safe_prompt
+from core.params_io import load_params_from_json
+from core.runtime_utils import safe_prompt
 from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
 
 warnings.simplefilter("default")
@@ -40,7 +40,7 @@ DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 
-def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
+def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json")):
     params = load_params_from_json(json_file)
     print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params

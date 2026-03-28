@@ -1,5 +1,5 @@
-from core.v16_buy_sort import get_buy_sort_title
-from core.v16_config import (
+from core.buy_sort import get_buy_sort_title
+from core.config import (
     BUY_SORT_METHOD,
     EV_CALC_METHOD,
     MAX_PORTFOLIO_MDD_PCT,
@@ -11,7 +11,7 @@ from core.v16_config import (
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
 )
-from core.v16_display_common import C_RESET, C_YELLOW, get_p
+from core.display_common import C_RESET, C_YELLOW, get_p
 
 
 def print_scanner_header(params):

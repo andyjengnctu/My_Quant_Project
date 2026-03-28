@@ -2,14 +2,14 @@ import json
 import os
 from dataclasses import fields
 
-from core.v16_config import (
+from core.config import (
     RUNTIME_PARAM_DEFAULTS,
     V16StrategyParams,
     normalize_runtime_param_value,
     strategy_params_to_dict,
     validate_strategy_param_ranges,
 )
-from core.v16_log_utils import format_exception_summary
+from core.log_utils import format_exception_summary
 
 
 PARAM_FIELDS = tuple(fields(V16StrategyParams))

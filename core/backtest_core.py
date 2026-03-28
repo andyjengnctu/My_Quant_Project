@@ -1,9 +1,9 @@
 import numpy as np
 
-from core.v16_backtest_finalize import build_backtest_stats, finalize_open_position_at_end
-from core.v16_config import V16StrategyParams
-from core.v16_position_step import execute_bar_step
-from core.v16_price_utils import (
+from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
+from core.config import V16StrategyParams
+from core.position_step import execute_bar_step
+from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
     adjust_long_stop_price,
@@ -15,8 +15,8 @@ from core.v16_price_utils import (
     can_execute_half_take_profit,
     get_exit_sell_block_reason,
 )
-from core.v16_signal_utils import generate_signals
-from core.v16_trade_plans import (
+from core.signal_utils import generate_signals
+from core.trade_plans import (
     build_cash_capped_entry_plan,
     build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,

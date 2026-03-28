@@ -3,8 +3,8 @@ import tempfile
 
 import pandas as pd
 
-from core.v16_core import calc_reference_candidate_qty, can_execute_half_take_profit
-from core.v16_data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.backtest_core import calc_reference_candidate_qty, can_execute_half_take_profit
+from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 
 from .checks import add_check, build_expected_scanner_payload, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle

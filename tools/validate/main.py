@@ -8,7 +8,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.v16_dataset_profiles import (
+from core.dataset_profiles import (
     DEFAULT_VALIDATE_DATASET_PROFILE,
     VALIDATE_DATASET_ENV_VAR,
     build_validate_dataset_prompt,
@@ -17,10 +17,10 @@ from core.v16_dataset_profiles import (
     get_dataset_profile_label,
     normalize_dataset_profile_key,
 )
-from core.v16_data_utils import discover_unique_csv_map
-from core.v16_log_utils import format_exception_summary
-from core.v16_params_io import load_params_from_json
-from core.v16_runtime_utils import is_interactive_stdin, safe_prompt
+from core.data_utils import discover_unique_csv_map
+from core.log_utils import format_exception_summary
+from core.params_io import load_params_from_json
+from core.runtime_utils import is_interactive_stdin, safe_prompt
 from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
@@ -34,7 +34,7 @@ from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
-PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "v16_best_params.json")
+PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
 
 CSV_PATH_CACHE = None
@@ -203,7 +203,7 @@ def main():
         df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(OUTPUT_DIR, f"v16_consistency_full_scan_{timestamp}.csv")
+    csv_path = os.path.join(OUTPUT_DIR, f"consistency_full_scan_{timestamp}.csv")
     df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
     if df_failed.empty:

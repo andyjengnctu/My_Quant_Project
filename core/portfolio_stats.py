@@ -3,7 +3,7 @@ import numpy as np
 
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
-    from core.v16_config import SCORE_CALC_METHOD
+    from core.config import SCORE_CALC_METHOD
     base_return = sys_ret if annual_return_pct is None else annual_return_pct
     annualized_romd = base_return / (abs(sys_mdd) + 0.0001)
     if SCORE_CALC_METHOD == 'LOG_R2':
@@ -83,7 +83,7 @@ def build_benchmark_full_year_return_stats(sorted_dates, benchmark_data, yearly_
             "bm_yearly_return_rows": []
         }
 
-    from core.v16_portfolio_fast_data import has_fast_date, get_fast_close
+    from core.portfolio_fast_data import has_fast_date, get_fast_close
 
     year_market_bounds = {}
     for dt in sorted_dates:

@@ -1,7 +1,7 @@
 import pandas as pd
 
-from core.v16_entry_plans import resize_candidate_plan_to_capital
-from core.v16_price_utils import adjust_long_buy_limit, adjust_long_stop_price
+from core.entry_plans import resize_candidate_plan_to_capital
+from core.price_utils import adjust_long_buy_limit, adjust_long_stop_price
 
 
 # # (AI註: 單一真理來源 - 延續訊號何時失效統一由此判斷)

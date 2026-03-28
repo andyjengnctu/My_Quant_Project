@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.v16_core import generate_signals
+from core.backtest_core import generate_signals
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
 from tools.debug.reporting import finalize_debug_trade_logs

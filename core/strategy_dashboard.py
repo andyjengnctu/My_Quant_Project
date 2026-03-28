@@ -1,5 +1,5 @@
-from core.v16_buy_sort import get_buy_sort_title
-from core.v16_config import (
+from core.buy_sort import get_buy_sort_title
+from core.config import (
     BUY_SORT_METHOD,
     EV_CALC_METHOD,
     MAX_PORTFOLIO_MDD_PCT,
@@ -12,7 +12,7 @@ from core.v16_config import (
     SCORE_CALC_METHOD,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
 )
-from core.v16_display_common import (
+from core.display_common import (
     C_CYAN,
     C_GRAY,
     C_GREEN,
@@ -22,7 +22,7 @@ from core.v16_display_common import (
     _table_row,
     get_p,
 )
-from core.v16_portfolio_stats import calc_portfolio_score
+from core.portfolio_stats import calc_portfolio_score
 
 
 def print_strategy_dashboard(

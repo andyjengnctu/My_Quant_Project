@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.v16_core import adjust_long_sell_fill_price, calc_net_sell_price, execute_bar_step
+from core.backtest_core import adjust_long_sell_fill_price, calc_net_sell_price, execute_bar_step
 from tools.debug.log_rows import append_debug_trade_row
 
 

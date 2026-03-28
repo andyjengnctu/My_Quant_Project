@@ -9,9 +9,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.v16_dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
-from core.v16_log_utils import append_issue_log, build_timestamped_log_path
-from core.v16_runtime_utils import get_taipei_now, get_taipei_file_mtime
+from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
+from core.log_utils import append_issue_log, build_timestamped_log_path
+from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = PROJECT_ROOT

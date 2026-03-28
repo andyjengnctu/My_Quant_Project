@@ -4,8 +4,8 @@ import sys
 
 import optuna
 
-from core.v16_display import print_strategy_dashboard
-from core.v16_runtime_utils import safe_prompt_choice
+from core.display import print_strategy_dashboard
+from core.runtime_utils import safe_prompt_choice
 from tools.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
@@ -30,7 +30,7 @@ def prompt_existing_db_policy(db_file, colors):
 
 def create_optimizer_study(db_name):
     return optuna.create_study(
-        study_name="v16_portfolio_optimization_overnight",
+        study_name="portfolio_optimization_overnight",
         storage=db_name,
         load_if_exists=True,
         direction="maximize",

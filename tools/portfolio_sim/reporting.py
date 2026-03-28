@@ -4,9 +4,9 @@ import webbrowser
 import numpy as np
 import pandas as pd
 
-from core.v16_display import C_CYAN, C_GREEN, C_GRAY, C_RESET, C_YELLOW
-from core.v16_log_utils import format_exception_summary
-from core.v16_runtime_utils import should_auto_open_browser
+from core.display import C_CYAN, C_GREEN, C_GRAY, C_RESET, C_YELLOW
+from core.log_utils import format_exception_summary
+from core.runtime_utils import should_auto_open_browser
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")

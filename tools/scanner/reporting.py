@@ -1,6 +1,6 @@
-from core.v16_buy_sort import get_buy_sort_title
-from core.v16_config import BUY_SORT_METHOD
-from core.v16_display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
+from core.buy_sort import get_buy_sort_title
+from core.config import BUY_SORT_METHOD
+from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 
 
 def print_scanner_start_banner(now_label):

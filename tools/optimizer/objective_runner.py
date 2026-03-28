@@ -1,7 +1,7 @@
 import time
 
-from core.v16_portfolio_engine import run_portfolio_timeline
-from core.v16_portfolio_stats import calc_portfolio_score
+from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_filters import apply_filter_rules
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs

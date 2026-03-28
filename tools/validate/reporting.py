@@ -9,7 +9,7 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
     if df_failed.empty:
         return None
 
-    report_path = os.path.join(output_dir, f"v16_consistency_issues_{timestamp}.xlsx")
+    report_path = os.path.join(output_dir, f"consistency_issues_{timestamp}.xlsx")
 
     with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
         df_failed.to_excel(writer, sheet_name="failed_only", index=False)

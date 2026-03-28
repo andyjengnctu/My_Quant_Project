@@ -1,6 +1,6 @@
-from core.v16_config import V16StrategyParams
-from core.v16_core import run_v16_backtest
-from core.v16_params_io import build_params_from_mapping, params_to_json_dict
+from core.config import V16StrategyParams
+from core.backtest_core import run_v16_backtest
+from core.params_io import build_params_from_mapping, params_to_json_dict
 
 from .checks import (
     add_check,

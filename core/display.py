@@ -1,5 +1,5 @@
-# core/v16_display.py
-from core.v16_display_common import (
+# core/display.py
+from core.display_common import (
     C_CYAN,
     C_GRAY,
     C_GREEN,
@@ -12,8 +12,8 @@ from core.v16_display_common import (
     _table_row,
     get_p,
 )
-from core.v16_scanner_display import print_scanner_header
-from core.v16_strategy_dashboard import print_strategy_dashboard
+from core.scanner_display import print_scanner_header
+from core.strategy_dashboard import print_strategy_dashboard
 
 __all__ = [
     'C_RED',

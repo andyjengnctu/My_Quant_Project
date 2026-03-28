@@ -1,4 +1,4 @@
-# core/v16_config.py
+# core/config.py
 from dataclasses import MISSING, dataclass, fields
 from typing import Any
 
