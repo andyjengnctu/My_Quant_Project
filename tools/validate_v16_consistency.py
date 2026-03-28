@@ -109,6 +109,9 @@ def resolve_validate_dataset_profile_key(argv, environ):
     if env_value:
         return normalize_dataset_profile_key(env_value), "ENV"
 
+    if not sys.stdin or not sys.stdin.isatty():
+        return normalize_dataset_profile_key(DEFAULT_VALIDATE_DATASET_PROFILE), "DEFAULT"
+
     selected_value = _safe_prompt(
         build_validate_dataset_prompt(DEFAULT_VALIDATE_DATASET_PROFILE),
         DEFAULT_VALIDATE_DATASET_PROFILE,
