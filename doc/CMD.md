@@ -70,8 +70,8 @@ python tools/debug/trade_log.py
 
 
 # apps 入口層
-# apps/portfolio_sim.py 為薄入口；tools/portfolio_sim/main.py 負責 CLI/互動流程，runtime.py 負責預載入與 timeline 執行，reporting.py 負責年度報酬 / Excel / Plotly 輸出
-# apps/vip_scanner.py 為薄入口；tools/scanner/main.py 負責 CLI/平行掃描，worker.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
+# apps/portfolio_sim.py 為薄入口；tools/portfolio_sim/main.py 負責 CLI/互動流程，runtime.py 為 façade，runtime_common.py 負責共用路徑/參數載入/runtime 目錄/不足資料判定，simulation_runner.py 負責預載入與 timeline 執行，reporting.py 負責年度報酬 / Excel / Plotly 輸出
+# apps/vip_scanner.py 為薄入口；tools/scanner/main.py 為 façade，scan_runner.py 負責 CLI/平行掃描，worker.py 為 façade，runtime_common.py 負責共用路徑/runtime 目錄/參數載入/worker 數判定，stock_processor.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
 
 # display 架構
 # core/v16_display.py 為 façade；v16_display_common.py 負責 ANSI 色彩/表格與共用 helper，v16_scanner_display.py 負責 scanner header，v16_strategy_dashboard.py 負責策略 dashboard 與對比表
