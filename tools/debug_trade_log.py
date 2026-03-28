@@ -416,4 +416,8 @@ def main():
     run_debug_backtest(df, ticker, params)
     
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FileNotFoundError as e:
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
