@@ -147,7 +147,12 @@ def main(argv=None, environ=None):
     if session.profile_recorder.enabled:
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
 
-    prompt_existing_db_policy(db_file, COLORS)
+    try:
+        prompt_existing_db_policy(db_file, COLORS)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     trial_count_exit = print_trial_count_or_exit(
         session,
         environ=environ,
