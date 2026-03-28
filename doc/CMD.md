@@ -37,7 +37,7 @@ python apps/validate_consistency.py --dataset reduced    # 正式入口
 python apps/smart_downloader.py
 ```
 
-下載主流程已移至 `tools/downloader/main.py`；正式入口仍為 `apps/smart_downloader.py`。
+下載正式入口為 `apps/smart_downloader.py`；`tools/downloader/main.py` 只負責總流程協調，`runtime.py` 管理共用設定 / lazy loader / issue log，`universe.py` 負責市場日期與海選，`sync.py` 負責 VIP 資料下載與最新日期跳過。
 
 
 ## 交易除錯

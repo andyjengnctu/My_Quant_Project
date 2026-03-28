@@ -54,7 +54,10 @@ project/
    ├─ __init__.py                     # tools 套件初始化檔
    ├─ downloader/
    │  ├─ __init__.py                  # downloader 子套件初始化檔
-   │  └─ main.py                      # 下載主流程、名單快篩與資料輸出
+   │  ├─ main.py                      # 下載正式主控；CLI 與總流程協調
+   │  ├─ runtime.py                   # downloader 共用設定、lazy loader、log 與執行期狀態
+   │  ├─ universe.py                  # 最新交易日判定、universe 快取與海選
+   │  └─ sync.py                      # VIP 資料下載與最新日期跳過邏輯
    ├─ debug/
    │  ├─ __init__.py                  # debug 子套件初始化檔
    │  ├─ backtest.py                  # 交易回放與明細列建構
@@ -83,7 +86,7 @@ project/
 
 ## 分層原則
 
-- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程已拆成 `tools/optimizer/main.py`（CLI/啟動）、`session.py`（objective / callback）與 `runtime.py`（記憶庫流程 / 歷史最佳還原 / 匯出控制）。
+- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程已拆成 `tools/optimizer/main.py`（CLI/啟動）、`session.py`（objective / callback）與 `runtime.py`（記憶庫流程 / 歷史最佳還原 / 匯出控制）；`apps/smart_downloader.py` 現為薄入口，下載流程已拆成 `tools/downloader/main.py`（總控）、`runtime.py`（共用設定 / lazy loader / issue log）、`universe.py`（市場日期與海選）與 `sync.py`（VIP 資料下載與更新跳過）。
 - `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_portfolio_cases.py`、`synthetic_param_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`、`real_case_assertions.py`、`real_cases.py`；`main.py` 僅保留資料集解析、真實掃描協調、synthetic suite 觸發與結果彙整，`real_cases.py` 保留真實 ticker 驗證總控與資料載入，cross-check 規則集中到 `real_case_assertions.py`，synthetic 投組/工具交叉驗證集中到 `synthetic_portfolio_cases.py`，參數 guardrail 與排序門檻案例集中到 `synthetic_param_cases.py`。
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 專責正式核心邏輯回放與明細列建構，`reporting.py` 專責 Excel 匯出與虧損摘要。
 - `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作流程抽至 `v16_portfolio_ops.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。`v16_core.py` 已縮為單股 K 棒推進與回測總控；跳價/成本/股數/漲跌停口徑抽至 `v16_price_utils.py`，技術指標與訊號生成抽至 `v16_signal_utils.py`，候選/掛單/延續訊號/進場成交規格抽至 `v16_trade_plans.py`。
