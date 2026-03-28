@@ -113,22 +113,20 @@ DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 def resolve_optimizer_trial_count(environ):
     env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
     if env_value != "":
-        return parse_int_strict(
-            env_value,
-            field_name=f"環境變數 {OPTIMIZER_TRIALS_ENV_VAR}",
-            min_value=0,
-        ), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
+        return parse_int_strict(env_value, f"環境變數 {OPTIMIZER_TRIALS_ENV_VAR}", min_value=0), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
 
     default_trials = (
         DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE if is_interactive_stdin() else DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE
     )
-    trial_count = safe_prompt_int(
-        f"👉 請輸入訓練次數 (預設 {default_trials}，輸入 0 則直接提取匯出參數): ",
-        default_trials,
-        field_name="訓練次數",
+    prompt_default = str(default_trials)
+    user_input = safe_prompt_int(
+        f"👉 請輸入訓練次數 (預設 {prompt_default}，輸入 0 則直接提取匯出參數): ",
+        prompt_default,
+        "訓練次數",
         min_value=0,
     )
-    return trial_count, "UI/DEFAULT"
+    return user_input, "UI/DEFAULT"
+
 
 def build_optimizer_db_file_path(dataset_profile_key):
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
@@ -801,42 +799,36 @@ if __name__ == "__main__":
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
-    except ValueError as e:
-        sys.stdout.flush()
-        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-    db_file = build_optimizer_db_file_path(dataset_profile_key)
-    DB_NAME = f"sqlite:///{db_file}"
+        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        db_file = build_optimizer_db_file_path(dataset_profile_key)
+        DB_NAME = f"sqlite:///{db_file}"
 
-    ensure_runtime_dirs(); load_all_raw_data(selected_data_dir)
-    print(
-        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
-    )
-    print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
-    init_profile_output_files()
-    if ENABLE_OPTIMIZER_PROFILING:
-        print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
-    
-    try:
+        ensure_runtime_dirs(); load_all_raw_data(selected_data_dir)
+        print(
+            f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+            f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+        )
+        print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
+        init_profile_output_files()
+        if ENABLE_OPTIMIZER_PROFILING:
+            print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
+        
         if os.path.exists(db_file):
             choice = safe_prompt_choice(
                 "\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ",
                 "1",
                 ("1", "2"),
-                field_name="記憶庫選項",
+                "記憶庫操作選項",
             )
-            if choice == '2':
+            if choice == '2': 
                 os.remove(db_file)
                 print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
 
         N_TRIALS, trial_source = resolve_optimizer_trial_count(os.environ)
+        print(f"{C_GRAY}🎯 訓練次數: {N_TRIALS} | 來源: {trial_source}{C_RESET}")
     except ValueError as e:
-        sys.stdout.flush()
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
-    print(f"{C_GRAY}🎯 訓練次數: {N_TRIALS} | 來源: {trial_source}{C_RESET}")
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     
     if len(study.trials) > 0:

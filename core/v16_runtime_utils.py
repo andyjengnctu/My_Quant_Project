@@ -80,47 +80,36 @@ def safe_prompt(prompt_text, default_value):
     return raw if raw != "" else default_value
 
 
-# # (AI註: 整數型 CLI/ENV/UI 參數共用同一套驗證，避免各工具各自 int() 後噴 traceback)
-def parse_int_strict(raw_value, *, field_name, min_value=None):
+# # (AI註: 整數輸入驗證集中處理，避免各工具直接 int(...) 導致 traceback 或口徑分叉)
+def parse_int_strict(raw_value, field_name, *, min_value=None, max_value=None):
     text = str(raw_value).strip()
-    if text == "":
-        raise ValueError(f"{field_name} 不可空白。")
-
     try:
         value = int(text)
-    except (TypeError, ValueError) as e:
-        raise ValueError(f"{field_name} 必須是整數，收到: {raw_value!r}") from e
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} 必須是整數，收到: {raw_value}") from None
 
     if min_value is not None and value < min_value:
-        raise ValueError(f"{field_name} 不可小於 {min_value}，收到: {value}")
-
+        raise ValueError(f"{field_name} 必須 >= {min_value}，收到: {value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"{field_name} 必須 <= {max_value}，收到: {value}")
     return value
 
 
-# # (AI註: 整數 prompt 直接共用 safe_prompt + parse_int_strict，避免重複維護輸入驗證)
-def safe_prompt_int(prompt_text, default_value, *, field_name, min_value=None):
-    raw = safe_prompt(prompt_text, str(default_value))
-    return parse_int_strict(raw, field_name=field_name, min_value=min_value)
+# # (AI註: prompt + 整數解析共用單一入口；互動 / ENV / pipe 的錯誤訊息保持一致)
+def safe_prompt_int(prompt_text, default_value, field_name, *, min_value=None, max_value=None):
+    raw_value = safe_prompt(prompt_text, str(default_value))
+    return parse_int_strict(raw_value, field_name, min_value=min_value, max_value=max_value)
 
 
-# # (AI註: 選單型 prompt 共用同一套 allowed-values 驗證，避免錯輸入被靜默吞掉)
-def safe_prompt_choice(prompt_text, default_value, allowed_values, *, field_name, case_sensitive=False):
-    normalized_allowed = [str(value).strip() for value in allowed_values]
-    if not normalized_allowed:
-        raise ValueError(f"{field_name} 的 allowed_values 不可為空。")
-
-    raw = str(safe_prompt(prompt_text, str(default_value))).strip()
-    if case_sensitive:
-        if raw in normalized_allowed:
-            return raw
-    else:
-        normalized_map = {value.lower(): value for value in normalized_allowed}
-        normalized_raw = raw.lower()
-        if normalized_raw in normalized_map:
-            return normalized_map[normalized_raw]
-
-    allowed_text = ", ".join(normalized_allowed)
-    raise ValueError(f"{field_name} 只接受 {allowed_text}，收到: {raw!r}")
+# # (AI註: 選單輸入集中驗證，避免各工具把無效選項靜默吞掉)
+def safe_prompt_choice(prompt_text, default_value, valid_choices, field_name):
+    normalized_map = {str(choice).strip().upper(): str(choice).strip() for choice in valid_choices}
+    raw_value = safe_prompt(prompt_text, str(default_value)).strip()
+    normalized = raw_value.upper()
+    if normalized not in normalized_map:
+        valid_text = ", ".join(str(choice) for choice in valid_choices)
+        raise ValueError(f"{field_name} 只接受 {valid_text}，收到: {raw_value}")
+    return normalized_map[normalized]
 
 
 # # (AI註: 自動開瀏覽器只在互動且具圖形環境時啟用；可由環境變數 V16_AUTO_OPEN_BROWSER 強制覆寫)

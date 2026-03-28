@@ -375,15 +375,13 @@ def main():
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
+        DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
+        print(
+            f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+        )
     except ValueError as e:
-        sys.stdout.flush()
-        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
-    print(
-        f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-    )
+        raise ValueError(str(e)) from e
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
@@ -424,6 +422,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)

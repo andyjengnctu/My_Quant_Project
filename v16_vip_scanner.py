@@ -245,14 +245,12 @@ if __name__ == "__main__":
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
+        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        print(
+            f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+            f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+        )
     except ValueError as e:
-        sys.stdout.flush()
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
-
-    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-    print(
-        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
-    )
     run_daily_scanner(selected_data_dir)

@@ -2404,16 +2404,15 @@ def main():
 
     try:
         dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
+        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        set_active_data_dir(selected_data_dir)
+        print(
+            f"驗證資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+        )
     except ValueError as e:
-        sys.stdout.flush()
         print(f"❌ {e}", file=sys.stderr)
         return 1
-    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-    set_active_data_dir(selected_data_dir)
-    print(
-        f"驗證資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-    )
 
     base_params = load_params()
     all_results = []

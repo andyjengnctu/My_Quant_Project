@@ -194,42 +194,35 @@ if __name__ == "__main__":
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
-    except ValueError as e:
-        sys.stdout.flush()
-        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
-        raise SystemExit(1)
+        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        print(
+            f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+            f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+        )
 
-    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-    print(
-        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
-    )
-
-    try:
-        USER_ROTATION = safe_prompt_choice(
+        rotation_choice = safe_prompt_choice(
             "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
             "N",
             ("Y", "N"),
-            field_name="汰弱換股選項",
-        ) == 'Y'
+            "汰弱換股選項",
+        )
+        USER_ROTATION = rotation_choice == 'Y'
         USER_MAX_POS = safe_prompt_int(
             "👉 2. 最大持倉數量 (預設 10): ",
             10,
-            field_name="最大持倉數量",
+            "最大持倉數量",
             min_value=1,
         )
         USER_START_YEAR = safe_prompt_int(
             "👉 3. 開始回測年份 (預設 2015): ",
             2015,
-            field_name="開始回測年份",
-            min_value=1,
+            "開始回測年份",
+            min_value=1900,
         )
+        USER_BENCHMARK = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
     except ValueError as e:
-        sys.stdout.flush()
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
-
-    USER_BENCHMARK = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
 
     ensure_runtime_dirs()
     params = load_strict_params(BEST_PARAMS_PATH)
