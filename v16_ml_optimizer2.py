@@ -724,13 +724,19 @@ def monitoring_callback(study, trial):
     global CURRENT_SESSION_TRIAL
     CURRENT_SESSION_TRIAL += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
-    if trial.value is not None and trial.value <= -9000:
+
+    prep_mode = trial.user_attrs.get("prep_mode", "parallel")
+    mode_suffix = " [fallback]" if prep_mode == "sequential_fallback" else ""
+
+    if trial.value is None:
+        state_name = getattr(trial.state, "name", str(trial.state))
+        status_text, score_text = f"{C_YELLOW}{state_name}{mode_suffix}{C_RESET}", "N/A"
+    elif trial.value <= -9000:
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
-        status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{C_RESET}", "N/A"
+        status_text, score_text = f"{C_YELLOW}淘汰 [{fail_msg}]{mode_suffix}{C_RESET}", "N/A"
     else:
-        prep_mode = trial.user_attrs.get("prep_mode", "parallel")
-        mode_suffix = " [fallback]" if prep_mode == "sequential_fallback" else ""
         status_text, score_text = f"{C_GREEN}進化中{mode_suffix}{C_RESET}", f"{trial.value:.3f}"
+
     print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{N_TRIALS}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
     if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
@@ -745,19 +751,25 @@ def monitoring_callback(study, trial):
             f"to_dict_sum={float(profile.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
             f"pf_loop={float(profile.get('portfolio_day_loop_sec', 0.0)):.3f}s{C_RESET}"
         )
-    
-    if study.best_trial.number == trial.number and trial.value is not None and trial.value > -9000:
+
+    best_completed_trial = get_best_completed_trial_or_none(study)
+    if (
+        best_completed_trial is not None
+        and best_completed_trial.number == trial.number
+        and trial.value is not None
+        and trial.value > -9000
+    ):
         print()
         attrs = trial.user_attrs
         p = build_optimizer_trial_params(trial.params, attrs)
         mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
         print(f"\n{C_RED}🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試){C_RESET}")
-        
+
         print_strategy_dashboard(
             params=p, title="績效與風險對比表", mode_display=mode_display, max_pos=TRAIN_MAX_POSITIONS,
             trades=attrs['pf_trades'], missed_b=attrs.get('missed_buys', 0), missed_s=attrs.get('missed_sells', 0),
             final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
-            sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
+            sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'],
             win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
             r_sq=attrs['r_squared'], m_win_rate=attrs['m_win_rate'], bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
             normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', 0),
