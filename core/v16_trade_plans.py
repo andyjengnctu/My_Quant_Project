@@ -1,266 +1,36 @@
-import numpy as np
-import pandas as pd
-
-from core.v16_config import EV_CALC_METHOD
-from core.v16_price_utils import (
-    adjust_long_buy_fill_price,
-    adjust_long_buy_limit,
-    adjust_long_stop_price,
-    adjust_long_target_price,
-    calc_entry_price,
-    calc_half_take_profit_sell_qty,
-    calc_initial_risk_total,
-    calc_limit_up_price,
-    calc_net_sell_price,
-    calc_position_size,
-    is_locked_limit_up_bar,
+from core.v16_entry_plans import (
+    build_cash_capped_entry_plan,
+    build_normal_candidate_plan,
+    build_normal_entry_plan,
+    build_position_from_entry_fill,
+    execute_pre_market_entry_plan,
+    resize_candidate_plan_to_capital,
+    should_count_miss_buy,
+    should_count_normal_miss_buy,
 )
+from core.v16_extended_signals import (
+    build_extended_candidate_plan_from_signal,
+    build_extended_entry_plan_from_signal,
+    create_signal_tracking_state,
+    evaluate_extended_candidate_eligibility,
+    should_clear_extended_signal,
+)
+from core.v16_history_filters import evaluate_history_candidate_metrics
 
 
-def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_r_sum, loss_r_sum, params):
-    min_trades_req = getattr(params, 'min_history_trades', 0)
-    min_ev_req = getattr(params, 'min_history_ev', 0.0)
-    min_win_rate_req = getattr(params, 'min_history_win_rate', 0.30)
-
-    allow_zero_history = (
-        (min_trades_req == 0)
-        and (min_ev_req <= 0)
-        and (min_win_rate_req <= 0)
-    )
-
-    if trade_count < min_trades_req:
-        return False, 0.0, 0.0, trade_count
-
-    if trade_count == 0:
-        return allow_zero_history, 0.0, 0.0, trade_count
-
-    win_rate = win_count / trade_count
-
-    if EV_CALC_METHOD == 'B':
-        avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
-        loss_count = trade_count - win_count
-        avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
-
-        if avg_loss_r > 0:
-            payoff_for_ev = min(10.0, avg_win_r / avg_loss_r)
-        elif avg_win_r > 0:
-            payoff_for_ev = 99.9
-        else:
-            payoff_for_ev = 0.0
-
-        expected_value = (win_rate * payoff_for_ev) - (1 - win_rate)
-    else:
-        expected_value = total_r_sum / trade_count
-
-    is_candidate = (win_rate >= min_win_rate_req) and (expected_value >= min_ev_req)
-    return is_candidate, expected_value, win_rate, trade_count
-
-
-# # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
-def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
-    if candidate_plan is None:
-        return None
-
-    limit_price = candidate_plan.get('limit_price')
-    init_sl = candidate_plan.get('init_sl')
-    if pd.isna(limit_price) or pd.isna(init_sl):
-        return None
-
-    resized_plan = dict(candidate_plan)
-    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
-    resized_plan['qty'] = qty
-    resized_plan['is_orderable'] = qty > 0
-    return resized_plan
-
-
-# # (AI註: 單一真理來源 - 盤前依當下可用現金重算有效掛單規格與保留資金)
-def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
-    resized_plan = resize_candidate_plan_to_capital(candidate_plan, available_cash, params)
-    if resized_plan is None or resized_plan['qty'] <= 0:
-        return None
-
-    reserved_cost = calc_entry_price(resized_plan['limit_price'], resized_plan['qty'], params) * resized_plan['qty']
-    if pd.isna(reserved_cost) or reserved_cost > available_cash:
-        return None
-
-    resized_plan['reserved_cost'] = reserved_cost
-    return resized_plan
-
-
-# # (AI註: 單一真理來源 - 正常候選的 limit/sl/trail/qty 規格統一由此產生；候選資格與可掛單分離)
-def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
-    if pd.isna(limit_price) or pd.isna(atr):
-        return None
-
-    init_sl = adjust_long_stop_price(limit_price - atr * params.atr_times_init)
-    init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
-    base_plan = {
-        'limit_price': limit_price,
-        'init_sl': init_sl,
-        'init_trail': init_trail,
-    }
-    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
-
-
-# # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
-def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
-    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params)
-    if candidate_plan is None or candidate_plan['qty'] <= 0:
-        return None
-    return candidate_plan
-
-
-# # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
-def should_count_miss_buy(order_qty, is_worse_than_initial_stop=False):
-    if order_qty is None or order_qty <= 0:
-        return False
-    if is_worse_than_initial_stop:
-        return False
-    return True
-
-
-def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
-    return should_count_miss_buy(order_qty, is_worse_than_initial_stop=is_worse_than_initial_stop)
-
-
-# # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
-def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, entry_type='normal'):
-    if pd.isna(buy_price) or buy_price <= 0 or qty <= 0:
-        raise ValueError(f"build_position_from_entry_fill 需要有效 buy_price/qty，收到 buy_price={buy_price!r}, qty={qty!r}")
-
-    entry_price = calc_entry_price(buy_price, qty, params)
-    net_sl = calc_net_sell_price(init_sl, qty, params)
-    tp_half = adjust_long_target_price(buy_price + (entry_price - net_sl))
-    init_risk = calc_initial_risk_total(entry_price, net_sl, qty, params)
-
-    return {
-        'qty': qty,
-        'entry': entry_price,
-        'sl': max(init_sl, init_trail),
-        'initial_stop': init_sl,
-        'trailing_stop': init_trail,
-        'tp_half': tp_half,
-        'sold_half': False,
-        'pure_buy_price': buy_price,
-        'realized_pnl': 0.0,
-        'initial_risk_total': init_risk,
-        'entry_type': entry_type,
-    }
-
-
-# # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy / 先達停損放棄進場邏輯統一由此判斷)
-def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type='normal'):
-    result = {
-        'filled': False,
-        'count_as_missed_buy': False,
-        'is_worse_than_initial_stop': False,
-        'is_locked_limit_up': False,
-        'buy_price': np.nan,
-        'entry_price': np.nan,
-        'tp_half': np.nan,
-        'position': None,
-        'entry_type': entry_type,
-    }
-    if entry_plan is None:
-        return result
-
-    qty = entry_plan.get('qty', 0)
-    result['count_as_missed_buy'] = should_count_miss_buy(qty)
-    result['is_locked_limit_up'] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
-
-    if qty <= 0:
-        result['count_as_missed_buy'] = False
-        return result
-
-    if pd.isna(t_volume) or t_volume <= 0 or pd.isna(t_open) or pd.isna(t_low) or result['is_locked_limit_up']:
-        return result
-
-    limit_price = entry_plan['limit_price']
-    init_sl = entry_plan['init_sl']
-    init_trail = entry_plan['init_trail']
-
-    if t_low > limit_price:
-        return result
-
-    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price))
-    result['buy_price'] = buy_price
-
-    if buy_price <= init_sl:
-        result['is_worse_than_initial_stop'] = True
-        result['count_as_missed_buy'] = False
-        return result
-
-    position = build_position_from_entry_fill(
-        buy_price=buy_price,
-        qty=qty,
-        init_sl=init_sl,
-        init_trail=init_trail,
-        params=params,
-        entry_type=entry_type,
-    )
-    result['filled'] = True
-    result['count_as_missed_buy'] = False
-    result['position'] = position
-    result['entry_price'] = position['entry']
-    result['tp_half'] = position['tp_half']
-    return result
-
-
-# # (AI註: 單一真理來源 - 延續訊號何時失效統一由此判斷)
-def should_clear_extended_signal(signal_state, t_low):
-    if signal_state is None or pd.isna(t_low):
-        return False
-    return t_low <= signal_state['init_sl']
-
-
-# # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立)
-def create_signal_tracking_state(original_limit, atr, params):
-    if pd.isna(original_limit) or pd.isna(atr):
-        return None
-
-    init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
-    return {
-        'orig_limit': original_limit,
-        'orig_atr': atr,
-        'init_sl': init_sl,
-    }
-
-
-# # (AI註: 單一真理來源 - 延續候選每日盤前資格規格統一由此產生；必須仍在原始買入區間內)
-def build_extended_candidate_plan_from_signal(signal_state, reference_price, sizing_capital, params):
-    if signal_state is None or pd.isna(reference_price):
-        return None
-
-    original_limit = signal_state['orig_limit']
-    atr = signal_state['orig_atr']
-    init_sl = signal_state['init_sl']
-    if not (init_sl < reference_price <= original_limit):
-        return None
-
-    limit_price = adjust_long_buy_limit(reference_price)
-    if pd.isna(limit_price) or not (init_sl < limit_price <= original_limit):
-        return None
-
-    init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
-    base_plan = {
-        'limit_price': limit_price,
-        'init_sl': init_sl,
-        'init_trail': init_trail,
-        'orig_limit': original_limit,
-        'orig_atr': atr,
-    }
-    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
-
-
-# # (AI註: 單一真理來源 - 延續單實際掛單規格；僅接受可掛單候選)
-def build_extended_entry_plan_from_signal(signal_state, reference_price, sizing_capital, params):
-    candidate_plan = build_extended_candidate_plan_from_signal(signal_state, reference_price, sizing_capital, params)
-    if candidate_plan is None or candidate_plan['qty'] <= 0:
-        return None
-    return candidate_plan
-
-
-# # (AI註: 延續候選資格評估)
-def evaluate_extended_candidate_eligibility(close_price, original_limit, atr, sizing_capital, params):
-    signal_state = create_signal_tracking_state(original_limit, atr, params)
-    return build_extended_candidate_plan_from_signal(signal_state, close_price, sizing_capital, params)
+__all__ = [
+    "evaluate_history_candidate_metrics",
+    "resize_candidate_plan_to_capital",
+    "build_cash_capped_entry_plan",
+    "build_normal_candidate_plan",
+    "build_normal_entry_plan",
+    "should_count_miss_buy",
+    "should_count_normal_miss_buy",
+    "build_position_from_entry_fill",
+    "execute_pre_market_entry_plan",
+    "should_clear_extended_signal",
+    "create_signal_tracking_state",
+    "build_extended_candidate_plan_from_signal",
+    "build_extended_entry_plan_from_signal",
+    "evaluate_extended_candidate_eligibility",
+]

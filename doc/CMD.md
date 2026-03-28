@@ -65,7 +65,10 @@ python tools/debug/trade_log.py
 # core/v16_core.py：單股 K 棒推進與回測總控
 # core/v16_price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷
 # core/v16_signal_utils.py：技術指標與訊號生成
-# core/v16_trade_plans.py：候選規格、盤前掛單規格、延續訊號狀態與進場成交判定
+# core/v16_trade_plans.py：候選/掛單/延續訊號 façade
+# core/v16_history_filters.py：歷史績效候選門檻
+# core/v16_entry_plans.py：候選規格、盤前掛單規格、成交後部位建立
+# core/v16_extended_signals.py：延續訊號狀態、延續候選與延續掛單規格
 
 - validate 子模組已再拆分：`synthetic_history_cases.py`、`synthetic_guardrail_cases.py`、`synthetic_frame_utils.py`、`synthetic_case_builders.py`。
 
