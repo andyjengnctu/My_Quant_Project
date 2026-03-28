@@ -4,7 +4,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 
 from core.data_utils import discover_unique_csv_inputs
-from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
+from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
 from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, has_help_flag
@@ -15,14 +15,16 @@ from .stock_processor import process_single_stock
 
 def run_daily_scanner(data_dir, params):
     if not os.path.exists(data_dir):
-        raise FileNotFoundError(f"找不到資料夾 {data_dir}。")
+        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     ensure_runtime_dirs()
     print_scanner_start_banner(datetime.now().strftime('%Y-%m-%d %H:%M'))
     total_files = len(csv_inputs)
     if total_files == 0:
-        raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
+        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        raise FileNotFoundError(build_empty_dataset_dir_message(profile_key, data_dir))
 
     print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
 
@@ -93,7 +95,7 @@ def main(argv=None, env=None):
     env = os.environ if env is None else env
     if has_help_flag(argv):
         print("用法: python apps/vip_scanner.py [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；可用 --dataset 切到縮減資料集。")
+        print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -103,10 +105,10 @@ def main(argv=None, env=None):
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         if not os.path.isdir(selected_data_dir):
-            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}。")
+            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
         csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
         if not csv_inputs:
-            raise FileNotFoundError(f"資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。")
+            raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
         params = load_strict_params(BEST_PARAMS_PATH)
         print(
             f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "

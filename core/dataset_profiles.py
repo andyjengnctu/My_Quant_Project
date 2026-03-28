@@ -55,18 +55,24 @@ def normalize_dataset_profile_key(value, default=DEFAULT_DATASET_PROFILE):
     return normalized
 
 
-def get_dataset_root_dir(project_root):
+def get_dataset_root_dir(project_root, profile_key=DEFAULT_DATASET_PROFILE):
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    project_root_abs = os.path.abspath(project_root)
+    project_data_root = os.path.join(project_root_abs, PROJECT_DATA_DIRNAME)
+
+    if normalized_key == DATASET_PROFILE_REDUCED:
+        return project_data_root
+
     unix_root = os.path.normpath(UNIX_DATASET_ROOT_DIR)
     if os.path.isdir(unix_root):
         return unix_root
 
-    project_root_abs = os.path.abspath(project_root)
-    return os.path.join(project_root_abs, PROJECT_DATA_DIRNAME)
+    return project_data_root
 
 
 def get_dataset_dir(project_root, profile_key):
     normalized_key = normalize_dataset_profile_key(profile_key)
-    return os.path.join(get_dataset_root_dir(project_root), DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
+    return os.path.join(get_dataset_root_dir(project_root, normalized_key), DATASET_PROFILE_SPECS[normalized_key]["dir_name"])
 
 
 def get_dataset_profile_label(profile_key):
@@ -117,3 +123,18 @@ def build_validate_dataset_prompt(default=DEFAULT_VALIDATE_DATASET_PROFILE):
         f"2=完整 [{DATASET_PROFILE_SPECS[DATASET_PROFILE_FULL]['dir_name']}], "
         f"預設 {default_menu_key}): "
     )
+
+
+
+def build_missing_dataset_dir_message(profile_key, data_dir):
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    if normalized_key == DATASET_PROFILE_REDUCED:
+        return f"找不到資料夾 {data_dir}，請先由本投資專案的 data.zip 取得 tw_stock_data_vip_reduced。"
+    return f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py！"
+
+
+def build_empty_dataset_dir_message(profile_key, data_dir):
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    if normalized_key == DATASET_PROFILE_REDUCED:
+        return f"資料夾 {data_dir} 內沒有任何 CSV 檔案，請先由本投資專案的 data.zip 取得 tw_stock_data_vip_reduced。"
+    return f"資料夾 {data_dir} 內沒有任何 CSV 檔案。"
