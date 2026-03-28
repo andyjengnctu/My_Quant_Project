@@ -12,6 +12,7 @@ def rebuild_completed_trades_from_event_log(
     half_action,
     full_exit_actions,
     ignored_actions,
+    ignored_action_prefixes=(),
     missed_sell_actions,
 ):
     if df_logs is None or len(df_logs) == 0:
@@ -43,6 +44,9 @@ def rebuild_completed_trades_from_event_log(
             continue
 
         if action in ignored_actions:
+            continue
+
+        if any(action.startswith(prefix) for prefix in ignored_action_prefixes):
             continue
 
         if action == half_action:
@@ -87,7 +91,8 @@ def rebuild_completed_trades_from_debug_log(debug_df):
         buy_prefix="買進",
         half_action="半倉停利",
         full_exit_actions={"停損殺出", "指標賣出", "期末強制結算"},
-        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"},
+        ignored_actions=set(),
+        ignored_action_prefixes=("錯失買進", "放棄進場"),
         missed_sell_actions={"錯失賣出"},
     )
 
@@ -104,6 +109,7 @@ def rebuild_completed_trades_from_portfolio_trade_log(df_trades):
         buy_prefix="買進",
         half_action="半倉停利",
         full_exit_actions={"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"},
-        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)"},
+        ignored_actions=set(),
+        ignored_action_prefixes=("錯失買進",),
         missed_sell_actions={"錯失賣出"},
     )
