@@ -1,5 +1,6 @@
 import inspect
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from multiprocessing import get_context
@@ -21,6 +22,41 @@ def get_taipei_now():
 # # (AI註: 檔案快取時間也統一轉成 Asia/Taipei aware datetime，避免 now 與 mtime 比較時口徑不一致)
 def get_taipei_file_mtime(path):
     return datetime.fromtimestamp(os.path.getmtime(path), tz=TAIPEI_TIMEZONE)
+
+
+# # (AI註: 互動式 prompt 與 headless 判斷集中管理，避免各工具腳本各自分叉)
+def is_interactive_stdin():
+    return bool(sys.stdin and sys.stdin.isatty())
+
+
+# # (AI註: 非互動/CI/headless 執行時直接回傳預設值，避免 input() 在自動化環境拋 EOFError)
+def safe_prompt(prompt_text, default_value):
+    if not is_interactive_stdin():
+        return default_value
+
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
+# # (AI註: 自動開瀏覽器只在明確可互動桌面環境啟用；容器/CI/無 GUI 時跳過，避免殘留 subprocess warning)
+def should_auto_open_browser(environ=None):
+    env = os.environ if environ is None else environ
+    forced_flag = str(env.get("V16_AUTO_OPEN_BROWSER", "")).strip().lower()
+    if forced_flag in {"0", "false", "n", "no", "off"}:
+        return False
+    if forced_flag in {"1", "true", "y", "yes", "on"}:
+        return True
+
+    if not is_interactive_stdin():
+        return False
+
+    if os.name == "nt":
+        return True
+
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
 # # (AI註: ProcessPool 啟動方法集中管理；預設避開 fork，必要時可用環境變數 V16_PROCESS_START_METHOD 覆寫)

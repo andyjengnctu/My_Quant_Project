@@ -25,7 +25,7 @@ from core.v16_data_utils import (
     discover_unique_csv_inputs,
 )
 from core.v16_log_utils import write_issue_log, format_exception_summary
-from core.v16_runtime_utils import get_process_pool_executor_kwargs
+from core.v16_runtime_utils import get_process_pool_executor_kwargs, is_interactive_stdin, safe_prompt
 from core.v16_params_io import build_params_from_mapping, params_to_json_dict
 from core.v16_dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
@@ -757,13 +757,19 @@ if __name__ == "__main__":
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
     
     if os.path.exists(db_file):
-        choice = input("\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ").strip()
+        choice = safe_prompt("\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ", "1").strip()
         if choice == '2': 
             os.remove(db_file)
             print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
             
-    user_input = input("👉 請輸入訓練次數 (預設 50000，輸入 0 則直接提取匯出參數): ").strip()
-    N_TRIALS = int(user_input) if user_input != "" else 50000
+    default_trial_text = os.getenv("V16_OPTIMIZER_TRIALS", "").strip()
+    if default_trial_text == "":
+        default_trial_text = "50000" if is_interactive_stdin() else "0"
+    user_input = safe_prompt(
+        f"👉 請輸入訓練次數 (預設 {default_trial_text}，輸入 0 則直接提取匯出參數): ",
+        default_trial_text,
+    ).strip()
+    N_TRIALS = int(user_input) if user_input != "" else int(default_trial_text)
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     
     if len(study.trials) > 0:

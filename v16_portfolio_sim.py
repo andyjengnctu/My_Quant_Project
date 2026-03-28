@@ -12,6 +12,7 @@ from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_
 from core.v16_display import print_strategy_dashboard, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
+from core.v16_runtime_utils import safe_prompt, should_auto_open_browser
 from core.v16_dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     get_dataset_dir,
@@ -182,14 +183,6 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
-def _safe_prompt(prompt_text, default_value):
-    try:
-        raw = input(prompt_text).strip()
-    except EOFError:
-        return default_value
-    return raw if raw != "" else default_value
-
-
 if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
@@ -206,10 +199,10 @@ if __name__ == "__main__":
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
 
-    USER_ROTATION = _safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
-    USER_MAX_POS = int(_safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
-    USER_START_YEAR = int(_safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
-    USER_BENCHMARK = _safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
+    USER_ROTATION = safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
+    USER_MAX_POS = int(safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
+    USER_START_YEAR = int(safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
+    USER_BENCHMARK = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
 
     ensure_runtime_dirs()
     params = load_strict_params(BEST_PARAMS_PATH)
@@ -271,6 +264,9 @@ if __name__ == "__main__":
         html_filename = DASHBOARD_HTML_PATH
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
-        webbrowser.open('file://' + os.path.realpath(html_filename))
+        if should_auto_open_browser():
+            webbrowser.open('file://' + os.path.realpath(html_filename))
+        else:
+            print(f"{C_GRAY}ℹ️ 偵測到非互動或無圖形介面環境，略過自動開啟瀏覽器。{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
         print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")
