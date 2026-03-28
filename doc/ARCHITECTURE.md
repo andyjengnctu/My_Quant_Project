@@ -10,10 +10,10 @@ project/
 ├─ apps/
 │  ├─ __init__.py                     # apps 套件初始化檔
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
-│  ├─ portfolio_sim.py                # 投組模擬正式入口
+│  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
 │  ├─ validate_consistency.py         # 一致性驗證正式入口
-│  └─ vip_scanner.py                  # 掃描器正式入口
+│  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 ├─ core/
 │  ├─ __init__.py                     # 套件初始化檔
 │  ├─ v16_buy_sort.py                 # 買入候選排序邏輯
@@ -60,6 +60,16 @@ project/
    │  ├─ runtime.py                   # downloader 共用設定、lazy loader、log 與執行期狀態
    │  ├─ universe.py                  # 最新交易日判定、universe 快取與海選
    │  └─ sync.py                      # VIP 資料下載與最新日期跳過邏輯
+   ├─ portfolio_sim/
+   │  ├─ __init__.py                  # portfolio_sim 子套件初始化檔
+   │  ├─ main.py                      # portfolio_sim CLI 主控與互動流程
+   │  ├─ runtime.py                   # portfolio_sim 預載入/時間軸模擬執行期流程
+   │  └─ reporting.py                 # portfolio_sim 年度報酬、Excel 與 Plotly 輸出
+   ├─ scanner/
+   │  ├─ __init__.py                  # scanner 子套件初始化檔
+   │  ├─ main.py                      # scanner CLI 主控與平行掃描流程
+   │  ├─ worker.py                    # 單股掃描 worker、候選排序值與參考投入計算
+   │  └─ reporting.py                 # scanner 啟動/摘要/候選清單輸出
    ├─ debug/
    │  ├─ __init__.py                  # debug 子套件初始化檔
    │  ├─ backtest.py                  # 交易回放與明細列建構
@@ -105,7 +115,7 @@ project/
 
 ## 分層原則
 
-- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程已拆成 `tools/optimizer/main.py`（CLI/啟動）、`session.py`（session 狀態 façade）、`prep.py` / `raw_cache.py` / `trial_inputs.py`（原始資料快取、worker 預處理與 trial 輸入整合）、`objective.py` / `objective_profiles.py` / `objective_filters.py` / `objective_runner.py`（trial 參數 / 初始 profile / filter rules / objective runner）、`callbacks.py`（monitoring / 破紀錄展示）與 `runtime.py`（記憶庫流程 / 歷史最佳還原 / 匯出控制）；`apps/smart_downloader.py` 現為薄入口，下載流程已拆成 `tools/downloader/main.py`（總控）、`runtime.py`（共用設定 / lazy loader / issue log）、`universe.py`（市場日期與海選）與 `sync.py`（VIP 資料下載與更新跳過）。
+- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程已拆成 `tools/optimizer/main.py`（CLI/啟動）、`session.py`（session 狀態 façade）、`prep.py` / `raw_cache.py` / `trial_inputs.py`（原始資料快取、worker 預處理與 trial 輸入整合）、`objective.py` / `objective_profiles.py` / `objective_filters.py` / `objective_runner.py`（trial 參數 / 初始 profile / filter rules / objective runner）、`callbacks.py`（monitoring / 破紀錄展示）與 `runtime.py`（記憶庫流程 / 歷史最佳還原 / 匯出控制）；`apps/smart_downloader.py` 現為薄入口，下載流程已拆成 `tools/downloader/main.py`（總控）、`runtime.py`（共用設定 / lazy loader / issue log）、`universe.py`（市場日期與海選）與 `sync.py`（VIP 資料下載與更新跳過）；`apps/portfolio_sim.py` 現為薄入口，模擬流程已拆成 `tools/portfolio_sim/main.py`（CLI/互動流程）、`runtime.py`（預載入與 timeline 執行）與 `reporting.py`（年度報酬 / Excel / Plotly 輸出）；`apps/vip_scanner.py` 現為薄入口，掃描流程已拆成 `tools/scanner/main.py`（CLI/平行掃描）、`worker.py`（單股掃描 worker）與 `reporting.py`（啟動/摘要/候選清單輸出）。
 - `tools/validate/`：一致性驗證子系統，已拆成 `check_result_utils.py`（檢查結果記錄 / ticker 正規化 / 可恢復錯誤判定）、`portfolio_payloads.py`（投組 payload / 年度欄位 / completed trade 摘要）、`scanner_expectations.py`（scanner 預期 payload / reference check）、`module_loader.py`（模組動態載入與快取）、`tool_check_common.py`（smoke check 共用輸出抑制與日期欄位解析）、`portfolio_tool_checks.py`（portfolio_sim smoke checks）、`external_tool_checks.py`（scanner/downloader/debug smoke checks）、`tool_checks.py`（smoke check façade）、`checks.py` / `tool_adapters.py` façade、`synthetic_cases.py`、`synthetic_portfolio_common.py`、`synthetic_take_profit_cases.py`、`synthetic_flow_cases.py`、`synthetic_portfolio_cases.py` façade、`synthetic_history_cases.py`、`synthetic_guardrail_cases.py`、`synthetic_param_cases.py` façade、`synthetic_frame_utils.py`、`synthetic_case_builders.py`、`synthetic_fixtures.py` façade、`trade_rebuild.py`、`reporting.py`、`real_case_assertions.py`、`real_case_io.py`、`real_case_runners.py`、`real_cases.py` façade；`main.py` 僅保留資料集解析、真實掃描協調、synthetic suite 觸發與結果彙整，真實 ticker 驗證已再拆成 `real_case_io.py`（CSV 路徑解析 / 資料清洗）與 `real_case_runners.py`（單股 / 單檔投組 / 真實掃描協調），cross-check 規則集中到 `real_case_assertions.py`；synthetic 投組案例已再拆成 `synthetic_take_profit_cases.py`（半倉停利相關）與 `synthetic_flow_cases.py`（延續候選 / 競爭候選 / 同日賣出封鎖 / rotation），`synthetic_portfolio_cases.py` 僅保留 façade。
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 只保留 debug 回測主控 façade，買進 / 延續候選進場已拆到 `entry_flow.py`，出場 / 錯失賣出 / 期末結算已拆到 `exit_flow.py`，明細列建構與半倉停利價 helper 集中到 `log_rows.py`，`reporting.py` 專責 Excel 匯出與虧損摘要。
 - `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作 façade 保留於 `v16_portfolio_ops.py`，其中盤前買進執行/延續訊號清理抽至 `v16_portfolio_entries.py`，汰弱換股/持倉結算/期末結算抽至 `v16_portfolio_exits.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。`v16_core.py` 已縮為單股 K 棒推進與回測總控；跳價/成本/股數/漲跌停口徑抽至 `v16_price_utils.py`，技術指標與訊號生成抽至 `v16_signal_utils.py`，候選/掛單/延續訊號/進場成交規格抽至 `v16_trade_plans.py`。

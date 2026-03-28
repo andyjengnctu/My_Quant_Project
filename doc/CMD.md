@@ -67,3 +67,8 @@ python tools/debug/trade_log.py
 # core/v16_trade_plans.py：候選規格、盤前掛單規格、延續訊號狀態與進場成交判定
 
 - validate 子模組已再拆分：`synthetic_history_cases.py`、`synthetic_guardrail_cases.py`、`synthetic_frame_utils.py`、`synthetic_case_builders.py`。
+
+
+# apps 入口層
+# apps/portfolio_sim.py 為薄入口；tools/portfolio_sim/main.py 負責 CLI/互動流程，runtime.py 負責預載入與 timeline 執行，reporting.py 負責年度報酬 / Excel / Plotly 輸出
+# apps/vip_scanner.py 為薄入口；tools/scanner/main.py 負責 CLI/平行掃描，worker.py 負責單股掃描 worker，reporting.py 負責啟動/摘要/候選清單輸出
