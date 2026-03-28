@@ -48,7 +48,7 @@ python apps/smart_downloader.py
 python tools/debug/trade_log.py
 ```
 
-`tools/debug/trade_log.py` 為 debug 正式入口；交易回放主邏輯在 `tools/debug/backtest.py`，輸出摘要在 `tools/debug/reporting.py`。
+`tools/debug/trade_log.py` 為 debug 正式入口；`tools/debug/backtest.py` 只保留主控 façade，進場流程在 `tools/debug/entry_flow.py`，出場 / 錯失賣出 / 期末結算在 `tools/debug/exit_flow.py`，明細列建構 helper 在 `tools/debug/log_rows.py`，輸出摘要在 `tools/debug/reporting.py`。
 
 
 # portfolio engine 架構
