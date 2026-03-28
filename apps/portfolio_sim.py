@@ -1,17 +1,16 @@
 import os
 import sys
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(APP_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
 import time
 import warnings
 import webbrowser
 
 import numpy as np
 import pandas as pd
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
@@ -30,6 +29,7 @@ from core.v16_runtime_utils import safe_prompt, safe_prompt_choice, safe_prompt_
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
@@ -188,16 +188,14 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
     return df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv
+if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-            argv,
+            sys.argv,
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
@@ -297,8 +295,3 @@ def main(argv=None):
             print(f"{C_GRAY}ℹ️ 目前為非互動或無圖形環境，略過自動開啟瀏覽器。{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
         print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

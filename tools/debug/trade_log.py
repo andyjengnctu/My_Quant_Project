@@ -3,10 +3,9 @@ import os
 import pandas as pd
 import numpy as np
 import warnings
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-BASE_DIR = PROJECT_ROOT
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
 from core.v16_params_io import load_params_from_json
 from core.v16_core import (

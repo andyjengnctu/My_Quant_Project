@@ -1,22 +1,21 @@
 import pandas as pd
-import os
 import sys
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(APP_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
+import os
 import time
 import requests
 from datetime import timedelta
 from io import StringIO
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from core.v16_dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
 from core.v16_log_utils import append_issue_log, build_timestamped_log_path
 from core.v16_runtime_utils import get_taipei_now, get_taipei_file_mtime
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
-BASE_DIR = PROJECT_ROOT
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE_DIR = get_dataset_dir(BASE_DIR, DATASET_PROFILE_FULL)
 
 
@@ -380,9 +379,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
     if last_date_check_errors or download_errors:
         vprint(f"⚠️ 非致命問題詳細已寫入: {get_downloader_issue_log_path()}")
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv
+if __name__ == "__main__":
     print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")
     market_date = get_market_last_date()
     target_tickers = get_or_update_universe()
@@ -391,8 +388,3 @@ def main(argv=None):
         raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
     smart_download_vip_data(target_tickers, market_date)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

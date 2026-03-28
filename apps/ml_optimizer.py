@@ -1,11 +1,5 @@
 import os
 import sys
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(APP_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
 import time
 import json
 import traceback
@@ -15,6 +9,10 @@ import pandas as pd
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_config import (
     V16StrategyParams,
@@ -67,6 +65,7 @@ warnings.filterwarnings(
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
@@ -330,7 +329,7 @@ def load_all_raw_data(data_dir):
     global RAW_DATA_CACHE_DATA_DIR
 
     if not os.path.exists(data_dir):
-        raise FileNotFoundError(f"找不到資料夾 {data_dir}，請先執行 vip_smart_downloader.py！")
+        raise FileNotFoundError(f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py！")
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
@@ -794,15 +793,13 @@ def monitoring_callback(study, trial):
         )
         print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv
+if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-            argv,
+            sys.argv,
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
@@ -837,7 +834,7 @@ def main(argv=None):
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
-
+    
     if len(study.trials) > 0:
         print(f"\n{C_GREEN}✅ 已累積 {len(study.trials)} 次經驗。{C_RESET}")
         best_trial = get_best_completed_trial_or_none(study)
@@ -893,8 +890,3 @@ def main(argv=None):
         print_profile_summary()
         print_optimizer_prep_summary()
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

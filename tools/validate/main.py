@@ -1,14 +1,13 @@
 import os
 import sys
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
 import copy
 import time
 import importlib.util
 import pandas as pd
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json, build_params_from_mapping, params_to_json_dict
 from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit, resize_candidate_plan_to_capital, build_cash_capped_entry_plan, evaluate_history_candidate_metrics
@@ -33,21 +32,6 @@ from core.v16_dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.v16_runtime_utils import is_interactive_stdin, safe_prompt
-from tools.validate.reporting import print_console_summary, write_issue_excel_report
-from tools.validate.synthetic_fixtures import (
-    build_synthetic_competing_candidates_case,
-    build_synthetic_extended_miss_buy_case,
-    build_synthetic_half_tp_full_year_case,
-    build_synthetic_param_guardrail_case,
-    build_synthetic_rotation_t_plus_one_case,
-    build_synthetic_same_day_sell_block_case,
-    build_synthetic_unexecutable_half_tp_case,
-    write_synthetic_csv_bundle,
-)
-from tools.validate.trade_rebuild import (
-    rebuild_completed_trades_from_debug_log,
-    rebuild_completed_trades_from_portfolio_trade_log,
-)
 from contextlib import redirect_stdout, redirect_stderr
 import tempfile
 import io
@@ -372,7 +356,36 @@ def make_synthetic_validation_params(base_params, *, tp_percent=None):
     return params
 
 
+def build_synthetic_baseline_frame(start_date, periods, base_price=100.0, volume=1000):
+    dates = pd.bdate_range(start_date, periods=periods)
+    df = pd.DataFrame({
+        "Date": dates.strftime("%Y-%m-%d"),
+        "Open": [base_price - 0.5] * periods,
+        "High": [base_price + 0.5] * periods,
+        "Low": [base_price - 1.0] * periods,
+        "Close": [base_price] * periods,
+        "Volume": [volume] * periods,
+    })
+    return df
 
+
+def set_synthetic_bar(df, idx, *, open_price, high_price, low_price, close_price, volume=1000):
+    df.loc[idx, ["Open", "High", "Low", "Close", "Volume"]] = [
+        float(open_price),
+        float(high_price),
+        float(low_price),
+        float(close_price),
+        float(volume),
+    ]
+
+
+def write_synthetic_csv_bundle(temp_dir, frames_by_ticker):
+    for ticker, frame in frames_by_ticker.items():
+        frame.to_csv(os.path.join(temp_dir, f"{ticker}.csv"), index=False)
+
+
+# # (AI註: scanner 必須用 production 門檻驗證；
+# # (AI註: 若套用 consistency 的寬鬆門檻，會驗到實際 scanner 不會出現的候選)
 def build_scanner_validation_params(base_params):
     return copy.deepcopy(base_params)
 
@@ -502,7 +515,7 @@ def resolve_source_date_column(source_df, ticker):
 def run_portfolio_sim_tool_check_for_dir(data_dir, params, *, max_positions, enable_rotation, start_year, benchmark_ticker):
     module, module_path = load_module_from_candidates(
         "portfolio_sim_module",
-        ["v16_portfolio_sim.py"],
+        ["apps/portfolio_sim.py"],
         required_attrs=["run_portfolio_simulation"]
     )
 
@@ -602,7 +615,7 @@ def run_portfolio_sim_tool_check(ticker, file_path, params):
 def run_scanner_tool_check(ticker, file_path, params):
     module, module_path = load_module_from_candidates(
         "vip_scanner_module",
-        ["v16_vip_scanner.py"],
+        ["apps/vip_scanner.py"],
         required_attrs=["process_single_stock"]
     )
 
@@ -617,7 +630,7 @@ def run_scanner_tool_check(ticker, file_path, params):
 def run_downloader_tool_check(ticker):
     module, module_path = load_module_from_candidates(
         "vip_downloader_module",
-        ["vip_smart_downloader.py"],
+        ["apps/smart_downloader.py"],
         required_attrs=["smart_download_vip_data"]
     )
 
@@ -812,7 +825,7 @@ def run_single_ticker_portfolio_check(ticker, df, params):
 def run_debug_trade_log_check(ticker, df, params):
     module, module_path = load_module_from_candidates(
         "debug_trade_log_module",
-        ["tools/debug_trade_log.py", "debug_trade_log.py"],
+        ["tools/debug/trade_log.py"],
         required_attrs=["run_debug_backtest"]
     )
     debug_df = module.run_debug_backtest(
@@ -824,6 +837,101 @@ def run_debug_trade_log_check(ticker, df, params):
     )
     return debug_df, module_path
 
+
+def rebuild_completed_trades_from_event_log(df_logs, *, tool_name, date_col, action_col, pnl_col, buy_prefix, half_action, full_exit_actions, ignored_actions, missed_sell_actions):
+    if df_logs is None or len(df_logs) == 0:
+        return []
+
+    required_cols = {date_col, action_col, pnl_col}
+    missing_cols = [col for col in required_cols if col not in df_logs.columns]
+    if missing_cols:
+        raise KeyError(f"{tool_name} 缺少必要欄位: {missing_cols}")
+
+    completed_trades = []
+    active_trade = None
+
+    for row in df_logs.itertuples(index=False):
+        action = str(getattr(row, action_col))
+        trade_date = pd.to_datetime(getattr(row, date_col)).strftime("%Y-%m-%d")
+        realized_pnl = float(getattr(row, pnl_col))
+
+        if action.startswith(buy_prefix):
+            if active_trade is not None:
+                raise ValueError(f"{tool_name} 出現連續買進，上一筆交易尚未完整結束。")
+            active_trade = {
+                "buy_date": trade_date,
+                "exit_date": None,
+                "total_pnl": 0.0,
+                "half_exit_count": 0,
+                "full_exit_action": None,
+            }
+            continue
+
+        if action in ignored_actions:
+            continue
+
+        if action == half_action:
+            if active_trade is None:
+                raise ValueError(f"{tool_name} 出現{half_action}，但前面沒有對應買進。")
+            active_trade["total_pnl"] += realized_pnl
+            active_trade["half_exit_count"] += 1
+            continue
+
+        if action in missed_sell_actions:
+            if active_trade is None:
+                raise ValueError(f"{tool_name} 出現 {action}，但前面沒有對應買進。")
+            continue
+
+        if action in full_exit_actions:
+            if active_trade is None:
+                raise ValueError(f"{tool_name} 出現 {action}，但前面沒有對應買進。")
+            active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
+            active_trade["exit_date"] = trade_date
+            active_trade["full_exit_action"] = action
+            completed_trades.append(active_trade)
+            active_trade = None
+            continue
+
+        raise ValueError(f"{tool_name} 出現未納入驗證的動作: {action}")
+
+    if active_trade is not None:
+        raise ValueError(f"{tool_name} 最後仍有未完成交易，缺少完整賣出列。")
+
+    return completed_trades
+
+
+# # (AI註: 將 debug_trade_log 的逐列事件重建為 completed trades，
+# # (AI註: 才能嚴格驗證半倉停利 + 尾倉結算後的總損益口徑是否與核心一致)
+def rebuild_completed_trades_from_debug_log(debug_df):
+    return rebuild_completed_trades_from_event_log(
+        debug_df,
+        tool_name="debug_trade_log",
+        date_col="日期",
+        action_col="動作",
+        pnl_col="單筆實質損益",
+        buy_prefix="買進",
+        half_action="半倉停利",
+        full_exit_actions={"停損殺出", "指標賣出", "期末強制結算"},
+        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)", "放棄進場(先達停損)", "放棄進場(延續先達停損)"},
+        missed_sell_actions={"錯失賣出"},
+    )
+
+
+# # (AI註: portfolio_sim 的 df_trades 也必須能重建成 completed trades，
+# # (AI註: 否則即使 aggregate 指標一致，逐筆明細仍可能漂移而不自知)
+def rebuild_completed_trades_from_portfolio_trade_log(df_trades):
+    return rebuild_completed_trades_from_event_log(
+        df_trades,
+        tool_name="portfolio_sim df_trades",
+        date_col="Date",
+        action_col="Type",
+        pnl_col="單筆損益",
+        buy_prefix="買進",
+        half_action="半倉停利",
+        full_exit_actions={"全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"},
+        ignored_actions={"錯失買進(新訊號)", "錯失買進(延續候選)"},
+        missed_sell_actions={"錯失賣出"},
+    )
 
 
 def validate_one_ticker(ticker, base_params):
@@ -1414,9 +1522,196 @@ def add_portfolio_stats_equality_checks(results, module_name, ticker, expected_s
     )
 
 
+def build_synthetic_half_tp_full_year_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    df = build_synthetic_baseline_frame("2024-01-01", 320)
+    trigger_idx = 270
+    set_synthetic_bar(df, trigger_idx, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, trigger_idx + 1, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df, trigger_idx + 2, open_price=104.3, high_price=107.5, low_price=104.0, close_price=106.5)
+    set_synthetic_bar(df, trigger_idx + 3, open_price=106.5, high_price=107.0, low_price=106.1, close_price=106.8)
+    set_synthetic_bar(df, trigger_idx + 4, open_price=106.6, high_price=107.1, low_price=106.2, close_price=106.9)
+    for idx in range(trigger_idx + 5, len(df)):
+        base_close = 106.8 + (idx - (trigger_idx + 5)) * 0.01
+        set_synthetic_bar(df, idx, open_price=base_close - 0.2, high_price=base_close + 0.3, low_price=base_close - 0.4, close_price=base_close)
+    return {
+        "case_id": "SYNTH_HALF_TP_FULL_YEAR",
+        "params": params,
+        "frames": {"9201": df},
+        "benchmark_ticker": "9201",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9201",
+    }
+
+
+def build_synthetic_extended_miss_buy_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    df = build_synthetic_baseline_frame("2024-01-01", 56)
+    set_synthetic_bar(df, 54, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, 55, open_price=103.8, high_price=104.0, low_price=103.6, close_price=103.9, volume=0)
+    return {
+        "case_id": "SYNTH_EXTENDED_MISS_BUY",
+        "params": params,
+        "frames": {"9301": df},
+        "benchmark_ticker": "9301",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9301",
+    }
+
+
+def build_synthetic_competing_candidates_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    def build_frame():
+        df = build_synthetic_baseline_frame("2024-01-01", 60)
+        set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+        set_synthetic_bar(df, 56, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+        set_synthetic_bar(df, 57, open_price=104.8, high_price=105.3, low_price=104.4, close_price=105.0)
+        set_synthetic_bar(df, 58, open_price=105.3, high_price=105.8, low_price=105.0, close_price=105.5)
+        set_synthetic_bar(df, 59, open_price=105.8, high_price=106.3, low_price=105.6, close_price=106.0)
+        return df
+
+    return {
+        "case_id": "SYNTH_COMPETING_CANDIDATES",
+        "params": params,
+        "frames": {"9401": build_frame(), "9402": build_frame()},
+        "benchmark_ticker": "9401",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9402",
+    }
+
+
+def build_synthetic_same_day_sell_block_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    df_a = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df_a, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_a, 56, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_a, 57, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5)
+    set_synthetic_bar(df_a, 58, open_price=101.4, high_price=101.9, low_price=101.1, close_price=101.6)
+    set_synthetic_bar(df_a, 59, open_price=101.5, high_price=102.0, low_price=101.2, close_price=101.7)
+
+    df_b = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df_b, 56, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_b, 57, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_b, 58, open_price=104.0, high_price=104.4, low_price=103.7, close_price=103.9)
+    set_synthetic_bar(df_b, 59, open_price=103.8, high_price=104.1, low_price=103.5, close_price=103.7)
+
+    return {
+        "case_id": "SYNTH_SAME_DAY_SELL_BLOCK",
+        "params": params,
+        "frames": {"9501": df_a, "9502": df_b},
+        "benchmark_ticker": "9501",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9501",
+    }
+
+
+def build_synthetic_unexecutable_half_tp_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.initial_capital = 130.0
+    params.fixed_risk = 1.0
+
+    df = build_synthetic_baseline_frame("2024-01-01", 320)
+    trigger_idx = 270
+    set_synthetic_bar(df, trigger_idx, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, trigger_idx + 1, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df, trigger_idx + 2, open_price=104.3, high_price=107.5, low_price=104.0, close_price=106.5)
+    set_synthetic_bar(df, trigger_idx + 3, open_price=106.5, high_price=107.0, low_price=106.1, close_price=106.8)
+    set_synthetic_bar(df, trigger_idx + 4, open_price=106.6, high_price=107.1, low_price=106.2, close_price=106.9)
+    for idx in range(trigger_idx + 5, len(df)):
+        base_close = 106.8 + (idx - (trigger_idx + 5)) * 0.01
+        set_synthetic_bar(df, idx, open_price=base_close - 0.2, high_price=base_close + 0.3, low_price=base_close - 0.4, close_price=base_close)
+
+    return {
+        "case_id": "SYNTH_UNEXECUTABLE_HALF_TP",
+        "params": params,
+        "frames": {"9601": df},
+        "benchmark_ticker": "9601",
+        "max_positions": 1,
+        "enable_rotation": False,
+        "start_year": 2024,
+        "primary_ticker": "9601",
+    }
+
+
+def build_synthetic_rotation_t_plus_one_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    df_weak = build_synthetic_baseline_frame("2024-01-01", 140)
+    set_synthetic_bar(df_weak, 20, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_weak, 21, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    set_synthetic_bar(df_weak, 22, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5)
+    set_synthetic_bar(df_weak, 23, open_price=101.4, high_price=101.9, low_price=101.1, close_price=101.6)
+
+    set_synthetic_bar(df_weak, 70, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_weak, 71, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    for idx in range(72, len(df_weak)):
+        set_synthetic_bar(df_weak, idx, open_price=104.2, high_price=104.5, low_price=103.9, close_price=104.2)
+
+    df_strong = build_synthetic_baseline_frame("2024-01-01", 140)
+    winning_bars = {
+        20: (103.0, 104.5, 102.8, 104.0),
+        21: (103.8, 105.0, 103.4, 104.2),
+        22: (104.05535005017578, 105.7658272705768, 103.9476570515015, 105.31105462881263),
+        23: (105.19304226445999, 105.8322019147044, 104.84077547539177, 105.58924143223415),
+        24: (105.59205354572458, 106.13076304128805, 105.04437370111694, 105.78073381761503),
+        25: (105.63103762243249, 106.23421634010937, 105.1143070306091, 105.4853284286143),
+        26: (105.72662799887804, 107.34936535415748, 104.99919808701634, 106.7596940685349),
+        27: (106.87008442768416, 107.19759311749098, 105.99576001905243, 106.53506299183323),
+        28: (106.6015951758995, 106.77584050530604, 106.27455989056097, 106.71541978046501),
+        29: (106.934605737128, 108.57791123422221, 106.42921391453338, 107.99794741355976),
+        30: (107.70637243365817, 108.48096410976757, 107.3199586072383, 107.64917818953965),
+        31: (107.75007011027877, 108.6877340308841, 107.15427120325072, 108.44843990554953),
+        32: (108.29478643168181, 108.74458662542872, 106.93073528853994, 107.45129695383561),
+        33: (107.491803398208, 107.9735796931008, 107.14966760580265, 107.26430786070408),
+        34: (107.23308960356542, 107.84483201087816, 106.3789400006742, 106.86084768224212),
+        35: (107.12054797677827, 107.05288044504564, 105.75719784311111, 106.06196222862346),
+    }
+    for idx, (o, h, l, c) in winning_bars.items():
+        set_synthetic_bar(df_strong, idx, open_price=o, high_price=h, low_price=l, close_price=c)
+
+    for idx in range(36, 100):
+        set_synthetic_bar(df_strong, idx, open_price=100.0, high_price=100.4, low_price=99.6, close_price=100.0)
+
+    set_synthetic_bar(df_strong, 100, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df_strong, 101, open_price=103.8, high_price=104.0, low_price=103.7, close_price=103.9, volume=0)
+    set_synthetic_bar(df_strong, 102, open_price=103.9, high_price=104.1, low_price=103.8, close_price=104.0)
+    set_synthetic_bar(df_strong, 103, open_price=104.2, high_price=104.6, low_price=104.0, close_price=104.4)
+    set_synthetic_bar(df_strong, 104, open_price=104.3, high_price=104.7, low_price=104.1, close_price=104.4)
+    for idx in range(105, len(df_strong)):
+        set_synthetic_bar(df_strong, idx, open_price=104.4, high_price=104.7, low_price=104.2, close_price=104.4)
+
+    return {
+        "case_id": "SYNTH_ROTATION_T_PLUS_ONE",
+        "params": params,
+        "frames": {"9701": df_weak, "9702": df_strong},
+        "benchmark_ticker": "9701",
+        "max_positions": 1,
+        "enable_rotation": True,
+        "start_year": 2024,
+        "weak_ticker": "9701",
+        "strong_ticker": "9702",
+    }
+
+
+def build_synthetic_param_guardrail_case(base_params):
+    return {
+        "case_id": "SYNTH_PARAM_GUARDRAIL",
+        "base_payload": params_to_json_dict(make_consistency_params(base_params)),
+    }
+
 
 def validate_synthetic_half_tp_full_year_case(base_params):
-    case = build_synthetic_half_tp_full_year_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_half_tp_full_year_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1451,7 +1746,7 @@ def validate_synthetic_half_tp_full_year_case(base_params):
 
 
 def validate_synthetic_extended_miss_buy_case(base_params):
-    case = build_synthetic_extended_miss_buy_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_extended_miss_buy_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1485,7 +1780,7 @@ def validate_synthetic_extended_miss_buy_case(base_params):
 
 
 def validate_synthetic_competing_candidates_case(base_params):
-    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_competing_candidates_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1514,7 +1809,7 @@ def validate_synthetic_competing_candidates_case(base_params):
 
 
 def validate_synthetic_same_day_sell_block_case(base_params):
-    case = build_synthetic_same_day_sell_block_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_same_day_sell_block_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1546,7 +1841,7 @@ def validate_synthetic_same_day_sell_block_case(base_params):
 
 
 def validate_synthetic_unexecutable_half_tp_case(base_params):
-    case = build_synthetic_unexecutable_half_tp_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_unexecutable_half_tp_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1578,7 +1873,7 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
         add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_half_take_profit_rows", 0, half_rows)
         add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_buy_row_half_tp_price_is_nan", True, half_tp_price_is_nan)
 
-    scanner_case = build_synthetic_half_tp_full_year_case(base_params, make_synthetic_validation_params)
+    scanner_case = build_synthetic_half_tp_full_year_case(base_params)
     scanner_case["params"].initial_capital = 130.0
     scanner_case["params"].fixed_risk = 1.0
     scanner_case["frames"][scanner_case["primary_ticker"]] = scanner_case["frames"][scanner_case["primary_ticker"]].iloc[:271].copy()
@@ -1602,7 +1897,7 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
 
 
 def validate_synthetic_rotation_t_plus_one_case(base_params):
-    case = build_synthetic_rotation_t_plus_one_case(base_params, make_synthetic_validation_params)
+    case = build_synthetic_rotation_t_plus_one_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1843,7 +2138,7 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
 
 
 def validate_synthetic_param_guardrail_case(base_params):
-    case = build_synthetic_param_guardrail_case(base_params, lambda params: params_to_json_dict(make_consistency_params(params)))
+    case = build_synthetic_param_guardrail_case(base_params)
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -1987,6 +2282,121 @@ def run_synthetic_consistency_suite(base_params):
 
 
 
+
+def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp):
+    from openpyxl.styles import numbers
+
+    if df_failed.empty:
+        return None
+
+    report_path = os.path.join(OUTPUT_DIR, f"v16_consistency_issues_{timestamp}.xlsx")
+
+    with pd.ExcelWriter(report_path, engine="openpyxl") as writer:
+        df_failed.to_excel(writer, sheet_name="failed_only", index=False)
+        df_failed_summary.to_excel(writer, sheet_name="failed_tickers", index=False)
+        df_failed_module.to_excel(writer, sheet_name="failed_modules", index=False)
+
+        for sheet_name in ["failed_only", "failed_tickers"]:
+            ws = writer.book[sheet_name]
+            header_map = {cell.value: idx + 1 for idx, cell in enumerate(ws[1])}
+            if "ticker" in header_map:
+                col_idx = header_map["ticker"]
+                for row_idx in range(2, ws.max_row + 1):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.number_format = numbers.FORMAT_TEXT
+                    cell.value = normalize_ticker_text(cell.value)
+
+    return report_path
+
+
+def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path, elapsed_time, real_summary_count, real_tickers):
+    synthetic_summary_count = 0
+    synthetic_ticker_set = set()
+    if not df_summary.empty and "synthetic" in df_summary.columns:
+        synthetic_mask = df_summary["synthetic"].astype("boolean").fillna(False).astype(bool)
+        synthetic_summary_count = int(synthetic_mask.sum())
+        synthetic_ticker_set = {
+            normalize_ticker_text(ticker)
+            for ticker in df_summary.loc[synthetic_mask, "ticker"].dropna().tolist()
+        }
+
+    system_summary_count = max(len(df_summary) - real_summary_count - synthetic_summary_count, 0)
+
+    real_ticker_set = {normalize_ticker_text(ticker) for ticker in real_tickers}
+    failed_ticker_series = (
+        df_failed["ticker"].fillna("").map(normalize_ticker_text)
+        if not df_failed.empty else pd.Series(dtype="object")
+    )
+    failed_real_mask = failed_ticker_series.isin(real_ticker_set) if not df_failed.empty else pd.Series(dtype=bool)
+    failed_synthetic_mask = failed_ticker_series.isin(synthetic_ticker_set) if not df_failed.empty else pd.Series(dtype=bool)
+    failed_system_mask = ~(failed_real_mask | failed_synthetic_mask) if not df_failed.empty else pd.Series(dtype=bool)
+
+    failed_real_tickers = int(failed_ticker_series[failed_real_mask].nunique()) if not df_failed.empty else 0
+    failed_synthetic_cases = int(failed_ticker_series[failed_synthetic_mask].nunique()) if not df_failed.empty else 0
+    failed_system_items = int(failed_ticker_series[failed_system_mask].nunique()) if not df_failed.empty else 0
+
+    pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
+    skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
+    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
+
+    print("\n================================================================================")
+    print("一致性回歸摘要")
+    print("================================================================================")
+    print(f"耗時: {elapsed_time:.2f} 秒")
+    print(f"成功進入 summary 的真實股票數: {real_summary_count}")
+    print(f"synthetic case 數: {synthetic_summary_count}")
+    print(f"system 檢查列數: {system_summary_count}")
+    print(f"summary 總列數: {len(df_summary)}")
+    print(f"總檢查數: {len(df_results)}")
+    print(f"PASS 數: {pass_count}")
+    print(f"SKIP 數: {skip_count}")
+    print(f"FAIL 數: {fail_count}")
+    print(f"有問題真實股票數: {failed_real_tickers}")
+    print(f"有問題 synthetic case 數: {failed_synthetic_cases}")
+    print(f"有問題 system 項目數: {failed_system_items}")
+    print(f"完整 CSV: {csv_path}")
+    print(f"問題 Excel: {xlsx_path if xlsx_path else '無，因為沒有 failed 項'}")
+
+    if df_failed.empty:
+        print("\n失敗項摘要：無")
+        return
+
+    print("\n失敗項前覽：")
+    show_cols = ["ticker", "module", "metric", "expected", "actual", "note"]
+    preview_df = df_failed[show_cols].head(MAX_CONSOLE_FAIL_PREVIEW).copy()
+    print(preview_df.to_string(index=False))
+
+    remain_count = len(df_failed) - len(preview_df)
+    if remain_count > 0:
+        print(f"\n... 尚有 {remain_count} 筆 FAIL 未顯示，請直接查看 CSV / Excel。")
+
+    failed_real_summary = (
+        df_failed.loc[failed_real_mask]
+        .groupby("ticker", dropna=False)
+        .agg(failed_checks=("passed", "size"))
+        .reset_index()
+        .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        .head(MAX_CONSOLE_FAIL_PREVIEW)
+        if not df_failed.empty else pd.DataFrame()
+    )
+
+    if not failed_real_summary.empty:
+        print("\n失敗真實股票前覽：")
+        print(failed_real_summary.to_string(index=False))
+
+    failed_non_real_summary = (
+        df_failed.loc[~failed_real_mask]
+        .groupby("ticker", dropna=False)
+        .agg(failed_checks=("passed", "size"))
+        .reset_index()
+        .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+        .head(MAX_CONSOLE_FAIL_PREVIEW)
+        if not df_failed.empty else pd.DataFrame()
+    )
+
+    if not failed_non_real_summary.empty:
+        print("\n失敗 synthetic/system 前覽：")
+        print(failed_non_real_summary.to_string(index=False))
 
 
 def main():
@@ -2158,9 +2568,7 @@ def main():
         df_failed=df_failed,
         df_failed_summary=df_failed_summary,
         df_failed_module=df_failed_module,
-        timestamp=timestamp,
-        output_dir=OUTPUT_DIR,
-        normalize_ticker=normalize_ticker_text,
+        timestamp=timestamp
     )
 
     elapsed_time = time.time() - start_time
@@ -2173,9 +2581,7 @@ def main():
         xlsx_path=xlsx_path,
         elapsed_time=elapsed_time,
         real_summary_count=total_tickers,
-        real_tickers=selected_tickers,
-        normalize_ticker_text=normalize_ticker_text,
-        max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
+        real_tickers=selected_tickers
     )
 
     return 1 if (not df_failed.empty or real_data_unavailable_reason is not None) else 0
