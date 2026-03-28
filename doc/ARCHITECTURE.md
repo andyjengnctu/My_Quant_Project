@@ -7,10 +7,17 @@
 ```text
 project/
 ├─ .gitignore                         # Git 忽略規則
-├─ v16_ml_optimizer2.py               # 參數最佳化主程式
-├─ v16_portfolio_sim.py               # 投組模擬主程式
-├─ v16_vip_scanner.py                 # 掃描器主程式
-├─ vip_smart_downloader.py            # 資料下載主程式
+├─ v16_ml_optimizer2.py               # 舊入口 wrapper；轉呼叫 apps/ml_optimizer.py
+├─ v16_portfolio_sim.py               # 舊入口 wrapper；轉呼叫 apps/portfolio_sim.py
+├─ v16_vip_scanner.py                 # 舊入口 wrapper；轉呼叫 apps/vip_scanner.py
+├─ vip_smart_downloader.py            # 舊入口 wrapper；轉呼叫 apps/smart_downloader.py
+├─ apps/
+│  ├─ __init__.py                     # apps 套件初始化
+│  ├─ ml_optimizer.py                 # 參數最佳化正式入口
+│  ├─ portfolio_sim.py                # 投組模擬正式入口
+│  ├─ smart_downloader.py             # 資料下載正式入口
+│  ├─ validate_consistency.py         # 一致性驗證正式入口
+│  └─ vip_scanner.py                  # 掃描器正式入口
 ├─ core/
 │  ├─ __init__.py                     # 套件初始化檔
 │  ├─ v16_buy_sort.py                 # 買入候選排序邏輯
@@ -42,34 +49,43 @@ project/
 │  ├─ requirements-lock.txt           # 鎖版本套件清單
 │  └─ requirements.txt                # 主要相依套件清單
 └─ tools/
-   ├─ debug_trade_log.py              # 交易除錯工具
-   ├─ validate_v16_consistency.py     # 一致性驗證主程式；負責流程編排、實股/合成案例執行與總結
-   ├─ validate_v16_reporting.py       # validate 報表輸出與 console summary
-   ├─ validate_v16_synthetic_fixtures.py # validate synthetic case 資料生成與 CSV bundle 寫出
-   └─ validate_v16_trade_rebuild.py   # validate 逐列事件重建 completed trades 的共用工具
+   ├─ __init__.py                     # tools 套件初始化
+   ├─ debug_trade_log.py              # 舊除錯入口 wrapper；轉呼叫 tools/debug/trade_log.py
+   ├─ validate_v16_consistency.py     # 舊驗證入口 wrapper；轉呼叫 tools/validate/main.py
+   ├─ validate_v16_reporting.py       # 舊 helper wrapper；轉呼叫 tools/validate/reporting.py
+   ├─ validate_v16_synthetic_fixtures.py # 舊 helper wrapper；轉呼叫 tools/validate/synthetic_fixtures.py
+   ├─ validate_v16_trade_rebuild.py   # 舊 helper wrapper；轉呼叫 tools/validate/trade_rebuild.py
+   ├─ debug/
+   │  ├─ __init__.py                  # debug 子套件初始化
+   │  └─ trade_log.py                 # 交易除錯工具正式位置
+   └─ validate/
+      ├─ __init__.py                  # validate 子套件初始化
+      ├─ main.py                      # 一致性驗證主流程編排
+      ├─ reporting.py                 # validate 報表輸出與 console summary
+      ├─ synthetic_fixtures.py        # validate synthetic case 資料生成與 CSV bundle 寫出
+      └─ trade_rebuild.py             # validate completed trades 重建共用工具
 ```
 
 ## 分層原則
 
+- `apps/`：正式執行入口層；使用者要找可直接執行的主程式時，優先看這裡。
+- 根目錄與 `tools/` 舊入口 wrapper：僅為相容性保留，應維持超薄，不得重寫核心交易規則或流程。
 - `core/`：核心規則與共用計算，應作為單一真理來源。
-- 根目錄主程式：負責流程組裝與執行入口，不得重寫核心交易規則。
-- `tools/`：負責除錯、驗證、一致性檢查，可呼叫核心邏輯，但不得成為正式邏輯唯一來源。
-  - `validate_v16_consistency.py` 僅負責驗證編排與檢查整合。
-  - `validate_v16_synthetic_fixtures.py` 集中 synthetic 測試資料與 fixture 生成。
-  - `validate_v16_trade_rebuild.py` 集中 debug/portfolio trade log 的 completed trade 重建口徑。
-  - `validate_v16_reporting.py` 集中 validate 報表輸出與摘要顯示。
+- `tools/validate/`：一致性驗證子系統；負責驗證編排、synthetic fixtures、trade rebuild、報表輸出。
+- `tools/debug/`：除錯工具子系統；集中交易明細與開發期偵錯工具。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。
 - `requirements/`：環境相依與版本鎖定，不放商業邏輯。
 
 ## 依賴方向
 
-- `core/` 不得依賴 `tools/`、主程式入口或純顯示用途程式。
-- 主程式與工具可依賴 `core/`，但不得在外層重寫核心規則。
+- `core/` 不得依賴 `apps/`、`tools/`、舊 wrapper 或純顯示用途程式。
+- `apps/`、`tools/` 與相容性 wrapper 可依賴 `core/`，但不得在外層重寫核心規則。
+- `tools/validate/`、`tools/debug/` 可依賴 `core/`，也可由 `apps/` 轉呼叫；不得反向影響核心交易規則。
 - 顯示、輸出、CLI、下載流程不得反向影響核心交易規則。
 - 參數驗證、交易規則、統計口徑應集中管理，不得在多處重複實作。
 
 ## 維護要求
 
-- 新增、刪除、移動、拆分、合併檔案，或調整模組責任與依賴方向時，必須同步更新本文件。
+- 新增、刪除、移動、拆分、合併檔案，或調整模組責任與依賴方向時，必須同步更新本文件與 `doc/CMD.md`。
 - 若本文件與實際程式不一致，應優先修正文件，不得放任過期。

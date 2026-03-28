@@ -1,13 +1,14 @@
 import os
 import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import copy
 import time
 import importlib.util
 import pandas as pd
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from core.v16_params_io import load_params_from_json, build_params_from_mapping, params_to_json_dict
 from core.v16_core import run_v16_backtest, calc_reference_candidate_qty, calc_entry_price, can_execute_half_take_profit, resize_candidate_plan_to_capital, build_cash_capped_entry_plan, evaluate_history_candidate_metrics
@@ -32,8 +33,8 @@ from core.v16_dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.v16_runtime_utils import is_interactive_stdin, safe_prompt
-from tools.validate_v16_reporting import print_console_summary, write_issue_excel_report
-from tools.validate_v16_synthetic_fixtures import (
+from tools.validate.reporting import print_console_summary, write_issue_excel_report
+from tools.validate.synthetic_fixtures import (
     build_synthetic_competing_candidates_case,
     build_synthetic_extended_miss_buy_case,
     build_synthetic_half_tp_full_year_case,
@@ -43,7 +44,7 @@ from tools.validate_v16_synthetic_fixtures import (
     build_synthetic_unexecutable_half_tp_case,
     write_synthetic_csv_bundle,
 )
-from tools.validate_v16_trade_rebuild import (
+from tools.validate.trade_rebuild import (
     rebuild_completed_trades_from_debug_log,
     rebuild_completed_trades_from_portfolio_trade_log,
 )

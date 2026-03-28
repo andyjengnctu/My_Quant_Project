@@ -1,5 +1,11 @@
 import os
 import sys
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(APP_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import pandas as pd
 import warnings
 import time
@@ -27,7 +33,6 @@ warnings.simplefilter("default")
 # # (AI註: 相同 RuntimeWarning 只顯示一次；保留可見性，但避免掃描輸出被重複洗版)
 warnings.filterwarnings("once", category=RuntimeWarning)
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
@@ -238,10 +243,12 @@ def run_daily_scanner(data_dir):
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-if __name__ == "__main__":
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-            sys.argv,
+            argv,
             os.environ,
             default=DEFAULT_DATASET_PROFILE,
         )
@@ -254,3 +261,8 @@ if __name__ == "__main__":
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
     run_daily_scanner(selected_data_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

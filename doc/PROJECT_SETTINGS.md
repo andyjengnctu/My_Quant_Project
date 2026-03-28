@@ -30,10 +30,11 @@
 3. 避免 magic number；公式與參數需具數學意義與可解釋性。
 4. 禁止裸 except，所有異常必須可追蹤。
 5. 架構調整不可明顯犧牲效率；若增加未來策略修改或 ML / DRL / LLM 升級複雜度，必須先明確說明。
-6. 檔案拆分原則
+6. 檔案拆分與結構原則
     - 何時該拆: 單檔程式應控制複雜度與職責範圍；若單一檔案職責混雜、規則耦合、明顯過大，或已影響維護、驗證、除錯與後續擴充，應依單一職責、單一真理來源與穩定介面進行適度拆分；不得為拆分而碎片化，也不得破壞統計口徑一致性、交易規則一致性、測試可重現性，或明顯犧牲效率。
     - 依什麼判斷拆: 拆分判斷應以降低規則耦合、提升可驗證性、避免口徑分叉，以及維持未來 ML / DRL / LLM 模組接入、替換、實驗與回歸驗證的相容性為目的；不得僅以行數作為唯一拆分依據。
-    - 拆完後架構與文件要求: 檔案拆分、合併、移動或模組責任調整後，應採分層、單一職責與單純依賴方向架構：核心規則與計算、流程編排、工具層、參數／設定／驗證、測試與一致性驗證應分離管理，並以上層呼叫下層為原則，禁止反向依賴、循環依賴、重複實作與規則分叉；凡涉及檔案結構或模組責任變動，必須同步更新 `doc/ARCHITECTURE.md`，確保文件與實際程式一致。
+    - 檔案/資料夾結構原則: 正式執行入口應集中於固定入口層（目前為 `apps/`），讓使用者可一眼辨識可直接執行的主程式；相容性 wrapper 可暫留舊位置，但不得在 wrapper 中重寫核心邏輯。`core/` 僅放核心規則與共用計算；`tools/` 僅放除錯、驗證與開發輔助工具，且應再依職責分子資料夾（如 `tools/validate/`、`tools/debug/`）；helper 模組不得與正式入口長期混放同層。
+    - 拆完後架構與文件要求: 檔案拆分、合併、移動或模組責任調整後，應採分層、單一職責與單純依賴方向架構：核心規則與計算、流程編排、工具層、參數／設定／驗證、測試與一致性驗證應分離管理，並以上層呼叫下層為原則，禁止反向依賴、循環依賴、重複實作與規則分叉；凡涉及檔案結構或模組責任變動，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`，確保文件與實際程式一致。
 
 ## D. 交易原則
 1. 杜絕未來函數：不可偷看未來資料。
@@ -66,6 +67,6 @@
 5. 技術訊號、候選資格、是否掛單、是否成交、miss buy、歷史績效統計，必須分層定義，禁止混用。
 
 ## G. 專案特例
-1. `v16_portfolio_sim.py` 自動開瀏覽器暫時允許。
+1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許；相容性 wrapper `v16_portfolio_sim.py` 視為等效入口。
 2. 暫時都只使用還原價，不考慮 raw。
-3. 資料集預設：tools/validate_v16_consistency.py 預設使用 `/data/tw_stock_data_vip_reduced`；v16_portfolio_sim.py、v16_vip_scanner.py、v16_ml_optimizer2.py 預設使用 `/data/tw_stock_data_vip`；除 consistency 外不在一般 UI 額外詢問資料集；若需切換，只能透過 CLI `--dataset` 或環境變數覆蓋，且不得把未顯示資料集選單視為問題。
+3. 資料集預設：`apps/validate_consistency.py`（相容 wrapper：`tools/validate_v16_consistency.py`）預設使用 `/data/tw_stock_data_vip_reduced`；`apps/portfolio_sim.py`、`apps/vip_scanner.py`、`apps/ml_optimizer.py`（相容 wrapper：`v16_portfolio_sim.py`、`v16_vip_scanner.py`、`v16_ml_optimizer2.py`）預設使用 `/data/tw_stock_data_vip`；除 consistency 外不在一般 UI 額外詢問資料集；若需切換，只能透過 CLI `--dataset` 或環境變數覆蓋，且不得把未顯示資料集選單視為問題。
