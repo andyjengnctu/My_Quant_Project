@@ -106,10 +106,6 @@ def main(argv=None, environ=None):
         return 0
     session = build_optimizer_session()
 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
             argv,
@@ -118,9 +114,15 @@ def main(argv=None, environ=None):
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         dataset_label = get_dataset_profile_label(dataset_profile_key)
-    except ValueError as exc:
+        if not os.path.isdir(selected_data_dir):
+            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請先執行 apps/smart_downloader.py！")
+    except (ValueError, FileNotFoundError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
+
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
 
     db_file = build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
     db_name = f"sqlite:///{db_file}"

@@ -14,13 +14,12 @@ from .stock_processor import process_single_stock
 
 
 def run_daily_scanner(data_dir):
-    ensure_runtime_dirs()
-    print_scanner_start_banner(datetime.now().strftime('%Y-%m-%d %H:%M'))
-
     if not os.path.exists(data_dir):
         raise FileNotFoundError(f"找不到資料夾 {data_dir}。")
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
+    ensure_runtime_dirs()
+    print_scanner_start_banner(datetime.now().strftime('%Y-%m-%d %H:%M'))
     total_files = len(csv_inputs)
     if total_files == 0:
         raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
@@ -103,14 +102,16 @@ def main(argv=None, env=None):
             default=DEFAULT_DATASET_PROFILE,
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        if not os.path.isdir(selected_data_dir):
+            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}。")
         print(
             f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
             f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
         )
-    except ValueError as e:
+    except (ValueError, FileNotFoundError) as e:
         import sys
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
-        raise SystemExit(1)
+        return 1
     try:
         run_daily_scanner(selected_data_dir)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

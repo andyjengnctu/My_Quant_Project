@@ -22,10 +22,6 @@ def main(argv=None, env=None):
         print("說明: 非互動模式會自動套用預設輸入；完整資料集預設使用 /data/tw_stock_data_vip。")
         return 0
 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
             argv,
@@ -33,11 +29,21 @@ def main(argv=None, env=None):
             default=DEFAULT_DATASET_PROFILE,
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-        print(
-            f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-            f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
-        )
+        if not os.path.isdir(selected_data_dir):
+            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請確認路徑或先下載資料！")
+    except (ValueError, FileNotFoundError) as e:
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        return 1
 
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(
+        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+    )
+
+    try:
         rotation_choice = safe_prompt_choice(
             "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
             "N",
@@ -60,7 +66,7 @@ def main(argv=None, env=None):
         user_benchmark = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
-        raise SystemExit(1)
+        return 1
 
     ensure_runtime_dirs()
     try:
