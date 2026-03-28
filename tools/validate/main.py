@@ -11,7 +11,6 @@ if PROJECT_ROOT not in sys.path:
 from core.dataset_profiles import (
     DEFAULT_VALIDATE_DATASET_PROFILE,
     VALIDATE_DATASET_ENV_VAR,
-    build_missing_dataset_dir_message,
     build_validate_dataset_prompt,
     extract_dataset_cli_value,
     get_dataset_dir,
@@ -104,7 +103,7 @@ def main():
     enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
         print("用法: python apps/validate_consistency.py [--dataset reduced|full]")
-        print("說明: 預設資料集為縮減；正式測試資料路徑為 /data/tw_stock_data_vip_reduced。")
+        print("說明: 預設資料集為縮減；若 /data 不存在，會退回專案根目錄 data/。")
         return 0
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -133,7 +132,7 @@ def main():
     selected_tickers = []
     real_data_unavailable_reason = None
     if not os.path.isdir(DATA_DIR):
-        real_data_unavailable_reason = build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR)
+        real_data_unavailable_reason = f"找不到資料夾: {DATA_DIR}"
         print(real_data_unavailable_reason)
         print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
     else:
@@ -187,16 +186,18 @@ def main():
         })
 
     if real_data_unavailable_reason is not None:
-        add_skip_result(
+        add_fail_result(
             all_results,
             "system",
             "REAL_DATA_COVERAGE",
             "real_data_scan_required",
-            f"reduced 真實資料未執行：{real_data_unavailable_reason}"
+            "至少 1 檔真實股票完成 validate",
+            real_data_unavailable_reason,
+            "最嚴格檢查不可只靠 synthetic coverage suite；若真實資料缺失，本次結果只能視為工具與合成案例檢查，不可視為完整通過。"
         )
         summaries.append({
             "ticker": "REAL_DATA_COVERAGE",
-            "validation_runtime": f"SKIP: {real_data_unavailable_reason}",
+            "validation_runtime": f"FAIL: {real_data_unavailable_reason}",
             "synthetic": False,
         })
 
@@ -256,7 +257,7 @@ def main():
         max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
     )
 
-    return 1 if not df_failed.empty else 0
+    return 1 if (not df_failed.empty or real_data_unavailable_reason is not None) else 0
 
 
 if __name__ == "__main__":

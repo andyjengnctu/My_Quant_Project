@@ -3,7 +3,6 @@ import os
 import pandas as pd
 
 from core.data_utils import discover_unique_csv_inputs, sanitize_ohlcv_dataframe
-from core.dataset_profiles import build_empty_dataset_dir_message, build_missing_dataset_dir_message, infer_dataset_profile_key_from_dir
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary, write_issue_log
 
@@ -27,12 +26,12 @@ def resolve_optimizer_max_workers(params, default_max_workers):
 
 def load_all_raw_data(data_dir, required_min_rows, output_dir):
     if not os.path.exists(data_dir):
-        raise FileNotFoundError(build_missing_dataset_dir_message(infer_dataset_profile_key_from_dir(data_dir), data_dir))
+        raise FileNotFoundError(f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py！")
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     if not csv_inputs:
-        raise FileNotFoundError(build_empty_dataset_dir_message(infer_dataset_profile_key_from_dir(data_dir), data_dir))
+        raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
     load_issues = list(duplicate_file_issue_lines)
     total_invalid_rows = 0

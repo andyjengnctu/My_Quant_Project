@@ -12,8 +12,6 @@ if PROJECT_ROOT not in sys.path:
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
-    build_empty_dataset_dir_message,
-    build_missing_dataset_dir_message,
     get_dataset_dir,
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
@@ -158,14 +156,14 @@ def main(argv=None, environ=None):
 
     try:
         if not os.path.isdir(selected_data_dir):
-            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請先執行 apps/smart_downloader.py！")
     except FileNotFoundError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
     csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
     if not csv_inputs:
-        print(f"{C_RED}❌ {build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir)}{C_RESET}", file=sys.stderr)
+        print(f"{C_RED}❌ 資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。{C_RESET}", file=sys.stderr)
         return 1
 
     try:
