@@ -198,6 +198,21 @@ def build_best_params_payload_from_trial(best_trial):
     return params_to_json_dict(build_params_from_mapping(base_payload))
 
 
+def list_completed_study_trials(study):
+    return [trial for trial in study.trials if trial.value is not None]
+
+
+def get_best_completed_trial_or_none(study):
+    completed_trials = list_completed_study_trials(study)
+    if not completed_trials:
+        return None
+
+    try:
+        return study.best_trial
+    except ValueError:
+        return None
+
+
 def print_optimizer_prep_summary():
     insufficient_total = OPTIMIZER_PREP_SUMMARY["insufficient_count_total"]
 
@@ -787,50 +802,48 @@ if __name__ == "__main__":
     
     if len(study.trials) > 0:
         print(f"\n{C_GREEN}✅ 已累積 {len(study.trials)} 次經驗。{C_RESET}")
-        try:
-            best_trial = study.best_trial
-            if best_trial.value is not None and best_trial.value > -9000:
-                attrs = best_trial.user_attrs
-                p = build_optimizer_trial_params(best_trial.params, attrs)
-                mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
-                
-                print(f"\n{C_CYAN}📜 【歷史突破紀錄還原】{C_RESET}")
-                print(f"{C_RED}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){C_RESET}")
-                
-                print_strategy_dashboard(
-                    params=p, title="績效與風險對比表", mode_display=mode_display, max_pos=TRAIN_MAX_POSITIONS,
-                    trades=attrs['pf_trades'], missed_b=attrs.get('missed_buys', 0), missed_s=attrs.get('missed_sells', 0),
-                    final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
-                    sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
-                    win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
-                    r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
-                    normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', 0),
-                    annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
-                    annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
-                    min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
-                )
-                print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
-        except ValueError as e:
-            print(f"{C_YELLOW}⚠️ 無法還原歷史最佳參數儀表板: {type(e).__name__}: {e}{C_RESET}")
+        best_trial = get_best_completed_trial_or_none(study)
+        if best_trial is None:
+            print(f"{C_GRAY}ℹ️ 記憶庫目前尚無已完成 trial，略過歷史最佳儀表板還原。{C_RESET}")
+        elif best_trial.value is not None and best_trial.value > -9000:
+            attrs = best_trial.user_attrs
+            p = build_optimizer_trial_params(best_trial.params, attrs)
+            mode_display = "啟用 (汰弱換強)" if TRAIN_ENABLE_ROTATION else "關閉 (穩定鎖倉)"
+            
+            print(f"\n{C_CYAN}📜 【歷史突破紀錄還原】{C_RESET}")
+            print(f"{C_RED}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){C_RESET}")
+            
+            print_strategy_dashboard(
+                params=p, title="績效與風險對比表", mode_display=mode_display, max_pos=TRAIN_MAX_POSITIONS,
+                trades=attrs['pf_trades'], missed_b=attrs.get('missed_buys', 0), missed_s=attrs.get('missed_sells', 0),
+                final_eq=attrs['final_equity'], avg_exp=attrs['avg_exposure'], max_exp=attrs.get('max_exposure', None),
+                sys_ret=attrs['pf_return'], bm_ret=attrs['bm_return'], sys_mdd=attrs['pf_mdd'], bm_mdd=attrs['bm_mdd'], 
+                win_rate=attrs['win_rate'], payoff=attrs['pf_payoff'], ev=attrs['pf_ev'],
+                r_sq=attrs.get('r_squared', 0.0), m_win_rate=attrs.get('m_win_rate', 0.0), bm_r_sq=attrs.get('bm_r_squared', 0.0), bm_m_win_rate=attrs.get('bm_m_win_rate', 0.0),
+                normal_trades=attrs.get('normal_trades', attrs['pf_trades']), extended_trades=attrs.get('extended_trades', 0),
+                annual_trades=attrs.get('annual_trades', 0.0), reserved_buy_fill_rate=attrs.get('reserved_buy_fill_rate', 0.0),
+                annual_return_pct=attrs.get('annual_return_pct', 0.0), bm_annual_return_pct=attrs.get('bm_annual_return_pct', 0.0),
+                min_full_year_return_pct=attrs.get('min_full_year_return_pct', 0.0), bm_min_full_year_return_pct=attrs.get('bm_min_full_year_return_pct', 0.0)
+            )
+            print(f"{C_GRAY}   年化報酬率: {attrs.get('annual_return_pct', 0.0):.2f}% | 年化交易次數: {attrs.get('annual_trades', 0.0):.1f} 次/年 | 保留後買進成交率: {attrs.get('reserved_buy_fill_rate', 0.0):.1f}% | 完整年度數: {attrs.get('full_year_count', 0)} | 最差完整年度: {attrs.get('min_full_year_return_pct', 0.0):.2f}%{C_RESET}")
 
     if N_TRIALS == 0:
-        completed_trials = [trial for trial in study.trials if trial.value is not None]
+        completed_trials = list_completed_study_trials(study)
         if len(study.trials) == 0:
             print(f"\n{C_YELLOW}⚠️ 記憶庫為空，無法匯出。{C_RESET}\n")
         elif not completed_trials:
             print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無已完成紀錄，無法匯出。{C_RESET}\n")
         else:
-            try:
-                best_trial = study.best_trial
-                if best_trial.value is not None and best_trial.value > -9000:
-                    best_params_payload = build_best_params_payload_from_trial(best_trial)
-                    with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
-                        json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
-                    print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
-                else:
-                    print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")
-            except ValueError as e:
-                print(f"\n{C_YELLOW}⚠️ 匯出最佳參數失敗: {type(e).__name__}: {e}{C_RESET}\n")
+            best_trial = get_best_completed_trial_or_none(study)
+            if best_trial is None:
+                print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{C_RESET}\n")
+            elif best_trial.value is not None and best_trial.value > -9000:
+                best_params_payload = build_best_params_payload_from_trial(best_trial)
+                with open(BEST_PARAMS_PATH, "w", encoding="utf-8") as f:
+                    json.dump(best_params_payload, f, indent=4, ensure_ascii=False)
+                print(f"\n{C_GREEN}💾 匯出成功！已從記憶庫提取最強參數！{C_RESET}\n")
+            else:
+                print(f"\n{C_YELLOW}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{C_RESET}\n")
     else:
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         try:
