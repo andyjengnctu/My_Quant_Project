@@ -43,7 +43,10 @@ project/
 │  └─ requirements.txt                # 主要相依套件清單
 └─ tools/
    ├─ debug_trade_log.py              # 交易除錯工具
-   └─ validate_v16_consistency.py     # 一致性驗證工具與 synthetic case 驗證主程式
+   ├─ validate_v16_consistency.py     # 一致性驗證主程式；負責流程編排、實股/合成案例執行與總結
+   ├─ validate_v16_reporting.py       # validate 報表輸出與 console summary
+   ├─ validate_v16_synthetic_fixtures.py # validate synthetic case 資料生成與 CSV bundle 寫出
+   └─ validate_v16_trade_rebuild.py   # validate 逐列事件重建 completed trades 的共用工具
 ```
 
 ## 分層原則
@@ -51,6 +54,10 @@ project/
 - `core/`：核心規則與共用計算，應作為單一真理來源。
 - 根目錄主程式：負責流程組裝與執行入口，不得重寫核心交易規則。
 - `tools/`：負責除錯、驗證、一致性檢查，可呼叫核心邏輯，但不得成為正式邏輯唯一來源。
+  - `validate_v16_consistency.py` 僅負責驗證編排與檢查整合。
+  - `validate_v16_synthetic_fixtures.py` 集中 synthetic 測試資料與 fixture 生成。
+  - `validate_v16_trade_rebuild.py` 集中 debug/portfolio trade log 的 completed trade 重建口徑。
+  - `validate_v16_reporting.py` 集中 validate 報表輸出與摘要顯示。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。
 - `requirements/`：環境相依與版本鎖定，不放商業邏輯。
