@@ -33,6 +33,17 @@ FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
 OUTPUT_DIR = os.path.join(BASE_DIR, 'outputs')
 
 # # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
+def _get_optional_curl_request_exceptions():
+    try:
+        from curl_cffi.requests.exceptions import RequestException as CurlRequestException
+    except (ImportError, ModuleNotFoundError):
+        return ()
+    return (CurlRequestException,)
+
+
+OPTIONAL_CURL_REQUEST_EXCEPTIONS = _get_optional_curl_request_exceptions()
+
+
 EXPECTED_MARKET_DATE_EXCEPTIONS = (
     requests.RequestException,
     ValueError,
@@ -41,7 +52,7 @@ EXPECTED_MARKET_DATE_EXCEPTIONS = (
     TypeError,
     ImportError,
     ModuleNotFoundError,
-)
+) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 EXPECTED_UNIVERSE_FETCH_EXCEPTIONS = (
     requests.RequestException,
@@ -49,7 +60,7 @@ EXPECTED_UNIVERSE_FETCH_EXCEPTIONS = (
     KeyError,
     IndexError,
     pd.errors.EmptyDataError,
-)
+) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 EXPECTED_SCREENING_EXCEPTIONS = (
     requests.RequestException,
@@ -59,7 +70,7 @@ EXPECTED_SCREENING_EXCEPTIONS = (
     AttributeError,
     ImportError,
     ModuleNotFoundError,
-)
+) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 EXPECTED_LAST_DATE_CHECK_EXCEPTIONS = (
     OSError,
@@ -68,7 +79,7 @@ EXPECTED_LAST_DATE_CHECK_EXCEPTIONS = (
     IndexError,
     pd.errors.EmptyDataError,
     pd.errors.ParserError,
-)
+) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 EXPECTED_DOWNLOAD_EXCEPTIONS = (
     requests.RequestException,
@@ -80,7 +91,7 @@ EXPECTED_DOWNLOAD_EXCEPTIONS = (
     OSError,
     ImportError,
     ModuleNotFoundError,
-)
+) + OPTIONAL_CURL_REQUEST_EXCEPTIONS
 
 # # (AI註: 大量批次時預設不逐筆洗板；需要時再手動切成 True)
 VERBOSE_UNIVERSE_FETCH_ERRORS = False

@@ -91,5 +91,16 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
         download_log_lines = [f"{sid} -> {err}" for sid, err in download_errors]
         rt.append_downloader_issues("下載失敗", download_log_lines)
 
+    issue_log_path = None
     if last_date_check_errors or download_errors:
-        vprint(f"⚠️ 非致命問題詳細已寫入: {rt.get_downloader_issue_log_path()}")
+        issue_log_path = rt.get_downloader_issue_log_path()
+        vprint(f"⚠️ 非致命問題詳細已寫入: {issue_log_path}")
+
+    return {
+        "total": total,
+        "count_success": count_success,
+        "count_skipped_latest": count_skipped_latest,
+        "last_date_check_error_count": len(last_date_check_errors),
+        "download_error_count": len(download_errors),
+        "issue_log_path": issue_log_path,
+    }

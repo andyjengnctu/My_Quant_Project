@@ -45,7 +45,18 @@ def main(argv=None):
         if not target_tickers:
             raise RuntimeError("未取得任何可下載標的；請檢查 universe 快篩條件、資料來源或快取內容。")
 
-        smart_download_vip_data(target_tickers, market_date)
+        summary = smart_download_vip_data(target_tickers, market_date)
+        if summary["count_success"] == 0 and summary["count_skipped_latest"] == 0:
+            issue_log_path = summary.get("issue_log_path")
+            issue_log_suffix = f"；詳細請見 {issue_log_path}" if issue_log_path else ""
+            raise RuntimeError(
+                "VIP 資料庫更新失敗："
+                f"成功 {summary['count_success']} 檔、"
+                f"已最新跳過 {summary['count_skipped_latest']} 檔、"
+                f"最後日期檢查失敗 {summary['last_date_check_error_count']} 檔、"
+                f"下載失敗 {summary['download_error_count']} 檔"
+                f"{issue_log_suffix}"
+            )
         return 0
     except (
         RuntimeError,
