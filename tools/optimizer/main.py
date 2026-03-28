@@ -140,6 +140,13 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ 資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。{C_RESET}", file=sys.stderr)
             return 1
 
+    try:
+        if os.path.exists(db_file):
+            ensure_optimizer_db_usable(db_file)
+    except RuntimeError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -154,7 +161,6 @@ def main(argv=None, environ=None):
             print(f"\n{C_YELLOW}⚠️ 記憶庫不存在，無法匯出。{C_RESET}\n")
             return 0
         try:
-            ensure_optimizer_db_usable(db_file)
             study = create_optimizer_study(db_name)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -171,7 +177,8 @@ def main(argv=None, environ=None):
 
     try:
         prompt_existing_db_policy(db_file, COLORS)
-        ensure_optimizer_db_usable(db_file)
+        if os.path.exists(db_file):
+            ensure_optimizer_db_usable(db_file)
         study = create_optimizer_study(db_name)
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
