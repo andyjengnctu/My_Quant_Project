@@ -17,6 +17,7 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
+from core.runtime_utils import has_help_flag
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
 from tools.optimizer.runtime import (
@@ -99,25 +100,44 @@ def build_optimizer_session():
 def main(argv=None, environ=None):
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
+    if has_help_flag(argv):
+        print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
+        print("說明: 非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
+        return 0
     session = build_optimizer_session()
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(argv, environ, default=DEFAULT_DATASET_PROFILE)
-    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+    try:
+        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+            argv,
+            environ,
+            default=DEFAULT_DATASET_PROFILE,
+        )
+        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+        dataset_label = get_dataset_profile_label(dataset_profile_key)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     db_file = build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
     db_name = f"sqlite:///{db_file}"
 
     ensure_runtime_dirs()
-    session.load_raw_data(
-        selected_data_dir,
-        load_all_raw_data=load_all_raw_data,
-        required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
-    )
+    try:
+        session.load_raw_data(
+            selected_data_dir,
+            load_all_raw_data=load_all_raw_data,
+            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     print(
-        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"{C_GRAY}📁 使用資料集: {dataset_label} | "
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")

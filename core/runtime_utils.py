@@ -67,6 +67,11 @@ def is_interactive_stdin():
         return False
 
 
+def has_help_flag(argv):
+    args = [] if argv is None else list(argv)
+    return any(str(arg).strip() in {"-h", "--help"} for arg in args[1:])
+
+
 # # (AI註: input 例外與空字串預設值集中處理；不要在各工具各自維護一份 prompt 邏輯)
 def safe_prompt(prompt_text, default_value):
     stdin = getattr(sys, "stdin", None)

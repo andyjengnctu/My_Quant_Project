@@ -5,7 +5,7 @@ import time
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import safe_prompt, safe_prompt_choice, safe_prompt_int
+from core.runtime_utils import has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int
 from .reporting import export_portfolio_reports, print_yearly_return_report
 from .runtime import BEST_PARAMS_PATH, PROJECT_ROOT, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
@@ -16,6 +16,11 @@ warnings.filterwarnings("once", category=RuntimeWarning)
 def main(argv=None, env=None):
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
+
+    if has_help_flag(argv):
+        print("用法: python apps/portfolio_sim.py [--dataset reduced|full]")
+        print("說明: 非互動模式會自動套用預設輸入；完整資料集預設使用 /data/tw_stock_data_vip。")
+        return 0
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
@@ -58,12 +63,23 @@ def main(argv=None, env=None):
         raise SystemExit(1)
 
     ensure_runtime_dirs()
-    params = load_strict_params(BEST_PARAMS_PATH)
-    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+    try:
+        params = load_strict_params(BEST_PARAMS_PATH)
+        print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
-    start_time = time.time()
-    result = run_portfolio_simulation(selected_data_dir, params, user_max_pos, user_rotation, user_start_year, user_benchmark)
-    end_time = time.time()
+        start_time = time.time()
+        result = run_portfolio_simulation(
+            selected_data_dir,
+            params,
+            user_max_pos,
+            user_rotation,
+            user_start_year,
+            user_benchmark,
+        )
+        end_time = time.time()
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
 
     (
         df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff,

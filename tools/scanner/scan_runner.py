@@ -7,7 +7,7 @@ from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
-from core.runtime_utils import get_process_pool_executor_kwargs
+from core.runtime_utils import get_process_pool_executor_kwargs, has_help_flag
 from .reporting import print_scanner_start_banner, print_scanner_summary
 from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 from .stock_processor import process_single_stock
@@ -92,6 +92,10 @@ def main(argv=None, env=None):
     import sys
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
+    if has_help_flag(argv):
+        print("用法: python apps/vip_scanner.py [--dataset reduced|full]")
+        print("說明: 預設資料集為完整；可用 --dataset 切到縮減資料集。")
+        return 0
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
             argv,
@@ -107,5 +111,9 @@ def main(argv=None, env=None):
         import sys
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
-    run_daily_scanner(selected_data_dir)
+    try:
+        run_daily_scanner(selected_data_dir)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
     return 0
