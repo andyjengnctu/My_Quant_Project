@@ -75,10 +75,13 @@ project/
    │  └─ study_utils.py               # trial / study / 參數還原共用工具
    └─ validate/
       ├─ __init__.py                  # validate 子套件初始化檔
-      ├─ checks.py                    # validate 共用檢查結果、統計比對與 payload 建構
+      ├─ check_result_utils.py        # validate 檢查結果記錄、ticker 正規化與共用失敗/跳過判定
+      ├─ checks.py                    # validate checks façade：統一匯出結果/統計/scanner 預期 helpers
       ├─ main.py                      # 一致性驗證總控；資料集解析、真實掃描協調與結果彙整
       ├─ real_case_assertions.py      # 真實 ticker 驗證的 cross-check 規則與比對項目
       ├─ real_cases.py                # 真實 ticker 驗證總控、資料載入與掃描協調
+      ├─ module_loader.py            # validate 模組動態載入、可恢復例外與模組快取
+      ├─ portfolio_payloads.py        # validate 投組 payload、年度欄位與 completed trade 摘要 helper
       ├─ reporting.py                 # validate 報表輸出與 console summary
       ├─ synthetic_cases.py           # synthetic suite 入口與 validator 編排
       ├─ synthetic_fixtures.py        # synthetic 測試資料與案例生成
@@ -91,7 +94,7 @@ project/
 ## 分層原則
 
 - `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程已拆成 `tools/optimizer/main.py`（CLI/啟動）、`session.py`（session 狀態 façade）、`objective.py`（trial 級評分流程）、`callbacks.py`（monitoring / 破紀錄展示）與 `runtime.py`（記憶庫流程 / 歷史最佳還原 / 匯出控制）；`apps/smart_downloader.py` 現為薄入口，下載流程已拆成 `tools/downloader/main.py`（總控）、`runtime.py`（共用設定 / lazy loader / issue log）、`universe.py`（市場日期與海選）與 `sync.py`（VIP 資料下載與更新跳過）。
-- `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_portfolio_cases.py`、`synthetic_param_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`、`real_case_assertions.py`、`real_cases.py`；`main.py` 僅保留資料集解析、真實掃描協調、synthetic suite 觸發與結果彙整，`real_cases.py` 保留真實 ticker 驗證總控與資料載入，cross-check 規則集中到 `real_case_assertions.py`，synthetic 投組/工具交叉驗證已再拆成 `synthetic_portfolio_common.py`（共用 builder / core 對照 / 統計 equality）與 `synthetic_portfolio_cases.py`（各 synthetic 投組案例 validator），參數 guardrail 與排序門檻案例集中到 `synthetic_param_cases.py`。
+- `tools/validate/`：一致性驗證子系統，已拆成 `check_result_utils.py`（檢查結果記錄 / ticker 正規化 / 可恢復錯誤判定）、`portfolio_payloads.py`（投組 payload / 年度欄位 / completed trade 摘要）、`scanner_expectations.py`（scanner 預期 payload / reference check）、`module_loader.py`（模組動態載入與快取）、`tool_checks.py`（apps/debug/downloader smoke checks）、`checks.py` / `tool_adapters.py` façade、`synthetic_cases.py`、`synthetic_portfolio_cases.py`、`synthetic_param_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`、`real_case_assertions.py`、`real_cases.py`；`main.py` 僅保留資料集解析、真實掃描協調、synthetic suite 觸發與結果彙整，`real_cases.py` 保留真實 ticker 驗證總控與資料載入，cross-check 規則集中到 `real_case_assertions.py`，synthetic 投組/工具交叉驗證已再拆成 `synthetic_portfolio_common.py`（共用 builder / core 對照 / 統計 equality）與 `synthetic_portfolio_cases.py`（各 synthetic 投組案例 validator），參數 guardrail 與排序門檻案例集中到 `synthetic_param_cases.py`。
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 專責正式核心邏輯回放與明細列建構，`reporting.py` 專責 Excel 匯出與虧損摘要。
 - `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作 façade 保留於 `v16_portfolio_ops.py`，其中盤前買進執行/延續訊號清理抽至 `v16_portfolio_entries.py`，汰弱換股/持倉結算/期末結算抽至 `v16_portfolio_exits.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。`v16_core.py` 已縮為單股 K 棒推進與回測總控；跳價/成本/股數/漲跌停口徑抽至 `v16_price_utils.py`，技術指標與訊號生成抽至 `v16_signal_utils.py`，候選/掛單/延續訊號/進場成交規格抽至 `v16_trade_plans.py`。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
