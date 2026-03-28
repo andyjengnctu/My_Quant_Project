@@ -183,5 +183,5 @@
 
 ## I. 專案特例
 
-1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
+1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。 
 2. 暫時只使用還原價，不考慮 raw。
