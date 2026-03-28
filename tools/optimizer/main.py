@@ -117,9 +117,7 @@ def main(argv=None, environ=None):
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         dataset_label = get_dataset_profile_label(dataset_profile_key)
-        if not os.path.isdir(selected_data_dir):
-            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請先執行 apps/smart_downloader.py！")
-    except (ValueError, FileNotFoundError) as exc:
+    except ValueError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
@@ -136,11 +134,37 @@ def main(argv=None, environ=None):
     if trial_count_exit is not None:
         return trial_count_exit
 
-    if session.n_trials > 0:
-        csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
-        if not csv_inputs:
-            print(f"{C_RED}❌ 資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。{C_RESET}", file=sys.stderr)
+    if session.n_trials == 0:
+        if not os.path.exists(db_file):
+            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}{C_RESET}", file=sys.stderr)
             return 1
+        try:
+            ensure_optimizer_db_usable(db_file)
+            study = create_optimizer_study(db_name)
+        except RuntimeError as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
+        try:
+            return export_best_params_if_requested(
+                study,
+                best_params_path=BEST_PARAMS_PATH,
+                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                colors=COLORS,
+            )
+        finally:
+            close_study_storage(study)
+
+    try:
+        if not os.path.isdir(selected_data_dir):
+            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請先執行 apps/smart_downloader.py！")
+    except FileNotFoundError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
+    csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+    if not csv_inputs:
+        print(f"{C_RED}❌ 資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。{C_RESET}", file=sys.stderr)
+        return 1
 
     try:
         if os.path.exists(db_file):
@@ -158,25 +182,6 @@ def main(argv=None, environ=None):
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
-
-    if session.n_trials == 0:
-        if not os.path.exists(db_file):
-            print(f"\n{C_YELLOW}⚠️ 記憶庫不存在，無法匯出。{C_RESET}\n")
-            return 0
-        try:
-            study = create_optimizer_study(db_name)
-        except RuntimeError as exc:
-            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-            return 1
-        try:
-            return export_best_params_if_requested(
-                study,
-                best_params_path=BEST_PARAMS_PATH,
-                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                colors=COLORS,
-            )
-        finally:
-            close_study_storage(study)
 
     try:
         prompt_existing_db_policy(db_file, COLORS)

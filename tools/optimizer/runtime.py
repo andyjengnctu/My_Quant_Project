@@ -126,17 +126,17 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
 
 def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors):
     if len(study.trials) == 0:
-        print(f"\n{colors['yellow']}⚠️ 記憶庫為空，無法匯出。{colors['reset']}\n")
-        return 0
+        print(f"{colors['red']}❌ 記憶庫為空，無法匯出。{colors['reset']}", file=sys.stderr)
+        return 1
     completed_trials = list_completed_study_trials(study)
     if not completed_trials:
-        print(f"\n{colors['yellow']}⚠️ 目前記憶庫中尚無已完成紀錄，無法匯出。{colors['reset']}\n")
-        return 0
+        print(f"{colors['red']}❌ 目前記憶庫中尚無已完成紀錄，無法匯出。{colors['reset']}", file=sys.stderr)
+        return 1
 
     best_trial = get_best_completed_trial_or_none(study)
     if best_trial is None:
-        print(f"\n{colors['yellow']}⚠️ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{colors['reset']}\n")
-        return 0
+        print(f"{colors['red']}❌ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{colors['reset']}", file=sys.stderr)
+        return 1
     if best_trial.value is not None and best_trial.value > -9000:
         best_params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=fixed_tp_percent)
         with open(best_params_path, "w", encoding="utf-8") as handle:
@@ -144,8 +144,8 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
         print(f"\n{colors['green']}💾 匯出成功！已從記憶庫提取最強參數！{colors['reset']}\n")
         return 0
 
-    print(f"\n{colors['yellow']}⚠️ 目前記憶庫中尚無及格的紀錄，無法匯出。{colors['reset']}\n")
-    return 0
+    print(f"{colors['red']}❌ 目前記憶庫中尚無及格的紀錄，無法匯出。{colors['reset']}", file=sys.stderr)
+    return 1
 
 
 def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
