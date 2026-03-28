@@ -148,11 +148,14 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
     return 0
 
 
-def print_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
+def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
     try:
         session.n_trials, trial_source = resolve_optimizer_trial_count(environ)
-        print(f"{colors['gray']}🎯 訓練次數: {session.n_trials} | 來源: {trial_source}{colors['reset']}")
     except ValueError as exc:
         print(f"{colors['red']}❌ {exc}{colors['reset']}", file=sys.stderr)
-        return 1
-    return None
+        return 1, None
+    return None, trial_source
+
+
+def print_resolved_trial_count(session, *, trial_source, colors):
+    print(f"{colors['gray']}🎯 訓練次數: {session.n_trials} | 來源: {trial_source}{colors['reset']}")

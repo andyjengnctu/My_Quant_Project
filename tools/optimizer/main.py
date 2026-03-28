@@ -25,8 +25,9 @@ from tools.optimizer.runtime import (
     ensure_optimizer_db_usable,
     export_best_params_if_requested,
     maybe_print_history_best,
-    print_trial_count_or_exit,
+    print_resolved_trial_count,
     prompt_existing_db_policy,
+    resolve_trial_count_or_exit,
 )
 from tools.optimizer.session import OptimizerSession, close_study_storage
 from tools.optimizer.study_utils import (
@@ -125,7 +126,7 @@ def main(argv=None, environ=None):
     db_name = f"sqlite:///{db_file}"
     ensure_runtime_dirs()
 
-    trial_count_exit = print_trial_count_or_exit(
+    trial_count_exit, trial_source = resolve_trial_count_or_exit(
         session,
         environ=environ,
         resolve_optimizer_trial_count=resolve_optimizer_trial_count,
@@ -147,6 +148,7 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
