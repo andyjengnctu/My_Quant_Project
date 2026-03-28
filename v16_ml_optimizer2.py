@@ -25,7 +25,14 @@ from core.v16_data_utils import (
     discover_unique_csv_inputs,
 )
 from core.v16_log_utils import write_issue_log, format_exception_summary
-from core.v16_runtime_utils import get_process_pool_executor_kwargs, is_interactive_stdin, safe_prompt
+from core.v16_runtime_utils import (
+    get_process_pool_executor_kwargs,
+    is_interactive_stdin,
+    parse_int_strict,
+    safe_prompt,
+    safe_prompt_choice,
+    safe_prompt_int,
+)
 from core.v16_params_io import build_params_from_mapping, params_to_json_dict
 from core.v16_dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
@@ -106,18 +113,22 @@ DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 def resolve_optimizer_trial_count(environ):
     env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
     if env_value != "":
-        return int(env_value), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
+        return parse_int_strict(
+            env_value,
+            field_name=f"環境變數 {OPTIMIZER_TRIALS_ENV_VAR}",
+            min_value=0,
+        ), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
 
     default_trials = (
         DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE if is_interactive_stdin() else DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE
     )
-    prompt_default = str(default_trials)
-    user_input = safe_prompt(
-        f"👉 請輸入訓練次數 (預設 {prompt_default}，輸入 0 則直接提取匯出參數): ",
-        prompt_default,
-    ).strip()
-    return int(user_input), "UI/DEFAULT"
-
+    trial_count = safe_prompt_int(
+        f"👉 請輸入訓練次數 (預設 {default_trials}，輸入 0 則直接提取匯出參數): ",
+        default_trials,
+        field_name="訓練次數",
+        min_value=0,
+    )
+    return trial_count, "UI/DEFAULT"
 
 def build_optimizer_db_file_path(dataset_profile_key):
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
@@ -784,11 +795,16 @@ if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-        sys.argv,
-        os.environ,
-        default=DEFAULT_DATASET_PROFILE,
-    )
+    try:
+        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+            sys.argv,
+            os.environ,
+            default=DEFAULT_DATASET_PROFILE,
+        )
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     db_file = build_optimizer_db_file_path(dataset_profile_key)
     DB_NAME = f"sqlite:///{db_file}"
@@ -803,13 +819,23 @@ if __name__ == "__main__":
     if ENABLE_OPTIMIZER_PROFILING:
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")
     
-    if os.path.exists(db_file):
-        choice = safe_prompt("\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ", "1").strip()
-        if choice == '2': 
-            os.remove(db_file)
-            print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
+    try:
+        if os.path.exists(db_file):
+            choice = safe_prompt_choice(
+                "\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ",
+                "1",
+                ("1", "2"),
+                field_name="記憶庫選項",
+            )
+            if choice == '2':
+                os.remove(db_file)
+                print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
 
-    N_TRIALS, trial_source = resolve_optimizer_trial_count(os.environ)
+        N_TRIALS, trial_source = resolve_optimizer_trial_count(os.environ)
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
     print(f"{C_GRAY}🎯 訓練次數: {N_TRIALS} | 來源: {trial_source}{C_RESET}")
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     

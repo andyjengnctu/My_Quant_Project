@@ -9,7 +9,7 @@ import pandas as pd
 
 from core.v16_params_io import load_params_from_json
 from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_stock_data, run_portfolio_timeline
-from core.v16_display import print_strategy_dashboard, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
+from core.v16_display import print_strategy_dashboard, C_RED, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_dataset_profiles import (
@@ -18,7 +18,7 @@ from core.v16_dataset_profiles import (
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
 )
-from core.v16_runtime_utils import safe_prompt, should_auto_open_browser
+from core.v16_runtime_utils import safe_prompt, safe_prompt_choice, safe_prompt_int, should_auto_open_browser
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
 warnings.simplefilter("default")
@@ -188,20 +188,47 @@ if __name__ == "__main__":
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-        sys.argv,
-        os.environ,
-        default=DEFAULT_DATASET_PROFILE,
-    )
+    try:
+        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+            sys.argv,
+            os.environ,
+            default=DEFAULT_DATASET_PROFILE,
+        )
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
+
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     print(
         f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
 
-    USER_ROTATION = safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
-    USER_MAX_POS = int(safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
-    USER_START_YEAR = int(safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
+    try:
+        USER_ROTATION = safe_prompt_choice(
+            "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
+            "N",
+            ("Y", "N"),
+            field_name="汰弱換股選項",
+        ) == 'Y'
+        USER_MAX_POS = safe_prompt_int(
+            "👉 2. 最大持倉數量 (預設 10): ",
+            10,
+            field_name="最大持倉數量",
+            min_value=1,
+        )
+        USER_START_YEAR = safe_prompt_int(
+            "👉 3. 開始回測年份 (預設 2015): ",
+            2015,
+            field_name="開始回測年份",
+            min_value=1,
+        )
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
+
     USER_BENCHMARK = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
 
     ensure_runtime_dirs()

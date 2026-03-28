@@ -239,11 +239,17 @@ def run_daily_scanner(data_dir):
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
 if __name__ == "__main__":
-    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-        sys.argv,
-        os.environ,
-        default=DEFAULT_DATASET_PROFILE,
-    )
+    try:
+        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+            sys.argv,
+            os.environ,
+            default=DEFAULT_DATASET_PROFILE,
+        )
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
+
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     print(
         f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "

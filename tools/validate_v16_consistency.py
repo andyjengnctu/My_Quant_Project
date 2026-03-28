@@ -2402,7 +2402,12 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
+    try:
+        dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"❌ {e}", file=sys.stderr)
+        return 1
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     set_active_data_dir(selected_data_dir)
     print(

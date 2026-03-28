@@ -369,11 +369,16 @@ def main():
     print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
-    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-        sys.argv,
-        os.environ,
-        default=DEFAULT_DATASET_PROFILE,
-    )
+    try:
+        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+            sys.argv,
+            os.environ,
+            default=DEFAULT_DATASET_PROFILE,
+        )
+    except ValueError as e:
+        sys.stdout.flush()
+        print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
+        raise SystemExit(1)
     DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
     print(
         f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
