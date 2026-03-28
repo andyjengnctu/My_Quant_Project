@@ -28,8 +28,9 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 python apps/validate_consistency.py --dataset reduced    # 正式入口
 # apps/validate_consistency.py 為薄入口；總控在 tools/validate/main.py
 # tools/validate/check_result_utils.py / portfolio_payloads.py / scanner_expectations.py 分別負責檢查結果記錄、投組 payload/年度欄位摘要、scanner 預期 payload/reference check
-# tools/validate/module_loader.py / tool_checks.py 分別負責模組動態載入與 apps/debug/downloader smoke checks；checks.py / tool_adapters.py 僅保留 façade
-# tools/validate/real_cases.py 負責真實 ticker 驗證總控；real_case_assertions.py 負責 cross-check 規則；synthetic_cases.py 負責 suite 入口；synthetic_portfolio_common.py / synthetic_portfolio_cases.py / synthetic_param_cases.py 分別負責 synthetic 投組共用 helper、synthetic 投組/工具交叉驗證與 guardrail/排序/歷史門檻案例
+# tools/validate/module_loader.py / tool_check_common.py / portfolio_tool_checks.py / external_tool_checks.py 分別負責模組動態載入、smoke check 共用工具、portfolio_sim smoke checks、scanner/downloader/debug smoke checks；checks.py / tool_adapters.py / tool_checks.py 僅保留 façade
+# tools/validate/real_case_io.py / real_case_runners.py / real_case_assertions.py 分別負責真實 ticker 的 CSV/清洗、執行/掃描協調、cross-check 規則；real_cases.py 僅保留 façade
+# synthetic_cases.py 負責 suite 入口；synthetic_portfolio_common.py / synthetic_take_profit_cases.py / synthetic_flow_cases.py / synthetic_portfolio_cases.py 分別負責 synthetic 投組共用 helper、半倉停利案例、流程/rotation 案例與 façade；synthetic_history_cases.py / synthetic_guardrail_cases.py / synthetic_param_cases.py 分別負責歷史門檻案例、guardrail 案例與 façade
 
 
 ## 資料下載
