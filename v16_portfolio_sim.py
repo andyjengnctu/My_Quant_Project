@@ -195,6 +195,17 @@ if __name__ == "__main__":
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
+    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+        sys.argv,
+        os.environ,
+        default=DEFAULT_DATASET_PROFILE,
+    )
+    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+    print(
+        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+    )
+
     USER_ROTATION = _safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
     USER_MAX_POS = int(_safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
     USER_START_YEAR = int(_safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
@@ -206,7 +217,7 @@ if __name__ == "__main__":
 
     start_time = time.time()
     df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
-        DEFAULT_DATA_DIR, params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
+        selected_data_dir, params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
 

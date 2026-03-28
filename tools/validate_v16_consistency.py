@@ -101,13 +101,8 @@ def _safe_prompt(prompt_text, default_value):
 
 
 def resolve_validate_dataset_profile_key(argv, environ):
-    cli_value = None
-    for arg in argv[1:]:
-        if arg.startswith("--dataset="):
-            cli_value = arg.split("=", 1)[1]
-            break
-
-    if cli_value is not None:
+    cli_value = extract_dataset_cli_value(argv)
+    if cli_value is not None and str(cli_value).strip() != "":
         return normalize_dataset_profile_key(cli_value), "CLI"
 
     env_value = environ.get("V16_VALIDATE_DATASET")
