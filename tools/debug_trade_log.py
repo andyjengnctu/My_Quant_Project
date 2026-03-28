@@ -382,7 +382,8 @@ def main():
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
-        return
+        print(f"{C_RED}❌ 未輸入股票代號，工具已取消。{C_RESET}")
+        raise SystemExit(1)
 
     manual_csv_path = f"{ticker}.csv"
     if os.path.exists(manual_csv_path):
