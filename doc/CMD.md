@@ -52,7 +52,8 @@ python tools/debug/trade_log.py
 
 
 # portfolio engine 架構
-# run_portfolio_timeline() 正式總控、候選池掃描與最終整合仍在 core/v16_portfolio_engine.py
+# run_portfolio_timeline() 正式總控與最終整合仍在 core/v16_portfolio_engine.py
+# 當日候選池掃描、normal/extended 候選規格與排序在 core/v16_portfolio_candidates.py
 # 快取市場資料/PIT 索引在 core/v16_portfolio_fast_data.py
 # 日內操作 façade 在 core/v16_portfolio_ops.py
 # 盤前買進執行/延續訊號清理在 core/v16_portfolio_entries.py

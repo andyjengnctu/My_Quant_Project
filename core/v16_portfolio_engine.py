@@ -1,17 +1,12 @@
 import pandas as pd
 import time
-from core.v16_core import calc_entry_price, build_normal_candidate_plan, create_signal_tracking_state, build_extended_candidate_plan_from_signal
-from core.v16_config import EV_CALC_METHOD, BUY_SORT_METHOD
-from core.v16_buy_sort import calc_buy_sort_value
+from core.v16_config import EV_CALC_METHOD
 from core.v16_portfolio_fast_data import (
     build_normal_setup_index,
     build_trade_stats_index,
     calc_mark_to_market_equity,
     get_fast_close,
     get_fast_close_on_or_before,
-    get_fast_pos,
-    get_fast_value,
-    get_pit_stats_from_index,
     has_fast_date,
     is_extended_entry_type,
 )
@@ -24,6 +19,7 @@ from core.v16_portfolio_stats import (
     find_sim_start_idx,
 )
 from core.v16_portfolio_stats import calc_portfolio_score
+from core.v16_portfolio_candidates import build_daily_candidates
 from core.v16_portfolio_ops import (
     cleanup_extended_signals_for_day,
     closeout_open_positions,
@@ -102,117 +98,17 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
 
         t0 = time.perf_counter() if profile_stats is not None else None
-        candidates_today = []
-        orderable_candidates_today = []
-        normal_setup_tickers_today = set()
-
-        for ticker, y_pos, t_pos in sorted(normal_setup_index.get(today, []), key=lambda x: x[0]):
-            normal_setup_tickers_today.add(ticker)
-            if ticker in portfolio or ticker in sold_today:
-                continue
-
-            fast_df = all_dfs_fast[ticker]
-            y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
-            y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-
-            signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params)
-            if signal_state is not None:
-                active_extended_signals[ticker] = signal_state
-
-            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
-                pit_stats_index[ticker], today, params
-            )
-            if not is_candidate:
-                continue
-
-            candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params)
-            if candidate_plan is None:
-                continue
-
-            est_limit_px = candidate_plan['limit_price']
-            est_init_sl = candidate_plan['init_sl']
-            est_init_trail = candidate_plan['init_trail']
-            est_qty = candidate_plan['qty']
-            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
-            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
-            candidate_row = {
-                'ticker': ticker,
-                'type': 'normal',
-                'limit_px': est_limit_px,
-                'ev': ev,
-                'y_atr': y_atr,
-                'today_pos': t_pos,
-                'yesterday_pos': y_pos,
-                'qty': est_qty,
-                'proj_cost': est_cost,
-                'sort_value': sort_value,
-                'hist_win_rate': win_rate,
-                'hist_trade_count': trade_count,
-                'init_sl': est_init_sl,
-                'init_trail': est_init_trail,
-                'is_orderable': candidate_plan['is_orderable'],
-            }
-            candidates_today.append(candidate_row)
-            if candidate_row['is_orderable']:
-                orderable_candidates_today.append(candidate_row)
-
-        for ticker in sorted(list(active_extended_signals.keys())):
-            if ticker in portfolio or ticker in sold_today or ticker in normal_setup_tickers_today:
-                continue
-
-            fast_df = all_dfs_fast.get(ticker)
-            if fast_df is None:
-                continue
-
-            t_pos = get_fast_pos(fast_df, today)
-            if t_pos <= 0:
-                continue
-            y_pos = t_pos - 1
-
-            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(pit_stats_index[ticker], today, params)
-            if not is_candidate:
-                continue
-
-            reference_price = get_fast_close(fast_df, pos=y_pos)
-            candidate_plan = build_extended_candidate_plan_from_signal(
-                active_extended_signals[ticker],
-                reference_price,
-                sizing_equity,
-                params,
-            )
-            if candidate_plan is None:
-                continue
-
-            est_limit_px = candidate_plan['limit_price']
-            est_init_sl = candidate_plan['init_sl']
-            est_init_trail = candidate_plan['init_trail']
-            est_qty = candidate_plan['qty']
-            est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
-            sort_value = calc_buy_sort_value(BUY_SORT_METHOD, ev, est_cost, win_rate, trade_count)
-            candidate_row = {
-                'ticker': ticker,
-                'type': 'extended',
-                'limit_px': est_limit_px,
-                'ev': ev,
-                'y_atr': candidate_plan['orig_atr'],
-                'today_pos': t_pos,
-                'yesterday_pos': y_pos,
-                'qty': est_qty,
-                'proj_cost': est_cost,
-                'sort_value': sort_value,
-                'hist_win_rate': win_rate,
-                'hist_trade_count': trade_count,
-                'signal_state': active_extended_signals[ticker],
-                'init_sl': est_init_sl,
-                'init_trail': est_init_trail,
-                'is_orderable': candidate_plan['is_orderable'],
-            }
-            candidates_today.append(candidate_row)
-            if candidate_row['is_orderable']:
-                orderable_candidates_today.append(candidate_row)
-
-        candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
-        orderable_candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+        candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
+            normal_setup_index=normal_setup_index,
+            active_extended_signals=active_extended_signals,
+            portfolio=portfolio,
+            sold_today=sold_today,
+            all_dfs_fast=all_dfs_fast,
+            pit_stats_index=pit_stats_index,
+            today=today,
+            sizing_equity=sizing_equity,
+            params=params,
+        )
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0
 
