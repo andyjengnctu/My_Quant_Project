@@ -56,12 +56,33 @@ def normalize_dataset_profile_key(value, default=DEFAULT_DATASET_PROFILE):
 
 
 def get_dataset_root_dir(project_root):
-    unix_root = os.path.normpath(UNIX_DATASET_ROOT_DIR)
-    if os.path.isdir(unix_root):
-        return unix_root
+    del project_root
+    return os.path.normpath(UNIX_DATASET_ROOT_DIR)
 
-    project_root_abs = os.path.abspath(project_root)
-    return os.path.join(project_root_abs, PROJECT_DATA_DIRNAME)
+
+def build_missing_dataset_dir_message(profile_key, data_dir):
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    if normalized_key == DATASET_PROFILE_REDUCED:
+        return f"找不到資料夾 {data_dir}，請確認本輪測試資料 ZIP 已解到該路徑。"
+    return f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py 下載完整資料集。"
+
+
+def build_empty_dataset_dir_message(profile_key, data_dir):
+    normalized_key = normalize_dataset_profile_key(profile_key)
+    if normalized_key == DATASET_PROFILE_REDUCED:
+        return f"資料夾 {data_dir} 內沒有任何 CSV 檔案，請確認本輪測試資料 ZIP 內容是否完整。"
+    return f"資料夾 {data_dir} 內沒有任何 CSV 檔案。"
+
+
+def infer_dataset_profile_key_from_dir(data_dir, default=DEFAULT_DATASET_PROFILE):
+    normalized_default = normalize_dataset_profile_key(default, default=default)
+    if not data_dir:
+        return normalized_default
+    base_name = os.path.basename(os.path.normpath(str(data_dir)))
+    for key, spec in DATASET_PROFILE_SPECS.items():
+        if base_name == spec["dir_name"]:
+            return key
+    return normalized_default
 
 
 def get_dataset_dir(project_root, profile_key):

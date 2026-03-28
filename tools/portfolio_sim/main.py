@@ -4,7 +4,7 @@ import warnings
 import time
 
 from core.data_utils import discover_unique_csv_inputs
-from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
+from core.dataset_profiles import DEFAULT_DATASET_PROFILE, build_empty_dataset_dir_message, build_missing_dataset_dir_message, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int
 from .reporting import export_portfolio_reports, print_yearly_return_report
@@ -21,7 +21,7 @@ def main(argv=None, env=None):
 
     if has_help_flag(argv):
         print("用法: python apps/portfolio_sim.py [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；完整資料集預設使用 /data/tw_stock_data_vip。")
+        print("說明: 非互動模式會自動套用預設輸入；reduced 正式測試資料路徑為 /data/tw_stock_data_vip_reduced。")
         return 0
 
     try:
@@ -32,10 +32,10 @@ def main(argv=None, env=None):
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         if not os.path.isdir(selected_data_dir):
-            raise FileNotFoundError(f"找不到資料夾 {selected_data_dir}，請確認路徑或先下載資料！")
+            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
         csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
         if not csv_inputs:
-            raise FileNotFoundError(f"資料夾 {selected_data_dir} 內沒有任何 CSV 檔案。")
+            raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
     except (ValueError, FileNotFoundError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
