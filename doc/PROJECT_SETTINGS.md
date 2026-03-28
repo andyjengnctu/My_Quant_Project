@@ -9,7 +9,7 @@
 5. 重點回答，避免重複說明相同概念。
 6. 回答要明確，是就是是、非就是非，避免似乎、幾乎、比較好、比較差這種模稜兩可的用語。
 7. 當使用者要求「最嚴格檢查」時，須一次找出所有問題，包含程式、工具、統計口徑、交易限制符合性，包含全檔靜態審核、py_compile 語法檢查、合成案例等驗證，如靜態過了才做動態檢查。
-8. 需做動態測試，測試資料（`tw_stock_data_vip_reduced`）放在專案資料中，程式包中不會放；如需要外部套件（如 `optuna`）就自行安裝，環境設定寫在 `requirements` 資料夾中。
+8. 需做動態測試，測試資料（`/data/tw_stock_data_vip_reduced`）放在專案資料中，程式包中不會放；如需外部套件（如 `optuna`）就自行安裝，環境設定寫在 `requirements` 資料夾中。
 9. 檢查有問題就直接提供修改，須徹底修好，避免產生新問題。
 10. 如果是提供更新的程式碼片段，總是先提供明確要被取代的完整片段（需確認過可直接貼上搜尋就找到），縮排也必須可直接貼上使用，讓我可以無腦地 copy-search-paste 就完成。
 11. 如果是提供更新的程式碼 ZIP 檔，只給有改的檔案就好，放在正確的資料夾目錄中，並列出改了哪些檔，讓我可以直接 copy-paste 取代舊檔案。
@@ -65,4 +65,3 @@
 1. `v16_portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. 暫時都只使用還原價，不考慮 raw。
 3. 資料集預設：tools/validate_v16_consistency.py 預設使用 `/data/tw_stock_data_vip_reduced`；v16_portfolio_sim.py、v16_vip_scanner.py、v16_ml_optimizer2.py 預設使用 `/data/tw_stock_data_vip`；除 consistency 外不在一般 UI 額外詢問資料集；若需切換，只能透過 CLI `--dataset` 或環境變數覆蓋，且不得把未顯示資料集選單視為問題。
-

@@ -1,5 +1,5 @@
 # 忽略所有 CSV 數據 (這是那 586 個檔案的主因)
-/data/dw_stock_data_vip/
+/data/tw_stock_data_vip/
 /data/tw_stock_data_vip_reduced/
 *.csv
 
