@@ -23,3 +23,8 @@ set V16_DATASET_PROFILE=full
 # optimizer 架構
 python apps/ml_optimizer.py --dataset full            # 正式入口
 # apps/ml_optimizer.py 為薄入口；主流程在 tools/optimizer/main.py
+
+# validate 架構
+python apps/validate_consistency.py --dataset reduced    # 正式入口
+# apps/validate_consistency.py 為薄入口；總控在 tools/validate/main.py
+# tools/validate/checks.py / tool_adapters.py / synthetic_cases.py 分別負責共用檢查、工具載入與 synthetic suite

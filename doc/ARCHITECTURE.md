@@ -57,15 +57,19 @@ project/
    │  └─ study_utils.py               # trial / study / 參數還原共用工具
    └─ validate/
       ├─ __init__.py                  # validate 子套件初始化檔
-      ├─ main.py                      # 一致性驗證主模組與真實/合成案例編排
+      ├─ checks.py                   # validate 共用檢查結果、統計比對與 payload 建構
+      ├─ main.py                      # 一致性驗證主模組；資料集解析、真實 ticker 編排與總控入口
       ├─ reporting.py                 # validate 報表輸出與 console summary
+      ├─ synthetic_cases.py           # synthetic case 驗證編排與 suite 入口
       ├─ synthetic_fixtures.py        # synthetic 測試資料與案例生成
+      ├─ tool_adapters.py             # validate 對 apps/debug 工具的動態載入與 smoke 檢查
       └─ trade_rebuild.py             # trade log / completed trade 重建工具
 ```
 
 ## 分層原則
 
 - `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程移至 `tools/optimizer/`。
+- `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`；`main.py` 僅保留資料集解析、真實 ticker 驗證編排與總控流程。
 - `core/`：核心規則與共用計算，應作為單一真理來源。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
