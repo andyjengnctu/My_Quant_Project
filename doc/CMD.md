@@ -27,7 +27,7 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 # validate 架構
 python apps/validate_consistency.py --dataset reduced    # 正式入口
 # apps/validate_consistency.py 為薄入口；總控在 tools/validate/main.py
-# tools/validate/checks.py / tool_adapters.py / synthetic_cases.py 分別負責共用檢查、工具載入與 synthetic suite
+# tools/validate/real_cases.py 負責真實 ticker 驗證；checks.py / tool_adapters.py / synthetic_cases.py 分別負責共用檢查、工具載入與 synthetic suite
 
 
 ## 資料下載
