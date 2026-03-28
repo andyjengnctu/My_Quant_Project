@@ -18,7 +18,10 @@ project/
 │  ├─ __init__.py                     # 套件初始化檔
 │  ├─ v16_buy_sort.py                 # 買入候選排序邏輯
 │  ├─ v16_config.py                   # dataclass、參數預設、參數驗證、共用設定
-│  ├─ v16_core.py                     # 單股策略核心邏輯、訊號、進出場與回測主流程
+│  ├─ v16_core.py                     # 單股策略核心：K棒推進與單股回測總控
+│  ├─ v16_price_utils.py              # 跳價/成交價/成本/股數/漲跌停與賣出阻塞判斷單一口徑
+│  ├─ v16_signal_utils.py             # 單股技術指標與訊號生成
+│  ├─ v16_trade_plans.py              # 單股候選規格、盤前掛單規格、延續訊號狀態與進場成交判定
 │  ├─ v16_data_utils.py               # OHLCV 清理與共用資料工具
 │  ├─ v16_dataset_profiles.py         # 資料集模式/CLI/ENV 解析與路徑切換單一入口
 │  ├─ v16_display.py                  # 顯示與輸出格式整理
@@ -79,7 +82,7 @@ project/
 - `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程移至 `tools/optimizer/`。
 - `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`；`main.py` 僅保留資料集解析、真實 ticker 驗證編排與總控流程。
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 專責正式核心邏輯回放與明細列建構，`reporting.py` 專責 Excel 匯出與虧損摘要。
-- `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作流程抽至 `v16_portfolio_ops.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。
+- `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作流程抽至 `v16_portfolio_ops.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。`v16_core.py` 已縮為單股 K 棒推進與回測總控；跳價/成本/股數/漲跌停口徑抽至 `v16_price_utils.py`，技術指標與訊號生成抽至 `v16_signal_utils.py`，候選/掛單/延續訊號/進場成交規格抽至 `v16_trade_plans.py`。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。

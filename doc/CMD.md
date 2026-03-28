@@ -53,3 +53,10 @@ python tools/debug/trade_log.py
 # 快取市場資料/PIT 索引在 core/v16_portfolio_fast_data.py
 # 日內操作流程（汰弱換股/持倉結算/盤前買進/延續訊號清理/期末結算）在 core/v16_portfolio_ops.py
 # 曲線/年度/年化統計與分數在 core/v16_portfolio_stats.py
+
+
+# single-stock core 架構
+# core/v16_core.py：單股 K 棒推進與回測總控
+# core/v16_price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷
+# core/v16_signal_utils.py：技術指標與訊號生成
+# core/v16_trade_plans.py：候選規格、盤前掛單規格、延續訊號狀態與進場成交判定
