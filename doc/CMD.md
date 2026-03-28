@@ -37,3 +37,12 @@ python apps/smart_downloader.py
 ```
 
 下載主流程已移至 `tools/downloader/main.py`；正式入口仍為 `apps/smart_downloader.py`。
+
+
+## 交易除錯
+
+```bash
+python tools/debug/trade_log.py
+```
+
+`tools/debug/trade_log.py` 為 debug 正式入口；交易回放主邏輯在 `tools/debug/backtest.py`，輸出摘要在 `tools/debug/reporting.py`。

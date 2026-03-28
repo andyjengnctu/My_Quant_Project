@@ -73,6 +73,7 @@ project/
 
 - `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程移至 `tools/optimizer/`。
 - `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`；`main.py` 僅保留資料集解析、真實 ticker 驗證編排與總控流程。
+- `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 專責正式核心邏輯回放與明細列建構，`reporting.py` 專責 Excel 匯出與虧損摘要。
 - `core/`：核心規則與共用計算，應作為單一真理來源。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
