@@ -28,13 +28,12 @@ from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_runtime_utils import get_process_pool_executor_kwargs
 from core.v16_params_io import build_params_from_mapping, params_to_json_dict
 from core.v16_dataset_profiles import (
-    DEFAULT_DATASET_ENV_VAR,
     DEFAULT_DATASET_PROFILE,
     DATASET_PROFILE_FULL,
-    DATASET_PROFILE_REDUCED,
     get_dataset_dir,
     get_dataset_profile_label,
-    resolve_dataset_profile_key,
+    normalize_dataset_profile_key,
+    resolve_dataset_profile_from_cli_env,
 )
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
@@ -58,25 +57,13 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
-DB_FILE_PATH = os.path.join(MODELS_DIR, "v16_portfolio_ai_10pos_overnight_reduced.db")
 
 
 # # (AI註: 將目錄建立延後到實際執行期，避免被 import 時污染呼叫端工作目錄)
 def ensure_runtime_dirs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
-
-
-def build_optimizer_db_file_path(profile_key):
-    if profile_key == DATASET_PROFILE_FULL:
-        suffix = "full"
-    elif profile_key == DATASET_PROFILE_REDUCED:
-        suffix = "reduced"
-    else:
-        raise ValueError(f"不支援的 optimizer 資料集模式: {profile_key}")
-    return os.path.join(MODELS_DIR, f"v16_portfolio_ai_10pos_overnight_{suffix}.db")
 
 
 TRAIN_MAX_POSITIONS = 10         
@@ -111,6 +98,12 @@ OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH
 
 # # (AI註: 方案B - None=照常搜尋 tp_percent；數值=暫時固定該 tp_percent 並跳過搜尋)
 OPTIMIZER_FIXED_TP_PERCENT = None
+
+
+def build_optimizer_db_file_path(dataset_profile_key):
+    normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
+    suffix = "" if normalized_key == DATASET_PROFILE_FULL else f"_{normalized_key}"
+    return os.path.join(MODELS_DIR, f"v16_portfolio_ai_10pos_overnight{suffix}.db")
 
 PROFILE_FIELDS = [
     "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
@@ -285,22 +278,16 @@ def is_insufficient_data_message(msg):
 def is_insufficient_data_error(exc):
     return isinstance(exc, ValueError) and ("有效資料不足" in str(exc))
 
-def load_all_raw_data(data_dir=None):
-    global DATA_DIR, RAW_DATA_CACHE_DATA_DIR
+def load_all_raw_data(data_dir):
+    global RAW_DATA_CACHE_DATA_DIR
 
-    resolved_data_dir = os.path.abspath(DATA_DIR if data_dir is None else data_dir)
-    if RAW_DATA_CACHE and RAW_DATA_CACHE_DATA_DIR == resolved_data_dir:
-        print(f"{C_GRAY}ℹ️ 已重用記憶體快取資料集: {resolved_data_dir}{C_RESET}")
-        DATA_DIR = resolved_data_dir
-        return
-
-    if not os.path.exists(resolved_data_dir):
-        raise FileNotFoundError(f"找不到資料夾 {resolved_data_dir}，請先執行 vip_smart_downloader.py！")
+    if not os.path.exists(data_dir):
+        raise FileNotFoundError(f"找不到資料夾 {data_dir}，請先執行 vip_smart_downloader.py！")
 
     print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
-    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(resolved_data_dir)
+    csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     if not csv_inputs:
-        raise FileNotFoundError(f"資料夾 {resolved_data_dir} 內沒有任何 CSV 檔案。")
+        raise FileNotFoundError(f"資料夾 {data_dir} 內沒有任何 CSV 檔案。")
 
     load_issues = list(duplicate_file_issue_lines)
     total_invalid_rows = 0
@@ -320,9 +307,9 @@ def load_all_raw_data(data_dir=None):
             clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
             fresh_raw_data_cache[ticker] = clean_df
 
-            invalid_row_count = sanitize_stats["invalid_row_count"]
-            duplicate_date_count = sanitize_stats["duplicate_date_count"]
-            dropped_row_count = sanitize_stats["dropped_row_count"]
+            invalid_row_count = sanitize_stats['invalid_row_count']
+            duplicate_date_count = sanitize_stats['duplicate_date_count']
+            dropped_row_count = sanitize_stats['dropped_row_count']
 
             total_invalid_rows += invalid_row_count
             total_duplicate_dates += duplicate_date_count
@@ -355,8 +342,7 @@ def load_all_raw_data(data_dir=None):
     # # (AI註: 也避免載入途中失敗留下半新半舊的污染狀態)
     RAW_DATA_CACHE.clear()
     RAW_DATA_CACHE.update(fresh_raw_data_cache)
-    RAW_DATA_CACHE_DATA_DIR = resolved_data_dir
-    DATA_DIR = resolved_data_dir
+    RAW_DATA_CACHE_DATA_DIR = data_dir
 
     print(
         f"\n{C_GREEN}✅ 記憶體快取完成！共載入 {len(RAW_DATA_CACHE)} 檔標的，"
@@ -751,21 +737,21 @@ if __name__ == "__main__":
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    dataset_profile_key, dataset_source = resolve_dataset_profile_key(
+    dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
         sys.argv,
         os.environ,
         default=DEFAULT_DATASET_PROFILE,
-        env_var_names=(DEFAULT_DATASET_ENV_VAR,),
-        allow_ui_prompt=False,
     )
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     db_file = build_optimizer_db_file_path(dataset_profile_key)
+    DB_NAME = f"sqlite:///{db_file}"
+
+    ensure_runtime_dirs(); load_all_raw_data(selected_data_dir)
     print(
-        f"{C_GRAY}🗂️ 資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
-    print(f"{C_GRAY}🧠 Optimizer 記憶庫: {db_file}{C_RESET}")
-    ensure_runtime_dirs(); load_all_raw_data(selected_data_dir); DB_NAME = f"sqlite:///{db_file}"
+    print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     init_profile_output_files()
     if ENABLE_OPTIMIZER_PROFILING:
         print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {PROFILE_CSV_PATH}{C_RESET}")

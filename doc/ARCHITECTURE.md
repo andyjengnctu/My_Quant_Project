@@ -17,7 +17,7 @@ project/
 │  ├─ v16_config.py                   # dataclass、參數預設、參數驗證、共用設定
 │  ├─ v16_core.py                     # 單股策略核心邏輯、訊號、進出場與回測主流程
 │  ├─ v16_data_utils.py               # OHLCV 清理與共用資料工具
-│  ├─ v16_dataset_profiles.py         # 全專案資料集模式、CLI/ENV 覆寫與路徑切換單一入口
+│  ├─ v16_dataset_profiles.py         # 資料集模式/CLI/ENV 解析與路徑切換單一入口
 │  ├─ v16_display.py                  # 顯示與輸出格式整理
 │  ├─ v16_log_utils.py                # logging 與輸出輔助工具
 │  ├─ v16_params_io.py                # 參數讀寫、json 載入/匯出
@@ -29,8 +29,8 @@ project/
 │  ├─ FINMIND_API_TOKEN.md            # API token 說明
 │  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
 │  └─ ToDo.md                         # 待辦事項與後續整理筆記
-├─ tw_stock_data_vip/                 # 完整版測試資料集（portfolio/scanner/optimizer 預設使用）
-├─ tw_stock_data_vip_reduced/         # 縮減版測試資料集（validate 預設使用）
+├─ tw_stock_data_vip/                 # 完整版測試資料集
+├─ tw_stock_data_vip_reduced/         # 縮減版測試資料集（供 validate 預設使用；主工具可用 --dataset 切換）
 ├─ models/
 │  ├─ v16_all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄
 │  ├─ v16_all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄

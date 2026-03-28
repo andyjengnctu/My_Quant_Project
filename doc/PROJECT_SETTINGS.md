@@ -52,4 +52,4 @@
 ## F. 專案特例
 1. v16_portfolio_sim.py 自動開瀏覽器暫時允許。
 2. 暫時都只使用還原價，不考慮raw。
-3. 資料集模式規則：tools/validate_v16_consistency.py 預設使用 tw_stock_data_vip_reduced；其餘工具預設使用 tw_stock_data_vip，且 UI 不需每次詢問資料集。若需切換僅透過 CLI 參數 `--dataset` 或環境變數指定；不得把未提供資料集選單視為問題。
+3. 資料集預設：tools/validate_v16_consistency.py 預設使用 tw_stock_data_vip_reduced；v16_portfolio_sim.py、v16_vip_scanner.py、v16_ml_optimizer2.py 預設使用 tw_stock_data_vip；除 consistency 外不在一般 UI 額外詢問資料集；若需切換，只能透過 CLI `--dataset` 或環境變數覆蓋，且不得把未顯示資料集選單視為問題。

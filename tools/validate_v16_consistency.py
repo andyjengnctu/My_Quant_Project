@@ -23,13 +23,13 @@ from core.v16_portfolio_engine import (
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_map, discover_unique_csv_inputs
 from core.v16_log_utils import format_exception_summary
 from core.v16_dataset_profiles import (
-    DEFAULT_DATASET_ENV_VAR,
     DEFAULT_VALIDATE_DATASET_PROFILE,
     VALIDATE_DATASET_ENV_VAR,
     build_validate_dataset_prompt,
+    extract_dataset_cli_value,
     get_dataset_dir,
     get_dataset_profile_label,
-    resolve_dataset_profile_key,
+    normalize_dataset_profile_key,
 )
 from contextlib import redirect_stdout, redirect_stderr
 import tempfile
@@ -87,6 +87,38 @@ def set_active_data_dir(data_dir):
     CSV_PATH_CACHE = None
     CSV_DUPLICATE_ISSUES = None
     CSV_PATH_CACHE_DATA_DIR = None
+
+
+def _safe_prompt(prompt_text, default_value):
+    if not sys.stdin or not sys.stdin.isatty():
+        return default_value
+
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
+def resolve_validate_dataset_profile_key(argv, environ):
+    cli_value = None
+    for arg in argv[1:]:
+        if arg.startswith("--dataset="):
+            cli_value = arg.split("=", 1)[1]
+            break
+
+    if cli_value is not None:
+        return normalize_dataset_profile_key(cli_value), "CLI"
+
+    env_value = environ.get("V16_VALIDATE_DATASET")
+    if env_value:
+        return normalize_dataset_profile_key(env_value), "ENV"
+
+    selected_value = _safe_prompt(
+        build_validate_dataset_prompt(DEFAULT_VALIDATE_DATASET_PROFILE),
+        DEFAULT_VALIDATE_DATASET_PROFILE,
+    )
+    return normalize_dataset_profile_key(selected_value), "UI"
 
 
 # # (AI註: consistency test 與 portfolio engine 共用相同模擬起點，避免完整年度/年化交易次數驗證口徑漂移)
@@ -2382,14 +2414,7 @@ def print_console_summary(df_results, df_failed, df_summary, csv_path, xlsx_path
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    dataset_profile_key, dataset_source = resolve_dataset_profile_key(
-        sys.argv,
-        os.environ,
-        default=DEFAULT_VALIDATE_DATASET_PROFILE,
-        env_var_names=(VALIDATE_DATASET_ENV_VAR, DEFAULT_DATASET_ENV_VAR),
-        allow_ui_prompt=True,
-        prompt_text=build_validate_dataset_prompt(DEFAULT_VALIDATE_DATASET_PROFILE),
-    )
+    dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
     selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
     set_active_data_dir(selected_data_dir)
     print(
