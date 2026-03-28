@@ -76,3 +76,6 @@ python tools/debug/trade_log.py
 
 # display 架構
 # core/v16_display.py 為 façade；v16_display_common.py 負責 ANSI 色彩/表格與共用 helper，v16_scanner_display.py 負責 scanner header，v16_strategy_dashboard.py 負責策略 dashboard 與對比表
+
+
+- 單股核心已拆分為 `core/v16_position_step.py` 與 `core/v16_backtest_finalize.py`，對外仍由 `core/v16_core.py` 提供 façade。
