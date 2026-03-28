@@ -31,6 +31,7 @@ from core.v16_dataset_profiles import (
     get_dataset_profile_label,
     normalize_dataset_profile_key,
 )
+from core.v16_runtime_utils import is_interactive_stdin, safe_prompt
 from contextlib import redirect_stdout, redirect_stderr
 import tempfile
 import io
@@ -89,30 +90,19 @@ def set_active_data_dir(data_dir):
     CSV_PATH_CACHE_DATA_DIR = None
 
 
-def _safe_prompt(prompt_text, default_value):
-    if not sys.stdin or not sys.stdin.isatty():
-        return default_value
-
-    try:
-        raw = input(prompt_text).strip()
-    except EOFError:
-        return default_value
-    return raw if raw != "" else default_value
-
-
 def resolve_validate_dataset_profile_key(argv, environ):
     cli_value = extract_dataset_cli_value(argv)
     if cli_value is not None and str(cli_value).strip() != "":
         return normalize_dataset_profile_key(cli_value), "CLI"
 
-    env_value = environ.get("V16_VALIDATE_DATASET")
+    env_value = environ.get(VALIDATE_DATASET_ENV_VAR)
     if env_value:
         return normalize_dataset_profile_key(env_value), "ENV"
 
-    if not sys.stdin or not sys.stdin.isatty():
+    if not is_interactive_stdin():
         return normalize_dataset_profile_key(DEFAULT_VALIDATE_DATASET_PROFILE), "DEFAULT"
 
-    selected_value = _safe_prompt(
+    selected_value = safe_prompt(
         build_validate_dataset_prompt(DEFAULT_VALIDATE_DATASET_PROFILE),
         DEFAULT_VALIDATE_DATASET_PROFILE,
     )

@@ -22,7 +22,12 @@ from core.v16_core import (
     can_execute_half_take_profit,
 )
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, resolve_unique_csv_path
-from core.v16_dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
+from core.v16_dataset_profiles import (
+    DEFAULT_DATASET_PROFILE,
+    get_dataset_dir,
+    get_dataset_profile_label,
+    resolve_dataset_profile_from_cli_env,
+)
 from core.v16_runtime_utils import safe_prompt
 
 warnings.simplefilter("default")
@@ -34,6 +39,7 @@ C_YELLOW = '\033[93m'
 C_RED = '\033[91m'
 C_RESET = '\033[0m'
 
+DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "v16_best_params.json")):
@@ -357,6 +363,8 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     return df_logs
 
 def main():
+    global DATA_DIR
+
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -366,27 +374,26 @@ def main():
         os.environ,
         default=DEFAULT_DATASET_PROFILE,
     )
-    data_dir = get_dataset_dir(BASE_DIR, dataset_profile_key)
+    DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
     print(
-        f"{C_YELLOW}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {data_dir}{C_RESET}"
+        f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
     )
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
-        print(f"{C_YELLOW}⚠️ 未輸入股票代號，已取消執行。{C_RESET}")
         return
 
-    try:
-        file_path, _duplicate_file_issue_lines = resolve_unique_csv_path(data_dir, ticker)
-    except FileNotFoundError as exc:
-        # 允許使用者手動上傳的檔案
-        if os.path.exists(f"{ticker}.csv"):
-            file_path = f"{ticker}.csv"
-        else:
-            if not os.path.isdir(data_dir):
-                raise FileNotFoundError(f"找不到資料集資料夾: {data_dir}") from exc
-            raise FileNotFoundError(f"找不到 {ticker} 的歷史資料 CSV。") from exc
+    manual_csv_path = f"{ticker}.csv"
+    if os.path.exists(manual_csv_path):
+        file_path = manual_csv_path
+    else:
+        if not os.path.isdir(DATA_DIR):
+            raise FileNotFoundError(f"找不到資料夾 {DATA_DIR}，請確認資料集路徑是否存在。")
+        try:
+            file_path, _duplicate_file_issue_lines = resolve_unique_csv_path(DATA_DIR, ticker)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"找不到 {ticker} 的歷史資料 CSV。") from e
 
     print(f"📥 讀取 {file_path}...")
     raw_df = pd.read_csv(file_path)
@@ -407,6 +414,6 @@ def main():
 
     print("⏳ 正在產生完整交易明細...")
     run_debug_backtest(df, ticker, params)
-
+    
 if __name__ == "__main__":
     main()

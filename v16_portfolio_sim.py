@@ -12,13 +12,13 @@ from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_
 from core.v16_display import print_strategy_dashboard, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
-from core.v16_runtime_utils import safe_prompt, should_auto_open_browser
 from core.v16_dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     get_dataset_dir,
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
 )
+from core.v16_runtime_utils import safe_prompt, should_auto_open_browser
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
 warnings.simplefilter("default")
@@ -264,9 +264,9 @@ if __name__ == "__main__":
         html_filename = DASHBOARD_HTML_PATH
         fig.write_html(html_filename)
         print(f"{C_GREEN}📊 互動式網頁已生成: {html_filename}{C_RESET}")
-        if should_auto_open_browser():
+        if should_auto_open_browser(os.environ):
             webbrowser.open('file://' + os.path.realpath(html_filename))
         else:
-            print(f"{C_GRAY}ℹ️ 偵測到非互動或無圖形介面環境，略過自動開啟瀏覽器。{C_RESET}")
+            print(f"{C_GRAY}ℹ️ 目前為非互動或無圖形環境，略過自動開啟瀏覽器。{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
         print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")

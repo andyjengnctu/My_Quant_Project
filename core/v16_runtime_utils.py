@@ -24,41 +24,6 @@ def get_taipei_file_mtime(path):
     return datetime.fromtimestamp(os.path.getmtime(path), tz=TAIPEI_TIMEZONE)
 
 
-# # (AI註: 互動式 prompt 與 headless 判斷集中管理，避免各工具腳本各自分叉)
-def is_interactive_stdin():
-    return bool(sys.stdin and sys.stdin.isatty())
-
-
-# # (AI註: 非互動/CI/headless 執行時直接回傳預設值，避免 input() 在自動化環境拋 EOFError)
-def safe_prompt(prompt_text, default_value):
-    if not is_interactive_stdin():
-        return default_value
-
-    try:
-        raw = input(prompt_text).strip()
-    except EOFError:
-        return default_value
-    return raw if raw != "" else default_value
-
-
-# # (AI註: 自動開瀏覽器只在明確可互動桌面環境啟用；容器/CI/無 GUI 時跳過，避免殘留 subprocess warning)
-def should_auto_open_browser(environ=None):
-    env = os.environ if environ is None else environ
-    forced_flag = str(env.get("V16_AUTO_OPEN_BROWSER", "")).strip().lower()
-    if forced_flag in {"0", "false", "n", "no", "off"}:
-        return False
-    if forced_flag in {"1", "true", "y", "yes", "on"}:
-        return True
-
-    if not is_interactive_stdin():
-        return False
-
-    if os.name == "nt":
-        return True
-
-    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
-
-
 # # (AI註: ProcessPool 啟動方法集中管理；預設避開 fork，必要時可用環境變數 V16_PROCESS_START_METHOD 覆寫)
 def resolve_process_start_method():
     requested = os.getenv("V16_PROCESS_START_METHOD", "").strip().lower()
@@ -88,3 +53,46 @@ def get_process_pool_executor_kwargs():
 
     start_method = resolve_process_start_method()
     return {"mp_context": get_context(start_method)}, start_method
+
+
+# # (AI註: 將互動式輸入判斷集中管理；非互動/EOF 時回退預設值，但保留管線餵值能力)
+def is_interactive_stdin():
+    stdin = getattr(sys, "stdin", None)
+    if stdin is None:
+        return False
+
+    try:
+        return bool(stdin.isatty())
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+# # (AI註: input 例外與空字串預設值集中處理；不要在各工具各自維護一份 prompt 邏輯)
+def safe_prompt(prompt_text, default_value):
+    stdin = getattr(sys, "stdin", None)
+    if stdin is None:
+        return default_value
+
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
+# # (AI註: 自動開瀏覽器只在互動且具圖形環境時啟用；可由環境變數 V16_AUTO_OPEN_BROWSER 強制覆寫)
+def should_auto_open_browser(environ=None):
+    env = os.environ if environ is None else environ
+    override = str(env.get("V16_AUTO_OPEN_BROWSER", "")).strip().lower()
+    if override in {"0", "false", "n", "no", "off"}:
+        return False
+    if override in {"1", "true", "y", "yes", "on"}:
+        return True
+
+    if not is_interactive_stdin():
+        return False
+
+    if os.name == "nt" or sys.platform == "darwin":
+        return True
+
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))

@@ -98,6 +98,25 @@ OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH
 
 # # (AI註: 方案B - None=照常搜尋 tp_percent；數值=暫時固定該 tp_percent 並跳過搜尋)
 OPTIMIZER_FIXED_TP_PERCENT = None
+OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
+DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
+DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
+
+
+def resolve_optimizer_trial_count(environ):
+    env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
+    if env_value != "":
+        return int(env_value), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
+
+    default_trials = (
+        DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE if is_interactive_stdin() else DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE
+    )
+    prompt_default = str(default_trials)
+    user_input = safe_prompt(
+        f"👉 請輸入訓練次數 (預設 {prompt_default}，輸入 0 則直接提取匯出參數): ",
+        prompt_default,
+    ).strip()
+    return int(user_input), "UI/DEFAULT"
 
 
 def build_optimizer_db_file_path(dataset_profile_key):
@@ -761,15 +780,9 @@ if __name__ == "__main__":
         if choice == '2': 
             os.remove(db_file)
             print(f"{C_RED}🗑️ 已刪除舊記憶。{C_RESET}")
-            
-    default_trial_text = os.getenv("V16_OPTIMIZER_TRIALS", "").strip()
-    if default_trial_text == "":
-        default_trial_text = "50000" if is_interactive_stdin() else "0"
-    user_input = safe_prompt(
-        f"👉 請輸入訓練次數 (預設 {default_trial_text}，輸入 0 則直接提取匯出參數): ",
-        default_trial_text,
-    ).strip()
-    N_TRIALS = int(user_input) if user_input != "" else int(default_trial_text)
+
+    N_TRIALS, trial_source = resolve_optimizer_trial_count(os.environ)
+    print(f"{C_GRAY}🎯 訓練次數: {N_TRIALS} | 來源: {trial_source}{C_RESET}")
     study = optuna.create_study(study_name="v16_portfolio_optimization_overnight", storage=DB_NAME, load_if_exists=True, direction="maximize")
     
     if len(study.trials) > 0:
