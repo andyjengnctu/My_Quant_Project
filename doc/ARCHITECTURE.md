@@ -24,8 +24,9 @@ project/
 │  ├─ v16_display.py                  # 顯示與輸出格式整理
 │  ├─ v16_log_utils.py                # logging 與輸出輔助工具
 │  ├─ v16_params_io.py                # 參數讀寫、json 載入/匯出
-│  ├─ v16_portfolio_engine.py         # 投組核心 timeline、候選池、資金/名額保留與最終整合
+│  ├─ v16_portfolio_engine.py         # 投組核心 timeline 總控、候選池掃描與最終整合
 │  ├─ v16_portfolio_fast_data.py      # 投組快取市場資料、mark-to-market 與歷史 PIT 統計索引單一口徑
+│  ├─ v16_portfolio_ops.py            # 投組日內操作流程：汰弱換股、持倉結算、盤前買進、延續訊號清理、期末結算
 │  ├─ v16_portfolio_stats.py          # 投組曲線/年度/年化統計與分數計算單一口徑
 │  └─ v16_runtime_utils.py            # 執行期共用工具：ProcessPool 啟動方法、Asia/Taipei 時間工具
 ├─ doc/
@@ -78,7 +79,7 @@ project/
 - `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程移至 `tools/optimizer/`。
 - `tools/validate/`：一致性驗證子系統，已拆成 `checks.py`、`tool_adapters.py`、`synthetic_cases.py`、`synthetic_fixtures.py`、`trade_rebuild.py`、`reporting.py`；`main.py` 僅保留資料集解析、真實 ticker 驗證編排與總控流程。
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 專責正式核心邏輯回放與明細列建構，`reporting.py` 專責 Excel 匯出與虧損摘要。
-- `core/`：核心規則與共用計算，應作為單一真理來源；本輪先把 `v16_portfolio_engine.py` 的快取市場資料/PIT 統計索引與曲線/年度/年化統計函式抽到 `v16_portfolio_fast_data.py`、`v16_portfolio_stats.py`，保留 `run_portfolio_timeline()` 作為投組總控。
+- `core/`：核心規則與共用計算，應作為單一真理來源；目前 `v16_portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控、候選池掃描與最終整合，快取市場資料/PIT 統計索引抽至 `v16_portfolio_fast_data.py`，日內操作流程抽至 `v16_portfolio_ops.py`，曲線/年度/年化統計與分數計算抽至 `v16_portfolio_stats.py`。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。
