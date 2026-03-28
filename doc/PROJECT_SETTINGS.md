@@ -11,15 +11,12 @@
    - 全新解壓目錄
    - 已讀 `/doc/PROJECT_SETTINGS.md`
 
-2. 每次開始前，必須先做資產盤點，並明確區分「外部環境資產」與「專案內資產」：
-   - `/data/tw_stock_data_vip`
-   - `/data/tw_stock_data_vip_reduced`
-   - `<repo>/data/tw_stock_data_vip`
-   - `<repo>/data/tw_stock_data_vip_reduced`
+2. 每次開始前，必須先做必要資產盤點：
    - `<repo>/models/best_params.json`
    - optimizer 使用的 DB
    - `requirements` 中主流程所需套件
-   若缺任何必要資產，必須明確列為「資料阻塞」或「環境阻塞」，不得混稱為已通過。
+
+   測試資料規則一律以「D. 資料集與執行環境規則」為準，不在本節重複定義。
 
 3. 只要使用者要求「再檢查」、「最嚴格檢查」或「一次修好」，就必須先完成完整問題盤點，再開始修補；不得邊測邊修、修一點算一點。
 
@@ -42,6 +39,7 @@
    - 修改原因
    - 重現方式
    - 回歸驗證結果
+8. 修改 `/doc/PROJECT_SETTINGS.md` 時，必須優先做整併與去重，保持精簡；不得在不同章節重複定義同一規則，不得只用換句話說的方式增加篇幅。若新增規則與既有條文重疊，必須直接合併或改寫舊條文，不得疊加相似內容。
 
 ---
 
@@ -53,8 +51,6 @@
    - `compileall`
    - `--help`
    - CLI 缺值 / 空值 / 非法值
-   - 缺資料夾
-   - 空資料夾
    - 缺參數檔
    - 壞參數檔
    - 壞 DB
@@ -62,9 +58,13 @@
    - export-only 路徑
    - headless / stdout-stderr 輸出順序
    - reduced 真實資料主流程
-   - consistency
+   - reduced consistency
    - 已修問題回歸
    - 錯誤路徑驗證
+
+   補充規則：
+   - 最嚴格檢查只驗 `tw_stock_data_vip_reduced`
+   - 資料集規則一律以「D. 資料集與執行環境規則」為準
 
 2. 驗證順序必須是：
    - 先靜態
@@ -86,8 +86,8 @@
    - 本輪問題已一次列全
    - 本輪問題已全部修補
    - 修補後已完成整輪回歸
-   - 無未揭露的資料阻塞
-   - 無未揭露的環境阻塞
+   - 無未揭露的未執行驗證項
+   - 無未揭露的環境問題
 
 6. 只要仍存在任何阻塞、未覆蓋、未驗證、依賴外部資產或依賴外部套件的情況，就不得寫：
    - 已全部修好
@@ -98,16 +98,19 @@
 
 ## D. 資料集與執行環境規則
 
-1. 動態測試預設只要求 `tw_stock_data_vip_reduced`，不要求 `tw_stock_data_vip`。
-2. 若執行環境存在 `/data`：
-   - `apps/validate_consistency.py` 預設使用 `/data/tw_stock_data_vip_reduced`
-   - `apps/portfolio_sim.py`、`apps/vip_scanner.py`、`apps/ml_optimizer.py` 預設使用 `/data/tw_stock_data_vip`
-3. 若執行環境不存在 `/data`，則退回專案根目錄：
-   - `data/tw_stock_data_vip_reduced`
-   - `data/tw_stock_data_vip`
-4. 不得把外部環境剛好存在的 `/data/...` 視為專案內建資產。
-5. 若需外部套件（如 `optuna`），應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
-6. 除 consistency 外，一般 UI 不需額外詢問資料集；若需切換，只能透過 CLI `--dataset` 或環境變數覆蓋。
+1. 測試資料由獨立測試資料 ZIP 提供，正常解開後位於 `/data/tw_stock_data_vip_reduced`。
+
+2. 程式包 ZIP 不包含測試資料；程式包內沒有 `data/tw_stock_data_vip_reduced` 或 `data/tw_stock_data_vip` 屬正常設計，不得視為缺檔或專案缺陷。
+
+3. 動態測試、主流程 smoke test、consistency、最嚴格檢查，一律以 `tw_stock_data_vip_reduced` 為準。
+
+4. 不要求 `tw_stock_data_vip` 測試；未測 full dataset 不得視為阻塞、失敗或驗證不完整。
+
+5. 若 `/data/tw_stock_data_vip_reduced` 不存在，不需額外回報為測試環境未掛載；只需在驗證結果中如實註明 reduced 動態驗證未執行，不得解讀為程式包缺檔、專案缺陷或使用者未提供資料。
+
+6. 若需外部套件（如 `optuna`），應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
+
+7. 除非使用者明確要求，UI 不需額外詢問資料集；一般驗證預設即為 reduced。
 
 ---
 

@@ -90,8 +90,16 @@ def safe_prompt(prompt_text, default_value):
         return default_value
 
     try:
-        raw = input(prompt_text).strip()
+        if is_interactive_stdin():
+            raw = input(prompt_text).strip()
+        else:
+            raw = stdin.readline()
+            if raw == "":
+                return default_value
+            raw = raw.strip()
     except EOFError:
+        return default_value
+    except (OSError, ValueError):
         return default_value
     return raw if raw != "" else default_value
 
