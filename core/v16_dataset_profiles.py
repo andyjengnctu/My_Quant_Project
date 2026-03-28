@@ -1,9 +1,13 @@
 import os
-from typing import Dict
+import sys
+from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 DATASET_PROFILE_REDUCED = "reduced"
 DATASET_PROFILE_FULL = "full"
+DEFAULT_DATASET_PROFILE = DATASET_PROFILE_FULL
 DEFAULT_VALIDATE_DATASET_PROFILE = DATASET_PROFILE_REDUCED
+DEFAULT_DATASET_ENV_VAR = "V16_DATASET_PROFILE"
+VALIDATE_DATASET_ENV_VAR = "V16_VALIDATE_DATASET"
 
 DATASET_PROFILE_SPECS: Dict[str, Dict[str, str]] = {
     DATASET_PROFILE_REDUCED: {
@@ -33,7 +37,7 @@ _DATASET_PROFILE_ALIASES = {
 }
 
 
-def normalize_dataset_profile_key(value, default=DEFAULT_VALIDATE_DATASET_PROFILE):
+def normalize_dataset_profile_key(value, default=DEFAULT_DATASET_PROFILE):
     if value is None:
         return default
 
@@ -69,3 +73,54 @@ def build_validate_dataset_prompt(default=DEFAULT_VALIDATE_DATASET_PROFILE):
         f"2=完整 [{DATASET_PROFILE_SPECS[DATASET_PROFILE_FULL]['dir_name']}], "
         f"預設 {default_menu_key}): "
     )
+
+
+def _safe_prompt(prompt_text, default_value):
+    if not sys.stdin or not sys.stdin.isatty():
+        return default_value
+
+    try:
+        raw = input(prompt_text).strip()
+    except EOFError:
+        return default_value
+    return raw if raw != "" else default_value
+
+
+def extract_dataset_cli_value(argv: Optional[Sequence[str]]):
+    if not argv:
+        return None
+
+    argv = list(argv)
+    for idx in range(1, len(argv)):
+        arg = argv[idx]
+        if arg.startswith("--dataset="):
+            return arg.split("=", 1)[1]
+        if arg == "--dataset" and (idx + 1) < len(argv):
+            return argv[idx + 1]
+    return None
+
+
+def resolve_dataset_profile_key(
+    argv: Optional[Sequence[str]] = None,
+    environ: Optional[dict] = None,
+    *,
+    default=DEFAULT_DATASET_PROFILE,
+    env_var_names: Optional[Iterable[str]] = None,
+    allow_ui_prompt=False,
+    prompt_text: Optional[str] = None,
+) -> Tuple[str, str]:
+    cli_value = extract_dataset_cli_value(sys.argv if argv is None else argv)
+    if cli_value is not None:
+        return normalize_dataset_profile_key(cli_value, default=default), "CLI"
+
+    env = os.environ if environ is None else environ
+    for env_var in tuple(env_var_names or (DEFAULT_DATASET_ENV_VAR,)):
+        env_value = env.get(env_var)
+        if env_value not in (None, ""):
+            return normalize_dataset_profile_key(env_value, default=default), f"ENV:{env_var}"
+
+    if allow_ui_prompt and prompt_text is not None:
+        selected_value = _safe_prompt(prompt_text, default)
+        return normalize_dataset_profile_key(selected_value, default=default), "UI"
+
+    return normalize_dataset_profile_key(default, default=default), "DEFAULT"

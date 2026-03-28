@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import warnings
 import webbrowser
@@ -11,6 +12,13 @@ from core.v16_portfolio_engine import prep_stock_data_and_trades, pack_prepared_
 from core.v16_display import print_strategy_dashboard, C_YELLOW, C_CYAN, C_GREEN, C_GRAY, C_RESET
 from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows, discover_unique_csv_inputs
 from core.v16_log_utils import write_issue_log, format_exception_summary
+from core.v16_dataset_profiles import (
+    DEFAULT_DATASET_ENV_VAR,
+    DEFAULT_DATASET_PROFILE,
+    get_dataset_dir,
+    get_dataset_profile_label,
+    resolve_dataset_profile_key,
+)
 
 # # (AI註: 收窄 warning 範圍；不要把資料品質與數值異常全部全域吃掉)
 warnings.simplefilter("default")
@@ -19,7 +27,7 @@ warnings.filterwarnings("once", category=RuntimeWarning)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+DEFAULT_DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
 REPORT_XLSX_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Report.xlsx")
 DASHBOARD_HTML_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Dashboard.html")
@@ -189,6 +197,19 @@ if __name__ == "__main__":
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
+    dataset_profile_key, dataset_source = resolve_dataset_profile_key(
+        sys.argv,
+        os.environ,
+        default=DEFAULT_DATASET_PROFILE,
+        env_var_names=(DEFAULT_DATASET_ENV_VAR,),
+        allow_ui_prompt=False,
+    )
+    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+    print(
+        f"{C_GRAY}🗂️ 資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+    )
+
     USER_ROTATION = _safe_prompt("👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ", "N").upper() == 'Y'
     USER_MAX_POS = int(_safe_prompt("👉 2. 最大持倉數量 (預設 10): ", "10"))
     USER_START_YEAR = int(_safe_prompt("👉 3. 開始回測年份 (預設 2015): ", "2015"))
@@ -200,7 +221,7 @@ if __name__ == "__main__":
 
     start_time = time.time()
     df_eq, df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile = run_portfolio_simulation(
-        DEFAULT_DATA_DIR, params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
+        selected_data_dir, params, USER_MAX_POS, USER_ROTATION, USER_START_YEAR, USER_BENCHMARK
     )
     end_time = time.time()
 

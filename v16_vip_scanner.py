@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 import warnings
 import time
@@ -13,6 +14,13 @@ from core.v16_data_utils import sanitize_ohlcv_dataframe, get_required_min_rows,
 from core.v16_log_utils import write_issue_log, format_exception_summary
 from core.v16_runtime_utils import get_process_pool_executor_kwargs
 from core.v16_buy_sort import calc_buy_sort_value, get_buy_sort_title
+from core.v16_dataset_profiles import (
+    DEFAULT_DATASET_ENV_VAR,
+    DEFAULT_DATASET_PROFILE,
+    get_dataset_dir,
+    get_dataset_profile_label,
+    resolve_dataset_profile_key,
+)
 
 # # (AI註: 收窄 warning 範圍；預設保留 warning，可疑資料與數值問題不要被全域吃掉)
 warnings.simplefilter("default")
@@ -23,7 +31,7 @@ warnings.filterwarnings("once", category=RuntimeWarning)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-DEFAULT_DATA_DIR = os.path.join(PROJECT_ROOT, "tw_stock_data_vip")
+DEFAULT_DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "v16_best_params.json")
 
 
@@ -234,4 +242,16 @@ def run_daily_scanner(data_dir=None):
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
 if __name__ == "__main__":
-    run_daily_scanner()
+    dataset_profile_key, dataset_source = resolve_dataset_profile_key(
+        sys.argv,
+        os.environ,
+        default=DEFAULT_DATASET_PROFILE,
+        env_var_names=(DEFAULT_DATASET_ENV_VAR,),
+        allow_ui_prompt=False,
+    )
+    selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+    print(
+        f"{C_GRAY}🗂️ 資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
+    )
+    run_daily_scanner(selected_data_dir)
