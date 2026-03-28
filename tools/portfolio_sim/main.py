@@ -6,7 +6,7 @@ import time
 from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int
 from .reporting import export_portfolio_reports, print_yearly_return_report
 from .runtime import BEST_PARAMS_PATH, PROJECT_ROOT, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
@@ -15,6 +15,7 @@ warnings.filterwarnings("once", category=RuntimeWarning)
 
 
 def main(argv=None, env=None):
+    enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
 

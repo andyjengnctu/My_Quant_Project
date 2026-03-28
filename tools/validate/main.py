@@ -20,7 +20,7 @@ from core.dataset_profiles import (
 from core.data_utils import discover_unique_csv_map
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import has_help_flag, is_interactive_stdin, safe_prompt
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, is_interactive_stdin, safe_prompt
 from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
@@ -100,6 +100,7 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
 
 
 def main():
+    enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
         print("用法: python apps/validate_consistency.py [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；若 /data 不存在，會退回專案根目錄 data/。")

@@ -11,7 +11,7 @@ if PROJECT_ROOT not in sys.path:
 from tools.downloader import runtime as rt
 from tools.downloader.universe import get_market_last_date, get_or_update_universe
 from tools.downloader import sync as sync_runtime
-from core.runtime_utils import has_help_flag
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag
 
 SAVE_DIR = rt.SAVE_DIR
 FINMIND_PRICE_DATASET = rt.FINMIND_PRICE_DATASET
@@ -30,6 +30,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
 
 
 def main(argv=None):
+    enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     if has_help_flag(argv):
         print("用法: python apps/smart_downloader.py")

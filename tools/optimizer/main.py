@@ -17,7 +17,7 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import has_help_flag
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
 from tools.optimizer.runtime import (
@@ -100,6 +100,7 @@ def build_optimizer_session():
 
 
 def main(argv=None, environ=None):
+    enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
     if has_help_flag(argv):

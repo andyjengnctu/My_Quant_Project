@@ -7,7 +7,7 @@ from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
-from core.runtime_utils import get_process_pool_executor_kwargs, has_help_flag
+from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, has_help_flag
 from .reporting import print_scanner_start_banner, print_scanner_summary
 from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 from .stock_processor import process_single_stock
@@ -87,6 +87,7 @@ def run_daily_scanner(data_dir, params):
 
 
 def main(argv=None, env=None):
+    enable_line_buffered_stdout()
     import sys
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env

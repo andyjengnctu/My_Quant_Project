@@ -67,6 +67,17 @@ def is_interactive_stdin():
         return False
 
 
+def enable_line_buffered_stdout(stream=None):
+    target = sys.stdout if stream is None else stream
+    reconfigure = getattr(target, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(line_buffering=True)
+        except (OSError, ValueError):
+            pass
+    return target
+
+
 def has_help_flag(argv):
     args = [] if argv is None else list(argv)
     return any(str(arg).strip() in {"-h", "--help"} for arg in args[1:])
