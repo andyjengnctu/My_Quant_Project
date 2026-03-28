@@ -737,8 +737,8 @@ def monitoring_callback(study, trial):
     else:
         status_text, score_text = f"{C_GREEN}進化中{mode_suffix}{C_RESET}", f"{trial.value:.3f}"
 
-    session_total_display = str(N_TRIALS) if isinstance(N_TRIALS, int) and N_TRIALS > 0 else "?"
-    print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{session_total_display}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
+    total_trials_display = str(N_TRIALS) if isinstance(N_TRIALS, int) and N_TRIALS > 0 else "?"
+    print(f"\r{C_GRAY}⏳ [累積 {trial.number + 1:>4} | 本輪 {CURRENT_SESSION_TRIAL:>3}/{total_trials_display}] 耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{C_RESET}\033[K", end="", flush=True)
 
     if ENABLE_OPTIMIZER_PROFILING and ENABLE_PROFILE_CONSOLE_PRINT and (CURRENT_SESSION_TRIAL % PROFILE_PRINT_EVERY_N_TRIALS == 0):
         profile = trial.user_attrs.get("profile_row", {})
