@@ -1,5 +1,5 @@
 # 打包
-git archive -o test-branch-1.zip test-branch-1
+$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
 
 # 重現環境
 python -m pip install -r requirements/requirements-lock.txt
@@ -19,3 +19,7 @@ python apps/ml_optimizer.py --dataset reduced
 set V16_VALIDATE_DATASET=reduced
 # 主工具共用
 set V16_DATASET_PROFILE=full
+
+# optimizer 架構
+python apps/ml_optimizer.py --dataset full            # 正式入口
+# apps/ml_optimizer.py 為薄入口；主流程在 tools/optimizer/main.py

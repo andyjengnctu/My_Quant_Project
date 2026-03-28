@@ -9,7 +9,7 @@ project/
 ├─ .gitignore                         # Git 忽略規則
 ├─ apps/
 │  ├─ __init__.py                     # apps 套件初始化檔
-│  ├─ ml_optimizer.py                 # 參數最佳化正式入口
+│  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口
 │  ├─ smart_downloader.py             # 資料下載正式入口
 │  ├─ validate_consistency.py         # 一致性驗證正式入口
@@ -49,14 +49,23 @@ project/
    ├─ debug/
    │  ├─ __init__.py                  # debug 子套件初始化檔
    │  └─ trade_log.py                 # 交易除錯工具
+   ├─ optimizer/
+   │  ├─ __init__.py                  # optimizer 子套件初始化檔
+   │  ├─ main.py                      # 最佳化主流程、study 控制與歷史最佳還原
+   │  ├─ prep.py                      # optimizer 原始資料快取、worker 預處理與平行/回退流程
+   │  ├─ profile.py                   # optimizer profiling CSV/JSON 輸出與摘要
+   │  └─ study_utils.py               # trial / study / 參數還原共用工具
    └─ validate/
       ├─ __init__.py                  # validate 子套件初始化檔
-      └─ main.py                      # 一致性驗證主模組與 synthetic case 驗證流程
+      ├─ main.py                      # 一致性驗證主模組與真實/合成案例編排
+      ├─ reporting.py                 # validate 報表輸出與 console summary
+      ├─ synthetic_fixtures.py        # synthetic 測試資料與案例生成
+      └─ trade_rebuild.py             # trade log / completed trade 重建工具
 ```
 
 ## 分層原則
 
-- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則。
+- `apps/`：正式執行入口，只負責 CLI、流程組裝與執行期 bootstrap，不得在入口層重寫核心交易規則；`apps/ml_optimizer.py` 現為薄入口，最佳化主流程移至 `tools/optimizer/`。
 - `core/`：核心規則與共用計算，應作為單一真理來源。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
 - `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
