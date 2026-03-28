@@ -1,7 +1,8 @@
 # core/log_utils.py
 import os
-import time
 import traceback
+
+from core.runtime_utils import get_taipei_now
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,7 +20,7 @@ def resolve_log_dir(log_dir=None):
 def build_timestamped_log_path(prefix, log_dir=None, timestamp=None):
     resolved_log_dir = resolve_log_dir(log_dir)
     os.makedirs(resolved_log_dir, exist_ok=True)
-    ts = timestamp or time.strftime("%Y%m%d_%H%M%S")
+    ts = timestamp or get_taipei_now().strftime("%Y%m%d_%H%M%S")
     return os.path.join(resolved_log_dir, f"{prefix}_{ts}.log")
 
 

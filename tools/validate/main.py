@@ -22,7 +22,7 @@ from core.dataset_profiles import (
 from core.data_utils import discover_unique_csv_map
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, is_interactive_stdin, safe_prompt
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt
 from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
@@ -212,7 +212,7 @@ def main():
     if not df_failed.empty:
         df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    timestamp = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     csv_path = os.path.join(OUTPUT_DIR, f"consistency_full_scan_{timestamp}.csv")
     df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
 

@@ -16,7 +16,7 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.params_io import load_params_from_json
-from core.runtime_utils import safe_prompt
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt
 from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
 
 warnings.simplefilter("default")
@@ -63,9 +63,11 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 def main():
     global DATA_DIR
 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
+    enable_line_buffered_stdout()
+    if has_help_flag(sys.argv):
+        print("用法: python tools/debug/trade_log.py [--dataset reduced|full]")
+        print("說明: 互動或管線輸入股票代號後，輸出單檔完整交易明細；預設資料集為縮減。")
+        return 0
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -74,12 +76,16 @@ def main():
             default=DEFAULT_DATASET_PROFILE,
         )
         DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
-        print(
-            f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-        )
     except ValueError as e:
         raise ValueError(str(e)) from e
+
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(
+        f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+    )
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
@@ -121,6 +127,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, RuntimeError, ValueError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)

@@ -19,7 +19,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
 from tools.optimizer.runtime import (
@@ -57,7 +57,7 @@ OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
 OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
 OPTIMIZER_FIXED_TP_PERCENT = None
-OPTIMIZER_SESSION_TS = time.strftime("%Y%m%d_%H%M%S")
+OPTIMIZER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
