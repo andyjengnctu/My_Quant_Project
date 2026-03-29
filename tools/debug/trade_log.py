@@ -42,9 +42,10 @@ DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
 OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 
 
-def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json")):
+def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), *, verbose=True):
     params = load_params_from_json(json_file)
-    print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
+    if verbose:
+        print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params
 
 
@@ -109,6 +110,8 @@ def main(argv=None, environ=None):
         except FileNotFoundError as e:
             raise FileNotFoundError(str(e)) from e
 
+    params = load_params(verbose=False)
+
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -118,8 +121,8 @@ def main(argv=None, environ=None):
     )
     print(f"📥 讀取 {file_path}...")
     raw_df = pd.read_csv(file_path)
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'best_params.json')}{C_RESET}")
 
-    params = load_params()
     min_rows_needed = get_required_min_rows(params)
     df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
 
