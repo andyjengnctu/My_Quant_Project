@@ -1,6 +1,5 @@
 {
   "dataset": "reduced",
-  "selected_tickers": ["5880", "2330", "2317", "0056", "6505"],
   "portfolio_start_year": 2015,
   "portfolio_max_positions": 10,
   "portfolio_enable_rotation": false,

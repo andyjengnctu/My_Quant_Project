@@ -178,7 +178,7 @@ tools/local_regression/
 
 ### 職責
 - `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / 壞 DB fail-fast。
-- `run_chain_checks.py`：固定代表 ticker 的單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳。
+- `run_chain_checks.py`：對 reduced 內實際 discover 到的全部 ticker 執行單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳，並輸出全量 chain summary / chain details。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke。
 - `run_all.py`：一鍵串接三者，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced data.zip 自動解壓、bundle 打包。

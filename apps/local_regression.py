@@ -26,15 +26,6 @@ class ConsoleProgress:
         self.spinner_index = 0
         self.last_render_ts = 0.0
         self.last_line_width = 0
-        self.major_total = 1
-
-    def _resolve_progress(self, payload: Dict[str, Any], *, default_index: int = 1) -> tuple[int, int]:
-        major_total = int(payload.get("major_total", self.major_total or 1))
-        major_total = max(major_total, 1)
-        self.major_total = major_total
-        major_index = int(payload.get("major_index", default_index))
-        major_index = min(max(major_index, 1), major_total)
-        return major_index, major_total
 
     def _build_bar(self, major_index: int, major_total: int, *, done: bool) -> str:
         width = 24
@@ -57,21 +48,19 @@ class ConsoleProgress:
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
         now = time.time()
         if event == "dataset_ready":
-            major_index, major_total = self._resolve_progress(payload)
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=True)} "
+                f"[{payload['major_index']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_index'], payload['major_total'], done=True)} "
                 f"資料就緒 | {payload['dataset_info'].get('csv_count', 0)} 檔 reduced"
             )
             self._finish_line(line)
             return
 
         if event == "step_start":
-            major_index, major_total = self._resolve_progress(payload)
             label = STEP_LABELS.get(payload['name'], payload['name'])
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=False)} "
+                f"[{payload['major_index']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_index'], payload['major_total'], done=False)} "
                 f"準備執行 {label}"
             )
             self._render_inline(line)
@@ -82,46 +71,42 @@ class ConsoleProgress:
             if now - self.last_render_ts < 0.15:
                 return
             self.last_render_ts = now
-            major_index, major_total = self._resolve_progress(payload)
             spinner = SPINNER_FRAMES[self.spinner_index % len(SPINNER_FRAMES)]
             self.spinner_index += 1
             label = STEP_LABELS.get(payload['name'], payload['name'])
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=False)} "
+                f"[{payload['major_index']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_index'], payload['major_total'], done=False)} "
                 f"{spinner} 執行中 {label} | {payload['elapsed_sec']:.1f}s"
             )
             self._render_inline(line)
             return
 
         if event == "step_finish":
-            major_index, major_total = self._resolve_progress(payload)
             symbol = "✓" if payload['status'] == "PASS" else "✗"
             label = STEP_LABELS.get(payload['name'], payload['name'])
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=True)} "
+                f"[{payload['major_index']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_index'], payload['major_total'], done=True)} "
                 f"{symbol} {label} | {payload['status']} | {payload['duration_sec']:.2f}s"
             )
             self._finish_line(line)
             return
 
         if event == "finalizing":
-            major_index, major_total = self._resolve_progress(payload)
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=False)} "
+                f"[{payload['major_index']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_index'], payload['major_total'], done=False)} "
                 "整理輸出與打包 bundle"
             )
             self._render_inline(line)
             return
 
         if event == "done":
-            major_index, major_total = self._resolve_progress(payload, default_index=self.major_total)
             symbol = "✓" if payload['overall_status'] == "PASS" else "✗"
             line = (
-                f"[{major_index}/{major_total}] "
-                f"{self._build_bar(major_index, major_total, done=True)} "
+                f"[{payload['major_total']}/{payload['major_total']}] "
+                f"{self._build_bar(payload['major_total'], payload['major_total'], done=True)} "
                 f"{symbol} 完成 | {payload['overall_status']}"
             )
             self._finish_line(line)
@@ -156,13 +141,19 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(f"- quick gate: step_count={quick.get('step_count', 0)} | failed_count={quick.get('failed_count', 0)}")
 
     portfolio_snapshot = chain.get("portfolio_snapshot", {})
-    selected_tickers = chain.get("selected_tickers", [])
+    highlights = chain.get("highlights", {})
     print(
         "- chain checks: "
-        f"tickers={','.join(selected_tickers)} | "
+        f"ticker_count={chain.get('ticker_count', 0)} | "
+        f"traded_ticker_count={highlights.get('traded_ticker_count', 0)} | "
+        f"missed_buy_ticker_count={highlights.get('missed_buy_ticker_count', 0)} | "
         f"trade_rows={portfolio_snapshot.get('trade_rows', 0)} | "
         f"reserved_buy_fill_rate={portfolio_snapshot.get('reserved_buy_fill_rate', 0.0)}"
     )
+    blocked_by_counts = highlights.get("blocked_by_counts", {})
+    if blocked_by_counts:
+        top_blocked = ", ".join(f"{key}:{value}" for key, value in list(blocked_by_counts.items())[:5])
+        print(f"  blocked_by: {top_blocked}")
     print(
         "- ml smoke: "
         f"db_trial_count={ml.get('db_trial_count', 0)} | "

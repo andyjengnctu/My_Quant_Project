@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -23,14 +24,14 @@ from tools.debug.trade_log import run_debug_backtest
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 
 
-def load_market_context(selected_tickers: List[str], params) -> Dict[str, Any]:
+def load_market_context(params) -> Dict[str, Any]:
     data_dir = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
     csv_inputs, duplicate_issues = discover_unique_csv_inputs(str(data_dir))
     min_rows = get_required_min_rows(params)
     all_dfs_fast: Dict[str, Any] = {}
     all_trade_logs: Dict[str, Any] = {}
-    selected_frames: Dict[str, pd.DataFrame] = {}
-    selected_sanitize_stats: Dict[str, Dict[str, int]] = {}
+    prepared_frames: Dict[str, pd.DataFrame] = {}
+    sanitize_stats_map: Dict[str, Dict[str, int]] = {}
     master_dates = set()
     skipped = []
 
@@ -43,29 +44,26 @@ def load_market_context(selected_tickers: List[str], params) -> Dict[str, Any]:
         prep_df, logs = prep_stock_data_and_trades(df, params)
         all_dfs_fast[ticker] = pack_prepared_stock_data(prep_df)
         all_trade_logs[ticker] = logs
+        prepared_frames[ticker] = prep_df
+        sanitize_stats_map[ticker] = sanitize_stats
         master_dates.update(prep_df.index)
-        if ticker in selected_tickers:
-            selected_frames[ticker] = prep_df
-            selected_sanitize_stats[ticker] = sanitize_stats
 
-    missing = [ticker for ticker in selected_tickers if ticker not in selected_frames]
-    if missing:
-        raise RuntimeError(f"reduced 資料集缺少指定 ticker: {', '.join(missing)}")
-
+    discovered_tickers = sorted(prepared_frames.keys())
     return {
         "data_dir": str(data_dir),
         "csv_count": len(csv_inputs),
         "duplicate_issues": duplicate_issues,
         "skipped": skipped,
+        "discovered_tickers": discovered_tickers,
         "all_dfs_fast": all_dfs_fast,
         "all_trade_logs": all_trade_logs,
-        "selected_frames": selected_frames,
-        "selected_sanitize_stats": selected_sanitize_stats,
+        "prepared_frames": prepared_frames,
+        "sanitize_stats_map": sanitize_stats_map,
         "sorted_dates": sorted(master_dates),
     }
 
 
-def build_target_replay_counts(*, selected_tickers: List[str], all_dfs_fast, all_trade_logs, sorted_dates, params, start_year: int, max_positions: int, enable_rotation: bool):
+def build_target_replay_counts(*, tickers: List[str], all_dfs_fast, all_trade_logs, sorted_dates, params, start_year: int, max_positions: int, enable_rotation: bool):
     pit_stats_index = {ticker: build_trade_stats_index(logs) for ticker, logs in all_trade_logs.items()}
     normal_setup_index = build_normal_setup_index(all_dfs_fast)
     start_idx = find_sim_start_idx(sorted_dates, start_year)
@@ -82,7 +80,7 @@ def build_target_replay_counts(*, selected_tickers: List[str], all_dfs_fast, all
     total_missed_buys = 0
     total_missed_sells = 0
 
-    counts = {ticker: {"candidate_dates": [], "orderable_dates": [], "trade_rows": []} for ticker in selected_tickers}
+    counts = {ticker: {"candidate_dates": [], "orderable_dates": [], "trade_rows": []} for ticker in tickers}
     for today in sorted_dates[start_idx:]:
         available_cash = cash
         sizing_equity = current_equity if getattr(params, "use_compounding", True) else initial_capital
@@ -99,7 +97,7 @@ def build_target_replay_counts(*, selected_tickers: List[str], all_dfs_fast, all
             sizing_equity=sizing_equity,
             params=params,
         )
-        for ticker in selected_tickers:
+        for ticker in tickers:
             if any(row["ticker"] == ticker for row in candidates_today):
                 counts[ticker]["candidate_dates"].append(today)
             if any(row["ticker"] == ticker for row in orderable_candidates_today):
@@ -222,18 +220,35 @@ def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, 
     }
 
 
+def _build_highlights(summary_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    traded_rows = [row for row in summary_rows if row["filled_count"] > 0]
+    missed_rows = [row for row in summary_rows if row["portfolio_missed_buy_count"] > 0]
+    sanitize_rows = [row for row in summary_rows if row["sanitize_dropped"] > 0]
+    blocked_counter = Counter(row["blocked_by"] or "filled_or_missed_buy" for row in summary_rows)
+    return {
+        "ticker_count": len(summary_rows),
+        "traded_ticker_count": len(traded_rows),
+        "missed_buy_ticker_count": len(missed_rows),
+        "sanitize_issue_ticker_count": len(sanitize_rows),
+        "traded_tickers": [row["ticker"] for row in traded_rows[:10]],
+        "missed_buy_tickers": [row["ticker"] for row in missed_rows[:10]],
+        "sanitize_issue_tickers": [row["ticker"] for row in sanitize_rows[:10]],
+        "blocked_by_counts": dict(sorted(blocked_counter.items())),
+    }
+
+
 def main() -> int:
     manifest = load_manifest()
     run_dir = resolve_run_dir("chain_checks")
     dataset_info = ensure_reduced_dataset()
     params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
-    selected_tickers = [str(t).strip() for t in manifest["selected_tickers"]]
     start_year = int(manifest["portfolio_start_year"])
     max_positions = int(manifest["portfolio_max_positions"])
     enable_rotation = bool(manifest["portfolio_enable_rotation"])
     benchmark_ticker = str(manifest["benchmark_ticker"])
 
-    context = load_market_context(selected_tickers, params)
+    context = load_market_context(params)
+    all_tickers = context["discovered_tickers"]
     portfolio_profile: Dict[str, Any] = {}
     portfolio_result = run_portfolio_timeline(
         context["all_dfs_fast"],
@@ -251,7 +266,7 @@ def main() -> int:
     )
     df_equity, df_trades = portfolio_result[0], portfolio_result[1]
     replay_counts = build_target_replay_counts(
-        selected_tickers=selected_tickers,
+        tickers=all_tickers,
         all_dfs_fast=context["all_dfs_fast"],
         all_trade_logs=context["all_trade_logs"],
         sorted_dates=context["sorted_dates"],
@@ -264,14 +279,14 @@ def main() -> int:
     detail_dir = run_dir / "chain_details"
     detail_dir.mkdir(parents=True, exist_ok=True)
     summary_rows = []
-    for ticker in selected_tickers:
+    for ticker in all_tickers:
         row = summarize_ticker(
             ticker=ticker,
             params=params,
             start_year=start_year,
-            df=context["selected_frames"][ticker],
+            df=context["prepared_frames"][ticker],
             standalone_logs=context["all_trade_logs"][ticker],
-            sanitize_stats=context["selected_sanitize_stats"][ticker],
+            sanitize_stats=context["sanitize_stats_map"][ticker],
             replay_counts=replay_counts[ticker],
         )
         summary_rows.append(row)
@@ -288,6 +303,7 @@ def main() -> int:
         if row["filled_count"] + row["portfolio_missed_buy_count"] > row["portfolio_trade_rows"]:
             failures.append(f"{row['ticker']}: filled+missed > portfolio_trade_rows")
 
+    highlights = _build_highlights(summary_rows)
     summary = {
         "status": "PASS" if not failures else "FAIL",
         "dataset": manifest["dataset"],
@@ -298,14 +314,16 @@ def main() -> int:
             "annual_return_pct": round(float(portfolio_profile.get("annual_return_pct", 0.0)), 4),
             "reserved_buy_fill_rate": round(float(portfolio_profile.get("reserved_buy_fill_rate", 0.0)), 4),
         },
-        "selected_tickers": selected_tickers,
+        "ticker_count": len(all_tickers),
+        "detail_count": len(summary_rows),
+        "highlights": highlights,
         "failures": failures,
         "rows": summary_rows,
     }
     write_json(run_dir / "chain_summary.json", summary)
     write_json(run_dir / "chain_checks_summary.json", summary)
-    write_text(run_dir / "chain_console.log", json.dumps({"status": summary["status"], "failures": failures, "selected_tickers": selected_tickers}, ensure_ascii=False, indent=2))
-    print(json.dumps({"status": summary["status"], "selected_tickers": selected_tickers, "failures": failures}, ensure_ascii=False))
+    write_text(run_dir / "chain_console.log", json.dumps({"status": summary["status"], "ticker_count": len(all_tickers), "failures": failures}, ensure_ascii=False, indent=2))
+    print(json.dumps({"status": summary["status"], "ticker_count": len(all_tickers), "failures": failures}, ensure_ascii=False))
     return 0 if not failures else 1
 
 

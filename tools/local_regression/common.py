@@ -74,7 +74,6 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     dataset = str(payload.get("dataset", "reduced")).strip().lower()
     if dataset != "reduced":
         raise LocalRegressionError(f"local regression 只支援 reduced，收到: {dataset}")
-    payload.setdefault("selected_tickers", ["5880", "2330", "2317", "0056", "6505"])
     payload.setdefault("portfolio_start_year", 2015)
     payload.setdefault("portfolio_max_positions", 10)
     payload.setdefault("portfolio_enable_rotation", False)

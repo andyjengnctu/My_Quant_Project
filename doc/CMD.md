@@ -125,13 +125,14 @@ outputs/local_regression/latest/
 - `quick_gate_summary.json`
 - `chain_summary.csv`
 - `chain_summary.json`
+- `chain_details/*.json`（reduced 內全部 discover 到的 ticker）
 - `ml_smoke_summary.json`
 - `to_chatgpt_bundle.zip`
 
 另外，執行完成後也會在專案根目錄額外保留一份最新 bundle：
 - `to_chatgpt_bundle_<timestamp>_<uniqueid>.zip`
 
-`apps/local_regression.py` 結束時也會在主控台印出整體 PASS/FAIL、三個步驟摘要、以及最新 bundle 位置。
+`apps/local_regression.py` 結束時也會在主控台印出整體 PASS/FAIL、三個步驟摘要、全量 ticker 摘要、以及最新 bundle 位置。
 
 根目錄舊的 `to_chatgpt_bundle*.zip` 會自動刪除，只保留最新一份，避免還要一層層進 `outputs/` 尋找。
 
