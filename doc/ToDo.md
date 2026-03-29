@@ -1,6 +1,5 @@
 ## Going
-- regression + smoke test / chen check
-    apps中，是否合併consisitance test到local regression，之後改程式一鍵測試就好了?
+- test suit
     是否將其它程式的對/output的輸出，也像local_regression一樣用資料匣分類?
     我大多數我不會去看output，想精output成chatgpt看的就好，例如\outputs\local_regression保留.zip是否就夠了?
     定期或定量刪除output，如何設計與觸發比較好?
