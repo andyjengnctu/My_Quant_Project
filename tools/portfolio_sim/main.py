@@ -21,7 +21,7 @@ def main(argv=None, env=None):
 
     if has_help_flag(argv):
         print("用法: python apps/portfolio_sim.py [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為縮減，路徑為 <repo>/data/tw_stock_data_vip_reduced。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整，路徑為 /data/tw_stock_data_vip。")
         return 0
 
     try:

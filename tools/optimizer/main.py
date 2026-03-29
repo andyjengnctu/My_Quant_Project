@@ -106,7 +106,7 @@ def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     if has_help_flag(argv):
         print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
-        print("說明: 非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
         return 0
     session = build_optimizer_session()
 
