@@ -42,7 +42,7 @@
 
 - `tw_stock_data_vip_reduced` 為獨立測試資料，不包含於程式包 ZIP；測試資料固定來自本投資專案的專案資料 `data.zip`。
 - reduced 驗證前，必須先由 `data.zip` 取得 `tw_stock_data_vip_reduced`。
-- 本地端運行時，除了`validate_consistency.py`，其它在apps中的程式都用full dataset; 
+- 本地端運行時，除了`test_suite.py`，其它在apps中的程式都用full dataset; 
 - 驗證時節省時間驗證，一律以 `tw_stock_data_vip_reduced` 為準，不做 `tw_stock_data_vip` full dataset 測試。
 - 只有在已確認 `data.zip` 中不存在或不可用 `tw_stock_data_vip_reduced` 時，才可寫「reduced 動態驗證未執行」；不得解讀為程式包缺檔、專案缺陷或使用者未提供資料。
 - 若需外部套件，應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
