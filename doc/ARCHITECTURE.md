@@ -12,7 +12,7 @@ project/
 │  ├─ ml_optimizer.py                 # 參數最佳化正式入口（薄入口）
 │  ├─ portfolio_sim.py                # 投組模擬正式入口（薄入口）
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
-│  ├─ validate_consistency.py         # 一致性驗證正式入口
+│  ├─ test_suite.py                   # 一鍵測試正式入口（reduced）
 │  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 ├─ core/
 │  ├─ __init__.py                     # 套件初始化檔
@@ -162,7 +162,7 @@ project/
 
 ## Local Regression（reduced only）
 
-新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則；並由 `apps/local_regression.py` 提供使用者直接執行的正式入口與主控台進度條 / 簡易結果整理。
+新增 `tools/local_regression/`，作為本地 reduced 一鍵測試的 orchestrator，只做薄封裝，不重寫交易規則；並由 `apps/test_suite.py` 提供使用者直接執行的正式入口與主控台進度條 / 簡易結果整理。
 
 ```text
 tools/local_regression/
@@ -180,10 +180,16 @@ tools/local_regression/
 - `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / 壞 DB fail-fast。
 - `run_chain_checks.py`：對 reduced 內實際 discover 到的全部 ticker 執行單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳，並輸出全量 chain summary / chain details。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke。
-- `run_all.py`：一鍵串接三者，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
+- `run_all.py`：一鍵串接 quick gate / consistency / chain checks / ml smoke，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced data.zip 自動解壓、bundle 打包。
 
 ### 設計原則
 - 固定使用 reduced，避免把 full dataset 變成日常 gate。
 - 測試只做 orchestration 與 summary，不複製核心交易規則。
 - 結果統一輸出到 `outputs/local_regression/latest/`，方便直接打包給 ChatGPT 分析。
+
+
+### 測試入口收斂
+- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口。
+- `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
+- 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。

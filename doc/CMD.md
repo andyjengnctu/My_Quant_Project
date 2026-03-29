@@ -5,8 +5,8 @@ $branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-p
 python -m pip install -r requirements/requirements-lock.txt
 
 # 資料集切換
-python apps/validate_consistency.py --dataset reduced
-python apps/validate_consistency.py --dataset full
+python tools/validate/cli.py --dataset reduced
+python tools/validate/cli.py --dataset full
 python apps/portfolio_sim.py --dataset full
 python apps/portfolio_sim.py --dataset reduced
 python apps/vip_scanner.py --dataset full
@@ -26,8 +26,8 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 # tools/optimizer/__init__.py 統一匯出 optimizer 公開介面；main.py 負責 CLI/啟動，session.py 提供 session façade，prep.py / objective.py 為 façade，實作分散於 raw_cache.py / trial_inputs.py / objective_profiles.py / objective_filters.py / objective_runner.py / callbacks.py / runtime.py
 
 # validate 架構
-python apps/validate_consistency.py --dataset reduced    # 正式入口
-# apps/validate_consistency.py 為薄入口；總控在 tools/validate/main.py
+python tools/validate/cli.py --dataset reduced        # validate standalone CLI
+# tools/validate/cli.py 為薄入口；總控在 tools/validate/main.py
 # tools/validate/check_result_utils.py / portfolio_payloads.py / scanner_expectations.py 分別負責檢查結果記錄、投組 payload/年度欄位摘要、scanner 預期 payload/reference check
 # tools/validate/module_loader.py / tool_check_common.py / portfolio_tool_checks.py / external_tool_checks.py 分別負責模組動態載入、smoke check 共用工具、portfolio_sim smoke checks、scanner/downloader/debug smoke checks；checks.py / tool_adapters.py / tool_checks.py 僅保留 façade
 # tools/validate/real_case_io.py / real_case_runners.py / real_case_assertions.py 分別負責真實 ticker 的 CSV/清洗、執行/掃描協調、cross-check 規則；real_cases.py 僅保留 façade
@@ -90,26 +90,26 @@ python tools/debug/trade_log.py
 # 模組檔名已完成版本前綴移除；既有函式／類別識別字若仍含版本字樣，屬另案處理範圍
 
 
-## 本地一鍵回歸（reduced）
+## 一鍵測試（reduced）
 
-本地最小必要回歸固定只用 reduced。
+日常一鍵測試固定只用 reduced；正式對外入口為 `apps/test_suite.py`。
 
 ### 一鍵執行
 
 ```bash
-python tools/local_regression/run_all.py
-```
-
-或直接使用 `apps/` 使用者入口（會顯示進度條與簡易結果整理）：
-
-```bash
-python apps/local_regression.py
+python apps/test_suite.py
 ```
 
 Windows：
 
 ```bat
-tools\local_regression\run_all.bat
+python apps\test_suite.py
+```
+
+若只想單獨執行底層 orchestrator：
+
+```bash
+python tools/local_regression/run_all.py
 ```
 
 ### 輸出位置
@@ -123,6 +123,7 @@ outputs/local_regression/latest/
 主要檔案：
 - `master_summary.json`
 - `quick_gate_summary.json`
+- `validate_consistency_summary.json`
 - `chain_summary.csv`
 - `chain_summary.json`
 - `chain_details/*.json`（reduced 內全部 discover 到的 ticker）
@@ -132,7 +133,7 @@ outputs/local_regression/latest/
 另外，執行完成後也會在專案根目錄額外保留一份最新 bundle：
 - `to_chatgpt_bundle_<timestamp>_<uniqueid>.zip`
 
-`apps/local_regression.py` 結束時也會在主控台印出整體 PASS/FAIL、三個步驟摘要、全量 ticker 摘要、以及最新 bundle 位置。
+`apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、四個步驟摘要（quick gate / consistency / chain checks / ml smoke）、全量 ticker 摘要，以及最新 bundle 位置。
 
 根目錄舊的 `to_chatgpt_bundle*.zip` 會自動刪除，只保留最新一份，避免還要一層層進 `outputs/` 尋找。
 
@@ -144,3 +145,8 @@ outputs/local_regression/latest/
 3. `/mnt/data/data.zip`
 
 自動解壓其中的 `tw_stock_data_vip_reduced` 到 `<repo>/data/`。
+
+
+### apps 清理
+
+若你已改用 `apps/test_suite.py`，可手動刪除舊的 `apps/local_regression.py` 與 `apps/validate_consistency.py`，避免 `apps/` 內出現多個測試入口造成干擾。

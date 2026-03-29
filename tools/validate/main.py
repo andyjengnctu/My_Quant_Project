@@ -35,6 +35,7 @@ from tools.validate.synthetic_cases import run_synthetic_consistency_suite
 from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
@@ -100,6 +101,35 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
         flush=True
     )
 
+
+
+
+def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir):
+    run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
+    if not run_dir:
+        return
+
+    summary = {
+        "status": "PASS" if df_failed.empty else "FAIL",
+        "dataset": dataset_profile_key,
+        "dataset_source": dataset_source,
+        "data_dir": data_dir,
+        "csv_path": csv_path,
+        "xlsx_path": xlsx_path,
+        "output_dir": output_dir,
+        "elapsed_time_sec": round(float(elapsed_time), 3),
+        "real_ticker_count": int(len(selected_tickers)),
+        "total_checks": int(len(df_results)),
+        "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
+        "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
+        "fail_count": int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0,
+    }
+    os.makedirs(run_dir, exist_ok=True)
+    summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        import json
+        json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
 
 def main():
     enable_line_buffered_stdout()
@@ -255,6 +285,19 @@ def main():
         real_tickers=selected_tickers,
         normalize_ticker_text=normalize_ticker_text,
         max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
+    )
+
+    write_local_regression_summary(
+        dataset_profile_key=dataset_profile_key,
+        dataset_source=dataset_source,
+        data_dir=DATA_DIR,
+        csv_path=csv_path,
+        xlsx_path=xlsx_path,
+        elapsed_time=elapsed_time,
+        selected_tickers=selected_tickers,
+        df_results=df_results,
+        df_failed=df_failed,
+        output_dir=OUTPUT_DIR,
     )
 
     return 1 if not df_failed.empty else 0

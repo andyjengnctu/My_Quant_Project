@@ -31,6 +31,7 @@ from tools.local_regression.common import (
 
 SCRIPT_ORDER = [
     ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json", 900),
+    ("consistency", "tools/validate/cli.py", "validate_consistency_summary.json", 900),
     ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json", 900),
     ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json", 900),
 ]

@@ -16,7 +16,7 @@ from tools.local_regression.common import ensure_reduced_dataset, load_manifest,
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
-    [sys.executable, "apps/validate_consistency.py", "--help"],
+    [sys.executable, "tools/validate/cli.py", "--help"],
     [sys.executable, "apps/portfolio_sim.py", "--help"],
     [sys.executable, "apps/vip_scanner.py", "--help"],
     [sys.executable, "apps/ml_optimizer.py", "--help"],
@@ -71,7 +71,7 @@ def check_help(timeout: int) -> List[Dict[str, Any]]:
 def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
     results = []
     targets = [
-        "apps/validate_consistency.py",
+        "tools/validate/cli.py",
         "apps/portfolio_sim.py",
         "apps/vip_scanner.py",
         "apps/ml_optimizer.py",
