@@ -217,3 +217,9 @@ tools/local_regression/
 - standalone 工具輸出固定分類到各自資料夾：`validate_consistency`、`ml_optimizer`、`portfolio_sim`、`vip_scanner`、`debug_trade_log`、`smart_downloader`。
 - `apps/test_suite.py` 不論 PASS / FAIL 都先在 staging 組裝結果，再打成單一 bundle；歷史 bundle 保留於 `outputs/local_regression/`，根目錄只留最新一份 copy。
 - 預設輸出採 minimum set；詳細除錯材料只在 FAIL 或指定 debug 模式時放入 bundle。
+
+
+## Output retention
+
+- `core/output_retention.py`：集中管理 output retention，提供雙門檻（最近 N 份 + 最多 D 天）清理。
+- 由 `tools/local_regression/run_all.py` 在 `apps/test_suite.py` 結束後自動觸發，不新增獨立 cleanup app。

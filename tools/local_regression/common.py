@@ -82,6 +82,13 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     payload.setdefault("ml_smoke_timeout_sec", 300)
     payload.setdefault("subprocess_timeout_sec", 300)
     payload.setdefault("bundle_name", "to_chatgpt_bundle.zip")
+    payload.setdefault("retention_enabled", True)
+    payload.setdefault("local_regression_keep_last_n", 20)
+    payload.setdefault("local_regression_max_age_days", 30)
+    payload.setdefault("summary_tools_keep_last_n", 10)
+    payload.setdefault("summary_tools_max_age_days", 30)
+    payload.setdefault("detail_tools_keep_last_n", 5)
+    payload.setdefault("detail_tools_max_age_days", 14)
     payload["dataset"] = dataset
     payload["manifest_path"] = str(manifest_path)
     return payload

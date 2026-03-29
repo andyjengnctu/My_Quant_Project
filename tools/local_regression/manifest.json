@@ -2,14 +2,21 @@
   "benchmark_ticker": "0050",
   "bundle_name": "to_chatgpt_bundle.zip",
   "dataset": "reduced",
+  "detail_tools_keep_last_n": 5,
+  "detail_tools_max_age_days": 14,
   "keep_chain_details_on_pass": false,
   "keep_logs_on_pass": false,
   "keep_validate_full_reports_on_pass": false,
+  "local_regression_keep_last_n": 20,
+  "local_regression_max_age_days": 30,
   "minimum_bundle_only": true,
   "ml_smoke_timeout_sec": 300,
   "ml_smoke_trials": 1,
   "portfolio_enable_rotation": false,
   "portfolio_max_positions": 10,
   "portfolio_start_year": 2015,
-  "subprocess_timeout_sec": 300
+  "retention_enabled": true,
+  "subprocess_timeout_sec": 300,
+  "summary_tools_keep_last_n": 10,
+  "summary_tools_max_age_days": 30
 }

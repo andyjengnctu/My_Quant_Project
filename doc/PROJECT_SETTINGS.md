@@ -79,6 +79,7 @@
 2. `apps/test_suite.py` 不論 PASS / FAIL，都必須先在 staging 整理結果，再打成單一 bundle；歷史 bundle 保留於 `outputs/local_regression/`，專案根目錄只保留最新一份同名 copy。
 3. 預設輸出以 minimum set 為準；詳細除錯材料僅在 FAIL 或指定 debug 模式時納入 bundle，不額外保留散開 json、log、latest 或 runs 目錄供日常查看。
 4. 變更任何工具的輸出路徑、bundle 內容或保留規則時，必須同步更新 `doc/CMD.md`、`doc/ARCHITECTURE.md` 與本檔。
+5. `apps/test_suite.py` 結束後必須自動執行 output retention；至少同時採用「最近 N 份」與「最多 D 天」雙門檻，且規則集中於單一來源，不得分散到各工具重複實作。
 
 ## H. 專案特例
 

@@ -125,10 +125,12 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(" Test Suite 結果整理")
     print("=" * 78)
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
+    retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
     print(f"根目錄 bundle : {result['root_bundle_copy']}")
     print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
+    print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     if script_map:

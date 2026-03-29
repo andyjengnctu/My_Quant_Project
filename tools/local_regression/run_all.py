@@ -11,9 +11,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.output_paths import output_dir_path
+from core.output_retention import RetentionRule, apply_retention_rules
 from tools.local_regression.common import (
-    build_artifacts_manifest,
     archive_bundle_history,
+    build_artifacts_manifest,
     build_bundle_zip,
     build_python_env,
     cleanup_staging_dir,
@@ -44,6 +46,74 @@ ProgressCallback = Callable[[str, Dict[str, Any]], None]
 def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, payload: Dict[str, Any]) -> None:
     if progress_callback is not None:
         progress_callback(event, payload)
+
+
+def _build_retention_rules(manifest: Dict[str, Any]) -> List[RetentionRule]:
+    return [
+        RetentionRule(
+            name="local_regression_history",
+            target_dir=output_dir_path(PROJECT_ROOT, "local_regression"),
+            patterns=["to_chatgpt_bundle_*.zip"],
+            keep_last_n=int(manifest["local_regression_keep_last_n"]),
+            max_age_days=int(manifest["local_regression_max_age_days"]),
+        ),
+        RetentionRule(
+            name="validate_consistency",
+            target_dir=output_dir_path(PROJECT_ROOT, "validate_consistency"),
+            patterns=["*"],
+            keep_last_n=int(manifest["summary_tools_keep_last_n"]),
+            max_age_days=int(manifest["summary_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="portfolio_sim",
+            target_dir=output_dir_path(PROJECT_ROOT, "portfolio_sim"),
+            patterns=["*"],
+            keep_last_n=int(manifest["summary_tools_keep_last_n"]),
+            max_age_days=int(manifest["summary_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="ml_optimizer",
+            target_dir=output_dir_path(PROJECT_ROOT, "ml_optimizer"),
+            patterns=["*"],
+            keep_last_n=int(manifest["detail_tools_keep_last_n"]),
+            max_age_days=int(manifest["detail_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="vip_scanner",
+            target_dir=output_dir_path(PROJECT_ROOT, "vip_scanner"),
+            patterns=["*"],
+            keep_last_n=int(manifest["detail_tools_keep_last_n"]),
+            max_age_days=int(manifest["detail_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="smart_downloader",
+            target_dir=output_dir_path(PROJECT_ROOT, "smart_downloader"),
+            patterns=["*"],
+            keep_last_n=int(manifest["detail_tools_keep_last_n"]),
+            max_age_days=int(manifest["detail_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="debug_trade_log",
+            target_dir=output_dir_path(PROJECT_ROOT, "debug_trade_log"),
+            patterns=["*"],
+            keep_last_n=int(manifest["detail_tools_keep_last_n"]),
+            max_age_days=int(manifest["detail_tools_max_age_days"]),
+        ),
+        RetentionRule(
+            name="local_regression_staging",
+            target_dir=output_dir_path(PROJECT_ROOT, "local_regression") / "_staging",
+            patterns=["*"],
+            keep_last_n=0,
+            max_age_days=1,
+            include_dirs=True,
+        ),
+    ]
+
+
+def _apply_output_retention(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    if not bool(manifest.get("retention_enabled", True)):
+        return {"removed_count": 0, "removed_bytes": 0, "removed_entries": []}
+    return apply_retention_rules(_build_retention_rules(manifest))
 
 
 def _run_script(
@@ -201,6 +271,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
         bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
         archived_bundle = archive_bundle_history(bundle_path)
         root_bundle_copy = publish_root_bundle_copy(archived_bundle)
+        retention = _apply_output_retention(manifest)
 
         result = {
             "overall_status": master_summary["overall_status"],
@@ -213,6 +284,10 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "scripts": script_summaries,
             "step_payloads": step_payloads,
             "failures": master_summary["failures"],
+            "retention": {
+                "removed_count": retention.get("removed_count", 0),
+                "removed_bytes": retention.get("removed_bytes", 0),
+            },
             "major_index": MAJOR_STEP_COUNT,
             "major_total": MAJOR_STEP_COUNT,
         }
@@ -229,6 +304,7 @@ def main() -> int:
         "bundle": result["bundle"],
         "archived_bundle": result.get("archived_bundle", ""),
         "bundle_mode": result["bundle_mode"],
+        "retention": result.get("retention", {}),
     }, ensure_ascii=False))
     return 0 if result["overall_status"] == "PASS" else 1
 

@@ -160,3 +160,12 @@ outputs/local_regression/
 - `outputs/vip_scanner/`：scanner issue log。
 - `outputs/debug_trade_log/`：單檔 debug trade log。
 - `outputs/smart_downloader/`：下載器 issue log。
+
+
+## Output retention
+
+`python apps/test_suite.py` 結束後會自動執行 output retention，不需額外手動清理。
+預設規則：
+- `outputs/local_regression/` 歷史 bundle：保留最近 20 份，刪除超過 30 天
+- `validate_consistency`、`portfolio_sim`：保留最近 10 份，刪除超過 30 天
+- `ml_optimizer`、`vip_scanner`、`smart_downloader`、`debug_trade_log`：保留最近 5 份，刪除超過 14 天
