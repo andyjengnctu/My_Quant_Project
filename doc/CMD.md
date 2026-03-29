@@ -1,5 +1,5 @@
 # 打包
-$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
+$branch="test-branch-1"; $archDir="arch"; New-Item -ItemType Directory -Force -Path $archDir | Out-Null; Get-ChildItem -File -Filter "${branch}_*.zip" | Move-Item -Destination $archDir -Force; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
 
 # 重現環境
 python -m pip install -r requirements/requirements-lock.txt
