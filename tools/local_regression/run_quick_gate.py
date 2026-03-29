@@ -16,11 +16,11 @@ from tools.local_regression.common import ensure_reduced_dataset, load_manifest,
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
-    [sys.executable, "tools/validate/cli.py", "--help"],
-    [sys.executable, "apps/portfolio_sim.py", "--help"],
-    [sys.executable, "apps/vip_scanner.py", "--help"],
-    [sys.executable, "apps/ml_optimizer.py", "--help"],
-    [sys.executable, "tools/debug/trade_log.py", "--help"],
+    ([sys.executable, "tools/validate/cli.py", "--help"], "python tools/validate/cli.py"),
+    ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
+    ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
+    ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
+    ([sys.executable, "tools/debug/trade_log.py", "--help"], "python tools/debug/trade_log.py"),
 ]
 
 
@@ -60,18 +60,15 @@ def run_static_checks() -> List[Dict[str, Any]]:
 
 def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
-    for args in HELP_TARGETS:
+    for args, expected_usage in HELP_TARGETS:
         outcome = run_command(args, timeout=timeout)
-        stdout = outcome["stdout"]
-        expected_entry = args[1].replace("\\", "/")
+        first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else ""
         ok = (
             outcome["returncode"] == 0
-            and "用法:" in stdout
-            and expected_entry in stdout
+            and "用法:" in outcome["stdout"]
+            and expected_usage in outcome["stdout"]
         )
-        first_line = stdout.splitlines()[0] if stdout.strip() else ""
-        detail = first_line if first_line else expected_entry
-        results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=detail, extra={"expected_entry": expected_entry}))
+        results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=first_line, extra={"expected_usage": expected_usage}))
     return results
 
 
@@ -152,6 +149,12 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         db_path.unlink(missing_ok=True)
         outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
         results.append(summarize_result("error_path::export_only_missing_db", outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="無 DB export-only 應 fail-fast"))
+
+        db_path.unlink(missing_ok=True)
+        import sqlite3
+        sqlite3.connect(db_path).close()
+        outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
+        results.append(summarize_result("error_path::export_only_empty_db", outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="空 DB export-only 應 fail-fast"))
     finally:
         db_path.unlink(missing_ok=True)
         if original_db_exists and db_backup.exists():
