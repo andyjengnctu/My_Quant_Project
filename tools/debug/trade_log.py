@@ -8,9 +8,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from core.data_utils import get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
+from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
+    build_empty_dataset_dir_message,
+    build_missing_dataset_dir_message,
     get_dataset_dir,
     get_dataset_profile_label,
     resolve_dataset_profile_from_cli_env,
@@ -81,6 +83,11 @@ def main(argv=None, environ=None):
     except ValueError as e:
         raise ValueError(str(e)) from e
 
+    dataset_dir_exists = os.path.isdir(DATA_DIR)
+    csv_inputs = []
+    if dataset_dir_exists:
+        csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
+
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -91,14 +98,20 @@ def main(argv=None, environ=None):
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
+        if not dataset_dir_exists:
+            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR))
+        if not csv_inputs:
+            raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, DATA_DIR))
         raise ValueError("未輸入股票代號，工具已取消。")
 
     manual_csv_path = f"{ticker}.csv"
     if os.path.exists(manual_csv_path):
         file_path = manual_csv_path
     else:
-        if not os.path.isdir(DATA_DIR):
-            raise FileNotFoundError(f"找不到資料夾 {DATA_DIR}，請確認資料集路徑是否存在。")
+        if not dataset_dir_exists:
+            raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR))
+        if not csv_inputs:
+            raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, DATA_DIR))
         try:
             file_path, _duplicate_file_issue_lines = resolve_unique_csv_path(DATA_DIR, ticker)
         except FileNotFoundError as e:
