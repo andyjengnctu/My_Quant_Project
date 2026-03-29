@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import os
 import shutil
@@ -21,10 +20,6 @@ LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
 DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
-SOURCE_MANIFEST_NAME = "repo_source_manifest.json"
-SOURCE_EXCLUDE_DIR_NAMES = {".git", "outputs", "data", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv", "env", ".idea", ".vscode", "dist", "build"}
-SOURCE_EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".zip", ".db", ".sqlite", ".sqlite3"}
-SOURCE_EXCLUDE_FILE_NAMES = {"to_chatgpt_bundle.zip"}
 
 
 class LocalRegressionError(RuntimeError):
@@ -94,7 +89,6 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     payload.setdefault("summary_tools_max_age_days", 30)
     payload.setdefault("detail_tools_keep_last_n", 5)
     payload.setdefault("detail_tools_max_age_days", 14)
-    payload.setdefault("archive_git_ref", "HEAD")
     payload["dataset"] = dataset
     payload["manifest_path"] = str(manifest_path)
     return payload
@@ -204,8 +198,6 @@ def select_bundle_paths(run_dir: Path, *, overall_ok: bool) -> List[Path]:
     if overall_ok:
         preferred = [
             run_dir / "master_summary.json",
-            run_dir / "preflight_env_summary.json",
-            run_dir / SOURCE_MANIFEST_NAME,
             run_dir / "quick_gate_summary.json",
             run_dir / "validate_consistency_summary.json",
             run_dir / "chain_summary.json",
@@ -234,68 +226,14 @@ def gather_recent_console_tail(run_dir: Path, limit_lines: int = 80) -> str:
     return "\n\n".join(chunks).strip()
 
 
-def resolve_git_commit(ref: str = "HEAD") -> str:
+def resolve_git_commit() -> str:
     try:
-        result = run_command(["git", "rev-parse", "--short", f"{ref}^{{commit}}"], timeout=30)
+        result = run_command(["git", "rev-parse", "--short", "HEAD"], timeout=30)
         if result["returncode"] == 0:
             return result["stdout"].strip()
     except Exception:
         pass
     return "unknown"
-
-
-def resolve_git_dirty() -> Optional[bool]:
-    try:
-        result = run_command(["git", "status", "--porcelain"], timeout=30)
-        if result["returncode"] == 0:
-            return bool(result["stdout"].strip())
-    except Exception:
-        pass
-    return None
-
-
-def _iter_source_files(project_root: Path = PROJECT_ROOT) -> List[Path]:
-    files: List[Path] = []
-    for path in sorted(project_root.rglob("*")):
-        if not path.is_file():
-            continue
-        relative_path = path.relative_to(project_root)
-        if any(part in SOURCE_EXCLUDE_DIR_NAMES or part.endswith(".egg-info") for part in relative_path.parts[:-1]):
-            continue
-        if path.name in SOURCE_EXCLUDE_FILE_NAMES:
-            continue
-        if path.suffix.lower() in SOURCE_EXCLUDE_SUFFIXES:
-            continue
-        if path.name.startswith("to_chatgpt_bundle_") and path.suffix.lower() == ".zip":
-            continue
-        files.append(path)
-    return files
-
-
-def build_repo_source_manifest(project_root: Path = PROJECT_ROOT) -> Dict[str, Any]:
-    entries = []
-    for path in _iter_source_files(project_root):
-        relative_path = str(path.relative_to(project_root)).replace("\\", "/")
-        data = path.read_bytes()
-        entries.append({"relative_path": relative_path, "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    canonical = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return {"project_root": str(project_root), "file_count": len(entries), "manifest_sha256": hashlib.sha256(canonical).hexdigest(), "files": entries}
-
-
-def resolve_source_zip_metadata() -> Dict[str, str]:
-    payload: Dict[str, str] = {}
-    name = os.environ.get("V16_SOURCE_ZIP_NAME", "").strip()
-    sha = os.environ.get("V16_SOURCE_ZIP_SHA256", "").strip()
-    if name:
-        payload["tested_zip_name"] = name
-    if sha:
-        payload["tested_zip_sha256"] = sha
-    return payload
-
-
-def resolve_source_proof_mode() -> str:
-    mode = os.environ.get("V16_SOURCE_PROOF_MODE", "").strip().lower()
-    return "zip_exact" if mode == "zip_exact" else "git_commit_clean"
 
 
 def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:

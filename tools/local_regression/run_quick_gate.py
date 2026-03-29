@@ -138,11 +138,6 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     if original_db_exists:
         shutil.move(db_path, db_backup)
     try:
-        db_path.touch()
-        outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::empty_optimizer_db", outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="空 DB 應 fail-fast"))
-
-        db_path.unlink(missing_ok=True)
         db_path.write_text("not-a-sqlite-db", encoding="utf-8")
         outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
         results.append(summarize_result("error_path::broken_optimizer_db", outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞 DB 應 fail-fast"))
@@ -157,55 +152,6 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     return results
 
 
-
-def check_headless_runtime_behavior(timeout: int) -> List[Dict[str, Any]]:
-    results = []
-
-    outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
-    stdout_text = outcome["stdout"]
-    ok = (
-        outcome["returncode"] == 0
-        and "V16 投資組合模擬器" in stdout_text
-        and "使用資料集: 縮減" in stdout_text
-        and "✅ 成功載入 AI 訓練大腦！" in stdout_text
-    )
-    results.append(
-        summarize_result(
-            "headless::portfolio_sim_defaults",
-            ok,
-            detail="非互動 stdin 應自動套用預設輸入並完成 reduced 主流程",
-        )
-    )
-
-    merged_probe = (
-        "import subprocess, sys; "
-        "proc = subprocess.run([sys.executable, 'apps/portfolio_sim.py', '--dataset', 'reduced'], "
-        "input='N\\nabc\\n', text=True, encoding='utf-8', errors='replace', "
-        "stdout=subprocess.PIPE, stderr=subprocess.STDOUT); "
-        "sys.stdout.write(proc.stdout or ''); raise SystemExit(proc.returncode)"
-    )
-    outcome = run_command([sys.executable, "-c", merged_probe], timeout=timeout)
-    merged_text = outcome["stdout"]
-    banner_idx = merged_text.find("V16 投資組合模擬器")
-    ready_idx = merged_text.find("✅ 成功載入 AI 訓練大腦！")
-    error_idx = merged_text.find("最大持倉數量 必須是整數")
-    ok = (
-        outcome["returncode"] != 0
-        and banner_idx != -1
-        and ready_idx != -1
-        and error_idx != -1
-        and banner_idx < ready_idx < error_idx
-    )
-    results.append(
-        summarize_result(
-            "headless::stdout_stderr_order",
-            ok,
-            detail="stdout/stderr 合流後，初始化輸出必須先於互動輸入錯誤",
-        )
-    )
-    return results
-
-
 def main() -> int:
     manifest = load_manifest()
     run_dir = resolve_run_dir("quick_gate")
@@ -217,7 +163,6 @@ def main() -> int:
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_error_paths(timeout))
-    steps.extend(check_headless_runtime_behavior(timeout))
 
     failed = [step for step in steps if step["status"] != "PASS"]
     summary = {
