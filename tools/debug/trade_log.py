@@ -47,7 +47,6 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json")):
 
 
 
-
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     return _run_debug_backtest(
         df=df,
@@ -60,19 +59,22 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
     )
 
 
-def main():
+
+def main(argv=None, environ=None):
     global DATA_DIR
 
     enable_line_buffered_stdout()
-    if has_help_flag(sys.argv):
+    argv = sys.argv if argv is None else argv
+    environ = os.environ if environ is None else environ
+    if has_help_flag(argv):
         print("用法: python tools/debug/trade_log.py [--dataset reduced|full]")
-        print("說明: 互動或管線輸入股票代號後，輸出單檔完整交易明細；預設資料集為縮減。")
+        print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
-            sys.argv,
-            os.environ,
+            argv,
+            environ,
             default=DEFAULT_DATASET_PROFILE,
         )
         DATA_DIR = get_dataset_dir(BASE_DIR, dataset_profile_key)
@@ -89,8 +91,7 @@ def main():
 
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
-        print(f"{C_RED}❌ 未輸入股票代號，工具已取消。{C_RESET}")
-        raise SystemExit(1)
+        raise ValueError("未輸入股票代號，工具已取消。")
 
     manual_csv_path = f"{ticker}.csv"
     if os.path.exists(manual_csv_path):
@@ -122,11 +123,12 @@ def main():
 
     print("⏳ 正在產生完整交易明細...")
     run_debug_backtest(df, ticker, params)
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        main()
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
+        raise SystemExit(main())
+    except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
