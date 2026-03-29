@@ -4,6 +4,7 @@
     \outputs\local_regression只要留.zip
     如果使者用有提供測試報告，避免chatgpt重覆的驗證
     測試資料應是reduced全部，不只哪五檔，並顯示c測測中輸出進度
+    合併consisitance test
     定期刪除output
 - 訓練/測試樣本分離
 

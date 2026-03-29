@@ -100,7 +100,7 @@ python tools/debug/trade_log.py
 python tools/local_regression/run_all.py
 ```
 
-或直接使用 `apps/` 使用者入口：
+或直接使用 `apps/` 使用者入口（會顯示進度條與簡易結果整理）：
 
 ```bash
 python apps/local_regression.py
@@ -130,6 +130,8 @@ outputs/local_regression/latest/
 
 另外，執行完成後也會在專案根目錄額外保留一份最新 bundle：
 - `to_chatgpt_bundle_<timestamp>_<uniqueid>.zip`
+
+`apps/local_regression.py` 結束時也會在主控台印出整體 PASS/FAIL、三個步驟摘要、以及最新 bundle 位置。
 
 根目錄舊的 `to_chatgpt_bundle*.zip` 會自動刪除，只保留最新一份，避免還要一層層進 `outputs/` 尋找。
 

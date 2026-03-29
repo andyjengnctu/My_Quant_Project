@@ -162,7 +162,7 @@ project/
 
 ## Local Regression（reduced only）
 
-新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則；並由 `apps/local_regression.py` 提供使用者直接執行的正式入口。
+新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則；並由 `apps/local_regression.py` 提供使用者直接執行的正式入口與主控台進度條 / 簡易結果整理。
 
 ```text
 tools/local_regression/
@@ -180,7 +180,7 @@ tools/local_regression/
 - `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / 壞 DB fail-fast。
 - `run_chain_checks.py`：固定代表 ticker 的單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke。
-- `run_all.py`：一鍵串接三者，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`。
+- `run_all.py`：一鍵串接三者，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced data.zip 自動解壓、bundle 打包。
 
 ### 設計原則

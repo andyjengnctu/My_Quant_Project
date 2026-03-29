@@ -341,6 +341,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
+        profile_stats['reserved_buy_fill_rate'] = reserved_buy_fill_rate
         profile_stats.update(yearly_stats)
         profile_stats.update(bm_yearly_stats)
 
