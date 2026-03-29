@@ -134,6 +134,16 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
     print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
+    source_proof = result.get("source_proof", {})
+    if source_proof:
+        print(
+            "source proof: "
+            f"runtime_git={source_proof.get('runtime_git_commit', 'unknown')} | "
+            f"archive_ref={source_proof.get('archive_git_ref', 'unknown')} | "
+            f"archive_git={source_proof.get('archive_git_commit', 'unknown')} | "
+            f"manifest={str(source_proof.get('repo_source_manifest_sha256', ''))[:12]}"
+        )
+
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     if script_map:
         print("\n[步驟摘要]")

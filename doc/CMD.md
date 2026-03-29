@@ -153,8 +153,9 @@ outputs/local_regression/
 
 `python apps/test_suite.py` 會先在 staging 組裝結果，再打成單一 bundle。
 
-- PASS：bundle 只含 minimum set 摘要檔（含 `preflight_env_summary.json`）。
+- PASS：bundle 只含 minimum set 摘要檔（含 `preflight_env_summary.json`、`repo_source_manifest.json`）。
 - FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
+- `master_summary.json` 會寫入 `git_commit`（runtime HEAD）與 `source_proof`（`archive_git_ref` / `archive_git_commit` / `repo_source_manifest_sha256`），供 ZIP 對照。
 - 歷史 bundle 保留在 `outputs/local_regression/`；根目錄只保留最新一份同名 copy。
 - 內部 staging 目錄打包完成後自動刪除，不保留散開 json、log、latest 或 runs 供日常查看。
 
