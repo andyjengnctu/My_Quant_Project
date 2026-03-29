@@ -72,7 +72,12 @@ def enable_line_buffered_stdout(stream=None):
     reconfigure = getattr(target, "reconfigure", None)
     if callable(reconfigure):
         try:
-            reconfigure(line_buffering=True)
+            reconfigure(line_buffering=True, errors="replace")
+        except TypeError:
+            try:
+                reconfigure(line_buffering=True)
+            except (OSError, ValueError):
+                pass
         except (OSError, ValueError):
             pass
     return target

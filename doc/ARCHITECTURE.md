@@ -162,7 +162,7 @@ project/
 
 ## Local Regression（reduced only）
 
-新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則。
+新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則；並由 `apps/local_regression.py` 提供使用者直接執行的正式入口。
 
 ```text
 tools/local_regression/

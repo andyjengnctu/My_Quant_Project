@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -90,6 +91,7 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
 def build_python_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("V16_DATASET_PROFILE", "reduced")
     env.setdefault("V16_VALIDATE_DATASET", "reduced")
     if extra_env:
@@ -244,3 +246,18 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
         "extracted_files": extracted_files,
         "csv_count": sum(1 for _ in REDUCED_DATASET_DIR.glob("*.csv")),
     }
+
+
+def publish_root_bundle_copy(bundle_path: Path, *, prefix: str = "to_chatgpt_bundle") -> Path:
+    root_dir = PROJECT_ROOT
+    latest_name = f"{prefix}_{timestamp_text()}_{uuid.uuid4().hex[:8]}.zip"
+    latest_path = root_dir / latest_name
+    for old_path in sorted(root_dir.glob(f"{prefix}*.zip")):
+        if old_path.resolve() == bundle_path.resolve():
+            continue
+        try:
+            old_path.unlink()
+        except FileNotFoundError:
+            pass
+    shutil.copy2(bundle_path, latest_path)
+    return latest_path

@@ -100,6 +100,12 @@ python tools/debug/trade_log.py
 python tools/local_regression/run_all.py
 ```
 
+或直接使用 `apps/` 使用者入口：
+
+```bash
+python apps/local_regression.py
+```
+
 Windows：
 
 ```bat
@@ -121,6 +127,11 @@ outputs/local_regression/latest/
 - `chain_summary.json`
 - `ml_smoke_summary.json`
 - `to_chatgpt_bundle.zip`
+
+另外，執行完成後也會在專案根目錄額外保留一份最新 bundle：
+- `to_chatgpt_bundle_<timestamp>_<uniqueid>.zip`
+
+根目錄舊的 `to_chatgpt_bundle*.zip` 會自動刪除，只保留最新一份，避免還要一層層進 `outputs/` 尋找。
 
 ### reduced 資料集
 

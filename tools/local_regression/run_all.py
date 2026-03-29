@@ -21,6 +21,7 @@ from tools.local_regression.common import (
     finalize_latest,
     gather_recent_console_tail,
     load_manifest,
+    publish_root_bundle_copy,
     resolve_git_commit,
     taipei_now,
     timestamp_text,
@@ -39,11 +40,10 @@ def main() -> int:
     manifest = load_manifest()
     ensure_reduced_dataset()
     run_dir = ensure_dir(OUTPUT_ROOT / "runs" / timestamp_text())
+    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
 
     script_summaries: List[Dict[str, Any]] = []
     overall_ok = True
-    base_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
-
     for name, relative_script, summary_name, timeout_sec in SCRIPT_ORDER:
         log_path = run_dir / f"{name}.log"
         started = time.time()
@@ -54,7 +54,7 @@ def main() -> int:
                 proc = subprocess.run(
                     [sys.executable, relative_script],
                     cwd=str(PROJECT_ROOT),
-                    env=base_env,
+                    env=shared_env,
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -67,15 +67,13 @@ def main() -> int:
         duration_sec = round(time.time() - started, 3)
         summary_path = run_dir / summary_name
         summary_payload = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {"status": "PASS" if returncode == 0 else "FAIL"}
-        script_summaries.append(
-            {
-                "name": name,
-                "status": summary_payload.get("status", "FAIL"),
-                "returncode": returncode,
-                "duration_sec": duration_sec,
-                "summary_file": summary_path.name,
-            }
-        )
+        script_summaries.append({
+            "name": name,
+            "status": summary_payload.get("status", "FAIL"),
+            "returncode": returncode,
+            "duration_sec": duration_sec,
+            "summary_file": summary_path.name,
+        })
         if returncode != 0 or summary_payload.get("status") != "PASS":
             overall_ok = False
 
@@ -91,18 +89,15 @@ def main() -> int:
     }
     write_json(run_dir / "master_summary.json", master_summary)
     write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
-    build_bundle_zip(run_dir, str(manifest["bundle_name"]))
+    bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]))
+    root_bundle_copy = publish_root_bundle_copy(bundle_path)
     latest_dir = finalize_latest(run_dir)
-    print(
-        json.dumps(
-            {
-                "overall_status": master_summary["overall_status"],
-                "latest_dir": str(latest_dir),
-                "bundle": str(latest_dir / manifest["bundle_name"]),
-            },
-            ensure_ascii=False,
-        )
-    )
+    print(json.dumps({
+        "overall_status": master_summary["overall_status"],
+        "latest_dir": str(latest_dir),
+        "bundle": str(latest_dir / manifest["bundle_name"]),
+        "root_bundle_copy": str(root_bundle_copy),
+    }, ensure_ascii=False))
     return 0 if overall_ok else 1
 
 

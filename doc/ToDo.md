@@ -1,7 +1,10 @@
 ## Going
 - regression + smoke test / chen check
-    是否在者用者接口式程放在apps，這樣我就不用一層層去找
-    如果使者用有提供測試報告，避免重覆的驗證
+    是否在者用者接口式程放在apps，最新的to_chatgpt_bundle copy一分到在根目錄 (打上維一編號，並把舊的自動刪掉)，這樣我就不用一層層去找
+    \outputs\local_regression只要留.zip
+    如果使者用有提供測試報告，避免chatgpt重覆的驗證
+    測試資料應是reduced全部，不只哪五檔，並顯示c測測中輸出進度
+    定期刪除output
 - 訓練/測試樣本分離
 
 ## To do
