@@ -1,4 +1,5 @@
 ## Going
+- 優化專案設定
 - 提升驗證效率
     - 當使用者提供最新程式ZIP與對應的本地 `apps/test_suite.py` bundle 時，不得重複執行 bundle已覆蓋且可由報告證明的驗證；僅在bundle缺項、顯示 FAIL、與 ZIP 不一致、本輪修改點未覆蓋、或使用者明確要求時補驗。
 

@@ -62,9 +62,16 @@ def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
     for args in HELP_TARGETS:
         outcome = run_command(args, timeout=timeout)
-        ok = outcome["returncode"] == 0 and "用法:" in outcome["stdout"]
-        first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else ""
-        results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=first_line))
+        stdout = outcome["stdout"]
+        expected_entry = args[1].replace("\\", "/")
+        ok = (
+            outcome["returncode"] == 0
+            and "用法:" in stdout
+            and expected_entry in stdout
+        )
+        first_line = stdout.splitlines()[0] if stdout.strip() else ""
+        detail = first_line if first_line else expected_entry
+        results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=detail, extra={"expected_entry": expected_entry}))
     return results
 
 

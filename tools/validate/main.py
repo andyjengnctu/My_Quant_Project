@@ -135,7 +135,7 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
 def main():
     enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
-        print("用法: python apps/validate_consistency.py [--dataset reduced|full]")
+        print("用法: python tools/validate/cli.py [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 
