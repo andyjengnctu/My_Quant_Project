@@ -1,60 +1,38 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.local_regression.common import OUTPUT_ROOT, build_artifacts_manifest, build_bundle_zip, ensure_dir, ensure_reduced_dataset, finalize_latest, gather_recent_console_tail, load_manifest, resolve_git_commit, taipei_now, timestamp_text, write_json, write_text
+from tools.local_regression.common import (
+    OUTPUT_ROOT,
+    build_artifacts_manifest,
+    build_bundle_zip,
+    build_python_env,
+    ensure_dir,
+    ensure_reduced_dataset,
+    finalize_latest,
+    gather_recent_console_tail,
+    load_manifest,
+    resolve_git_commit,
+    taipei_now,
+    timestamp_text,
+    write_json,
+    write_text,
+)
 
 SCRIPT_ORDER = [
-    ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json"),
-    ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_checks_summary.json"),
-    ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json"),
+    ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json", 900),
+    ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json", 900),
+    ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json", 900),
 ]
-
-
-def list_child_run_dirs() -> Dict[str, Path]:
-    child_dirs: Dict[str, Path] = {}
-    if not OUTPUT_ROOT.exists():
-        return child_dirs
-    for path in OUTPUT_ROOT.iterdir():
-        if not path.is_dir() or path.name in {"latest", "runs"}:
-            continue
-        child_dirs[path.name] = path
-    return child_dirs
-
-
-def detect_new_child_dir(before: Dict[str, Path], after: Dict[str, Path], script_name: str) -> Optional[Path]:
-    new_names = [name for name in after if name not in before]
-    if new_names:
-        candidates = [after[name] for name in new_names if name.endswith(f"_{script_name}")]
-        if not candidates:
-            candidates = [after[name] for name in new_names]
-        return sorted(candidates, key=lambda p: p.stat().st_mtime)[-1]
-
-    same_suffix = [path for name, path in after.items() if name.endswith(f"_{script_name}")]
-    if same_suffix:
-        return sorted(same_suffix, key=lambda p: p.stat().st_mtime)[-1]
-    return None
-
-
-def copy_child_artifacts(child_dir: Path, dest_dir: Path) -> None:
-    for item in child_dir.iterdir():
-        target = dest_dir / item.name
-        if item.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(item, target)
-        else:
-            shutil.copy2(item, target)
 
 
 def main() -> int:
@@ -64,34 +42,40 @@ def main() -> int:
 
     script_summaries: List[Dict[str, Any]] = []
     overall_ok = True
-    for name, relative_script, summary_name in SCRIPT_ORDER:
+    base_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
+
+    for name, relative_script, summary_name, timeout_sec in SCRIPT_ORDER:
         log_path = run_dir / f"{name}.log"
-        before_dirs = list_child_run_dirs()
         started = time.time()
-        log_path.write_text(f"$ {sys.executable} {relative_script}\n", encoding="utf-8")
-        cmd = (
-            f'cd "{PROJECT_ROOT}" && '
-            f'export PYTHONUNBUFFERED=1 V16_DATASET_PROFILE=reduced V16_VALIDATE_DATASET=reduced && '
-            f'"{sys.executable}" "{relative_script}" >> "{log_path}" 2>&1'
-        )
-        returncode = os.system(f'bash -lc {json.dumps(cmd)}')
-        if returncode > 255:
-            returncode = returncode >> 8
+        with log_path.open("w", encoding="utf-8") as log_file:
+            log_file.write(f"$ {sys.executable} {relative_script}\n")
+            log_file.flush()
+            try:
+                proc = subprocess.run(
+                    [sys.executable, relative_script],
+                    cwd=str(PROJECT_ROOT),
+                    env=base_env,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=timeout_sec,
+                )
+                returncode = proc.returncode
+            except subprocess.TimeoutExpired:
+                returncode = 124
+                log_file.write(f"\n[local_regression] TIMEOUT after {timeout_sec} seconds\n")
         duration_sec = round(time.time() - started, 3)
-        after_dirs = list_child_run_dirs()
-        child_dir = detect_new_child_dir(before_dirs, after_dirs, name)
-        if child_dir is not None:
-            copy_child_artifacts(child_dir, run_dir)
         summary_path = run_dir / summary_name
         summary_payload = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {"status": "PASS" if returncode == 0 else "FAIL"}
-        script_summaries.append({
-            "name": name,
-            "status": summary_payload.get("status", "FAIL"),
-            "returncode": returncode,
-            "duration_sec": duration_sec,
-            "summary_file": summary_path.name,
-            "child_run_dir": None if child_dir is None else str(child_dir),
-        })
+        script_summaries.append(
+            {
+                "name": name,
+                "status": summary_payload.get("status", "FAIL"),
+                "returncode": returncode,
+                "duration_sec": duration_sec,
+                "summary_file": summary_path.name,
+            }
+        )
         if returncode != 0 or summary_payload.get("status") != "PASS":
             overall_ok = False
 
@@ -109,7 +93,16 @@ def main() -> int:
     write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
     build_bundle_zip(run_dir, str(manifest["bundle_name"]))
     latest_dir = finalize_latest(run_dir)
-    print(json.dumps({"overall_status": master_summary["overall_status"], "latest_dir": str(latest_dir), "bundle": str(latest_dir / manifest["bundle_name"])}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "overall_status": master_summary["overall_status"],
+                "latest_dir": str(latest_dir),
+                "bundle": str(latest_dir / manifest["bundle_name"]),
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0 if overall_ok else 1
 
 

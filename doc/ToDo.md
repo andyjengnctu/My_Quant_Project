@@ -1,5 +1,7 @@
 ## Going
 - regression + smoke test / chen check
+    是否在者用者接口式程放在apps，這樣我就不用一層層去找
+    如果使者用有提供測試報告，避免重覆的驗證
 - 訓練/測試樣本分離
 
 ## To do
