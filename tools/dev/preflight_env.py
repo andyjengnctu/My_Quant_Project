@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import importlib
 import json
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from tools.local_regression.common import ensure_reduced_dataset
+
 DEFAULT_REQUIREMENTS_PATH = PROJECT_ROOT / "requirements" / "requirements.txt"
+DATASET_SAMPLE_LIMIT = 3
+REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
+DATE_COLUMN_CANDIDATES = ("Date", "Time")
 
 MODULE_NAME_MAP = {
     "FinMind": "FinMind",
@@ -98,6 +108,147 @@ def _check_file_exists(path: Path, *, label: str) -> Dict[str, Any]:
     }
 
 
+def _parse_float(value: object) -> Optional[float]:
+    text = "" if value is None else str(value).strip()
+    if text == "":
+        return None
+    return float(text)
+
+
+def _inspect_dataset_csv(csv_path: Path) -> Dict[str, Any]:
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = list(reader.fieldnames or [])
+            if not fieldnames:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": "缺少 CSV 標頭",
+                }
+
+            if not any(col in fieldnames for col in DATE_COLUMN_CANDIDATES):
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": "缺少 Date / Time 欄位",
+                }
+
+            missing_price_cols = [col for col in REQUIRED_PRICE_COLUMNS if col not in fieldnames]
+            if missing_price_cols:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": f"缺少必要欄位: {missing_price_cols}",
+                }
+
+            first_row = next(reader, None)
+            if first_row is None:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": "CSV 無資料列",
+                }
+
+            date_col = "Time" if "Time" in fieldnames else "Date"
+            if str(first_row.get(date_col, "")).strip() == "":
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": f"{date_col} 首列為空",
+                }
+
+            parsed = {}
+            for col in REQUIRED_PRICE_COLUMNS:
+                try:
+                    parsed[col] = _parse_float(first_row.get(col))
+                except ValueError:
+                    return {
+                        "path": str(csv_path),
+                        "status": "FAIL",
+                        "detail": f"{col} 首列不可轉為數值",
+                    }
+
+            empty_value_cols = [col for col, value in parsed.items() if value is None]
+            if empty_value_cols:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": f"首列空值欄位: {empty_value_cols}",
+                }
+
+            if parsed["High"] < parsed["Low"]:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": "首列 High < Low",
+                }
+
+            if parsed["Volume"] < 0:
+                return {
+                    "path": str(csv_path),
+                    "status": "FAIL",
+                    "detail": "首列 Volume < 0",
+                }
+
+            return {
+                "path": str(csv_path),
+                "status": "PASS",
+                "detail": "抽樣檔案結構正常",
+            }
+    except Exception as exc:
+        return {
+            "path": str(csv_path),
+            "status": "FAIL",
+            "detail": f"讀取失敗: {exc.__class__.__name__}: {exc}",
+        }
+
+
+def _check_reduced_dataset_health() -> Dict[str, Any]:
+    try:
+        dataset_info = ensure_reduced_dataset()
+    except Exception as exc:
+        return {
+            "name": "reduced_dataset_health",
+            "dataset": "reduced",
+            "status": "FAIL",
+            "detail": f"reduced 資料集不可用: {exc.__class__.__name__}: {exc}",
+            "dataset_info": {},
+            "csv_count": 0,
+            "sample_checked": 0,
+            "samples": [],
+        }
+
+    dataset_dir = Path(dataset_info["dataset_dir"])
+    csv_paths = sorted(dataset_dir.glob("*.csv"))
+    if not csv_paths:
+        return {
+            "name": "reduced_dataset_health",
+            "dataset": "reduced",
+            "status": "FAIL",
+            "detail": "資料夾內沒有任何 CSV",
+            "dataset_info": dataset_info,
+            "csv_count": 0,
+            "sample_checked": 0,
+            "samples": [],
+        }
+
+    sample_paths = csv_paths[:DATASET_SAMPLE_LIMIT]
+    sample_results = [_inspect_dataset_csv(path) for path in sample_paths]
+    sample_failures = [item for item in sample_results if item["status"] != "PASS"]
+
+    return {
+        "name": "reduced_dataset_health",
+        "dataset": "reduced",
+        "status": "PASS" if not sample_failures else "FAIL",
+        "detail": "資料集可用" if not sample_failures else sample_failures[0]["detail"],
+        "dataset_info": dataset_info,
+        "csv_count": len(csv_paths),
+        "sample_checked": len(sample_results),
+        "samples": sample_results,
+    }
+
+
 def run_preflight_checks(
     *,
     project_root: Optional[Path] = None,
@@ -121,7 +272,10 @@ def run_preflight_checks(
     ]
     path_failures = [item for item in path_checks if item["status"] != "PASS"]
 
-    overall_ok = not import_failures and not path_failures
+    dataset_check = _check_reduced_dataset_health()
+    dataset_failures = [] if dataset_check["status"] == "PASS" else [dataset_check["name"]]
+
+    overall_ok = not import_failures and not path_failures and not dataset_failures
     status = "PASS" if overall_ok else "FAIL"
     return {
         "status": status,
@@ -130,11 +284,13 @@ def run_preflight_checks(
         "requirement_count": len(requirements),
         "imports": imports,
         "paths": path_checks,
+        "dataset": dataset_check,
         "failed_imports": [item["package"] for item in import_failures],
         "failed_paths": [item["name"] for item in path_failures],
-        "detail": "環境可用" if overall_ok else "缺套件或寫入權限不足",
+        "failed_datasets": dataset_failures,
+        "detail": "環境與 reduced 資料集可用" if overall_ok else "缺套件、寫入權限不足或 reduced 資料集不可用",
         "guidance": (
-            "請先安裝 requirements 並確認 repo / outputs 可寫，再執行動態驗證。"
+            "請先安裝 requirements、確認 repo / outputs 可寫，並確認可由本投資專案的 data.zip 取得 tw_stock_data_vip_reduced，再執行動態驗證。"
             if not overall_ok
             else "環境前置檢查通過，可執行 local regression。"
         ),
