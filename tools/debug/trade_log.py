@@ -88,14 +88,6 @@ def main(argv=None, environ=None):
     if dataset_dir_exists:
         csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
 
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
-    print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(
-        f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-    )
-
     ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
         if not dataset_dir_exists:
@@ -117,6 +109,13 @@ def main(argv=None, environ=None):
         except FileNotFoundError as e:
             raise FileNotFoundError(str(e)) from e
 
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(
+        f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
+        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+    )
     print(f"📥 讀取 {file_path}...")
     raw_df = pd.read_csv(file_path)
 
