@@ -193,3 +193,10 @@ tools/local_regression/
 - `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口。
 - `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
 - 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。
+
+## Test Suite minimum set 輸出
+
+`tools/local_regression/run_all.py` 預設採 minimum set 輸出策略：
+- PASS 時只保留 summary / console tail / artifacts manifest / 單一 bundle。
+- `chain_details/`、步驟 log、`validate_consistency` full scan 報表僅在 FAIL 時保留，或由 manifest 明確要求保留。
+- 根目錄僅保留最新一份 `to_chatgpt_bundle_<timestamp>_<id>.zip`。

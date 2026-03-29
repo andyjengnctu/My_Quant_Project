@@ -131,6 +131,8 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
     print(f"latest 目錄 : {result['latest_dir']}")
     print(f"根目錄 bundle : {result['root_bundle_copy']}")
+    bundle_mode = "minimum set" if master.get("minimum_bundle_only", True) else "full set"
+    print(f"bundle 模式 : {bundle_mode}")
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     if script_map:

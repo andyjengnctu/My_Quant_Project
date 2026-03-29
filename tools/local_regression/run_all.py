@@ -15,10 +15,12 @@ from tools.local_regression.common import (
     OUTPUT_ROOT,
     build_artifacts_manifest,
     build_bundle_zip,
+    collect_minimum_retention,
     build_python_env,
     ensure_dir,
     ensure_reduced_dataset,
     finalize_latest,
+    prune_run_dir,
     gather_recent_console_tail,
     load_manifest,
     publish_root_bundle_copy,
@@ -113,7 +115,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
     manifest = load_manifest()
     dataset_info = ensure_reduced_dataset()
     run_dir = ensure_dir(OUTPUT_ROOT / "runs" / timestamp_text())
-    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
+    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir), "V16_MINIMUM_OUTPUTS": "1" if bool(manifest.get("minimum_bundle_only", True)) else "0"})
 
     _emit_progress(progress_callback, "dataset_ready", {
         "major_index": 1,
@@ -181,6 +183,12 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
         "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
     }
     write_json(run_dir / "master_summary.json", master_summary)
+
+    if bool(manifest.get("minimum_bundle_only", True)):
+        retained_files, retained_prefixes = collect_minimum_retention(run_dir=run_dir, overall_ok=overall_ok, manifest=manifest)
+        retained_files.add("master_summary.json")
+        prune_run_dir(run_dir, retained_files=retained_files, retained_prefixes=retained_prefixes)
+
     write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
     bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]))
     root_bundle_copy = publish_root_bundle_copy(bundle_path)
@@ -188,8 +196,11 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
     master_summary["bundle"] = str(bundle_path)
     master_summary["root_bundle_copy"] = str(root_bundle_copy)
     master_summary["latest_dir"] = str(latest_dir)
+    master_summary["minimum_bundle_only"] = bool(manifest.get("minimum_bundle_only", True))
     write_json(run_dir / "master_summary.json", master_summary)
+    write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
     write_json(latest_dir / "master_summary.json", master_summary)
+    write_json(latest_dir / "artifacts_manifest.json", build_artifacts_manifest(latest_dir))
 
     result = {
         "overall_status": master_summary["overall_status"],

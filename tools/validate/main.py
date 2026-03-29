@@ -36,6 +36,7 @@ from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
 LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
+MINIMUM_OUTPUTS_ENV = "V16_MINIMUM_OUTPUTS"
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
@@ -131,6 +132,15 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
 
+def resolve_validate_output_dir():
+    run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
+    minimum_outputs = os.environ.get(MINIMUM_OUTPUTS_ENV, "0").strip() == "1"
+    if run_dir:
+        os.makedirs(run_dir, exist_ok=True)
+        return run_dir, minimum_outputs
+    return OUTPUT_DIR, minimum_outputs
+
+
 def main():
     enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
@@ -138,7 +148,8 @@ def main():
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_dir, minimum_outputs = resolve_validate_output_dir()
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
         dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(sys.argv, os.environ)
@@ -243,8 +254,15 @@ def main():
         df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
 
     timestamp = get_taipei_now().strftime("%Y%m%d_%H%M%S")
-    csv_path = os.path.join(OUTPUT_DIR, f"consistency_full_scan_{timestamp}.csv")
-    df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    csv_path = None
+    failure_csv_path = None
+    if (not minimum_outputs) or (not df_failed.empty):
+        if minimum_outputs and not df_failed.empty:
+            failure_csv_path = os.path.join(output_dir, f"consistency_failures_{timestamp}.csv")
+            df_failed.to_csv(failure_csv_path, index=False, encoding="utf-8-sig")
+        else:
+            csv_path = os.path.join(output_dir, f"consistency_full_scan_{timestamp}.csv")
+            df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
     if df_failed.empty:
         df_failed_summary = pd.DataFrame(columns=["ticker", "failed_checks"])
@@ -268,7 +286,7 @@ def main():
         df_failed_summary=df_failed_summary,
         df_failed_module=df_failed_module,
         timestamp=timestamp,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
         normalize_ticker=normalize_ticker_text,
     )
 
@@ -278,7 +296,7 @@ def main():
         df_results=df_results,
         df_failed=df_failed,
         df_summary=df_summary,
-        csv_path=csv_path,
+        csv_path=csv_path or failure_csv_path,
         xlsx_path=xlsx_path,
         elapsed_time=elapsed_time,
         real_summary_count=scan_stats["total_tickers"],
@@ -291,13 +309,13 @@ def main():
         dataset_profile_key=dataset_profile_key,
         dataset_source=dataset_source,
         data_dir=DATA_DIR,
-        csv_path=csv_path,
+        csv_path=csv_path or failure_csv_path,
         xlsx_path=xlsx_path,
         elapsed_time=elapsed_time,
         selected_tickers=selected_tickers,
         df_results=df_results,
         df_failed=df_failed,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
     )
 
     return 1 if not df_failed.empty else 0

@@ -11,7 +11,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from zoneinfo import ZoneInfo
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -247,6 +247,55 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
         "extracted_files": extracted_files,
         "csv_count": sum(1 for _ in REDUCED_DATASET_DIR.glob("*.csv")),
     }
+
+
+def _matches_retained_prefix(relative_path: str, retained_prefixes: Sequence[str]) -> bool:
+    return any(relative_path == prefix or relative_path.startswith(prefix + "/") for prefix in retained_prefixes)
+
+
+def collect_minimum_retention(*, run_dir: Path, overall_ok: bool, manifest: Dict[str, Any]) -> Tuple[Set[str], List[str]]:
+    retained_files: Set[str] = {
+        "master_summary.json",
+        "artifacts_manifest.json",
+        "console_tail.txt",
+        "quick_gate_summary.json",
+        "validate_consistency_summary.json",
+        "chain_summary.json",
+        "chain_summary.csv",
+        "ml_smoke_summary.json",
+    }
+    retained_prefixes: List[str] = []
+
+    if overall_ok:
+        if bool(manifest.get("keep_logs_on_pass", False)):
+            retained_files.update({path.name for path in run_dir.glob("*.log")})
+        if bool(manifest.get("keep_chain_details_on_pass", False)):
+            retained_prefixes.append("chain_details")
+        if bool(manifest.get("keep_validate_full_reports_on_pass", False)):
+            retained_files.update({path.name for path in run_dir.glob("consistency_full_scan_*.csv")})
+            retained_files.update({path.name for path in run_dir.glob("consistency_failures_*.csv")})
+            retained_files.update({path.name for path in run_dir.glob("consistency_issues_*.xlsx")})
+    else:
+        retained_files.update({path.name for path in run_dir.glob("*.log")})
+        retained_files.update({path.name for path in run_dir.glob("consistency_full_scan_*.csv")})
+        retained_files.update({path.name for path in run_dir.glob("consistency_failures_*.csv")})
+        retained_files.update({path.name for path in run_dir.glob("consistency_issues_*.xlsx")})
+        retained_prefixes.append("chain_details")
+
+    return retained_files, retained_prefixes
+
+
+def prune_run_dir(run_dir: Path, *, retained_files: Set[str], retained_prefixes: Sequence[str]) -> None:
+    for path in sorted(run_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        relative_path = str(path.relative_to(run_dir)).replace("\\", "/")
+        keep = relative_path in retained_files or _matches_retained_prefix(relative_path, retained_prefixes)
+        if path.is_file() and not keep:
+            path.unlink()
+        elif path.is_dir() and not keep:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
 
 
 def publish_root_bundle_copy(bundle_path: Path, *, prefix: str = "to_chatgpt_bundle") -> Path:
