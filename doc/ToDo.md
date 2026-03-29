@@ -1,10 +1,9 @@
 ## Going
-- overfitting量化驗證工具
+- regression + smoke test / chen check
 - 訓練/測試樣本分離
-- 自動壓力測試角本，主動把系統推到邊界，例如：
-
 
 ## To do
+- overfitting量化驗證工具
 - ajd/raw整合交易策略 
 - 加入大盤過濾
 - 加入低點買入 + 盤整期策略
@@ -13,6 +12,7 @@
 - online虛擬交易 (小時交易)
 - TV-based UI
 - LLM-based learning
+- 自動壓力測試角本，驗證長時間運作穩定性
 
 ## Pending (useless)
 - 訓練歷史績效參數

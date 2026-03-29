@@ -158,3 +158,32 @@ project/
 
 - `core/position_step.py`: 單股持倉 K 棒步進與出場事件處理。
 - `core/backtest_finalize.py`: 單股回測期末結算與統計彙整。
+
+
+## Local Regression（reduced only）
+
+新增 `tools/local_regression/`，作為本地最小必要回歸入口，只做薄封裝，不重寫交易規則。
+
+```text
+tools/local_regression/
+├── __init__.py
+├── common.py
+├── manifest.json
+├── run_all.py
+├── run_all.bat
+├── run_chain_checks.py
+├── run_ml_smoke.py
+└── run_quick_gate.py
+```
+
+### 職責
+- `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / 壞 DB fail-fast。
+- `run_chain_checks.py`：固定代表 ticker 的單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳。
+- `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke。
+- `run_all.py`：一鍵串接三者，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`。
+- `common.py`：manifest、輸出目錄、JSON/CSV、reduced data.zip 自動解壓、bundle 打包。
+
+### 設計原則
+- 固定使用 reduced，避免把 full dataset 變成日常 gate。
+- 測試只做 orchestration 與 summary，不複製核心交易規則。
+- 結果統一輸出到 `outputs/local_regression/latest/`，方便直接打包給 ChatGPT 分析。

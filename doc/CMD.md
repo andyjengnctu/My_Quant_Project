@@ -1,5 +1,5 @@
 # 打包
-$branch="test-branch-1"; $archDir="arch"; New-Item -ItemType Directory -Force -Path $archDir | Out-Null; Get-ChildItem -File -Filter "${branch}_*.zip" | Move-Item -Destination $archDir -Force; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
+$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
 
 # 重現環境
 python -m pip install -r requirements/requirements-lock.txt
@@ -88,3 +88,45 @@ python tools/debug/trade_log.py
 # apps/* 僅從對應子系統套件 façade 匯入公開介面，避免入口層直接依賴更深子模組
 # tools/*/__init__.py 與 façade 檔維持穩定公開介面；子模組可繼續細拆，但外部匯入路徑應盡量不變
 # 模組檔名已完成版本前綴移除；既有函式／類別識別字若仍含版本字樣，屬另案處理範圍
+
+
+## 本地一鍵回歸（reduced）
+
+本地最小必要回歸固定只用 reduced。
+
+### 一鍵執行
+
+```bash
+python tools/local_regression/run_all.py
+```
+
+Windows：
+
+```bat
+tools\local_regression\run_all.bat
+```
+
+### 輸出位置
+
+執行完成後，請查看：
+
+```text
+outputs/local_regression/latest/
+```
+
+主要檔案：
+- `master_summary.json`
+- `quick_gate_summary.json`
+- `chain_summary.csv`
+- `chain_summary.json`
+- `ml_smoke_summary.json`
+- `to_chatgpt_bundle.zip`
+
+### reduced 資料集
+
+若專案根目錄尚未有 `data/tw_stock_data_vip_reduced`，local regression 會優先嘗試：
+1. `<repo>/data.zip`
+2. 環境變數 `V16_PROJECT_DATA_ZIP`
+3. `/mnt/data/data.zip`
+
+自動解壓其中的 `tw_stock_data_vip_reduced` 到 `<repo>/data/`。
