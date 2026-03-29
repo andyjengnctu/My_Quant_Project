@@ -174,14 +174,19 @@ tools/local_regression/
 ├── run_chain_checks.py
 ├── run_ml_smoke.py
 └── run_quick_gate.py
+
+tools/dev/
+├── __init__.py
+└── preflight_env.py
 ```
 
 ### 職責
 - `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / 壞 DB fail-fast。
 - `run_chain_checks.py`：對 reduced 內實際 discover 到的全部 ticker 執行單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳，並輸出全量 chain summary / chain details。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke。
-- `run_all.py`：一鍵串接 quick gate / consistency / chain checks / ml smoke，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
+- `run_all.py`：先做 preflight，再串接 quick gate / consistency / chain checks / ml smoke，並輸出 `master_summary.json`、`preflight_env_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced data.zip 自動解壓、bundle 打包。
+- `tools/dev/preflight_env.py`：requirements import、`best_params.json` 與 repo / outputs 可寫性前置檢查；避免把缺套件與權限問題誤判為程式缺陷。
 
 ### 設計原則
 - 固定使用 reduced，避免把 full dataset 變成日常 gate。

@@ -198,6 +198,7 @@ def select_bundle_paths(run_dir: Path, *, overall_ok: bool) -> List[Path]:
     if overall_ok:
         preferred = [
             run_dir / "master_summary.json",
+            run_dir / "preflight_env_summary.json",
             run_dir / "quick_gate_summary.json",
             run_dir / "validate_consistency_summary.json",
             run_dir / "chain_summary.json",

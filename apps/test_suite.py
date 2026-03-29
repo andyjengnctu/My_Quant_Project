@@ -14,6 +14,7 @@ from tools.local_regression.run_all import execute_all
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STEP_LABELS = {
+    "preflight": "preflight",
     "quick_gate": "quick gate",
     "consistency": "consistency",
     "chain_checks": "chain checks",
@@ -116,6 +117,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         "overall_status": result.get("overall_status", "FAIL"),
     }
     step_payloads = result.get("step_payloads", {})
+    preflight = step_payloads.get("preflight", {})
     quick = step_payloads.get("quick_gate", {})
     consistency = step_payloads.get("consistency", {})
     chain = step_payloads.get("chain_checks", {})
@@ -135,7 +137,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     if script_map:
         print("\n[步驟摘要]")
-        for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke"):
+        for key in ("preflight", "quick_gate", "consistency", "chain_checks", "ml_smoke"):
             item = script_map.get(key, {})
             print(f"- {STEP_LABELS.get(key, key):<13} {item.get('status', 'N/A'):<4} {item.get('duration_sec', 0.0):>6.2f}s")
 
@@ -180,7 +182,7 @@ def main() -> int:
     enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
         print("用法: python apps/test_suite.py")
-        print("說明: reduced 一鍵測試入口，依序執行 quick gate / consistency / chain checks / ml smoke。")
+        print("說明: reduced 一鍵測試入口，先做 preflight，再依序執行 quick gate / consistency / chain checks / ml smoke。")
         return 0
 
     print("=== Test Suite (reduced) ===")

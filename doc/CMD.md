@@ -112,6 +112,12 @@ python apps\test_suite.py
 python tools/local_regression/run_all.py
 ```
 
+若只想先檢查環境是否就緒：
+
+```bash
+python tools/dev/preflight_env.py
+```
+
 ### 輸出位置
 
 `apps/test_suite.py` 執行完成後：
@@ -126,7 +132,7 @@ outputs/local_regression/
 
 - `outputs/local_regression/` 保留歷史 bundle。
 - 專案根目錄只保留最新一份同名 copy，方便直接上傳給 ChatGPT。
-- `apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、四個步驟摘要（quick gate / consistency / chain checks / ml smoke）、全量 ticker 摘要，以及兩個 bundle 路徑。
+- `apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、preflight + 四個步驟摘要（quick gate / consistency / chain checks / ml smoke）、全量 ticker 摘要，以及兩個 bundle 路徑。
 
 ### reduced 資料集
 
@@ -147,7 +153,7 @@ outputs/local_regression/
 
 `python apps/test_suite.py` 會先在 staging 組裝結果，再打成單一 bundle。
 
-- PASS：bundle 只含 minimum set 摘要檔。
+- PASS：bundle 只含 minimum set 摘要檔（含 `preflight_env_summary.json`）。
 - FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
 - 歷史 bundle 保留在 `outputs/local_regression/`；根目錄只保留最新一份同名 copy。
 - 內部 staging 目錄打包完成後自動刪除，不保留散開 json、log、latest 或 runs 供日常查看。
