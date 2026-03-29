@@ -186,7 +186,7 @@ tools/local_regression/
 ### 設計原則
 - 固定使用 reduced，避免把 full dataset 變成日常 gate。
 - 測試只做 orchestration 與 summary，不複製核心交易規則。
-- 結果統一輸出到 `outputs/local_regression/latest/`，方便直接打包給 ChatGPT 分析。
+- 結果先在 staging 目錄整理後打包；歷史 bundle 歸檔到 `outputs/local_regression/`，專案根目錄只保留最新一份同名 copy。
 
 
 ### 測試入口收斂
@@ -209,3 +209,11 @@ tools/local_regression/
 - 打包後，歷史 bundle 保留在 `outputs/local_regression/`。
 - 專案根目錄只保留最新一份同名 copy，作為直接上傳用。
 - staging 目錄會在打包完成後清除。
+
+
+## Output 分類原則
+
+- `outputs/` 根目錄只放工具分類資料夾，不再讓工具直接把檔案散落到根目錄。
+- standalone 工具輸出固定分類到各自資料夾：`validate_consistency`、`ml_optimizer`、`portfolio_sim`、`vip_scanner`、`debug_trade_log`、`smart_downloader`。
+- `apps/test_suite.py` 不論 PASS / FAIL 都先在 staging 組裝結果，再打成單一 bundle；歷史 bundle 保留於 `outputs/local_regression/`，根目錄只留最新一份 copy。
+- 預設輸出採 minimum set；詳細除錯材料只在 FAIL 或指定 debug 模式時放入 bundle。

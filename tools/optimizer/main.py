@@ -19,6 +19,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag
+from core.output_paths import build_output_dir
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
 from tools.optimizer.runtime import (
@@ -44,7 +45,7 @@ warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$"
 warnings.filterwarnings("once", category=RuntimeWarning)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "best_params.json")
 TRAIN_MAX_POSITIONS = 10

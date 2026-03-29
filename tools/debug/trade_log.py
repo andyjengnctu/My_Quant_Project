@@ -18,6 +18,7 @@ from core.dataset_profiles import (
     resolve_dataset_profile_from_cli_env,
 )
 from core.params_io import load_params_from_json
+from core.output_paths import build_output_dir
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt
 from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
 
@@ -39,7 +40,7 @@ COLOR_MAP = {
 }
 
 DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
-OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+OUTPUT_DIR = build_output_dir(BASE_DIR, "debug_trade_log")
 
 
 def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), *, verbose=True):

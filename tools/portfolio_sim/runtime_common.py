@@ -1,9 +1,10 @@
 import os
 
 from core.params_io import load_params_from_json
+from core.output_paths import build_output_dir
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "portfolio_sim")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "best_params.json")
 LOAD_PROGRESS_EVERY = 50

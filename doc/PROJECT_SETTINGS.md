@@ -73,7 +73,14 @@
 9. 候選資格、是否掛單、是否成交、是否 miss buy、歷史績效統計，必須分層定義，不得混用。
 10. 單股回測不得使用該檔自身歷史績效 filter 作為買入閘門；歷史績效 filter 只能用於投組層。
 
-## G. 專案特例
+## G. 輸出與打包原則
+
+1. `outputs/` 根目錄只放工具分類資料夾；禁止新工具再把檔案散落到 `outputs/` 根目錄。
+2. `apps/test_suite.py` 不論 PASS / FAIL，都必須先在 staging 整理結果，再打成單一 bundle；歷史 bundle 保留於 `outputs/local_regression/`，專案根目錄只保留最新一份同名 copy。
+3. 預設輸出以 minimum set 為準；詳細除錯材料僅在 FAIL 或指定 debug 模式時納入 bundle，不額外保留散開 json、log、latest 或 runs 目錄供日常查看。
+4. 變更任何工具的輸出路徑、bundle 內容或保留規則時，必須同步更新 `doc/CMD.md`、`doc/ARCHITECTURE.md` 與本檔。
+
+## H. 專案特例
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. 暫時只使用還原價，不考慮 raw。

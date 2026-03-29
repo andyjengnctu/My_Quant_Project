@@ -12,6 +12,7 @@ if PROJECT_ROOT not in sys.path:
 from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
+from core.output_paths import build_output_dir
 
 API_TOKEN = os.getenv("FINMIND_API_TOKEN", "")
 BASE_DIR = PROJECT_ROOT
@@ -30,7 +31,7 @@ REQUEST_TIMEOUT_SEC = 10
 YF_SCREEN_SLEEP_SEC = 0.01
 FINMIND_DOWNLOAD_SLEEP_SEC = 0.5
 FINMIND_PRICE_DATASET = 'TaiwanStockPriceAdj'
-OUTPUT_DIR = os.path.join(BASE_DIR, 'outputs')
+OUTPUT_DIR = build_output_dir(BASE_DIR, 'smart_downloader')
 
 # # (AI註: 大量批次時避免逐筆錯誤洗板；詳細清單仍保留在摘要與 log)
 def _get_optional_curl_request_exceptions():

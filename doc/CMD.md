@@ -114,28 +114,19 @@ python tools/local_regression/run_all.py
 
 ### 輸出位置
 
-執行完成後，請查看：
+`apps/test_suite.py` 執行完成後：
 
 ```text
-outputs/local_regression/latest/
+outputs/local_regression/
+  to_chatgpt_bundle_<timestamp>_<uniqueid>.zip   # 歷史 bundle
+
+<repo>/
+  to_chatgpt_bundle_<timestamp>_<uniqueid>.zip   # 根目錄最新 copy
 ```
 
-主要檔案：
-- `master_summary.json`
-- `quick_gate_summary.json`
-- `validate_consistency_summary.json`
-- `chain_summary.csv`
-- `chain_summary.json`
-- `chain_details/*.json`（reduced 內全部 discover 到的 ticker）
-- `ml_smoke_summary.json`
-- `to_chatgpt_bundle.zip`
-
-另外，執行完成後也會在專案根目錄額外保留一份最新 bundle：
-- `to_chatgpt_bundle_<timestamp>_<uniqueid>.zip`
-
-`apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、四個步驟摘要（quick gate / consistency / chain checks / ml smoke）、全量 ticker 摘要，以及最新 bundle 位置。
-
-根目錄舊的 `to_chatgpt_bundle*.zip` 會自動刪除，只保留最新一份，避免還要一層層進 `outputs/` 尋找。
+- `outputs/local_regression/` 保留歷史 bundle。
+- 專案根目錄只保留最新一份同名 copy，方便直接上傳給 ChatGPT。
+- `apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、四個步驟摘要（quick gate / consistency / chain checks / ml smoke）、全量 ticker 摘要，以及兩個 bundle 路徑。
 
 ### reduced 資料集
 
@@ -154,15 +145,18 @@ outputs/local_regression/latest/
 
 ## Test suite bundle
 
-`python apps/test_suite.py` 預設只保留專案根目錄最新唯一 `to_chatgpt_bundle_<timestamp>_<id>.zip`。
+`python apps/test_suite.py` 會先在 staging 組裝結果，再打成單一 bundle。
 
 - PASS：bundle 只含 minimum set 摘要檔。
 - FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
-- 內部 staging 目錄打包完成後自動刪除；不再保留 `runs/`、`latest/` 或散開 json。
+- 歷史 bundle 保留在 `outputs/local_regression/`；根目錄只保留最新一份同名 copy。
+- 內部 staging 目錄打包完成後自動刪除，不保留散開 json、log、latest 或 runs 供日常查看。
 
+## 其它工具輸出分類
 
-### bundle 保留規則
-
-- 歷史 bundle 會保留在 `outputs/local_regression/`。
-- 專案根目錄只保留最新一份同名 copy，方便直接上傳給 ChatGPT。
-- 每次新跑完會自動刪除舊的根目錄 bundle，但不會刪掉 `outputs/local_regression/` 內的歷史 bundle。
+- `outputs/validate_consistency/`：standalone consistency 報表。
+- `outputs/ml_optimizer/`：optimizer profiling / 載入摘要。
+- `outputs/portfolio_sim/`：投組報表與載入摘要。
+- `outputs/vip_scanner/`：scanner issue log。
+- `outputs/debug_trade_log/`：單檔 debug trade log。
+- `outputs/smart_downloader/`：下載器 issue log。

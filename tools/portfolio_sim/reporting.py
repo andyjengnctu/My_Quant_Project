@@ -7,9 +7,10 @@ import pandas as pd
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary
 from core.runtime_utils import should_auto_open_browser
+from core.output_paths import build_output_dir
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "portfolio_sim")
 REPORT_XLSX_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Report.xlsx")
 DASHBOARD_HTML_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Dashboard.html")
 

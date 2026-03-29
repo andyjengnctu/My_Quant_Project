@@ -23,6 +23,7 @@ from core.data_utils import discover_unique_csv_map
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
 from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt
+from core.output_paths import build_output_dir
 from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
@@ -34,7 +35,7 @@ from tools.validate.reporting import print_console_summary, write_issue_excel_re
 from tools.validate.synthetic_cases import run_synthetic_consistency_suite
 from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "outputs")
+OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "best_params.json")
