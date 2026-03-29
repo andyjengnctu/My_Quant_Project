@@ -136,12 +136,18 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
 
     source_proof = result.get("source_proof", {})
     if source_proof:
+        proof_mode = source_proof.get("source_proof_mode", "unknown")
+        tested_zip_sha = str(source_proof.get("tested_zip_sha256") or "")
+        tested_zip_part = f" | zip_sha={tested_zip_sha[:12]}" if tested_zip_sha else ""
         print(
             "source proof: "
-            f"runtime_git={source_proof.get('runtime_git_commit', 'unknown')} | "
+            f"mode={proof_mode} | "
+            f"tested_git={source_proof.get('tested_git_commit', 'unknown')} | "
             f"archive_ref={source_proof.get('archive_git_ref', 'unknown')} | "
             f"archive_git={source_proof.get('archive_git_commit', 'unknown')} | "
-            f"manifest={str(source_proof.get('repo_source_manifest_sha256', ''))[:12]}"
+            f"tree_dirty={source_proof.get('tested_tree_dirty')} | "
+            f"commit_clean_ok={source_proof.get('commit_clean_proof_ok')}"
+            f"{tested_zip_part}"
         )
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}

@@ -244,6 +244,16 @@ def resolve_git_commit(ref: str = "HEAD") -> str:
     return "unknown"
 
 
+def resolve_git_dirty() -> Optional[bool]:
+    try:
+        result = run_command(["git", "status", "--porcelain"], timeout=30)
+        if result["returncode"] == 0:
+            return bool(result["stdout"].strip())
+    except Exception:
+        pass
+    return None
+
+
 def _iter_source_files(project_root: Path = PROJECT_ROOT) -> List[Path]:
     files: List[Path] = []
     for path in sorted(project_root.rglob("*")):
@@ -277,10 +287,15 @@ def resolve_source_zip_metadata() -> Dict[str, str]:
     name = os.environ.get("V16_SOURCE_ZIP_NAME", "").strip()
     sha = os.environ.get("V16_SOURCE_ZIP_SHA256", "").strip()
     if name:
-        payload["source_zip_name"] = name
+        payload["tested_zip_name"] = name
     if sha:
-        payload["source_zip_sha256"] = sha
+        payload["tested_zip_sha256"] = sha
     return payload
+
+
+def resolve_source_proof_mode() -> str:
+    mode = os.environ.get("V16_SOURCE_PROOF_MODE", "").strip().lower()
+    return "zip_exact" if mode == "zip_exact" else "git_commit_clean"
 
 
 def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:

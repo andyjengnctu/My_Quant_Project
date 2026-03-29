@@ -28,6 +28,8 @@ from tools.local_regression.common import (
     publish_root_bundle_copy,
     read_json_if_exists,
     resolve_git_commit,
+    resolve_git_dirty,
+    resolve_source_proof_mode,
     resolve_source_zip_metadata,
     select_bundle_paths,
     taipei_now,
@@ -187,19 +189,32 @@ def _run_script(
 def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[str, Any]:
     manifest = load_manifest()
     run_dir = create_staging_run_dir()
-    runtime_git_commit = resolve_git_commit("HEAD")
+    tested_git_commit = resolve_git_commit("HEAD")
+    tested_tree_dirty = resolve_git_dirty()
     archive_git_ref = str(manifest.get("archive_git_ref", "HEAD"))
     archive_git_commit = resolve_git_commit(archive_git_ref)
     source_manifest = build_repo_source_manifest(PROJECT_ROOT)
     write_json(run_dir / SOURCE_MANIFEST_NAME, source_manifest)
+    source_proof_mode = resolve_source_proof_mode()
     source_proof = {
-        "runtime_git_commit": runtime_git_commit,
+        "source_proof_mode": source_proof_mode,
+        "tested_git_commit": tested_git_commit,
+        "tested_tree_dirty": tested_tree_dirty,
         "archive_git_ref": archive_git_ref,
         "archive_git_commit": archive_git_commit,
-        "runtime_matches_archive_ref": runtime_git_commit != "unknown" and runtime_git_commit == archive_git_commit,
+        "commit_clean_proof_ok": (
+            tested_git_commit != "unknown"
+            and archive_git_commit != "unknown"
+            and tested_git_commit == archive_git_commit
+            and tested_tree_dirty is False
+        ),
+        "tested_zip_name": None,
+        "tested_zip_sha256": None,
         "repo_source_manifest_file": SOURCE_MANIFEST_NAME,
         "repo_source_manifest_sha256": source_manifest["manifest_sha256"],
         "repo_source_file_count": source_manifest["file_count"],
+        "runtime_git_commit": tested_git_commit,
+        "runtime_matches_archive_ref": tested_git_commit != "unknown" and tested_git_commit == archive_git_commit,
     }
     source_proof.update(resolve_source_zip_metadata())
 
@@ -232,7 +247,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "dataset": manifest["dataset"],
             "dataset_info": {},
             "timestamp": taipei_now().isoformat(),
-            "git_commit": runtime_git_commit,
+            "git_commit": tested_git_commit,
             "source_proof": source_proof,
             "preflight": {"status": preflight_summary["status"], "summary_file": "preflight_env_summary.json"},
             "scripts": [preflight_script],
@@ -341,7 +356,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "dataset": manifest["dataset"],
             "dataset_info": dataset_info,
             "timestamp": taipei_now().isoformat(),
-            "git_commit": runtime_git_commit,
+            "git_commit": tested_git_commit,
             "source_proof": source_proof,
             "preflight": {"status": preflight_summary["status"], "summary_file": "preflight_env_summary.json"},
             "scripts": script_summaries,

@@ -35,7 +35,7 @@
 - 驗證順序必須是：先靜態，靜態全過後才做動態。
 - 最嚴格檢查必須一次找出本輪所有明確問題，包含程式、工具、統計口徑、交易限制、初始化順序、錯誤路徑與 headless 輸出問題。
 - 修補後必須整輪回歸，不得只驗單一路徑。
-- 當使用者提供最新程式 ZIP 與對應的本地 `apps/test_suite.py` bundle，且 bundle 可證明與 ZIP 一致時，assistant 不得重複執行 bundle 已覆蓋且為 PASS 的驗證；僅可補驗 bundle 缺項、FAIL、與 ZIP／報告／程式內容不一致、本輪修改點未覆蓋、或使用者明確要求的項目。補驗前必須先完成必要環境檢查；assistant 自身環境或操作問題不得視為程式缺陷，亦不得作為重跑 bundle 已覆蓋且為 PASS 項目的理由。若 bundle 已明確列出本輪修改點對應驗證且為 PASS，不得再做函式級、子程序級或局部抽查；除非有不一致證據或使用者明確要求。
+- 當使用者提供最新程式 ZIP 與對應的本地 `apps/test_suite.py` bundle，且 bundle 可證明與 ZIP 一致時，assistant 不得重複執行 bundle 已覆蓋且為 PASS 的驗證；僅可補驗 bundle 缺項、FAIL、與 ZIP／報告／程式內容不一致、本輪修改點未覆蓋、或使用者明確要求的項目。補驗前必須先完成必要環境檢查；assistant 自身環境或操作問題不得視為程式缺陷，亦不得作為重跑 bundle 已覆蓋且為 PASS 項目的理由。若 bundle 已明確列出本輪修改點對應驗證且為 PASS，不得再做函式級、子程序級或局部抽查；除非有不一致證據或使用者明確要求。bundle 與 ZIP 的一致性預設以 commit-clean 證明為準：`tested_git_commit` 與 `archive_git_commit` 必須等於 ZIP 檔名尾碼 commit，且 `tested_tree_dirty == false`；不得預設要求 working tree、source manifest 或 ZIP 檔案位元組完全一致。只有在 bundle 明示 `source_proof_mode = zip_exact` 時，才要求 `tested_zip_sha256 == uploaded_zip_sha256`。
 - 只有在「已完成完整盤點、問題已一次列全、已全部修補、已整輪回歸、且無未揭露未執行驗證項或環境問題」時，才可寫「本輪已全部修好」。
 
 ## 測試資料與環境規則
