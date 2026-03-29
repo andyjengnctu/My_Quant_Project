@@ -199,6 +199,8 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
         "root_bundle_copy": str(root_bundle_copy),
         "scripts": script_summaries,
         "failures": master_summary["failures"],
+        "major_index": MAJOR_STEP_COUNT,
+        "major_total": MAJOR_STEP_COUNT,
     }
     _emit_progress(progress_callback, "done", result)
     return result
