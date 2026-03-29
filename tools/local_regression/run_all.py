@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from tools.local_regression.common import (
     build_artifacts_manifest,
+    archive_bundle_history,
     build_bundle_zip,
     build_python_env,
     cleanup_staging_dir,
@@ -198,12 +199,14 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
         write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
 
         bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
-        root_bundle_copy = publish_root_bundle_copy(bundle_path)
+        archived_bundle = archive_bundle_history(bundle_path)
+        root_bundle_copy = publish_root_bundle_copy(archived_bundle)
 
         result = {
             "overall_status": master_summary["overall_status"],
             "dataset": manifest["dataset"],
             "bundle": str(root_bundle_copy),
+            "archived_bundle": str(archived_bundle),
             "root_bundle_copy": str(root_bundle_copy),
             "bundle_mode": bundle_mode,
             "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths],
@@ -224,6 +227,7 @@ def main() -> int:
     print(json.dumps({
         "overall_status": result["overall_status"],
         "bundle": result["bundle"],
+        "archived_bundle": result.get("archived_bundle", ""),
         "bundle_mode": result["bundle_mode"],
     }, ensure_ascii=False))
     return 0 if result["overall_status"] == "PASS" else 1

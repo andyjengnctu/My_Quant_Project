@@ -202,3 +202,10 @@ tools/local_regression/
 - PASS：bundle 只含 minimum set 摘要檔。
 - FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
 - 內部 staging 目錄打包完成後自動刪除；不再保留 `runs/`、`latest/` 或散開 json。
+
+
+### bundle 歸檔規則
+- `test_suite` / `local_regression` 先在 staging 目錄整理檔案。
+- 打包後，歷史 bundle 保留在 `outputs/local_regression/`。
+- 專案根目錄只保留最新一份同名 copy，作為直接上傳用。
+- staging 目錄會在打包完成後清除。

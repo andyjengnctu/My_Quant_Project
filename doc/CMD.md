@@ -159,3 +159,10 @@ outputs/local_regression/latest/
 - PASS：bundle 只含 minimum set 摘要檔。
 - FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
 - 內部 staging 目錄打包完成後自動刪除；不再保留 `runs/`、`latest/` 或散開 json。
+
+
+### bundle 保留規則
+
+- 歷史 bundle 會保留在 `outputs/local_regression/`。
+- 專案根目錄只保留最新一份同名 copy，方便直接上傳給 ChatGPT。
+- 每次新跑完會自動刪除舊的根目錄 bundle，但不會刪掉 `outputs/local_regression/` 內的歷史 bundle。

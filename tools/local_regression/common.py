@@ -288,9 +288,17 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
     }
 
 
+def archive_bundle_history(bundle_path: Path, *, prefix: str = "to_chatgpt_bundle") -> Path:
+    archive_dir = ensure_dir(OUTPUT_ROOT)
+    archive_name = f"{prefix}_{timestamp_text()}_{uuid.uuid4().hex[:8]}.zip"
+    archive_path = archive_dir / archive_name
+    shutil.move(str(bundle_path), str(archive_path))
+    return archive_path
+
+
 def publish_root_bundle_copy(bundle_path: Path, *, prefix: str = "to_chatgpt_bundle") -> Path:
     root_dir = PROJECT_ROOT
-    latest_name = f"{prefix}_{timestamp_text()}_{uuid.uuid4().hex[:8]}.zip"
+    latest_name = bundle_path.name if bundle_path.name.startswith(prefix) else f"{prefix}_{timestamp_text()}_{uuid.uuid4().hex[:8]}.zip"
     latest_path = root_dir / latest_name
     for old_path in sorted(root_dir.glob(f"{prefix}*.zip")):
         if old_path.resolve() == bundle_path.resolve():
