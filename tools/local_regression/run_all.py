@@ -12,21 +12,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.local_regression.common import (
-    OUTPUT_ROOT,
     build_artifacts_manifest,
     build_bundle_zip,
-    collect_minimum_retention,
     build_python_env,
-    ensure_dir,
+    cleanup_staging_dir,
+    create_staging_run_dir,
     ensure_reduced_dataset,
-    finalize_latest,
-    prune_run_dir,
     gather_recent_console_tail,
     load_manifest,
     publish_root_bundle_copy,
+    read_json_if_exists,
     resolve_git_commit,
+    select_bundle_paths,
     taipei_now,
-    timestamp_text,
     write_json,
     write_text,
 )
@@ -86,7 +84,7 @@ def _run_script(
                     process.kill()
                     process.wait(timeout=5)
                     returncode = 124
-                    log_file.write(f"\n[local_regression] TIMEOUT after {timeout_sec} seconds\n")
+                    log_file.write(f"\n[test_suite] TIMEOUT after {timeout_sec} seconds\n")
                     log_file.flush()
                     break
                 _emit_progress(progress_callback, "step_progress", {
@@ -114,117 +112,119 @@ def _run_script(
 def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[str, Any]:
     manifest = load_manifest()
     dataset_info = ensure_reduced_dataset()
-    run_dir = ensure_dir(OUTPUT_ROOT / "runs" / timestamp_text())
-    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir), "V16_MINIMUM_OUTPUTS": "1" if bool(manifest.get("minimum_bundle_only", True)) else "0"})
+    run_dir = create_staging_run_dir()
+    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
 
     _emit_progress(progress_callback, "dataset_ready", {
         "major_index": 1,
         "major_total": MAJOR_STEP_COUNT,
         "dataset_info": dataset_info,
         "label": "準備 reduced 測試資料",
-        "run_dir": str(run_dir),
     })
 
     script_summaries: List[Dict[str, Any]] = []
     overall_ok = True
-    for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(SCRIPT_ORDER, start=2):
-        _emit_progress(progress_callback, "step_start", {
-            "name": name,
-            "major_index": script_offset,
-            "major_total": MAJOR_STEP_COUNT,
-            "timeout_sec": timeout_sec,
-        })
-        log_path = run_dir / f"{name}.log"
-        run_result = _run_script(
-            name=name,
-            relative_script=relative_script,
-            timeout_sec=timeout_sec,
-            env=shared_env,
-            log_path=log_path,
-            progress_callback=progress_callback,
-            major_index=script_offset,
-        )
+    try:
+        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(SCRIPT_ORDER, start=2):
+            _emit_progress(progress_callback, "step_start", {
+                "name": name,
+                "major_index": script_offset,
+                "major_total": MAJOR_STEP_COUNT,
+                "timeout_sec": timeout_sec,
+            })
+            log_path = run_dir / f"{name}.log"
+            run_result = _run_script(
+                name=name,
+                relative_script=relative_script,
+                timeout_sec=timeout_sec,
+                env=shared_env,
+                log_path=log_path,
+                progress_callback=progress_callback,
+                major_index=script_offset,
+            )
 
-        summary_path = run_dir / summary_name
-        summary_payload = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {"status": "PASS" if run_result["returncode"] == 0 else "FAIL"}
-        script_summary = {
-            "name": name,
-            "status": summary_payload.get("status", "FAIL"),
-            "returncode": run_result["returncode"],
-            "duration_sec": run_result["duration_sec"],
-            "summary_file": summary_path.name,
-            "timed_out": run_result["timed_out"],
+            summary_path = run_dir / summary_name
+            summary_payload = read_json_if_exists(summary_path)
+            if not summary_payload:
+                summary_payload = {"status": "PASS" if run_result["returncode"] == 0 else "FAIL"}
+            script_summary = {
+                "name": name,
+                "status": summary_payload.get("status", "FAIL"),
+                "returncode": run_result["returncode"],
+                "duration_sec": run_result["duration_sec"],
+                "summary_file": summary_path.name,
+                "timed_out": run_result["timed_out"],
+            }
+            script_summaries.append(script_summary)
+            if run_result["returncode"] != 0 or summary_payload.get("status") != "PASS":
+                overall_ok = False
+
+            _emit_progress(progress_callback, "step_finish", {
+                **script_summary,
+                "major_index": script_offset,
+                "major_total": MAJOR_STEP_COUNT,
+            })
+
+        _emit_progress(progress_callback, "finalizing", {
+            "major_index": MAJOR_STEP_COUNT,
+            "major_total": MAJOR_STEP_COUNT,
+            "label": "整理輸出與打包 bundle",
+        })
+
+        write_text(run_dir / "console_tail.txt", gather_recent_console_tail(run_dir) + "\n")
+        step_payloads = {
+            "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
+            "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
+            "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
+            "ml_smoke": read_json_if_exists(run_dir / "ml_smoke_summary.json"),
         }
-        script_summaries.append(script_summary)
-        if run_result["returncode"] != 0 or summary_payload.get("status") != "PASS":
-            overall_ok = False
+        master_summary = {
+            "overall_status": "PASS" if overall_ok else "FAIL",
+            "dataset": manifest["dataset"],
+            "dataset_info": dataset_info,
+            "timestamp": taipei_now().isoformat(),
+            "git_commit": resolve_git_commit(),
+            "scripts": script_summaries,
+            "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
+        }
+        write_json(run_dir / "master_summary.json", master_summary)
+        write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
 
-        _emit_progress(progress_callback, "step_finish", {
-            **script_summary,
-            "major_index": script_offset,
+        bundle_mode = "minimum_set" if overall_ok else "debug_bundle"
+        bundle_paths = select_bundle_paths(run_dir, overall_ok=overall_ok)
+        master_summary["bundle_mode"] = bundle_mode
+        master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths]
+        write_json(run_dir / "master_summary.json", master_summary)
+        write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
+
+        bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
+        root_bundle_copy = publish_root_bundle_copy(bundle_path)
+
+        result = {
+            "overall_status": master_summary["overall_status"],
+            "dataset": manifest["dataset"],
+            "bundle": str(root_bundle_copy),
+            "root_bundle_copy": str(root_bundle_copy),
+            "bundle_mode": bundle_mode,
+            "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths],
+            "scripts": script_summaries,
+            "step_payloads": step_payloads,
+            "failures": master_summary["failures"],
+            "major_index": MAJOR_STEP_COUNT,
             "major_total": MAJOR_STEP_COUNT,
-        })
-
-    _emit_progress(progress_callback, "finalizing", {
-        "major_index": MAJOR_STEP_COUNT,
-        "major_total": MAJOR_STEP_COUNT,
-        "label": "整理輸出與打包 bundle",
-    })
-
-    write_text(run_dir / "console_tail.txt", gather_recent_console_tail(run_dir) + "\n")
-    master_summary = {
-        "overall_status": "PASS" if overall_ok else "FAIL",
-        "dataset": manifest["dataset"],
-        "dataset_info": dataset_info,
-        "timestamp": taipei_now().isoformat(),
-        "git_commit": resolve_git_commit(),
-        "run_dir": str(run_dir),
-        "scripts": script_summaries,
-        "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
-    }
-    write_json(run_dir / "master_summary.json", master_summary)
-
-    if bool(manifest.get("minimum_bundle_only", True)):
-        retained_files, retained_prefixes = collect_minimum_retention(run_dir=run_dir, overall_ok=overall_ok, manifest=manifest)
-        retained_files.add("master_summary.json")
-        prune_run_dir(run_dir, retained_files=retained_files, retained_prefixes=retained_prefixes)
-
-    write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
-    bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]))
-    root_bundle_copy = publish_root_bundle_copy(bundle_path)
-    latest_dir = finalize_latest(run_dir)
-    master_summary["bundle"] = str(bundle_path)
-    master_summary["root_bundle_copy"] = str(root_bundle_copy)
-    master_summary["latest_dir"] = str(latest_dir)
-    master_summary["minimum_bundle_only"] = bool(manifest.get("minimum_bundle_only", True))
-    write_json(run_dir / "master_summary.json", master_summary)
-    write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
-    write_json(latest_dir / "master_summary.json", master_summary)
-    write_json(latest_dir / "artifacts_manifest.json", build_artifacts_manifest(latest_dir))
-
-    result = {
-        "overall_status": master_summary["overall_status"],
-        "dataset": manifest["dataset"],
-        "run_dir": str(run_dir),
-        "latest_dir": str(latest_dir),
-        "bundle": str(latest_dir / manifest["bundle_name"]),
-        "root_bundle_copy": str(root_bundle_copy),
-        "scripts": script_summaries,
-        "failures": master_summary["failures"],
-        "major_index": MAJOR_STEP_COUNT,
-        "major_total": MAJOR_STEP_COUNT,
-    }
-    _emit_progress(progress_callback, "done", result)
-    return result
+        }
+        _emit_progress(progress_callback, "done", result)
+        return result
+    finally:
+        cleanup_staging_dir(run_dir)
 
 
 def main() -> int:
     result = execute_all()
     print(json.dumps({
         "overall_status": result["overall_status"],
-        "latest_dir": result["latest_dir"],
         "bundle": result["bundle"],
-        "root_bundle_copy": result["root_bundle_copy"],
+        "bundle_mode": result["bundle_mode"],
     }, ensure_ascii=False))
     return 0 if result["overall_status"] == "PASS" else 1
 

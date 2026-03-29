@@ -151,16 +151,11 @@ outputs/local_regression/latest/
 
 若你已改用 `apps/test_suite.py`，可手動刪除舊的 `apps/local_regression.py` 與 `apps/validate_consistency.py`，避免 `apps/` 內出現多個測試入口造成干擾。
 
-### 預設輸出策略（minimum set）
 
-`apps/test_suite.py` 預設只保留給 ChatGPT 分析必要的最小輸出：
-- `master_summary.json`
-- `quick_gate_summary.json`
-- `validate_consistency_summary.json`
-- `chain_summary.json`
-- `chain_summary.csv`
-- `ml_smoke_summary.json`
-- `console_tail.txt`
-- `artifacts_manifest.json`
+## Test suite bundle
 
-PASS 時預設不保留 `chain_details/`、各步驟 `.log`、以及 `validate_consistency` 的 full scan 報表；FAIL 時才自動保留較多除錯材料。
+`python apps/test_suite.py` 預設只保留專案根目錄最新唯一 `to_chatgpt_bundle_<timestamp>_<id>.zip`。
+
+- PASS：bundle 只含 minimum set 摘要檔。
+- FAIL：bundle 自動擴充為 debug bundle，納入失敗步驟所需除錯材料。
+- 內部 staging 目錄打包完成後自動刪除；不再保留 `runs/`、`latest/` 或散開 json。

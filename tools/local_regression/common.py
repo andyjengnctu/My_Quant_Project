@@ -11,7 +11,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -144,29 +144,68 @@ def resolve_run_dir(script_name: str) -> Path:
         run_dir = Path(env_run_dir).resolve()
         ensure_dir(run_dir)
         return run_dir
-    run_dir = OUTPUT_ROOT / f"{timestamp_text()}_{script_name}"
+    run_dir = OUTPUT_ROOT / "_staging" / f"{timestamp_text()}_{script_name}_{uuid.uuid4().hex[:8]}"
     ensure_dir(run_dir)
     return run_dir
 
 
-def finalize_latest(run_dir: Path) -> Path:
-    latest_dir = OUTPUT_ROOT / "latest"
-    if latest_dir.exists():
-        shutil.rmtree(latest_dir)
-    shutil.copytree(run_dir, latest_dir)
-    return latest_dir
+def create_staging_run_dir(prefix: str = "test_suite") -> Path:
+    run_dir = OUTPUT_ROOT / "_staging" / f"{timestamp_text()}_{prefix}_{uuid.uuid4().hex[:8]}"
+    ensure_dir(run_dir)
+    return run_dir
 
 
-def build_bundle_zip(run_dir: Path, bundle_name: str) -> Path:
+def read_json_if_exists(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    return read_json(path)
+
+
+def build_bundle_zip(run_dir: Path, bundle_name: str, *, include_paths: Optional[List[Path]] = None) -> Path:
     bundle_path = run_dir / bundle_name
     if bundle_path.exists():
         bundle_path.unlink()
-    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(run_dir.rglob("*")):
-            if file_path.is_dir() or file_path == bundle_path:
+
+    if include_paths is None:
+        include_iter = [path for path in sorted(run_dir.rglob("*")) if path.is_file() and path != bundle_path]
+    else:
+        include_iter = []
+        seen = set()
+        for raw_path in include_paths:
+            path = raw_path.resolve()
+            if not path.exists() or not path.is_file() or path == bundle_path.resolve():
                 continue
+            rel = path.relative_to(run_dir.resolve())
+            if rel in seen:
+                continue
+            seen.add(rel)
+            include_iter.append(path)
+
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for file_path in include_iter:
             zf.write(file_path, file_path.relative_to(run_dir))
     return bundle_path
+
+
+def select_bundle_paths(run_dir: Path, *, overall_ok: bool) -> List[Path]:
+    if overall_ok:
+        preferred = [
+            run_dir / "master_summary.json",
+            run_dir / "quick_gate_summary.json",
+            run_dir / "validate_consistency_summary.json",
+            run_dir / "chain_summary.json",
+            run_dir / "chain_summary.csv",
+            run_dir / "ml_smoke_summary.json",
+            run_dir / "console_tail.txt",
+            run_dir / "artifacts_manifest.json",
+        ]
+        return [path for path in preferred if path.exists()]
+    return [path for path in sorted(run_dir.rglob("*")) if path.is_file() and path.name != "to_chatgpt_bundle.zip"]
+
+
+def cleanup_staging_dir(run_dir: Path) -> None:
+    if run_dir.exists():
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def gather_recent_console_tail(run_dir: Path, limit_lines: int = 80) -> str:
@@ -247,55 +286,6 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
         "extracted_files": extracted_files,
         "csv_count": sum(1 for _ in REDUCED_DATASET_DIR.glob("*.csv")),
     }
-
-
-def _matches_retained_prefix(relative_path: str, retained_prefixes: Sequence[str]) -> bool:
-    return any(relative_path == prefix or relative_path.startswith(prefix + "/") for prefix in retained_prefixes)
-
-
-def collect_minimum_retention(*, run_dir: Path, overall_ok: bool, manifest: Dict[str, Any]) -> Tuple[Set[str], List[str]]:
-    retained_files: Set[str] = {
-        "master_summary.json",
-        "artifacts_manifest.json",
-        "console_tail.txt",
-        "quick_gate_summary.json",
-        "validate_consistency_summary.json",
-        "chain_summary.json",
-        "chain_summary.csv",
-        "ml_smoke_summary.json",
-    }
-    retained_prefixes: List[str] = []
-
-    if overall_ok:
-        if bool(manifest.get("keep_logs_on_pass", False)):
-            retained_files.update({path.name for path in run_dir.glob("*.log")})
-        if bool(manifest.get("keep_chain_details_on_pass", False)):
-            retained_prefixes.append("chain_details")
-        if bool(manifest.get("keep_validate_full_reports_on_pass", False)):
-            retained_files.update({path.name for path in run_dir.glob("consistency_full_scan_*.csv")})
-            retained_files.update({path.name for path in run_dir.glob("consistency_failures_*.csv")})
-            retained_files.update({path.name for path in run_dir.glob("consistency_issues_*.xlsx")})
-    else:
-        retained_files.update({path.name for path in run_dir.glob("*.log")})
-        retained_files.update({path.name for path in run_dir.glob("consistency_full_scan_*.csv")})
-        retained_files.update({path.name for path in run_dir.glob("consistency_failures_*.csv")})
-        retained_files.update({path.name for path in run_dir.glob("consistency_issues_*.xlsx")})
-        retained_prefixes.append("chain_details")
-
-    return retained_files, retained_prefixes
-
-
-def prune_run_dir(run_dir: Path, *, retained_files: Set[str], retained_prefixes: Sequence[str]) -> None:
-    for path in sorted(run_dir.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-        relative_path = str(path.relative_to(run_dir)).replace("\\", "/")
-        keep = relative_path in retained_files or _matches_retained_prefix(relative_path, retained_prefixes)
-        if path.is_file() and not keep:
-            path.unlink()
-        elif path.is_dir() and not keep:
-            try:
-                path.rmdir()
-            except OSError:
-                pass
 
 
 def publish_root_bundle_copy(bundle_path: Path, *, prefix: str = "to_chatgpt_bundle") -> Path:

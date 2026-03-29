@@ -10,7 +10,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag
-from tools.local_regression.common import read_json
 from tools.local_regression.run_all import execute_all
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -110,29 +109,25 @@ class ConsoleProgress:
             symbol = "✓" if payload["overall_status"] == "PASS" else "✗"
             self._finish_line(self._step_text(payload, f"{symbol} 完成 | {payload['overall_status']}", done=True))
 
-
-def _read_summary_if_exists(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
-    return read_json(path)
-
-
 def _print_human_summary(result: Dict[str, Any]) -> None:
-    latest_dir = Path(result["latest_dir"])
-    master = _read_summary_if_exists(latest_dir / "master_summary.json")
-    quick = _read_summary_if_exists(latest_dir / "quick_gate_summary.json")
-    consistency = _read_summary_if_exists(latest_dir / "validate_consistency_summary.json")
-    chain = _read_summary_if_exists(latest_dir / "chain_summary.json")
-    ml = _read_summary_if_exists(latest_dir / "ml_smoke_summary.json")
+    master = {
+        "scripts": result.get("scripts", []),
+        "failures": result.get("failures", 0),
+        "overall_status": result.get("overall_status", "FAIL"),
+    }
+    step_payloads = result.get("step_payloads", {})
+    quick = step_payloads.get("quick_gate", {})
+    consistency = step_payloads.get("consistency", {})
+    chain = step_payloads.get("chain_checks", {})
+    ml = step_payloads.get("ml_smoke", {})
 
     print("\n" + "=" * 78)
     print(" Test Suite 結果整理")
     print("=" * 78)
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
-    print(f"latest 目錄 : {result['latest_dir']}")
+    print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"根目錄 bundle : {result['root_bundle_copy']}")
-    bundle_mode = "minimum set" if master.get("minimum_bundle_only", True) else "full set"
-    print(f"bundle 模式 : {bundle_mode}")
+    print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     if script_map:
