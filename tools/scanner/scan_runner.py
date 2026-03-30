@@ -9,10 +9,11 @@ from core.log_utils import write_issue_log
 from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, validate_cli_args
 from .reporting import print_scanner_start_banner, print_scanner_summary
 from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
-from .stock_processor import process_single_stock
 
 
 def run_daily_scanner(data_dir, params):
+    from .stock_processor import process_single_stock
+
     if not os.path.exists(data_dir):
         profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))

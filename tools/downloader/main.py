@@ -1,32 +1,45 @@
 import sys
 import os
-
-import pandas as pd
-import requests
+import importlib
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from tools.downloader import runtime as rt
-from tools.downloader.universe import get_market_last_date, get_or_update_universe
-from tools.downloader import sync as sync_runtime
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, validate_cli_args
 
-SAVE_DIR = rt.SAVE_DIR
-FINMIND_PRICE_DATASET = rt.FINMIND_PRICE_DATASET
-dl = rt.dl
-time = rt.time
+_RUNTIME_EXPORT_NAMES = {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}
+
+
+def _get_downloader_modules():
+    rt = importlib.import_module("tools.downloader.runtime")
+    sync_runtime = importlib.import_module("tools.downloader.sync")
+    universe_module = importlib.import_module("tools.downloader.universe")
+
+    return rt, sync_runtime, universe_module.get_market_last_date, universe_module.get_or_update_universe
 
 
 def smart_download_vip_data(tickers, market_last_date, verbose=True):
-    global SAVE_DIR, dl
-    rt.SAVE_DIR = SAVE_DIR
-    rt.dl = dl
+    global SAVE_DIR, dl, FINMIND_PRICE_DATASET, time
+
+    rt, sync_runtime, _get_market_last_date, _get_or_update_universe = _get_downloader_modules()
+    rt.SAVE_DIR = globals().get("SAVE_DIR", rt.SAVE_DIR)
+    rt.dl = globals().get("dl", rt.dl)
     result = sync_runtime.smart_download_vip_data(tickers, market_last_date, verbose=verbose)
     SAVE_DIR = rt.SAVE_DIR
+    FINMIND_PRICE_DATASET = rt.FINMIND_PRICE_DATASET
     dl = rt.dl
+    time = rt.time
     return result
+
+
+def __getattr__(name):
+    if name in _RUNTIME_EXPORT_NAMES:
+        rt, _sync_runtime, _get_market_last_date, _get_or_update_universe = _get_downloader_modules()
+        value = getattr(rt, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main(argv=None):
@@ -37,6 +50,15 @@ def main(argv=None):
         print("用法: python apps/smart_downloader.py")
         print("說明: 下載或更新完整資料集到預設 full dataset 路徑。")
         return 0
+
+    try:
+        import pandas as pd
+        import requests
+
+        rt, _sync_runtime, get_market_last_date, get_or_update_universe = _get_downloader_modules()
+    except (ImportError, ModuleNotFoundError) as exc:
+        print(f"❌ {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
     try:
         print(f"🤖 智能量化建庫系統 (VIP版) 啟動 | {rt.get_taipei_now().strftime('%Y-%m-%d %H:%M')}\n")

@@ -2,7 +2,6 @@ import os
 import sys
 import warnings
 
-import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if BASE_DIR not in sys.path:
@@ -20,7 +19,6 @@ from core.dataset_profiles import (
 from core.params_io import load_params_from_json
 from core.output_paths import build_output_dir
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, validate_cli_args
-from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -52,6 +50,8 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), 
 
 
 def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
+    from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
+
     return _run_debug_backtest(
         df=df,
         ticker=ticker,
@@ -75,6 +75,8 @@ def main(argv=None, environ=None):
         print("用法: python tools/debug/trade_log.py [--dataset reduced|full]")
         print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0
+
+    import pandas as pd
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(

@@ -20,15 +20,6 @@ from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_
 from core.output_paths import build_output_dir
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
-from tools.optimizer.runtime import (
-    create_optimizer_study,
-    ensure_optimizer_db_usable,
-    export_best_params_if_requested,
-    maybe_print_history_best,
-    print_resolved_trial_count,
-    prompt_existing_db_policy,
-    resolve_trial_count_or_exit,
-)
 from tools.optimizer.session import OptimizerSession, close_study_storage
 from tools.optimizer.study_utils import (
     build_optimizer_db_file_path,
@@ -114,6 +105,16 @@ def main(argv=None, environ=None):
         print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
         print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
         return 0
+    from tools.optimizer.runtime import (
+        create_optimizer_study,
+        ensure_optimizer_db_usable,
+        export_best_params_if_requested,
+        maybe_print_history_best,
+        print_resolved_trial_count,
+        prompt_existing_db_policy,
+        resolve_trial_count_or_exit,
+    )
+
     configure_optuna_logging()
     session = build_optimizer_session()
 

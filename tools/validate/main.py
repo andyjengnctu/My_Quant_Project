@@ -22,16 +22,6 @@ from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
 from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
-from tools.validate.checks import (
-    add_fail_result,
-    add_skip_result,
-    normalize_ticker_text,
-    is_insufficient_data_error,
-)
-from tools.validate.real_cases import run_real_ticker_scan
-from tools.validate.reporting import print_console_summary, write_issue_excel_report
-from tools.validate.synthetic_cases import run_synthetic_consistency_suite
-from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
@@ -131,8 +121,6 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         f.write("\n")
 
 def main(argv=None, environ=None):
-    import pandas as pd
-
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
@@ -141,6 +129,18 @@ def main(argv=None, environ=None):
         print("用法: python tools/validate/cli.py [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
+
+    import pandas as pd
+    from tools.validate.checks import (
+        add_fail_result,
+        add_skip_result,
+        normalize_ticker_text,
+        is_insufficient_data_error,
+    )
+    from tools.validate.real_cases import run_real_ticker_scan
+    from tools.validate.reporting import print_console_summary, write_issue_excel_report
+    from tools.validate.synthetic_cases import run_synthetic_consistency_suite
+    from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
     suite_run_dir = environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     output_dir = suite_run_dir if suite_run_dir else OUTPUT_DIR
