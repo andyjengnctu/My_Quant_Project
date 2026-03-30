@@ -302,6 +302,13 @@ def main(argv=None) -> int:
     write_csv(run_dir / "chain_summary.csv", summary_rows, fieldnames=fieldnames)
 
     failures = []
+    duplicate_issues = list(context.get("duplicate_issues", []))
+    skipped_rows = list(context.get("skipped", []))
+    if duplicate_issues:
+        failures.append(f"duplicate_csv_inputs={len(duplicate_issues)}")
+    if skipped_rows:
+        failures.append(f"skipped_tickers={len(skipped_rows)}")
+
     for row in summary_rows:
         if row["orderable_days"] > row["candidate_days"]:
             failures.append(f"{row['ticker']}: orderable_days > candidate_days")
@@ -320,6 +327,11 @@ def main(argv=None) -> int:
             "reserved_buy_fill_rate": round(float(portfolio_profile.get("reserved_buy_fill_rate", 0.0)), 4),
         },
         "ticker_count": len(all_tickers),
+        "csv_count": int(context.get("csv_count", 0)),
+        "duplicate_issue_count": len(duplicate_issues),
+        "skipped_ticker_count": len(skipped_rows),
+        "duplicate_issues": duplicate_issues,
+        "skipped": skipped_rows,
         "detail_count": len(summary_rows),
         "highlights": highlights,
         "failures": failures,

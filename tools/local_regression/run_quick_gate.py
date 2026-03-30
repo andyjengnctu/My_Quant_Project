@@ -81,12 +81,24 @@ def run_static_checks() -> List[Dict[str, Any]]:
     results.append(summarize_result("compileall", not pyc_compile_errors, detail=f"compileall 等價檢查 {len(py_files)} 個 Python 檔案", extra={"errors": pyc_compile_errors}))
 
     bare_except_hits = []
+    bare_except_scan_errors = []
     for path in py_files:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            bare_except_scan_errors.append(f"{path.relative_to(PROJECT_ROOT)}:{exc.lineno}: {exc.msg}")
+            continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler) and node.type is None:
                 bare_except_hits.append(f"{path.relative_to(PROJECT_ROOT)}:{node.lineno}")
-    results.append(summarize_result("bare_except_scan", not bare_except_hits, detail=f"裸 except 命中 {len(bare_except_hits)} 筆", extra={"hits": bare_except_hits}))
+    results.append(
+        summarize_result(
+            "bare_except_scan",
+            (not bare_except_hits) and (not bare_except_scan_errors),
+            detail=f"裸 except 命中 {len(bare_except_hits)} 筆；AST 解析失敗 {len(bare_except_scan_errors)} 筆",
+            extra={"hits": bare_except_hits, "ast_parse_errors": bare_except_scan_errors},
+        )
+    )
     return results
 
 

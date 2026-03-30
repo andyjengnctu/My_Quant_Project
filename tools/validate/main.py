@@ -94,13 +94,17 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
 
 
 
-def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir):
+def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok):
     run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     if not run_dir:
         return
 
+    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
+    if not real_data_coverage_ok:
+        fail_count += 1
+
     summary = {
-        "status": "PASS" if df_failed.empty else "FAIL",
+        "status": "PASS" if (df_failed.empty and real_data_coverage_ok) else "FAIL",
         "dataset": dataset_profile_key,
         "dataset_source": dataset_source,
         "data_dir": data_dir,
@@ -109,10 +113,11 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         "output_dir": output_dir,
         "elapsed_time_sec": round(float(elapsed_time), 3),
         "real_ticker_count": int(len(selected_tickers)),
+        "real_data_coverage_ok": bool(real_data_coverage_ok),
         "total_checks": int(len(df_results)),
         "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
         "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
-        "fail_count": int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0,
+        "fail_count": fail_count,
     }
     os.makedirs(run_dir, exist_ok=True)
     summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
@@ -227,6 +232,7 @@ def main(argv=None, environ=None):
             "synthetic": True,
         })
 
+    real_data_coverage_ok = real_data_unavailable_reason is None
     if real_data_unavailable_reason is not None:
         add_skip_result(
             all_results,
@@ -323,9 +329,10 @@ def main(argv=None, environ=None):
         df_results=df_results,
         df_failed=df_failed,
         output_dir=output_dir,
+        real_data_coverage_ok=real_data_coverage_ok,
     )
 
-    return 1 if not df_failed.empty else 0
+    return 1 if ((not df_failed.empty) or (not real_data_coverage_ok)) else 0
 
 
 if __name__ == "__main__":
