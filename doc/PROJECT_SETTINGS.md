@@ -14,7 +14,7 @@
 3. `apps/test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced`進行測試。
 4. 使用者未上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 僅依本輪提供之程式、ZIP、檔案做靜態檢查。
 5. 使用者有上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 才依該結果檢查本地動態回歸問題。
-6. 雖然`apps/test_suite.py` 限定在本地端測試，但assistant 有責任檢查 `test_suite.py` 是否完整覆蓋應驗項目。
+6. 雖然`apps/test_suite.py` 限定在本地端測試，但 assistant 有責任在必要時檢查 `test_suite.py` 是否完整覆蓋應驗項目。
 
 ## C. 回覆、交付與輸出
 
