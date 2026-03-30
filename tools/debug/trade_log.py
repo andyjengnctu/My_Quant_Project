@@ -17,7 +17,7 @@ from core.dataset_profiles import (
 )
 from core.params_io import load_params_from_json
 from core.output_paths import build_output_dir
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -73,7 +73,8 @@ def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        print("用法: python tools/debug/trade_log.py [--dataset reduced|full]")
+        program_name = resolve_cli_program_name(argv, "tools/debug/trade_log.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0
 

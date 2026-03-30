@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import has_help_flag, validate_cli_args
+from core.runtime_utils import has_help_flag, resolve_cli_program_name, validate_cli_args
 
 REQUIREMENTS_PATH = PROJECT_ROOT / "requirements" / "requirements.txt"
 _IMPORT_NAME_OVERRIDES = {
@@ -117,7 +117,8 @@ def main(argv=None) -> int:
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv)
     if has_help_flag(argv):
-        print("用法: python tools/validate/preflight_env.py")
+        program_name = resolve_cli_program_name(argv, "tools/validate/preflight_env.py")
+        print(f"用法: python {program_name}")
         print("說明: 只檢查目前 Python 環境是否已具備 requirements 所需套件；不自動安裝。")
         return 0
 

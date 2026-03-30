@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
-from core.runtime_utils import has_help_flag
+from core.runtime_utils import has_help_flag, resolve_cli_program_name
 from tools.validate.preflight_env import format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
@@ -481,7 +481,8 @@ def execute_all(
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv if argv is None else argv)
     if has_help_flag(args):
-        print("用法: python tools/local_regression/run_all.py [--only quick_gate,consistency,chain_checks,ml_smoke]")
+        program_name = resolve_cli_program_name(args, "tools/local_regression/run_all.py")
+        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke]")
         print("說明: 預設先跑完整 reduced regression；若完整入口已找出失敗步驟，可再用 --only 只重跑指定步驟。")
         return 0
 
@@ -489,7 +490,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parsed = _parse_cli_args(args)
     except ValueError as exc:
         print(f"參數錯誤: {exc}", file=sys.stderr)
-        print("用法: python tools/local_regression/run_all.py [--only quick_gate,consistency,chain_checks,ml_smoke]", file=sys.stderr)
+        program_name = resolve_cli_program_name(args, "tools/local_regression/run_all.py")
+        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke]", file=sys.stderr)
         return 2
 
     result = execute_all(selected_steps=parsed.get("only_steps"))
