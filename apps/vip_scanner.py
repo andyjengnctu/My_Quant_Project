@@ -5,12 +5,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import has_help_flag, validate_cli_args
+from core.runtime_utils import has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_LINES = (
-    "用法: python apps/vip_scanner.py [--dataset reduced|full]",
-    "說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。",
-)
+HELP_DESCRIPTION = "說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。"
 LAZY_EXPORTS = {
     "ensure_runtime_dirs",
     "is_insufficient_data_error",
@@ -25,8 +22,9 @@ def main(argv=None, env=None):
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        for line in HELP_LINES:
-            print(line)
+        program_name = resolve_cli_program_name(argv, "apps/vip_scanner.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
+        print(HELP_DESCRIPTION)
         return 0
 
     from tools.scanner import main as scanner_main

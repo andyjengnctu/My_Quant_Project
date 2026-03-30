@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, validate_cli_args
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STEP_LABELS = {
@@ -192,7 +192,8 @@ def main(argv=None) -> int:
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv)
     if has_help_flag(argv):
-        print("用法: python apps/test_suite.py")
+        program_name = resolve_cli_program_name(argv, "apps/test_suite.py")
+        print(f"用法: python {program_name}")
         print("說明: reduced 一鍵測試正式入口；先跑完整 regression，若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
 

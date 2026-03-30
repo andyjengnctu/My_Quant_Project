@@ -5,20 +5,18 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import has_help_flag, validate_cli_args
+from core.runtime_utils import has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_LINES = (
-    "用法: python apps/smart_downloader.py",
-    "說明: 下載或更新完整資料集到預設 full dataset 路徑。",
-)
+HELP_DESCRIPTION = "說明: 下載或更新完整資料集到預設 full dataset 路徑。"
 
 
 def main(argv=None):
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv)
     if has_help_flag(argv):
-        for line in HELP_LINES:
-            print(line)
+        program_name = resolve_cli_program_name(argv, "apps/smart_downloader.py")
+        print(f"用法: python {program_name}")
+        print(HELP_DESCRIPTION)
         return 0
 
     from tools.downloader import main as downloader_main
