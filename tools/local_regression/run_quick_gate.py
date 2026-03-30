@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-import compileall
+import py_compile
 import shutil
 import sys
 from contextlib import contextmanager
@@ -71,8 +71,13 @@ def run_static_checks() -> List[Dict[str, Any]]:
             py_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}:{exc.lineno}: {exc.msg}")
     results.append(summarize_result("py_compile", not py_compile_errors, detail=f"檢查 {len(py_files)} 個 Python 檔案", extra={"errors": py_compile_errors}))
 
-    compileall_ok = compileall.compile_dir(str(PROJECT_ROOT), quiet=1, force=True, maxlevels=10)
-    results.append(summarize_result("compileall", compileall_ok, detail="compileall 全樹編譯"))
+    pyc_compile_errors = []
+    for path in py_files:
+        try:
+            py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {exc.msg}")
+    results.append(summarize_result("compileall", not pyc_compile_errors, detail=f"compileall 等價檢查 {len(py_files)} 個 Python 檔案", extra={"errors": pyc_compile_errors}))
 
     bare_except_hits = []
     for path in py_files:

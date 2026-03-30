@@ -6,12 +6,10 @@ from core.runtime_utils import get_taipei_now
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_LOG_DIR = os.path.join(PROJECT_ROOT, "outputs")
-
 
 def resolve_log_dir(log_dir=None):
     if not log_dir:
-        return DEFAULT_LOG_DIR
+        raise ValueError("log_dir 必填，避免把檔案直接輸出到 outputs/ 根目錄")
     if os.path.isabs(log_dir):
         return log_dir
     return os.path.join(PROJECT_ROOT, log_dir)
@@ -43,7 +41,11 @@ def append_issue_log(log_path, lines):
     if not os.path.isabs(resolved_log_path):
         resolved_log_path = os.path.join(PROJECT_ROOT, resolved_log_path)
 
-    os.makedirs(os.path.dirname(resolved_log_path) or DEFAULT_LOG_DIR, exist_ok=True)
+    resolved_log_dir = os.path.dirname(resolved_log_path)
+    if not resolved_log_dir:
+        raise ValueError("log_path 必須包含目錄，避免把檔案直接輸出到專案根目錄")
+
+    os.makedirs(resolved_log_dir, exist_ok=True)
     with open(resolved_log_path, "a", encoding="utf-8") as f:
         for line in lines:
             f.write(f"{line}\n")

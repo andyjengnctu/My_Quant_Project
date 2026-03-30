@@ -20,6 +20,46 @@ LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
 DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
+MANIFEST_DEFAULTS: Dict[str, Any] = {
+    "benchmark_ticker": "0050",
+    "bundle_name": "to_chatgpt_bundle.zip",
+    "dataset": "reduced",
+    "detail_tools_keep_last_n": 5,
+    "detail_tools_max_age_days": 14,
+    "local_regression_keep_last_n": 20,
+    "local_regression_max_age_days": 30,
+    "ml_smoke_timeout_sec": 300,
+    "ml_smoke_trials": 1,
+    "portfolio_enable_rotation": False,
+    "portfolio_max_positions": 10,
+    "portfolio_start_year": 2015,
+    "retention_enabled": True,
+    "subprocess_timeout_sec": 300,
+    "summary_tools_keep_last_n": 10,
+    "summary_tools_max_age_days": 30,
+}
+MANIFEST_INT_FIELDS = {
+    "detail_tools_keep_last_n",
+    "detail_tools_max_age_days",
+    "local_regression_keep_last_n",
+    "local_regression_max_age_days",
+    "ml_smoke_timeout_sec",
+    "ml_smoke_trials",
+    "portfolio_max_positions",
+    "portfolio_start_year",
+    "subprocess_timeout_sec",
+    "summary_tools_keep_last_n",
+    "summary_tools_max_age_days",
+}
+MANIFEST_BOOL_FIELDS = {
+    "portfolio_enable_rotation",
+    "retention_enabled",
+}
+MANIFEST_STR_FIELDS = {
+    "benchmark_ticker",
+    "bundle_name",
+    "dataset",
+}
 
 
 class LocalRegressionError(RuntimeError):
@@ -71,27 +111,38 @@ def write_csv(path: Path, rows: Iterable[Dict[str, Any]], fieldnames: List[str])
 def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     manifest_path = DEFAULT_MANIFEST_PATH if path is None else Path(path)
     payload = read_json(manifest_path)
-    dataset = str(payload.get("dataset", "reduced")).strip().lower()
+    if not isinstance(payload, dict):
+        raise LocalRegressionError(f"manifest 根層必須是 object/dict，收到: {type(payload).__name__}")
+
+    unknown_keys = sorted(set(payload) - set(MANIFEST_DEFAULTS))
+    if unknown_keys:
+        raise LocalRegressionError(f"manifest 含未知欄位: {unknown_keys}")
+
+    merged: Dict[str, Any] = {**MANIFEST_DEFAULTS, **payload}
+    for field_name in sorted(MANIFEST_INT_FIELDS):
+        raw_value = merged[field_name]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise LocalRegressionError(f"manifest 欄位 {field_name} 需要 int，收到: {raw_value!r}")
+        if raw_value < 0:
+            raise LocalRegressionError(f"manifest 欄位 {field_name} 需要 >= 0，收到: {raw_value!r}")
+
+    for field_name in sorted(MANIFEST_BOOL_FIELDS):
+        raw_value = merged[field_name]
+        if not isinstance(raw_value, bool):
+            raise LocalRegressionError(f"manifest 欄位 {field_name} 需要 bool，收到: {raw_value!r}")
+
+    for field_name in sorted(MANIFEST_STR_FIELDS):
+        raw_value = str(merged[field_name]).strip()
+        if raw_value == "":
+            raise LocalRegressionError(f"manifest 欄位 {field_name} 不可空白")
+        merged[field_name] = raw_value
+
+    dataset = merged["dataset"].lower()
     if dataset != "reduced":
         raise LocalRegressionError(f"local regression 只支援 reduced，收到: {dataset}")
-    payload.setdefault("portfolio_start_year", 2015)
-    payload.setdefault("portfolio_max_positions", 10)
-    payload.setdefault("portfolio_enable_rotation", False)
-    payload.setdefault("benchmark_ticker", "0050")
-    payload.setdefault("ml_smoke_trials", 1)
-    payload.setdefault("ml_smoke_timeout_sec", 300)
-    payload.setdefault("subprocess_timeout_sec", 300)
-    payload.setdefault("bundle_name", "to_chatgpt_bundle.zip")
-    payload.setdefault("retention_enabled", True)
-    payload.setdefault("local_regression_keep_last_n", 20)
-    payload.setdefault("local_regression_max_age_days", 30)
-    payload.setdefault("summary_tools_keep_last_n", 10)
-    payload.setdefault("summary_tools_max_age_days", 30)
-    payload.setdefault("detail_tools_keep_last_n", 5)
-    payload.setdefault("detail_tools_max_age_days", 14)
-    payload["dataset"] = dataset
-    payload["manifest_path"] = str(manifest_path)
-    return payload
+    merged["dataset"] = dataset
+    merged["manifest_path"] = str(manifest_path)
+    return merged
 
 
 def build_python_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
