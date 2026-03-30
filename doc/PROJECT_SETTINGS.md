@@ -11,7 +11,7 @@
 
 1. 檢查必須一次找出所有問題，包含程式、工具、統計口徑、交易限制、初始化順序、錯誤路徑等。
 2. `apps/test_suite.py` 限定在本地端測試，測試資料固定使用 `data/tw_stock_data_vip_reduced`，其產出的 bundle 為本地動態驗證主要依據。
-3. 使用者有上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 依該結果檢查本地動態回歸問題。
+3. 如使用者有上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 須依該結果檢查本地動態回歸問題。
 4. 雖然`apps/test_suite.py` 限定在本地端測試，但assistant 有責任檢查 `test_suite.py` 是否完整覆蓋應驗項目。
 
 ## C. 回覆、交付與輸出
