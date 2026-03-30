@@ -3,11 +3,14 @@ import sys
 import warnings
 import time
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int, validate_cli_args
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -24,8 +27,8 @@ def main(argv=None, env=None):
         print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整，路徑為 /data/tw_stock_data_vip。")
         return 0
 
-    from .reporting import export_portfolio_reports, print_yearly_return_report
-    from .runtime import BEST_PARAMS_PATH, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
+    from tools.portfolio_sim.runtime import BEST_PARAMS_PATH, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
