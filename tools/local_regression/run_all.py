@@ -358,7 +358,73 @@ def execute_all(
         dataset_info: Dict[str, Any] = {}
         next_major_index = 2
         if include_dataset:
-            dataset_info = ensure_reduced_dataset()
+            try:
+                dataset_info = ensure_reduced_dataset()
+            except Exception as exc:
+                dataset_prepare_summary = {
+                    "status": "FAIL",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                }
+                write_json(run_dir / "dataset_prepare_summary.json", dataset_prepare_summary)
+                write_text(
+                    run_dir / "dataset_prepare_summary.txt",
+                    f"dataset_prepare failed: {type(exc).__name__}: {exc}\n",
+                )
+                preflight_payload = read_json_if_exists(run_dir / "preflight_summary.json")
+                master_summary = {
+                    "overall_status": "FAIL",
+                    "dataset": manifest["dataset"],
+                    "dataset_info": {},
+                    "timestamp": taipei_now().isoformat(),
+                    "git_commit": resolve_git_commit(),
+                    "scripts": [],
+                    "selected_steps": selected_step_names,
+                    "failures": 1,
+                    "preflight": preflight_payload,
+                    "dataset_prepare": dataset_prepare_summary,
+                    "bundle_mode": "dataset_prepare_failed",
+                    "failed_step_names": ["dataset_prepare"],
+                    "suggested_rerun_command": "",
+                }
+                write_json(run_dir / "master_summary.json", master_summary)
+                write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
+                bundle_paths = [
+                    run_dir / "master_summary.json",
+                    run_dir / "preflight_summary.json",
+                    run_dir / "preflight_summary.txt",
+                    run_dir / "dataset_prepare_summary.json",
+                    run_dir / "dataset_prepare_summary.txt",
+                    run_dir / "artifacts_manifest.json",
+                ]
+                bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
+                archived_bundle = archive_bundle_history(bundle_path)
+                root_bundle_copy = publish_root_bundle_copy(archived_bundle)
+                retention = _apply_output_retention(manifest)
+                result = {
+                    "overall_status": "FAIL",
+                    "dataset": manifest["dataset"],
+                    "bundle": str(root_bundle_copy),
+                    "archived_bundle": str(archived_bundle),
+                    "root_bundle_copy": str(root_bundle_copy),
+                    "bundle_mode": "dataset_prepare_failed",
+                    "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()],
+                    "scripts": [],
+                    "step_payloads": {"preflight": preflight_payload, "dataset_prepare": dataset_prepare_summary},
+                    "failures": 1,
+                    "failed_step_names": ["dataset_prepare"],
+                    "retention": {
+                        "removed_count": retention.get("removed_count", 0),
+                        "removed_bytes": retention.get("removed_bytes", 0),
+                    },
+                    "major_index": next_major_index,
+                    "major_total": major_total,
+                    "preflight": preflight_summary,
+                    "selected_steps": selected_step_names,
+                    "suggested_rerun_command": "",
+                }
+                _emit_progress(progress_callback, "done", result)
+                return result
             _emit_progress(progress_callback, "dataset_ready", {
                 "major_index": next_major_index,
                 "major_total": major_total,

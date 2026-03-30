@@ -20,6 +20,7 @@ LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
 DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
+REDUCED_DATASET_STAMP = REDUCED_DATASET_DIR / ".dataset_source.json"
 MANIFEST_DEFAULTS: Dict[str, Any] = {
     "benchmark_ticker": "0050",
     "bundle_name": "to_chatgpt_bundle.zip",
@@ -287,6 +288,8 @@ def select_bundle_paths(run_dir: Path, *, overall_ok: bool) -> List[Path]:
     if overall_ok:
         preferred = [
             run_dir / "master_summary.json",
+            run_dir / "preflight_summary.json",
+            run_dir / "preflight_summary.txt",
             run_dir / "quick_gate_summary.json",
             run_dir / "validate_consistency_summary.json",
             run_dir / "chain_summary.json",
@@ -345,32 +348,114 @@ def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
     return {"artifact_count": len(artifacts), "artifacts": artifacts}
 
 
-def ensure_reduced_dataset() -> Dict[str, Any]:
-    if REDUCED_DATASET_DIR.is_dir() and any(REDUCED_DATASET_DIR.glob("*.csv")):
-        return {
-            "dataset_dir": str(REDUCED_DATASET_DIR),
-            "source": "existing",
-            "csv_count": sum(1 for _ in REDUCED_DATASET_DIR.glob("*.csv")),
-        }
-
+def _resolve_dataset_zip_path() -> Optional[Path]:
     candidate_paths: List[Path] = []
     env_zip = os.environ.get("V16_PROJECT_DATA_ZIP", "").strip()
     if env_zip:
         candidate_paths.append(Path(env_zip))
     candidate_paths.append(PROJECT_ROOT / "data.zip")
     candidate_paths.append(Path("/mnt/data/data.zip"))
-    zip_path = next((path for path in candidate_paths if path.is_file()), None)
+    return next((path for path in candidate_paths if path.is_file()), None)
+
+
+def _collect_reduced_zip_members(zip_path: Path) -> List[zipfile.ZipInfo]:
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        members = [m for m in zf.infolist() if not m.is_dir() and "tw_stock_data_vip_reduced/" in m.filename.replace("\\", "/")]
+    if not members:
+        raise FileNotFoundError(f"{zip_path} 內找不到 tw_stock_data_vip_reduced")
+    return members
+
+
+def _build_dataset_stamp(zip_path: Path, members: List[zipfile.ZipInfo]) -> Dict[str, Any]:
+    stat = zip_path.stat()
+    csv_members: List[str] = []
+    for member in members:
+        parts = [part for part in member.filename.replace("\\", "/").split("/") if part]
+        dataset_idx = parts.index("tw_stock_data_vip_reduced")
+        relative_parts = parts[dataset_idx + 1 :]
+        if relative_parts and relative_parts[-1].lower().endswith(".csv"):
+            csv_members.append("/".join(relative_parts))
+    csv_members = sorted(csv_members)
+    return {
+        "zip_path": str(zip_path.resolve()),
+        "zip_size": int(stat.st_size),
+        "zip_mtime_ns": int(stat.st_mtime_ns),
+        "csv_members": csv_members,
+        "csv_count": len(csv_members),
+    }
+
+
+def _read_dataset_stamp() -> Dict[str, Any]:
+    if not REDUCED_DATASET_STAMP.exists():
+        return {}
+    try:
+        payload = read_json(REDUCED_DATASET_STAMP)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _current_dataset_csv_members() -> List[str]:
+    if not REDUCED_DATASET_DIR.is_dir():
+        return []
+    return sorted(str(path.relative_to(REDUCED_DATASET_DIR)).replace("\\", "/") for path in REDUCED_DATASET_DIR.rglob("*.csv"))
+
+
+def _is_current_dataset_usable(*, zip_path: Optional[Path]) -> bool:
+    current_members = _current_dataset_csv_members()
+    if not current_members:
+        return False
     if zip_path is None:
+        return True
+    stamp = _read_dataset_stamp()
+    if not stamp:
+        return False
+    try:
+        expected_members = _build_dataset_stamp(zip_path, _collect_reduced_zip_members(zip_path))
+    except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile):
+        return False
+    return (
+        stamp.get("zip_path") == expected_members["zip_path"]
+        and int(stamp.get("zip_size", -1)) == expected_members["zip_size"]
+        and int(stamp.get("zip_mtime_ns", -1)) == expected_members["zip_mtime_ns"]
+        and list(stamp.get("csv_members", [])) == expected_members["csv_members"]
+        and current_members == expected_members["csv_members"]
+    )
+
+
+def ensure_reduced_dataset() -> Dict[str, Any]:
+    zip_path = _resolve_dataset_zip_path()
+    if _is_current_dataset_usable(zip_path=zip_path):
+        stamp = _read_dataset_stamp()
+        return {
+            "dataset_dir": str(REDUCED_DATASET_DIR),
+            "source": stamp.get("zip_path", "existing" if zip_path is None else str(zip_path)),
+            "csv_count": len(_current_dataset_csv_members()),
+            "reused_existing": True,
+        }
+
+    if zip_path is None:
+        existing_members = _current_dataset_csv_members()
+        if existing_members:
+            return {
+                "dataset_dir": str(REDUCED_DATASET_DIR),
+                "source": "existing_without_zip",
+                "csv_count": len(existing_members),
+                "reused_existing": True,
+            }
         raise FileNotFoundError(
             f"找不到 data.zip；請把本投資專案的 data.zip 放到 {PROJECT_ROOT / 'data.zip'}，或設定 V16_PROJECT_DATA_ZIP。"
         )
 
+    members = _collect_reduced_zip_members(zip_path)
+    dataset_stamp = _build_dataset_stamp(zip_path, members)
+
     ensure_dir(PROJECT_ROOT / "data")
+    if REDUCED_DATASET_DIR.exists():
+        shutil.rmtree(REDUCED_DATASET_DIR, ignore_errors=True)
+
     extracted_files = 0
     with zipfile.ZipFile(zip_path, "r") as zf:
-        members = [m for m in zf.infolist() if not m.is_dir() and "tw_stock_data_vip_reduced/" in m.filename.replace("\\", "/")]
-        if not members:
-            raise FileNotFoundError(f"{zip_path} 內找不到 tw_stock_data_vip_reduced")
         for member in members:
             parts = [part for part in member.filename.replace("\\", "/").split("/") if part]
             dataset_idx = parts.index("tw_stock_data_vip_reduced")
@@ -381,14 +466,21 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
                 shutil.copyfileobj(src, dst)
             extracted_files += 1
 
-    if not REDUCED_DATASET_DIR.is_dir() or not any(REDUCED_DATASET_DIR.glob("*.csv")):
+    actual_members = _current_dataset_csv_members()
+    if not actual_members:
         raise FileNotFoundError(f"自動解壓後仍找不到 {REDUCED_DATASET_DIR}")
+    if actual_members != dataset_stamp["csv_members"]:
+        raise RuntimeError(
+            f"reduced 資料集解壓後檔案清單不一致；預期 {len(dataset_stamp['csv_members'])} 檔，實際 {len(actual_members)} 檔"
+        )
 
+    write_json(REDUCED_DATASET_STAMP, dataset_stamp)
     return {
         "dataset_dir": str(REDUCED_DATASET_DIR),
         "source": str(zip_path),
         "extracted_files": extracted_files,
-        "csv_count": sum(1 for _ in REDUCED_DATASET_DIR.glob("*.csv")),
+        "csv_count": len(actual_members),
+        "reused_existing": False,
     }
 
 

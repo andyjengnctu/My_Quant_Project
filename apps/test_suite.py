@@ -133,6 +133,12 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             f"preflight   : {preflight.get('status', 'N/A')} | "
             f"{preflight.get('duration_sec', 0.0):.2f}s | failed_packages={failed_text}"
         )
+    dataset_prepare = step_payloads.get("dataset_prepare", {})
+    if dataset_prepare:
+        print(
+            f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
+            f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
+        )
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
@@ -179,6 +185,8 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
 
     if result["overall_status"] != "PASS":
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
+        if not failed_names:
+            failed_names = [str(name) for name in result.get("failed_step_names", []) if str(name).strip()]
         if failed_names:
             print(f"\n失敗步驟 : {', '.join(failed_names)}")
         rerun_command = result.get("suggested_rerun_command", "")
