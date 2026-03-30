@@ -135,10 +135,16 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         )
     dataset_prepare = step_payloads.get("dataset_prepare", {})
     if dataset_prepare:
-        print(
-            f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
-            f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
-        )
+        if dataset_prepare.get("status") == "PASS":
+            print(
+                f"dataset prep: PASS | csv_count={dataset_prepare.get('csv_count', 0)} | "
+                f"source={dataset_prepare.get('source', '')}"
+            )
+        else:
+            print(
+                f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
+                f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
+            )
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")

@@ -290,6 +290,8 @@ def select_bundle_paths(run_dir: Path, *, overall_ok: bool) -> List[Path]:
             run_dir / "master_summary.json",
             run_dir / "preflight_summary.json",
             run_dir / "preflight_summary.txt",
+            run_dir / "dataset_prepare_summary.json",
+            run_dir / "dataset_prepare_summary.txt",
             run_dir / "quick_gate_summary.json",
             run_dir / "validate_consistency_summary.json",
             run_dir / "chain_summary.json",

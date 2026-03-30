@@ -114,6 +114,7 @@ def _suggest_rerun_command(failed_steps: List[str]) -> str:
 def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
     return {
         "preflight": read_json_if_exists(run_dir / "preflight_summary.json"),
+        "dataset_prepare": read_json_if_exists(run_dir / "dataset_prepare_summary.json"),
         "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
         "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
         "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
@@ -198,16 +199,39 @@ def _run_preflight(run_dir: Path) -> Dict[str, Any]:
     started = time.time()
     payload = run_preflight()
     duration_sec = round(time.time() - started, 3)
-    write_json(run_dir / "preflight_summary.json", payload)
-    write_text(run_dir / "preflight_summary.txt", format_preflight_summary(payload) + "\n")
+    payload_with_duration = {**payload, "duration_sec": duration_sec}
+    write_json(run_dir / "preflight_summary.json", payload_with_duration)
+    write_text(run_dir / "preflight_summary.txt", format_preflight_summary(payload_with_duration) + "\n")
     return {
-        "status": payload["status"],
+        "status": payload_with_duration["status"],
         "duration_sec": duration_sec,
-        "failed_packages": payload.get("failed_packages", []),
-        "python_executable": payload.get("python_executable", sys.executable),
+        "failed_packages": payload_with_duration.get("failed_packages", []),
+        "python_executable": payload_with_duration.get("python_executable", sys.executable),
         "summary_file": "preflight_summary.json",
         "summary_text_file": "preflight_summary.txt",
     }
+
+
+def _write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    summary = dict(payload)
+    write_json(run_dir / "dataset_prepare_summary.json", summary)
+    if summary.get("status") == "PASS":
+        lines = [
+            f"status      : {summary.get('status', 'PASS')}",
+            f"dataset_dir : {summary.get('dataset_dir', '')}",
+            f"source      : {summary.get('source', '')}",
+            f"csv_count   : {summary.get('csv_count', 0)}",
+            f"reused      : {summary.get('reused_existing', False)}",
+        ]
+        if "extracted_files" in summary:
+            lines.append(f"extracted   : {summary.get('extracted_files', 0)}")
+        write_text(run_dir / "dataset_prepare_summary.txt", "\n".join(lines) + "\n")
+    else:
+        write_text(
+            run_dir / "dataset_prepare_summary.txt",
+            f"dataset_prepare failed: {summary.get('error_type', '')}: {summary.get('error_message', '')}\n",
+        )
+    return summary
 
 
 def _run_script(
@@ -319,13 +343,15 @@ def execute_all(
                 "suggested_rerun_command": "",
             }
             write_json(run_dir / "master_summary.json", master_summary)
-            write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
             bundle_paths = [
                 run_dir / "master_summary.json",
                 run_dir / "preflight_summary.json",
                 run_dir / "preflight_summary.txt",
                 run_dir / "artifacts_manifest.json",
             ]
+            master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()]
+            write_json(run_dir / "master_summary.json", master_summary)
+            write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
             bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
             archived_bundle = archive_bundle_history(bundle_path)
             root_bundle_copy = publish_root_bundle_copy(archived_bundle)
@@ -360,16 +386,21 @@ def execute_all(
         if include_dataset:
             try:
                 dataset_info = ensure_reduced_dataset()
+                _write_dataset_prepare_summary(
+                    run_dir,
+                    {
+                        "status": "PASS",
+                        **dataset_info,
+                    },
+                )
             except Exception as exc:
-                dataset_prepare_summary = {
-                    "status": "FAIL",
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                }
-                write_json(run_dir / "dataset_prepare_summary.json", dataset_prepare_summary)
-                write_text(
-                    run_dir / "dataset_prepare_summary.txt",
-                    f"dataset_prepare failed: {type(exc).__name__}: {exc}\n",
+                dataset_prepare_summary = _write_dataset_prepare_summary(
+                    run_dir,
+                    {
+                        "status": "FAIL",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
                 )
                 preflight_payload = read_json_if_exists(run_dir / "preflight_summary.json")
                 master_summary = {
@@ -388,7 +419,6 @@ def execute_all(
                     "suggested_rerun_command": "",
                 }
                 write_json(run_dir / "master_summary.json", master_summary)
-                write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
                 bundle_paths = [
                     run_dir / "master_summary.json",
                     run_dir / "preflight_summary.json",
@@ -397,6 +427,9 @@ def execute_all(
                     run_dir / "dataset_prepare_summary.txt",
                     run_dir / "artifacts_manifest.json",
                 ]
+                master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()]
+                write_json(run_dir / "master_summary.json", master_summary)
+                write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
                 bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
                 archived_bundle = archive_bundle_history(bundle_path)
                 root_bundle_copy = publish_root_bundle_copy(archived_bundle)
@@ -512,6 +545,7 @@ def execute_all(
             "selected_steps": selected_step_names,
             "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
             "preflight": step_payloads["preflight"],
+            "dataset_prepare": step_payloads["dataset_prepare"],
         }
         failed_step_names = [item["name"] for item in script_summaries if item["status"] != "PASS"]
         suggested_rerun_command = _suggest_rerun_command(failed_step_names)
