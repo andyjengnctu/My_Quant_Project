@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
+from core.runtime_utils import has_help_flag
 from tools.validate.preflight_env import format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
@@ -39,9 +40,85 @@ SCRIPT_ORDER = [
     ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json", 900),
     ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json", 900),
 ]
-
-MAJOR_STEP_COUNT = 3 + len(SCRIPT_ORDER)
+STEP_NAMES = [name for name, *_ in SCRIPT_ORDER]
+DATASET_REQUIRED_STEPS = {"consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
+
+
+def _normalize_selected_steps(selected_steps: Optional[List[str]]) -> List[str]:
+    if not selected_steps:
+        return list(STEP_NAMES)
+
+    normalized: List[str] = []
+    seen = set()
+    invalid: List[str] = []
+    for raw_name in selected_steps:
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        if name not in STEP_NAMES:
+            invalid.append(name)
+            continue
+        if name in seen:
+            continue
+        normalized.append(name)
+        seen.add(name)
+
+    if invalid:
+        valid_text = ", ".join(STEP_NAMES)
+        raise ValueError(f"--only 只接受 {valid_text}，收到: {', '.join(invalid)}")
+    if not normalized:
+        raise ValueError("--only 不可為空；可接受的步驟: " + ", ".join(STEP_NAMES))
+    return normalized
+
+
+def _parse_cli_args(argv: Optional[List[str]] = None) -> Dict[str, Any]:
+    args = list(sys.argv[1:] if argv is None else argv[1:])
+    if not args:
+        return {"only_steps": None}
+
+    only_steps: Optional[List[str]] = None
+    index = 0
+    while index < len(args):
+        arg = str(args[index]).strip()
+        if arg in {"-h", "--help"}:
+            return {"help": True}
+        if arg == "--only":
+            if index + 1 >= len(args):
+                raise ValueError("--only 缺少值；例: --only quick_gate,consistency")
+            raw_value = str(args[index + 1]).strip()
+            only_steps = [item.strip() for item in raw_value.split(",")]
+            index += 2
+            continue
+        if arg.startswith("--only="):
+            raw_value = arg.split("=", 1)[1].strip()
+            only_steps = [item.strip() for item in raw_value.split(",")]
+            index += 1
+            continue
+        raise ValueError(f"不支援的參數: {arg}")
+
+    return {"only_steps": _normalize_selected_steps(only_steps)}
+
+
+def _major_step_total(*, selected_steps: List[str], include_dataset: bool) -> int:
+    return 1 + (1 if include_dataset else 0) + len(selected_steps) + 1
+
+
+def _suggest_rerun_command(failed_steps: List[str]) -> str:
+    if not failed_steps:
+        return ""
+    joined = ",".join(failed_steps)
+    return f"python tools/local_regression/run_all.py --only {joined}"
+
+
+def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
+    return {
+        "preflight": read_json_if_exists(run_dir / "preflight_summary.json"),
+        "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
+        "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
+        "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
+        "ml_smoke": read_json_if_exists(run_dir / "ml_smoke_summary.json"),
+    }
 
 
 def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, payload: Dict[str, Any]) -> None:
@@ -142,6 +219,7 @@ def _run_script(
     log_path: Path,
     progress_callback: Optional[ProgressCallback],
     major_index: int,
+    major_total: int,
 ) -> Dict[str, Any]:
     started = time.time()
     process = None
@@ -178,7 +256,7 @@ def _run_script(
                 _emit_progress(progress_callback, "step_progress", {
                     "name": name,
                     "major_index": major_index,
-                    "major_total": MAJOR_STEP_COUNT,
+                    "major_total": major_total,
                     "elapsed_sec": elapsed_sec,
                     "timeout_sec": timeout_sec,
                 })
@@ -197,16 +275,22 @@ def _run_script(
     }
 
 
-def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[str, Any]:
+def execute_all(
+    progress_callback: Optional[ProgressCallback] = None,
+    selected_steps: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     manifest = load_manifest()
     run_dir = create_staging_run_dir()
     shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
+    selected_step_names = _normalize_selected_steps(selected_steps)
+    include_dataset = any(name in DATASET_REQUIRED_STEPS for name in selected_step_names)
+    major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
 
     try:
         _emit_progress(progress_callback, "step_start", {
             "name": "preflight",
             "major_index": 1,
-            "major_total": MAJOR_STEP_COUNT,
+            "major_total": major_total,
             "timeout_sec": 0,
         })
         preflight_summary = _run_preflight(run_dir)
@@ -215,7 +299,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "status": preflight_summary["status"],
             "duration_sec": preflight_summary["duration_sec"],
             "major_index": 1,
-            "major_total": MAJOR_STEP_COUNT,
+            "major_total": major_total,
         })
 
         if preflight_summary["status"] != "PASS":
@@ -227,9 +311,12 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
                 "timestamp": taipei_now().isoformat(),
                 "git_commit": resolve_git_commit(),
                 "scripts": [],
+                "selected_steps": selected_step_names,
                 "failures": 1,
                 "preflight": preflight_payload,
                 "bundle_mode": "preflight_failed",
+                "failed_step_names": [],
+                "suggested_rerun_command": "",
             }
             write_json(run_dir / "master_summary.json", master_summary)
             write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
@@ -254,32 +341,40 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
                 "scripts": [],
                 "step_payloads": {"preflight": preflight_payload},
                 "failures": 1,
+                "failed_step_names": [],
                 "retention": {
                     "removed_count": retention.get("removed_count", 0),
                     "removed_bytes": retention.get("removed_bytes", 0),
                 },
                 "major_index": 1,
-                "major_total": MAJOR_STEP_COUNT,
+                "major_total": major_total,
                 "preflight": preflight_summary,
+                "selected_steps": selected_step_names,
+                "suggested_rerun_command": "",
             }
             _emit_progress(progress_callback, "done", result)
             return result
 
-        dataset_info = ensure_reduced_dataset()
-        _emit_progress(progress_callback, "dataset_ready", {
-            "major_index": 2,
-            "major_total": MAJOR_STEP_COUNT,
-            "dataset_info": dataset_info,
-            "label": "準備 reduced 測試資料",
-        })
+        dataset_info: Dict[str, Any] = {}
+        next_major_index = 2
+        if include_dataset:
+            dataset_info = ensure_reduced_dataset()
+            _emit_progress(progress_callback, "dataset_ready", {
+                "major_index": next_major_index,
+                "major_total": major_total,
+                "dataset_info": dataset_info,
+                "label": "準備 reduced 測試資料",
+            })
+            next_major_index += 1
 
+        selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
         script_summaries: List[Dict[str, Any]] = []
         overall_ok = True
-        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(SCRIPT_ORDER, start=3):
+        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(selected_script_order, start=next_major_index):
             _emit_progress(progress_callback, "step_start", {
                 "name": name,
                 "major_index": script_offset,
-                "major_total": MAJOR_STEP_COUNT,
+                "major_total": major_total,
                 "timeout_sec": timeout_sec,
             })
             log_path = run_dir / f"{name}.log"
@@ -291,6 +386,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
                 log_path=log_path,
                 progress_callback=progress_callback,
                 major_index=script_offset,
+                major_total=major_total,
             )
 
             summary_path = run_dir / summary_name
@@ -312,23 +408,17 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             _emit_progress(progress_callback, "step_finish", {
                 **script_summary,
                 "major_index": script_offset,
-                "major_total": MAJOR_STEP_COUNT,
+                "major_total": major_total,
             })
 
         _emit_progress(progress_callback, "finalizing", {
-            "major_index": MAJOR_STEP_COUNT,
-            "major_total": MAJOR_STEP_COUNT,
+            "major_index": major_total,
+            "major_total": major_total,
             "label": "整理輸出與打包 bundle",
         })
 
         write_text(run_dir / "console_tail.txt", gather_recent_console_tail(run_dir) + "\n")
-        step_payloads = {
-            "preflight": read_json_if_exists(run_dir / "preflight_summary.json"),
-            "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
-            "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
-            "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
-            "ml_smoke": read_json_if_exists(run_dir / "ml_smoke_summary.json"),
-        }
+        step_payloads = _read_step_payloads(run_dir)
         master_summary = {
             "overall_status": "PASS" if overall_ok else "FAIL",
             "dataset": manifest["dataset"],
@@ -336,9 +426,13 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "timestamp": taipei_now().isoformat(),
             "git_commit": resolve_git_commit(),
             "scripts": script_summaries,
+            "selected_steps": selected_step_names,
             "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
             "preflight": step_payloads["preflight"],
         }
+        failed_step_names = [item["name"] for item in script_summaries if item["status"] != "PASS"]
+        suggested_rerun_command = _suggest_rerun_command(failed_step_names)
+
         write_json(run_dir / "master_summary.json", master_summary)
         write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
 
@@ -346,6 +440,8 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
         bundle_paths = select_bundle_paths(run_dir, overall_ok=overall_ok)
         master_summary["bundle_mode"] = bundle_mode
         master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths]
+        master_summary["failed_step_names"] = failed_step_names
+        master_summary["suggested_rerun_command"] = suggested_rerun_command
         write_json(run_dir / "master_summary.json", master_summary)
         write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
 
@@ -369,17 +465,34 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
                 "removed_count": retention.get("removed_count", 0),
                 "removed_bytes": retention.get("removed_bytes", 0),
             },
-            "major_index": MAJOR_STEP_COUNT,
-            "major_total": MAJOR_STEP_COUNT,
+            "major_index": major_total,
+            "major_total": major_total,
             "preflight": preflight_summary,
+            "selected_steps": selected_step_names,
+            "failed_step_names": failed_step_names,
+            "suggested_rerun_command": suggested_rerun_command,
         }
         _emit_progress(progress_callback, "done", result)
         return result
     finally:
         cleanup_staging_dir(run_dir)
 
-def main() -> int:
-    result = execute_all()
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = list(sys.argv if argv is None else argv)
+    if has_help_flag(args):
+        print("用法: python tools/local_regression/run_all.py [--only quick_gate,consistency,chain_checks,ml_smoke]")
+        print("說明: 預設先跑完整 reduced regression；若完整入口已找出失敗步驟，可再用 --only 只重跑指定步驟。")
+        return 0
+
+    try:
+        parsed = _parse_cli_args(args)
+    except ValueError as exc:
+        print(f"參數錯誤: {exc}", file=sys.stderr)
+        print("用法: python tools/local_regression/run_all.py [--only quick_gate,consistency,chain_checks,ml_smoke]", file=sys.stderr)
+        return 2
+
+    result = execute_all(selected_steps=parsed.get("only_steps"))
     print(json.dumps({
         "overall_status": result["overall_status"],
         "bundle": result["bundle"],
@@ -387,6 +500,9 @@ def main() -> int:
         "bundle_mode": result["bundle_mode"],
         "retention": result.get("retention", {}),
         "preflight": result.get("preflight", {}),
+        "selected_steps": result.get("selected_steps", []),
+        "failed_step_names": result.get("failed_step_names", []),
+        "suggested_rerun_command": result.get("suggested_rerun_command", ""),
     }, ensure_ascii=False))
     return 0 if result["overall_status"] == "PASS" else 1
 

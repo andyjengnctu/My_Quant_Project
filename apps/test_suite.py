@@ -182,6 +182,9 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
         if failed_names:
             print(f"\n失敗步驟 : {', '.join(failed_names)}")
+        rerun_command = result.get("suggested_rerun_command", "")
+        if rerun_command:
+            print(f"建議重跑 : {rerun_command}")
     print("=" * 78)
 
 
@@ -189,7 +192,7 @@ def main() -> int:
     enable_line_buffered_stdout()
     if has_help_flag(sys.argv):
         print("用法: python apps/test_suite.py")
-        print("說明: reduced 一鍵測試入口，依序執行 quick gate / consistency / chain checks / ml smoke。")
+        print("說明: reduced 一鍵測試正式入口；先跑完整 regression，若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
 
     print("=== Test Suite (reduced) ===")

@@ -112,6 +112,13 @@ python apps\test_suite.py
 python tools/local_regression/run_all.py
 ```
 
+若完整入口已找出失敗步驟，可只重跑指定步驟：
+
+```bash
+python tools/local_regression/run_all.py --only quick_gate
+python tools/local_regression/run_all.py --only consistency,ml_smoke
+```
+
 若只想先檢查目前 Python 環境是否已具備 `requirements/requirements.txt` 所需套件：
 
 ```bash
@@ -120,6 +127,7 @@ python tools/validate/preflight_env.py
 
 - `preflight_env.py` 只做檢查，不自動安裝依賴。
 - `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。
+- 日常流程先跑完整入口；只有完整入口已找出 FAIL 步驟時，才使用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 
 ### 輸出位置
 
