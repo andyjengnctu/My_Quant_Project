@@ -59,6 +59,7 @@ def main(argv=None) -> int:
     params_path = PROJECT_ROOT / "models" / "best_params.json"
     db_read_error = ""
     params_read_error = ""
+    runtime_error = ""
     param_payload: Dict[str, Any] = {}
     failures = []
     trial_count = 0
@@ -70,9 +71,28 @@ def main(argv=None) -> int:
                 timeout=int(manifest["ml_smoke_timeout_sec"]),
                 env={"V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"]))},
             )
-            write_text(run_dir / "ml_smoke_console.log", f"$ {outcome['cmd']}\nreturncode={outcome['returncode']}\n\n[stdout]\n{outcome['stdout']}\n\n[stderr]\n{outcome['stderr']}")
+            write_text(
+                run_dir / "ml_smoke_console.log",
+                "\n".join(
+                    [
+                        f"$ {outcome['cmd']}",
+                        f"returncode={outcome['returncode']}",
+                        f"timed_out={outcome.get('timed_out', False)}",
+                        f"error_type={outcome.get('error_type', '')}",
+                        f"error_message={outcome.get('error_message', '')}",
+                        "",
+                        "[stdout]",
+                        outcome["stdout"],
+                        "",
+                        "[stderr]",
+                        outcome["stderr"],
+                    ]
+                ),
+            )
 
-            if outcome["returncode"] != 0:
+            if outcome.get("timed_out"):
+                failures.append("optimizer_timed_out")
+            elif outcome["returncode"] != 0:
                 failures.append("optimizer_exit_nonzero")
 
             if not db_path.exists():
@@ -107,8 +127,9 @@ def main(argv=None) -> int:
                     if missing_keys:
                         failures.append(f"best_params_missing_keys:{','.join(missing_keys)}")
     except RuntimeError as exc:
+        runtime_error = f"{type(exc).__name__}: {exc}"
         failures.append("ml_smoke_preserve_failed")
-        write_text(run_dir / "ml_smoke_console.log", f"preserve_failed={type(exc).__name__}: {exc}\n")
+        write_text(run_dir / "ml_smoke_console.log", f"preserve_failed={runtime_error}\n")
 
     summary = {
         "status": "PASS" if not failures else "FAIL",
@@ -120,6 +141,7 @@ def main(argv=None) -> int:
         "best_params_path": str(params_path),
         "best_params_keys": sorted(param_payload.keys()) if param_payload else [],
         "best_params_read_error": params_read_error,
+        "runtime_error": runtime_error,
         "failures": failures,
     }
     write_json(run_dir / "ml_smoke_summary.json", summary)

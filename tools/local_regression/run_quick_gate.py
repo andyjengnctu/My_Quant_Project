@@ -51,6 +51,15 @@ RUN_ALL_CLI_CASES = [
 ]
 
 
+def _outcome_detail(outcome: Dict[str, Any], fallback_text: str) -> str:
+    if outcome.get("timed_out"):
+        return f"timeout after {outcome.get('timeout_sec', 0)}s"
+    combined = "\n".join(part for part in [outcome.get("stdout", "").strip(), outcome.get("stderr", "").strip()] if part).strip()
+    if combined:
+        return combined.splitlines()[0]
+    return fallback_text
+
+
 def iter_python_files() -> List[Path]:
     files: List[Path] = []
     for path in PROJECT_ROOT.rglob("*.py"):
@@ -106,9 +115,10 @@ def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
     for args, expected_usage in HELP_TARGETS:
         outcome = run_command(args, timeout=timeout)
-        first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else ""
+        first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else _outcome_detail(outcome, expected_usage)
         ok = (
-            outcome["returncode"] == 0
+            (not outcome.get("timed_out"))
+            and outcome["returncode"] == 0
             and "用法:" in outcome["stdout"]
             and expected_usage in outcome["stdout"]
         )
@@ -134,8 +144,8 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         for suffix_args, expected in cases:
             outcome = run_command([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
-            ok = outcome["returncode"] != 0 and expected in combined
-            results.append(summarize_result(f"dataset_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=expected))
+            ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
+            results.append(summarize_result(f"dataset_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
     return results
 
 
@@ -149,14 +159,14 @@ def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         for suffix_args, expected in no_arg_cases:
             outcome = run_command([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
-            ok = outcome["returncode"] != 0 and expected in combined
-            results.append(summarize_result(f"generic_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=expected))
+            ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
+            results.append(summarize_result(f"generic_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
 
     for suffix_args, expected in RUN_ALL_CLI_CASES:
         outcome = run_command([sys.executable, "tools/local_regression/run_all.py", *suffix_args], timeout=timeout)
         combined = f"{outcome['stdout']}\n{outcome['stderr']}"
-        ok = outcome["returncode"] != 0 and expected in combined
-        results.append(summarize_result(f"generic_cli::run_all.py::{' '.join(suffix_args)}", ok, detail=expected))
+        ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
+        results.append(summarize_result(f"generic_cli::run_all.py::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
     return results
 
 
@@ -216,22 +226,25 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         results.append(summarize_result("error_path::broken_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞參數檔應 fail-fast"))
 
     original_db_exists = db_path.exists()
+    if db_backup.exists():
+        results.append(summarize_result("error_path::optimizer_db_backup_slot", False, detail=f"暫存備份已存在，疑似上次中斷殘留: {db_backup}"))
+        return results
     if original_db_exists:
         shutil.move(db_path, db_backup)
     try:
         db_path.write_text("not-a-sqlite-db", encoding="utf-8")
         outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::broken_optimizer_db", outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞 DB 應 fail-fast"))
+        results.append(summarize_result("error_path::broken_optimizer_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "壞 DB 應 fail-fast")))
 
         db_path.unlink(missing_ok=True)
         outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::export_only_missing_db", outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="無 DB export-only 應 fail-fast"))
+        results.append(summarize_result("error_path::export_only_missing_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "無 DB export-only 應 fail-fast")))
 
         db_path.unlink(missing_ok=True)
         import sqlite3
         sqlite3.connect(db_path).close()
         outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::export_only_empty_db", outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="空 DB export-only 應 fail-fast"))
+        results.append(summarize_result("error_path::export_only_empty_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "空 DB export-only 應 fail-fast")))
     finally:
         db_path.unlink(missing_ok=True)
         if original_db_exists and db_backup.exists():

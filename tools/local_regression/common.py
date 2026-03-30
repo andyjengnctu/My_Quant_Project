@@ -165,27 +165,65 @@ def run_command(
     cwd: Optional[Path] = None,
 ) -> Dict[str, Any]:
     started = time.time()
-    proc = subprocess.run(
-        args,
-        input=input_text,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        cwd=str(PROJECT_ROOT if cwd is None else cwd),
-        env=build_python_env(env),
-        timeout=timeout,
-    )
+    cmd_text = " ".join(args)
+    try:
+        proc = subprocess.run(
+            args,
+            input=input_text,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            cwd=str(PROJECT_ROOT if cwd is None else cwd),
+            env=build_python_env(env),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.time() - started
+        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout.decode("utf-8", errors="replace") if exc.stdout else "")
+        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr.decode("utf-8", errors="replace") if exc.stderr else "")
+        stderr = (stderr + ("\n" if stderr else "") + f"TimeoutExpired: command exceeded {timeout} seconds").strip()
+        return {
+            "args": args,
+            "cmd": cmd_text,
+            "returncode": 124,
+            "stdout": stdout,
+            "stderr": stderr,
+            "duration_sec": round(elapsed, 3),
+            "timed_out": True,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "timeout_sec": timeout,
+        }
+    except OSError as exc:
+        elapsed = time.time() - started
+        return {
+            "args": args,
+            "cmd": cmd_text,
+            "returncode": 127,
+            "stdout": "",
+            "stderr": f"{type(exc).__name__}: {exc}",
+            "duration_sec": round(elapsed, 3),
+            "timed_out": False,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "timeout_sec": timeout,
+        }
+
     elapsed = time.time() - started
     stdout = proc.stdout or ""
     stderr = proc.stderr or ""
     return {
         "args": args,
-        "cmd": " ".join(args),
+        "cmd": cmd_text,
         "returncode": proc.returncode,
         "stdout": stdout,
         "stderr": stderr,
         "duration_sec": round(elapsed, 3),
+        "timed_out": False,
+        "error_type": "",
+        "error_message": "",
+        "timeout_sec": timeout,
     }
 
 
