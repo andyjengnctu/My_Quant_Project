@@ -88,6 +88,44 @@ def has_help_flag(argv):
     return any(str(arg).strip() in {"-h", "--help"} for arg in args[1:])
 
 
+# # (AI註: 正式入口 CLI 參數格式集中驗證；未知參數、缺值與不接受值的旗標一律 fail-fast)
+def validate_cli_args(argv, *, allowed_value_options=(), allowed_flags=()):
+    args = [] if argv is None else list(argv)
+    value_option_set = {str(option).strip() for option in allowed_value_options}
+    flag_set = {str(flag).strip() for flag in allowed_flags}
+    index = 1
+    while index < len(args):
+        raw_arg = str(args[index]).strip()
+        if raw_arg in {"-h", "--help"}:
+            index += 1
+            continue
+        option_name, has_inline_value, inline_value = raw_arg, False, None
+        if raw_arg.startswith("--") and "=" in raw_arg:
+            option_name, inline_value = raw_arg.split("=", 1)
+            option_name = option_name.strip()
+            inline_value = inline_value.strip()
+            has_inline_value = True
+        if option_name in value_option_set:
+            if has_inline_value:
+                if inline_value == "":
+                    raise ValueError(f"{option_name}= 不能為空")
+                index += 1
+                continue
+            if index + 1 >= len(args):
+                raise ValueError(f"{option_name} 缺少值")
+            next_value = str(args[index + 1]).strip()
+            if next_value == "" or next_value.startswith("-"):
+                raise ValueError(f"{option_name} 缺少值")
+            index += 2
+            continue
+        if option_name in flag_set:
+            if has_inline_value:
+                raise ValueError(f"{option_name} 不接受值")
+            index += 1
+            continue
+        raise ValueError(f"不支援的參數: {raw_arg}")
+
+
 # # (AI註: input 例外與空字串預設值集中處理；不要在各工具各自維護一份 prompt 邏輯)
 def safe_prompt(prompt_text, default_value):
     stdin = getattr(sys, "stdin", None)

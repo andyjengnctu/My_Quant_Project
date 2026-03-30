@@ -22,7 +22,7 @@ from core.dataset_profiles import (
 from core.data_utils import discover_unique_csv_map
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 from tools.validate.checks import (
     add_fail_result,
@@ -134,6 +134,11 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
 
 def main():
     enable_line_buffered_stdout()
+    try:
+        validate_cli_args(sys.argv, allowed_value_options=("--dataset",))
+    except ValueError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
     if has_help_flag(sys.argv):
         print("用法: python tools/validate/cli.py [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")

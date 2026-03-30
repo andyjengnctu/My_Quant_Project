@@ -18,7 +18,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, validate_cli_args
 from core.output_paths import build_output_dir
 from tools.optimizer.prep import load_all_raw_data
 from tools.optimizer.profile import OptimizerProfileRecorder
@@ -105,6 +105,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
+    try:
+        validate_cli_args(argv, allowed_value_options=("--dataset",))
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
     if has_help_flag(argv):
         print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
         print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")

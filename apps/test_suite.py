@@ -9,8 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag
-from tools.local_regression.run_all import execute_all
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, validate_cli_args
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 STEP_LABELS = {
@@ -190,10 +189,17 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
 
 def main() -> int:
     enable_line_buffered_stdout()
+    try:
+        validate_cli_args(sys.argv)
+    except ValueError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
     if has_help_flag(sys.argv):
         print("用法: python apps/test_suite.py")
         print("說明: reduced 一鍵測試正式入口；先跑完整 regression，若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
+
+    from tools.local_regression.run_all import execute_all
 
     print("=== Test Suite (reduced) ===")
     print("[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。")
