@@ -15,7 +15,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
 
 warnings.simplefilter("default")
@@ -242,4 +242,4 @@ def main(argv=None, environ=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

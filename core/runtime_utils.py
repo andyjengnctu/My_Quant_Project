@@ -140,6 +140,16 @@ def validate_cli_args(argv, *, value_options=(), flag_options=()):
         raise ValueError(f"不支援的位置參數: {raw_arg}")
 
 
+def run_cli_entrypoint(main_func, *args, handled_exceptions=(FileNotFoundError, ValueError, RuntimeError), error_formatter=None, **kwargs):
+    try:
+        raise SystemExit(main_func(*args, **kwargs))
+    except handled_exceptions as exc:
+        formatter = error_formatter
+        message = formatter(exc) if callable(formatter) else f"❌ {exc}"
+        print(message, file=sys.stderr)
+        raise SystemExit(1)
+
+
 # # (AI註: input 例外與空字串預設值集中處理；不要在各工具各自維護一份 prompt 邏輯)
 def safe_prompt(prompt_text, default_value):
     stdin = getattr(sys, "stdin", None)

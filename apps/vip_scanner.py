@@ -5,7 +5,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
 HELP_DESCRIPTION = "說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。"
 LAZY_EXPORTS = {
@@ -55,4 +55,4 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

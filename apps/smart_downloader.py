@@ -5,7 +5,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
 HELP_DESCRIPTION = "說明: 下載或更新完整資料集到預設 full dataset 路徑。"
 
@@ -39,4 +39,4 @@ def __getattr__(name):
 __all__ = ["smart_download_vip_data", "main"]
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

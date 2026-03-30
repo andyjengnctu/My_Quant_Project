@@ -19,7 +19,7 @@ from core.dataset_profiles import (
 )
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
@@ -327,4 +327,4 @@ def main(argv=None, environ=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)
