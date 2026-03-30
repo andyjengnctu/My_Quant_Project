@@ -1,3 +1,5 @@
+from tools.optimizer.study_utils import is_qualified_trial_value
+
 def run_optimizer_monitoring_callback(session, study, trial):
     session.current_session_trial += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
@@ -7,7 +9,7 @@ def run_optimizer_monitoring_callback(session, study, trial):
     if trial.value is None:
         state_name = getattr(trial.state, "name", str(trial.state))
         status_text, score_text = f"{session.colors['yellow']}{state_name}{mode_suffix}{session.colors['reset']}", "N/A"
-    elif trial.value <= -9000:
+    elif not is_qualified_trial_value(trial.value):
         fail_msg = trial.user_attrs.get("fail_reason", "策略無效")
         status_text, score_text = f"{session.colors['yellow']}淘汰 [{fail_msg}]{mode_suffix}{session.colors['reset']}", "N/A"
     else:
@@ -40,8 +42,7 @@ def run_optimizer_monitoring_callback(session, study, trial):
     if (
         best_completed_trial is not None
         and best_completed_trial.number == trial.number
-        and trial.value is not None
-        and trial.value > -9000
+        and is_qualified_trial_value(trial.value)
     ):
         print()
         attrs = trial.user_attrs

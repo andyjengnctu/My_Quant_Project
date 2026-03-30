@@ -14,6 +14,7 @@ from tools.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
     get_best_completed_trial_or_none,
+    is_qualified_trial_value,
     list_completed_study_trials,
 )
 
@@ -111,7 +112,7 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
     if best_trial is None:
         print(f"{colors['gray']}ℹ️ 記憶庫目前尚無已完成 trial，略過歷史最佳儀表板還原。{colors['reset']}")
         return
-    if best_trial.value is None or best_trial.value <= -9000:
+    if not is_qualified_trial_value(best_trial.value):
         return
     print(f"\n{colors['cyan']}📜 【歷史突破紀錄還原】{colors['reset']}")
     print(f"{colors['red']}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){colors['reset']}")
@@ -137,7 +138,7 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
     if best_trial is None:
         print(f"{colors['red']}❌ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
-    if best_trial.value is not None and best_trial.value > -9000:
+    if is_qualified_trial_value(best_trial.value):
         best_params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=fixed_tp_percent)
         with open(best_params_path, "w", encoding="utf-8") as handle:
             json.dump(best_params_payload, handle, indent=4, ensure_ascii=False)

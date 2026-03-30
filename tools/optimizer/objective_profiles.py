@@ -1,4 +1,5 @@
 from core.config import V16StrategyParams
+from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
 
 
 def build_trial_params(session, trial):
@@ -76,6 +77,6 @@ def build_initial_profile_row(trial_number, prep_wall_sec, prep_profile):
         "m_win_rate": 0.0,
         "r_squared": 0.0,
         "base_score": 0.0,
-        "trial_value": -9999.0,
+        "trial_value": INVALID_TRIAL_VALUE,
         "fail_reason": "",
     }

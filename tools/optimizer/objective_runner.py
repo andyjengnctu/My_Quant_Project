@@ -5,6 +5,7 @@ from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_filters import apply_filter_rules
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
+from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
 
 
 def run_optimizer_objective(session, trial):
@@ -32,7 +33,7 @@ def run_optimizer_objective(session, trial):
         profile_row["fail_reason"] = "無有效資料"
         session.profile_recorder.append_row(profile_row)
         trial.set_user_attr("profile_row", profile_row)
-        return -9999.0
+        return INVALID_TRIAL_VALUE
 
     sort_start = time.perf_counter()
     sorted_dates = sorted(master_dates)
@@ -124,11 +125,11 @@ def run_optimizer_objective(session, trial):
     if fail_reason is not None:
         trial.set_user_attr("fail_reason", fail_reason)
         profile_row["fail_reason"] = fail_reason
-        profile_row["trial_value"] = -9999.0
+        profile_row["trial_value"] = INVALID_TRIAL_VALUE
         profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
         session.profile_recorder.append_row(profile_row)
         trial.set_user_attr("profile_row", profile_row)
-        return -9999.0
+        return INVALID_TRIAL_VALUE
 
     score_start = time.perf_counter()
     base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)

@@ -12,6 +12,12 @@ from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prom
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
 DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
+INVALID_TRIAL_VALUE = -9999.0
+MIN_QUALIFIED_TRIAL_VALUE = -9000.0
+
+
+def is_qualified_trial_value(value):
+    return value is not None and float(value) > MIN_QUALIFIED_TRIAL_VALUE
 
 
 def resolve_optimizer_trial_count(environ):

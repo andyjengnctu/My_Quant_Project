@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
 
 REQUIRED_PARAM_KEYS = [
@@ -63,6 +64,9 @@ def main(argv=None) -> int:
     param_payload: Dict[str, Any] = {}
     failures = []
     trial_count = 0
+    qualified_trial_count = 0
+    best_trial_value = None
+    best_params_required = False
 
     try:
         with preserve_existing_file(db_path, ".bak_ml_smoke_local_regression"), preserve_existing_file(params_path, ".bak_ml_smoke_local_regression"):
@@ -104,17 +108,30 @@ def main(argv=None) -> int:
                     try:
                         cursor = conn.execute("SELECT COUNT(*) FROM trials")
                         trial_count = int(cursor.fetchone()[0])
+                        cursor = conn.execute(
+                            """
+                            SELECT COUNT(*), MAX(tv.value)
+                            FROM trials t
+                            JOIN trial_values tv ON tv.trial_id = t.trial_id AND tv.objective = 0
+                            WHERE t.state = 'COMPLETE' AND tv.value > ?
+                            """,
+                            (MIN_QUALIFIED_TRIAL_VALUE,),
+                        )
+                        qualified_trial_count, best_trial_value = cursor.fetchone()
+                        qualified_trial_count = int(qualified_trial_count or 0)
                     finally:
                         conn.close()
-                except (sqlite3.Error, OSError, ValueError) as exc:
+                except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
                     db_read_error = f"{type(exc).__name__}: {exc}"
                     failures.append("optimizer_db_unreadable")
                 else:
                     if trial_count < 1:
                         failures.append("no_trials_recorded")
+                    best_params_required = qualified_trial_count > 0
 
             if not params_path.exists():
-                failures.append("missing_best_params")
+                if best_params_required:
+                    failures.append("missing_best_params_for_qualified_trial")
             else:
                 shutil.copy2(params_path, run_dir / params_path.name)
                 try:
@@ -139,6 +156,9 @@ def main(argv=None) -> int:
         "db_trial_count": trial_count,
         "db_read_error": db_read_error,
         "best_params_path": str(params_path),
+        "best_params_required": best_params_required,
+        "qualified_trial_count": qualified_trial_count,
+        "best_trial_value": best_trial_value,
         "best_params_keys": sorted(param_payload.keys()) if param_payload else [],
         "best_params_read_error": params_read_error,
         "runtime_error": runtime_error,
