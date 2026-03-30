@@ -231,8 +231,16 @@ def resolve_git_commit() -> str:
         result = run_command(["git", "rev-parse", "--short", "HEAD"], timeout=30)
         if result["returncode"] == 0:
             return result["stdout"].strip()
-    except Exception:
-        pass
+        err_text = result["stderr"].strip() or result["stdout"].strip() or f"returncode={result['returncode']}"
+        print(
+            f"⚠️ git rev-parse 失敗，git_commit 將標記為 unknown: {err_text}",
+            file=sys.stderr,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(
+            f"⚠️ git rev-parse 失敗，git_commit 將標記為 unknown: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     return "unknown"
 
 

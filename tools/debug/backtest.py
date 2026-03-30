@@ -26,7 +26,9 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
         if np.isnan(atr_main[j - 1]):
             continue
 
-        if position['qty'] > 0:
+        pos_qty_start_of_bar = position['qty']
+
+        if pos_qty_start_of_bar > 0:
             position, pnl_realized = process_debug_position_step(
                 position=position,
                 atr_prev=atr_main[j - 1],
@@ -46,6 +48,7 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
         sizing_cap = current_capital if getattr(params, 'use_compounding', True) else params.initial_capital
         position, active_extended_signal = process_debug_entry_for_day(
             position=position,
+            pos_qty_start_of_bar=pos_qty_start_of_bar,
             active_extended_signal=active_extended_signal,
             buy_condition_prev=buy_condition[j - 1],
             buy_limit_prev=buy_limits[j - 1],

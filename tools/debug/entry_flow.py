@@ -14,6 +14,7 @@ from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
 def process_debug_entry_for_day(
     *,
     position,
+    pos_qty_start_of_bar,
     active_extended_signal,
     buy_condition_prev,
     buy_limit_prev,
@@ -29,11 +30,10 @@ def process_debug_entry_for_day(
     params,
     trade_logs,
 ):
-    pos_qty_start = position['qty']
     buy_triggered = False
     date_str = current_date.strftime('%Y-%m-%d')
 
-    if buy_condition_prev and pos_qty_start == 0:
+    if buy_condition_prev and pos_qty_start_of_bar == 0:
         signal_state = create_signal_tracking_state(buy_limit_prev, atr_prev, params)
         if signal_state is not None:
             active_extended_signal = signal_state
@@ -100,7 +100,7 @@ def process_debug_entry_for_day(
                 note="不計 miss buy",
             )
 
-    elif active_extended_signal is not None and pos_qty_start == 0:
+    elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
         entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
