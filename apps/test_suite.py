@@ -18,6 +18,7 @@ STEP_LABELS = {
     "consistency": "consistency",
     "chain_checks": "chain checks",
     "ml_smoke": "ml smoke",
+    "preflight": "preflight",
 }
 
 
@@ -125,6 +126,14 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(" Test Suite 結果整理")
     print("=" * 78)
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
+    preflight = result.get("preflight", {})
+    if preflight:
+        failed_packages = preflight.get("failed_packages", [])
+        failed_text = ", ".join(failed_packages) if failed_packages else "(none)"
+        print(
+            f"preflight   : {preflight.get('status', 'N/A')} | "
+            f"{preflight.get('duration_sec', 0.0):.2f}s | failed_packages={failed_text}"
+        )
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
@@ -184,6 +193,7 @@ def main() -> int:
         return 0
 
     print("=== Test Suite (reduced) ===")
+    print("[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。")
     progress = ConsoleProgress()
     result = execute_all(progress_callback=progress)
     _print_human_summary(result)

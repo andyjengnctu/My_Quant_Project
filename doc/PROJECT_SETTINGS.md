@@ -48,6 +48,7 @@
 4. 驗證時節省時間驗證，一律以 `tw_stock_data_vip_reduced` 為準，不做 `tw_stock_data_vip` full dataset 測試。
 5. 只有在已確認 `data.zip` 中不存在或不可用 `tw_stock_data_vip_reduced` 時，才可寫「reduced 動態驗證未執行」；不得解讀為程式包缺檔、專案缺陷或使用者未提供資料。
 6. 若需外部套件，應依 `requirements` 自行安裝後再驗證；不得因缺套件就略過本應執行的動態測試。
+7. 再檢查／最嚴格檢查前，必須先執行 preflight；若環境不符，assistant 必須先建置或修復固定驗證環境，再繼續測試。所有實際花費時間均視為總耗時。
 
 ## E. Coding 原則 (強制)
 

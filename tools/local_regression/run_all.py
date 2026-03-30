@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
+from tools.validate.preflight_env import format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
     build_artifacts_manifest,
@@ -39,7 +40,7 @@ SCRIPT_ORDER = [
     ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json", 900),
 ]
 
-MAJOR_STEP_COUNT = 2 + len(SCRIPT_ORDER)
+MAJOR_STEP_COUNT = 3 + len(SCRIPT_ORDER)
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -116,6 +117,22 @@ def _apply_output_retention(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return apply_retention_rules(_build_retention_rules(manifest))
 
 
+def _run_preflight(run_dir: Path) -> Dict[str, Any]:
+    started = time.time()
+    payload = run_preflight()
+    duration_sec = round(time.time() - started, 3)
+    write_json(run_dir / "preflight_summary.json", payload)
+    write_text(run_dir / "preflight_summary.txt", format_preflight_summary(payload) + "\n")
+    return {
+        "status": payload["status"],
+        "duration_sec": duration_sec,
+        "failed_packages": payload.get("failed_packages", []),
+        "python_executable": payload.get("python_executable", sys.executable),
+        "summary_file": "preflight_summary.json",
+        "summary_text_file": "preflight_summary.txt",
+    }
+
+
 def _run_script(
     *,
     name: str,
@@ -182,21 +199,83 @@ def _run_script(
 
 def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[str, Any]:
     manifest = load_manifest()
-    dataset_info = ensure_reduced_dataset()
     run_dir = create_staging_run_dir()
     shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
 
-    _emit_progress(progress_callback, "dataset_ready", {
-        "major_index": 1,
-        "major_total": MAJOR_STEP_COUNT,
-        "dataset_info": dataset_info,
-        "label": "準備 reduced 測試資料",
-    })
-
-    script_summaries: List[Dict[str, Any]] = []
-    overall_ok = True
     try:
-        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(SCRIPT_ORDER, start=2):
+        _emit_progress(progress_callback, "step_start", {
+            "name": "preflight",
+            "major_index": 1,
+            "major_total": MAJOR_STEP_COUNT,
+            "timeout_sec": 0,
+        })
+        preflight_summary = _run_preflight(run_dir)
+        _emit_progress(progress_callback, "step_finish", {
+            "name": "preflight",
+            "status": preflight_summary["status"],
+            "duration_sec": preflight_summary["duration_sec"],
+            "major_index": 1,
+            "major_total": MAJOR_STEP_COUNT,
+        })
+
+        if preflight_summary["status"] != "PASS":
+            preflight_payload = read_json_if_exists(run_dir / "preflight_summary.json")
+            master_summary = {
+                "overall_status": "FAIL",
+                "dataset": manifest["dataset"],
+                "dataset_info": {},
+                "timestamp": taipei_now().isoformat(),
+                "git_commit": resolve_git_commit(),
+                "scripts": [],
+                "failures": 1,
+                "preflight": preflight_payload,
+                "bundle_mode": "preflight_failed",
+            }
+            write_json(run_dir / "master_summary.json", master_summary)
+            write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
+            bundle_paths = [
+                run_dir / "master_summary.json",
+                run_dir / "preflight_summary.json",
+                run_dir / "preflight_summary.txt",
+                run_dir / "artifacts_manifest.json",
+            ]
+            bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
+            archived_bundle = archive_bundle_history(bundle_path)
+            root_bundle_copy = publish_root_bundle_copy(archived_bundle)
+            retention = _apply_output_retention(manifest)
+            result = {
+                "overall_status": "FAIL",
+                "dataset": manifest["dataset"],
+                "bundle": str(root_bundle_copy),
+                "archived_bundle": str(archived_bundle),
+                "root_bundle_copy": str(root_bundle_copy),
+                "bundle_mode": "preflight_failed",
+                "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()],
+                "scripts": [],
+                "step_payloads": {"preflight": preflight_payload},
+                "failures": 1,
+                "retention": {
+                    "removed_count": retention.get("removed_count", 0),
+                    "removed_bytes": retention.get("removed_bytes", 0),
+                },
+                "major_index": 1,
+                "major_total": MAJOR_STEP_COUNT,
+                "preflight": preflight_summary,
+            }
+            _emit_progress(progress_callback, "done", result)
+            return result
+
+        dataset_info = ensure_reduced_dataset()
+        _emit_progress(progress_callback, "dataset_ready", {
+            "major_index": 2,
+            "major_total": MAJOR_STEP_COUNT,
+            "dataset_info": dataset_info,
+            "label": "準備 reduced 測試資料",
+        })
+
+        script_summaries: List[Dict[str, Any]] = []
+        overall_ok = True
+        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(SCRIPT_ORDER, start=3):
             _emit_progress(progress_callback, "step_start", {
                 "name": name,
                 "major_index": script_offset,
@@ -244,6 +323,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
 
         write_text(run_dir / "console_tail.txt", gather_recent_console_tail(run_dir) + "\n")
         step_payloads = {
+            "preflight": read_json_if_exists(run_dir / "preflight_summary.json"),
             "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
             "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
             "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
@@ -257,6 +337,7 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             "git_commit": resolve_git_commit(),
             "scripts": script_summaries,
             "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
+            "preflight": step_payloads["preflight"],
         }
         write_json(run_dir / "master_summary.json", master_summary)
         write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
@@ -290,12 +371,12 @@ def execute_all(progress_callback: Optional[ProgressCallback] = None) -> Dict[st
             },
             "major_index": MAJOR_STEP_COUNT,
             "major_total": MAJOR_STEP_COUNT,
+            "preflight": preflight_summary,
         }
         _emit_progress(progress_callback, "done", result)
         return result
     finally:
         cleanup_staging_dir(run_dir)
-
 
 def main() -> int:
     result = execute_all()
@@ -305,6 +386,7 @@ def main() -> int:
         "archived_bundle": result.get("archived_bundle", ""),
         "bundle_mode": result["bundle_mode"],
         "retention": result.get("retention", {}),
+        "preflight": result.get("preflight", {}),
     }, ensure_ascii=False))
     return 0 if result["overall_status"] == "PASS" else 1
 

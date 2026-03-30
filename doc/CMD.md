@@ -112,6 +112,15 @@ python apps\test_suite.py
 python tools/local_regression/run_all.py
 ```
 
+若只想先檢查目前 Python 環境是否已具備 `requirements/requirements.txt` 所需套件：
+
+```bash
+python tools/validate/preflight_env.py
+```
+
+- `preflight_env.py` 只做檢查，不自動安裝依賴。
+- `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。
+
 ### 輸出位置
 
 `apps/test_suite.py` 執行完成後：
