@@ -19,7 +19,7 @@ from core.dataset_profiles import (
 )
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
@@ -127,7 +127,8 @@ def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        print("用法: python tools/validate/cli.py [--dataset reduced|full]")
+        program_name = resolve_cli_program_name(argv, "tools/validate/main.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 

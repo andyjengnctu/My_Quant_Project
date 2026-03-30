@@ -6,7 +6,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, validate_cli_args
 
 _RUNTIME_EXPORT_NAMES = {"SAVE_DIR", "FINMIND_PRICE_DATASET", "dl", "time"}
 
@@ -47,7 +47,8 @@ def main(argv=None):
     argv = sys.argv if argv is None else argv
     validate_cli_args(argv)
     if has_help_flag(argv):
-        print("用法: python apps/smart_downloader.py")
+        program_name = resolve_cli_program_name(argv, "tools/downloader/main.py")
+        print(f"用法: python {program_name}")
         print("說明: 下載或更新完整資料集到預設 full dataset 路徑。")
         return 0
 

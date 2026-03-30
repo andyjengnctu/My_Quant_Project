@@ -88,6 +88,15 @@ def has_help_flag(argv):
     return any(str(arg).strip() in {"-h", "--help"} for arg in args[1:])
 
 
+def resolve_cli_program_name(argv, default_program):
+    args = [] if argv is None else list(argv)
+    if args:
+        raw_program = str(args[0]).strip()
+        if raw_program:
+            return raw_program.replace("\\", "/")
+    return default_program
+
+
 def validate_cli_args(argv, *, value_options=(), flag_options=()):
     args = [] if argv is None else list(argv)
     allowed_value_options = {str(option).strip() for option in value_options}

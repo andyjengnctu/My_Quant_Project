@@ -15,7 +15,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
 
 warnings.simplefilter("default")
@@ -98,7 +98,8 @@ def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
+        program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
         return 0
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len

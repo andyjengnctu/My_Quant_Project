@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, safe_prompt, safe_prompt_choice, safe_prompt_int, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, validate_cli_args
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -22,7 +22,8 @@ def main(argv=None, env=None):
     validate_cli_args(argv, value_options=("--dataset",))
 
     if has_help_flag(argv):
-        print("用法: python apps/portfolio_sim.py [--dataset reduced|full]")
+        program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整，路徑為 /data/tw_stock_data_vip。")
         return 0
 

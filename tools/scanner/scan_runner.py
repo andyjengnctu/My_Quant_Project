@@ -5,7 +5,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
-from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, validate_cli_args
+from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from .reporting import print_scanner_start_banner, print_scanner_summary
 from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 
@@ -95,7 +95,8 @@ def main(argv=None, env=None):
     env = os.environ if env is None else env
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        print("用法: python apps/vip_scanner.py [--dataset reduced|full]")
+        program_name = resolve_cli_program_name(argv, "tools/scanner/scan_runner.py")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
     from core.data_utils import discover_unique_csv_inputs
