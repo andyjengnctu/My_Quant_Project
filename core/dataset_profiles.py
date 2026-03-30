@@ -80,6 +80,23 @@ def get_dataset_profile_label(profile_key):
     return DATASET_PROFILE_SPECS[normalized_key]["label"]
 
 
+def infer_dataset_profile_key_from_data_dir(data_dir, default=DEFAULT_DATASET_PROFILE):
+    normalized_default = normalize_dataset_profile_key(default, default=DEFAULT_DATASET_PROFILE)
+    if data_dir is None:
+        return normalized_default
+
+    text = str(data_dir).strip()
+    if text == "":
+        return normalized_default
+
+    dir_name = os.path.basename(os.path.normpath(text))
+    if dir_name == DATASET_PROFILE_SPECS[DATASET_PROFILE_REDUCED]["dir_name"]:
+        return DATASET_PROFILE_REDUCED
+    if dir_name == DATASET_PROFILE_SPECS[DATASET_PROFILE_FULL]["dir_name"]:
+        return DATASET_PROFILE_FULL
+    return normalized_default
+
+
 def extract_dataset_cli_value(argv: Optional[Iterable[str]]):
     if argv is None:
         return None

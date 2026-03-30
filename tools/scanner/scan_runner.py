@@ -2,7 +2,15 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
+from core.dataset_profiles import (
+    DEFAULT_DATASET_PROFILE,
+    build_empty_dataset_dir_message,
+    build_missing_dataset_dir_message,
+    get_dataset_dir,
+    get_dataset_profile_label,
+    infer_dataset_profile_key_from_data_dir,
+    resolve_dataset_profile_from_cli_env,
+)
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
 from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
@@ -15,7 +23,7 @@ def run_daily_scanner(data_dir, params):
     from .stock_processor import process_single_stock
 
     if not os.path.exists(data_dir):
-        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
@@ -23,7 +31,7 @@ def run_daily_scanner(data_dir, params):
     print_scanner_start_banner(get_taipei_now().strftime('%Y-%m-%d %H:%M'))
     total_files = len(csv_inputs)
     if total_files == 0:
-        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_empty_dataset_dir_message(profile_key, data_dir))
 
     print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")

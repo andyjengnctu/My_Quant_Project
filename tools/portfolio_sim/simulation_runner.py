@@ -1,7 +1,13 @@
+import os
+
 import pandas as pd
 
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
-from core.dataset_profiles import build_empty_dataset_dir_message, build_missing_dataset_dir_message
+from core.dataset_profiles import (
+    build_empty_dataset_dir_message,
+    build_missing_dataset_dir_message,
+    infer_dataset_profile_key_from_data_dir,
+)
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
 from core.log_utils import format_exception_summary, write_issue_log
 from core.portfolio_engine import run_portfolio_timeline
@@ -12,11 +18,10 @@ from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, ensure_runtime_dirs
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050", verbose=True):
     ensure_runtime_dirs()
     if not data_dir:
-        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
-    import os
     if not os.path.exists(data_dir):
-        profile_key = "reduced" if os.path.basename(os.path.normpath(data_dir)) == "tw_stock_data_vip_reduced" else "full"
+        profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
     def vprint(*args, **kwargs):

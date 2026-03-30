@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from core.config import V16StrategyParams
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
@@ -214,6 +215,45 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     return results
 
 
+def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
+    results = []
+    params = V16StrategyParams()
+
+    from tools.optimizer.raw_cache import load_all_raw_data
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation
+    from tools.scanner.scan_runner import run_daily_scanner
+
+    runtime_cases = [
+        (
+            "runtime_error_path::portfolio_sim_missing_data_dir",
+            lambda: run_portfolio_simulation("", params, verbose=False),
+        ),
+        (
+            "runtime_error_path::scanner_missing_data_dir",
+            lambda: run_daily_scanner("", params),
+        ),
+        (
+            "runtime_error_path::optimizer_missing_data_dir",
+            lambda: load_all_raw_data("", required_min_rows=50, output_dir=str(PROJECT_ROOT / "outputs" / "ml_optimizer")),
+        ),
+    ]
+
+    for name, func in runtime_cases:
+        try:
+            func()
+            ok = False
+            detail = "應 fail-fast，但函式未拋出例外"
+        except FileNotFoundError as exc:
+            ok = "找不到資料夾" in str(exc)
+            detail = str(exc)
+        except Exception as exc:  # 非裸 except，明確保留型別，避免把錯誤路徑測試誤判為通過
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result(name, ok, detail=detail))
+
+    return results
+
+
 def main(argv=None) -> int:
     parsed = parse_no_arg_cli(argv, "tools/local_regression/run_quick_gate.py", description="執行 reduced quick gate 靜態與錯誤路徑檢查；不接受額外參數。")
     if parsed["help"]:
@@ -230,6 +270,7 @@ def main(argv=None) -> int:
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_generic_cli_errors(timeout))
     steps.extend(check_error_paths(timeout))
+    steps.extend(check_dataset_runtime_error_paths())
 
     failed = [step for step in steps if step["status"] != "PASS"]
     summary = {

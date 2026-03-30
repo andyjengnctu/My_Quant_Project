@@ -1,32 +1,17 @@
 import pandas as pd
 
-from core.portfolio_engine import find_sim_start_idx
+from core.portfolio_stats import calc_annual_return_pct, calc_sim_years, find_sim_start_idx
 
 from .trade_rebuild import rebuild_completed_trades_from_portfolio_trade_log
 
 
 def calc_validation_sim_years(sorted_dates, start_year):
-    if not sorted_dates:
-        return 0.0
-
     start_idx = find_sim_start_idx(sorted_dates, start_year)
-    if start_idx >= len(sorted_dates):
-        return 0.0
-
-    first_dt = pd.Timestamp(sorted_dates[start_idx])
-    last_dt = pd.Timestamp(sorted_dates[-1])
-    span_days = (last_dt - first_dt).days + 1
-    if span_days <= 0:
-        return 0.0
-    return span_days / 365.25
+    return calc_sim_years(sorted_dates, start_idx)
 
 
 def calc_validation_annual_return_pct(start_value, end_value, years):
-    if start_value <= 0 or years <= 0:
-        return 0.0
-    if end_value <= 0:
-        return -100.0
-    return ((end_value / start_value) ** (1.0 / years) - 1.0) * 100.0
+    return calc_annual_return_pct(start_value, end_value, years)
 
 
 def normalize_yearly_return_rows(rows):
