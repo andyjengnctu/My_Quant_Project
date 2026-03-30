@@ -5,7 +5,7 @@ import warnings
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
+    sys.path.insert(0, BASE_DIR)
 
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
@@ -64,8 +64,6 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
 
 def main(argv=None, environ=None):
-    from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
-
     global DATA_DIR
 
     enable_line_buffered_stdout()
@@ -78,6 +76,7 @@ def main(argv=None, environ=None):
         print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0
 
+    from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
     import pandas as pd
 
     try:
