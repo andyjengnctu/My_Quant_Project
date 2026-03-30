@@ -7,7 +7,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
-from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     build_empty_dataset_dir_message,
@@ -65,6 +64,8 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
 
 
 def main(argv=None, environ=None):
+    from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, resolve_unique_csv_path, sanitize_ohlcv_dataframe
+
     global DATA_DIR
 
     enable_line_buffered_stdout()

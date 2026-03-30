@@ -2,7 +2,6 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from core.data_utils import discover_unique_csv_inputs
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_scanner_header
 from core.log_utils import write_issue_log
@@ -12,6 +11,7 @@ from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_
 
 
 def run_daily_scanner(data_dir, params):
+    from core.data_utils import discover_unique_csv_inputs
     from .stock_processor import process_single_stock
 
     if not os.path.exists(data_dir):
@@ -98,6 +98,8 @@ def main(argv=None, env=None):
         print("用法: python apps/vip_scanner.py [--dataset reduced|full]")
         print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
+    from core.data_utils import discover_unique_csv_inputs
+
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
             argv,

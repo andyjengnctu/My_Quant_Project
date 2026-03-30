@@ -17,7 +17,6 @@ from core.dataset_profiles import (
     build_missing_dataset_dir_message,
     build_empty_dataset_dir_message,
 )
-from core.data_utils import discover_unique_csv_map
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
 from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, safe_prompt, validate_cli_args
@@ -39,6 +38,8 @@ def get_data_dir_csv_map():
 
     resolved_data_dir = os.path.abspath(DATA_DIR)
     if (CSV_PATH_CACHE is None) or (CSV_PATH_CACHE_DATA_DIR != resolved_data_dir):
+        from core.data_utils import discover_unique_csv_map
+
         CSV_PATH_CACHE, CSV_DUPLICATE_ISSUES = discover_unique_csv_map(resolved_data_dir)
         CSV_PATH_CACHE_DATA_DIR = resolved_data_dir
     return CSV_PATH_CACHE

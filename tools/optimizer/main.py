@@ -6,7 +6,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
     get_dataset_dir,
@@ -18,16 +17,6 @@ from core.dataset_profiles import (
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import enable_line_buffered_stdout, get_taipei_now, has_help_flag, validate_cli_args
 from core.output_paths import build_output_dir
-from tools.optimizer.prep import load_all_raw_data
-from tools.optimizer.profile import OptimizerProfileRecorder
-from tools.optimizer.session import OptimizerSession, close_study_storage
-from tools.optimizer.study_utils import (
-    build_optimizer_db_file_path,
-    build_optimizer_trial_params,
-    get_best_completed_trial_or_none,
-    resolve_optimizer_tp_percent,
-    resolve_optimizer_trial_count,
-)
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
@@ -50,7 +39,6 @@ DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 OPTIMIZER_HIGH_LEN_MIN = 40
 OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
-OPTIMIZER_REQUIRED_MIN_ROWS = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
 OPTIMIZER_FIXED_TP_PERCENT = None
 OPTIMIZER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 ENABLE_OPTIMIZER_PROFILING = True
@@ -73,6 +61,14 @@ def ensure_runtime_dirs():
 
 
 def build_optimizer_session():
+    from tools.optimizer.profile import OptimizerProfileRecorder
+    from tools.optimizer.session import OptimizerSession
+    from tools.optimizer.study_utils import (
+        build_optimizer_trial_params,
+        get_best_completed_trial_or_none,
+        resolve_optimizer_tp_percent,
+    )
+
     return OptimizerSession(
         output_dir=OUTPUT_DIR,
         session_ts=OPTIMIZER_SESSION_TS,
@@ -105,6 +101,8 @@ def main(argv=None, environ=None):
         print("用法: python apps/ml_optimizer.py [--dataset reduced|full]")
         print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
         return 0
+    from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
+    from tools.optimizer.prep import load_all_raw_data
     from tools.optimizer.runtime import (
         create_optimizer_study,
         ensure_optimizer_db_usable,
@@ -114,7 +112,10 @@ def main(argv=None, environ=None):
         prompt_existing_db_policy,
         resolve_trial_count_or_exit,
     )
+    from tools.optimizer.session import close_study_storage
+    from tools.optimizer.study_utils import build_optimizer_db_file_path, resolve_optimizer_trial_count
 
+    optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     configure_optuna_logging()
     session = build_optimizer_session()
 
@@ -213,7 +214,7 @@ def main(argv=None, environ=None):
         session.load_raw_data(
             selected_data_dir,
             load_all_raw_data=load_all_raw_data,
-            required_min_rows=OPTIMIZER_REQUIRED_MIN_ROWS,
+            required_min_rows=optimizer_required_min_rows,
         )
 
         session.profile_recorder.init_output_files()
