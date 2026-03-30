@@ -50,11 +50,11 @@ def append_issue_log(log_path, lines):
     return resolved_log_path
 
 
-# # (AI註: 防錯透明化 - 統一例外摘要格式，保留型別、訊息與 traceback 尾端，避免各腳本口徑分裂)
-def format_exception_summary(exc, tail_lines=3):
+# # (AI註: 例外摘要格式集中管理；user-facing 錯誤預設可關閉 traceback 尾端，避免 headless CLI 汙染)
+def format_exception_summary(exc, tail_lines=3, *, include_traceback=True):
     tb_lines = traceback.format_exc().strip().splitlines()
     tb_tail = " | ".join(tb_lines[-tail_lines:]) if tb_lines else ""
     msg = f"{type(exc).__name__}: {exc}"
-    if tb_tail:
+    if include_traceback and tb_tail:
         return f"{msg} | Traceback: {tb_tail}"
     return msg

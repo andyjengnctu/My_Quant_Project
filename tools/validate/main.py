@@ -152,10 +152,7 @@ def main(argv=None, environ=None):
         dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(argv, environ)
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         set_active_data_dir(selected_data_dir)
-        print(
-            f"驗證資料集: {get_dataset_profile_label(dataset_profile_key)} | "
-            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-        )
+        dataset_label = get_dataset_profile_label(dataset_profile_key)
     except ValueError as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
@@ -165,6 +162,11 @@ def main(argv=None, environ=None):
     except (FileNotFoundError, RuntimeError, ValueError) as e:
         print(f"❌ {e}", file=sys.stderr)
         return 1
+
+    print(
+        f"驗證資料集: {dataset_label} | "
+        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+    )
     all_results = []
     summaries = []
     start_time = time.time()

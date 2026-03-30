@@ -41,7 +41,7 @@ def create_optimizer_study(db_name):
             direction="maximize",
         )
     except (sqlite3.Error, SQLAlchemyError, RuntimeError, ValueError, OSError) as exc:
-        raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc)}") from exc
+        raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc, include_traceback=False)}") from exc
 
 
 def ensure_optimizer_db_usable(db_file):
@@ -53,7 +53,7 @@ def ensure_optimizer_db_usable(db_file):
         conn = sqlite3.connect(db_file)
         conn.execute("PRAGMA schema_version;").fetchone()
     except (sqlite3.Error, OSError, ValueError) as exc:
-        raise RuntimeError(f"Optimizer 記憶庫檔案損壞或不可讀: {format_exception_summary(exc)}") from exc
+        raise RuntimeError(f"Optimizer 記憶庫檔案損壞或不可讀: {format_exception_summary(exc, include_traceback=False)}") from exc
     finally:
         if conn is not None:
             conn.close()

@@ -131,4 +131,4 @@ def load_params_from_json(json_file):
 
         return build_params_from_mapping(data)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:
-        raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e)}") from e
+        raise RuntimeError(f"讀取參數檔 {json_file} 失敗: {format_exception_summary(e, include_traceback=False)}") from e
