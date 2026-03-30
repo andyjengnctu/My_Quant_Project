@@ -315,7 +315,7 @@ def execute_all(
                 "failures": 1,
                 "preflight": preflight_payload,
                 "bundle_mode": "preflight_failed",
-                "failed_step_names": [],
+                "failed_step_names": ["preflight"],
                 "suggested_rerun_command": "",
             }
             write_json(run_dir / "master_summary.json", master_summary)
@@ -341,7 +341,7 @@ def execute_all(
                 "scripts": [],
                 "step_payloads": {"preflight": preflight_payload},
                 "failures": 1,
-                "failed_step_names": [],
+                "failed_step_names": ["preflight"],
                 "retention": {
                     "removed_count": retention.get("removed_count", 0),
                     "removed_bytes": retention.get("removed_bytes", 0),
@@ -391,18 +391,35 @@ def execute_all(
 
             summary_path = run_dir / summary_name
             summary_payload = read_json_if_exists(summary_path)
-            if not summary_payload:
-                summary_payload = {"status": "PASS" if run_result["returncode"] == 0 else "FAIL"}
+            summary_exists = summary_path.exists()
+            reported_status = summary_payload.get("status", "") if summary_payload else ""
+            effective_status = "PASS"
+            failure_reasons: List[str] = []
+            if not summary_exists:
+                effective_status = "FAIL"
+                failure_reasons.append("missing_summary_file")
+            if run_result["timed_out"]:
+                effective_status = "FAIL"
+                failure_reasons.append("timed_out")
+            if run_result["returncode"] != 0:
+                effective_status = "FAIL"
+                failure_reasons.append(f"returncode={run_result['returncode']}")
+            if reported_status != "PASS":
+                effective_status = "FAIL"
+                failure_reasons.append(f"reported_status={reported_status or 'missing'}")
             script_summary = {
                 "name": name,
-                "status": summary_payload.get("status", "FAIL"),
+                "status": effective_status,
+                "reported_status": reported_status or "missing",
                 "returncode": run_result["returncode"],
                 "duration_sec": run_result["duration_sec"],
                 "summary_file": summary_path.name,
+                "summary_exists": summary_exists,
                 "timed_out": run_result["timed_out"],
+                "failure_reasons": failure_reasons,
             }
             script_summaries.append(script_summary)
-            if run_result["returncode"] != 0 or summary_payload.get("status") != "PASS":
+            if effective_status != "PASS":
                 overall_ok = False
 
             _emit_progress(progress_callback, "step_finish", {

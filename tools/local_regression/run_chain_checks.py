@@ -246,102 +246,136 @@ def main(argv=None) -> int:
     manifest = load_manifest()
     run_dir = resolve_run_dir("chain_checks")
     dataset_info = ensure_reduced_dataset()
-    params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
-    start_year = int(manifest["portfolio_start_year"])
-    max_positions = int(manifest["portfolio_max_positions"])
-    enable_rotation = bool(manifest["portfolio_enable_rotation"])
-    benchmark_ticker = str(manifest["benchmark_ticker"])
 
-    context = load_market_context(params)
-    all_tickers = context["discovered_tickers"]
-    portfolio_profile: Dict[str, Any] = {}
-    portfolio_result = run_portfolio_timeline(
-        context["all_dfs_fast"],
-        context["all_trade_logs"],
-        context["sorted_dates"],
-        start_year,
-        params,
-        max_positions,
-        enable_rotation,
-        benchmark_ticker=benchmark_ticker,
-        benchmark_data=context["all_dfs_fast"].get(benchmark_ticker),
-        is_training=False,
-        profile_stats=portfolio_profile,
-        verbose=False,
-    )
-    df_equity, df_trades = portfolio_result[0], portfolio_result[1]
-    replay_counts = build_target_replay_counts(
-        tickers=all_tickers,
-        all_dfs_fast=context["all_dfs_fast"],
-        all_trade_logs=context["all_trade_logs"],
-        sorted_dates=context["sorted_dates"],
-        params=params,
-        start_year=start_year,
-        max_positions=max_positions,
-        enable_rotation=enable_rotation,
-    )
+    try:
+        params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
+        start_year = int(manifest["portfolio_start_year"])
+        max_positions = int(manifest["portfolio_max_positions"])
+        enable_rotation = bool(manifest["portfolio_enable_rotation"])
+        benchmark_ticker = str(manifest["benchmark_ticker"])
 
-    detail_dir = run_dir / "chain_details"
-    detail_dir.mkdir(parents=True, exist_ok=True)
-    summary_rows = []
-    for ticker in all_tickers:
-        row = summarize_ticker(
-            ticker=ticker,
+        context = load_market_context(params)
+        all_tickers = context["discovered_tickers"]
+        portfolio_profile: Dict[str, Any] = {}
+        portfolio_result = run_portfolio_timeline(
+            context["all_dfs_fast"],
+            context["all_trade_logs"],
+            context["sorted_dates"],
+            start_year,
+            params,
+            max_positions,
+            enable_rotation,
+            benchmark_ticker=benchmark_ticker,
+            benchmark_data=context["all_dfs_fast"].get(benchmark_ticker),
+            is_training=False,
+            profile_stats=portfolio_profile,
+            verbose=False,
+        )
+        df_equity, df_trades = portfolio_result[0], portfolio_result[1]
+        replay_counts = build_target_replay_counts(
+            tickers=all_tickers,
+            all_dfs_fast=context["all_dfs_fast"],
+            all_trade_logs=context["all_trade_logs"],
+            sorted_dates=context["sorted_dates"],
             params=params,
             start_year=start_year,
-            df=context["prepared_frames"][ticker],
-            standalone_logs=context["all_trade_logs"][ticker],
-            sanitize_stats=context["sanitize_stats_map"][ticker],
-            replay_counts=replay_counts[ticker],
+            max_positions=max_positions,
+            enable_rotation=enable_rotation,
         )
-        summary_rows.append(row)
-        write_json(detail_dir / f"{ticker}.json", row)
 
-    summary_rows = sorted(summary_rows, key=lambda item: item["ticker"])
-    fieldnames = ["ticker", "single_trade_count", "single_missed_buys", "setup_days", "pit_pass_days", "candidate_days", "orderable_days", "portfolio_trade_rows", "filled_count", "portfolio_missed_buy_count", "debug_row_count", "blocked_by", "sanitize_dropped"]
-    write_csv(run_dir / "chain_summary.csv", summary_rows, fieldnames=fieldnames)
+        detail_dir = run_dir / "chain_details"
+        detail_dir.mkdir(parents=True, exist_ok=True)
+        summary_rows = []
+        for ticker in all_tickers:
+            row = summarize_ticker(
+                ticker=ticker,
+                params=params,
+                start_year=start_year,
+                df=context["prepared_frames"][ticker],
+                standalone_logs=context["all_trade_logs"][ticker],
+                sanitize_stats=context["sanitize_stats_map"][ticker],
+                replay_counts=replay_counts[ticker],
+            )
+            summary_rows.append(row)
+            write_json(detail_dir / f"{ticker}.json", row)
 
-    failures = []
-    duplicate_issues = list(context.get("duplicate_issues", []))
-    skipped_rows = list(context.get("skipped", []))
-    if duplicate_issues:
-        failures.append(f"duplicate_csv_inputs={len(duplicate_issues)}")
-    if skipped_rows:
-        failures.append(f"skipped_tickers={len(skipped_rows)}")
+        summary_rows = sorted(summary_rows, key=lambda item: item["ticker"])
+        fieldnames = ["ticker", "single_trade_count", "single_missed_buys", "setup_days", "pit_pass_days", "candidate_days", "orderable_days", "portfolio_trade_rows", "filled_count", "portfolio_missed_buy_count", "debug_row_count", "blocked_by", "sanitize_dropped"]
+        write_csv(run_dir / "chain_summary.csv", summary_rows, fieldnames=fieldnames)
 
-    for row in summary_rows:
-        if row["orderable_days"] > row["candidate_days"]:
-            failures.append(f"{row['ticker']}: orderable_days > candidate_days")
-        if row["filled_count"] + row["portfolio_missed_buy_count"] > row["portfolio_trade_rows"]:
-            failures.append(f"{row['ticker']}: filled+missed > portfolio_trade_rows")
+        failures = []
+        duplicate_issues = list(context.get("duplicate_issues", []))
+        skipped_rows = list(context.get("skipped", []))
+        if duplicate_issues:
+            failures.append(f"duplicate_csv_inputs={len(duplicate_issues)}")
+        if skipped_rows:
+            failures.append(f"skipped_tickers={len(skipped_rows)}")
 
-    highlights = _build_highlights(summary_rows)
-    summary = {
-        "status": "PASS" if not failures else "FAIL",
-        "dataset": manifest["dataset"],
-        "dataset_info": dataset_info,
-        "portfolio_snapshot": {
-            "equity_rows": int(len(df_equity)),
-            "trade_rows": int(len(df_trades)),
-            "annual_return_pct": round(float(portfolio_profile.get("annual_return_pct", 0.0)), 4),
-            "reserved_buy_fill_rate": round(float(portfolio_profile.get("reserved_buy_fill_rate", 0.0)), 4),
-        },
-        "ticker_count": len(all_tickers),
-        "csv_count": int(context.get("csv_count", 0)),
-        "duplicate_issue_count": len(duplicate_issues),
-        "skipped_ticker_count": len(skipped_rows),
-        "duplicate_issues": duplicate_issues,
-        "skipped": skipped_rows,
-        "detail_count": len(summary_rows),
-        "highlights": highlights,
-        "failures": failures,
-        "rows": summary_rows,
-    }
+        for row in summary_rows:
+            if row["orderable_days"] > row["candidate_days"]:
+                failures.append(f"{row['ticker']}: orderable_days > candidate_days")
+            if row["filled_count"] + row["portfolio_missed_buy_count"] > row["portfolio_trade_rows"]:
+                failures.append(f"{row['ticker']}: filled+missed > portfolio_trade_rows")
+
+        highlights = _build_highlights(summary_rows)
+        summary = {
+            "status": "PASS" if not failures else "FAIL",
+            "dataset": manifest["dataset"],
+            "dataset_info": dataset_info,
+            "runtime_error": "",
+            "portfolio_snapshot": {
+                "equity_rows": int(len(df_equity)),
+                "trade_rows": int(len(df_trades)),
+                "annual_return_pct": round(float(portfolio_profile.get("annual_return_pct", 0.0)), 4),
+                "reserved_buy_fill_rate": round(float(portfolio_profile.get("reserved_buy_fill_rate", 0.0)), 4),
+            },
+            "ticker_count": len(all_tickers),
+            "csv_count": int(context.get("csv_count", 0)),
+            "duplicate_issue_count": len(duplicate_issues),
+            "skipped_ticker_count": len(skipped_rows),
+            "duplicate_issues": duplicate_issues,
+            "skipped": skipped_rows,
+            "detail_count": len(summary_rows),
+            "highlights": highlights,
+            "failures": failures,
+            "rows": summary_rows,
+        }
+    except Exception as exc:
+        summary = {
+            "status": "FAIL",
+            "dataset": manifest["dataset"],
+            "dataset_info": dataset_info,
+            "runtime_error": f"{type(exc).__name__}: {exc}",
+            "portfolio_snapshot": {},
+            "ticker_count": 0,
+            "csv_count": 0,
+            "duplicate_issue_count": 0,
+            "skipped_ticker_count": 0,
+            "duplicate_issues": [],
+            "skipped": [],
+            "detail_count": 0,
+            "highlights": {},
+            "failures": [f"runtime_error={type(exc).__name__}"],
+            "rows": [],
+        }
+
     write_json(run_dir / "chain_summary.json", summary)
     write_json(run_dir / "chain_checks_summary.json", summary)
-    write_text(run_dir / "chain_console.log", json.dumps({"status": summary["status"], "ticker_count": len(all_tickers), "failures": failures}, ensure_ascii=False, indent=2))
-    print(json.dumps({"status": summary["status"], "ticker_count": len(all_tickers), "failures": failures}, ensure_ascii=False))
-    return 0 if not failures else 1
+    write_text(
+        run_dir / "chain_console.log",
+        json.dumps(
+            {
+                "status": summary["status"],
+                "ticker_count": summary.get("ticker_count", 0),
+                "failures": summary.get("failures", []),
+                "runtime_error": summary.get("runtime_error", ""),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+    print(json.dumps({"status": summary["status"], "ticker_count": summary.get("ticker_count", 0), "failures": summary.get("failures", []), "runtime_error": summary.get("runtime_error", "")}, ensure_ascii=False))
+    return 0 if summary["status"] == "PASS" else 1
 
 
 if __name__ == "__main__":
