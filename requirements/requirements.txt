@@ -2,6 +2,7 @@ numpy
 pandas
 openpyxl
 optuna
+SQLAlchemy
 requests
 yfinance
 FinMind
