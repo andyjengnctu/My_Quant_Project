@@ -18,6 +18,7 @@ _IMPORT_NAME_OVERRIDES = {
     "python-dateutil": "dateutil",
     "pyyaml": "yaml",
     "scikit-learn": "sklearn",
+    "sqlalchemy": "sqlalchemy",
 }
 
 
