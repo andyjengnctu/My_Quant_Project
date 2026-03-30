@@ -18,12 +18,7 @@ def main(argv=None, env=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
-
-    try:
-        validate_cli_args(argv, allowed_value_options=("--dataset",))
-    except ValueError as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
+    validate_cli_args(argv, value_options=("--dataset",))
 
     if has_help_flag(argv):
         print("用法: python apps/portfolio_sim.py [--dataset reduced|full]")

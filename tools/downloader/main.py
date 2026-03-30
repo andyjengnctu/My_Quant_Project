@@ -32,11 +32,7 @@ def smart_download_vip_data(tickers, market_last_date, verbose=True):
 def main(argv=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
-    try:
-        validate_cli_args(argv)
-    except ValueError as exc:
-        print(f"❌ {exc}", file=sys.stderr)
-        return 1
+    validate_cli_args(argv)
     if has_help_flag(argv):
         print("用法: python apps/smart_downloader.py")
         print("說明: 下載或更新完整資料集到預設 full dataset 路徑。")

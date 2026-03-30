@@ -187,14 +187,11 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print("=" * 78)
 
 
-def main() -> int:
+def main(argv=None) -> int:
     enable_line_buffered_stdout()
-    try:
-        validate_cli_args(sys.argv)
-    except ValueError as exc:
-        print(f"❌ {exc}", file=sys.stderr)
-        return 1
-    if has_help_flag(sys.argv):
+    argv = sys.argv if argv is None else argv
+    validate_cli_args(argv)
+    if has_help_flag(argv):
         print("用法: python apps/test_suite.py")
         print("說明: reduced 一鍵測試正式入口；先跑完整 regression，若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0

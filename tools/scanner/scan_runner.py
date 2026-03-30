@@ -92,11 +92,7 @@ def main(argv=None, env=None):
     import sys
     argv = sys.argv if argv is None else argv
     env = os.environ if env is None else env
-    try:
-        validate_cli_args(argv, allowed_value_options=("--dataset",))
-    except ValueError as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
+    validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
         print("用法: python apps/vip_scanner.py [--dataset reduced|full]")
         print("說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。")

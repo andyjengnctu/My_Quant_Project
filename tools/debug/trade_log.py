@@ -70,11 +70,7 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    try:
-        validate_cli_args(argv, allowed_value_options=("--dataset",))
-    except ValueError as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
+    validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
         print("用法: python tools/debug/trade_log.py [--dataset reduced|full]")
         print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
