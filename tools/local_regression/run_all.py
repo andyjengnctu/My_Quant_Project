@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
-from core.runtime_utils import has_help_flag, resolve_cli_program_name
+from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
 from tools.validate.preflight_env import format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
@@ -510,4 +510,4 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

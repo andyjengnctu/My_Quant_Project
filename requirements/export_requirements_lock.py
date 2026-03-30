@@ -1,6 +1,14 @@
 import os
 import re
+import sys
+from pathlib import Path
 from importlib.metadata import PackageNotFoundError, version
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,7 +61,11 @@ def write_lock_file(lock_file: str, locked_lines: list[str]) -> None:
         f.write('\n'.join(locked_lines) + '\n')
 
 
-def main() -> None:
+def main(argv=None) -> int:
+    parsed = parse_no_arg_cli(argv, "requirements/export_requirements_lock.py", description="依 requirements.txt 產生 requirements-lock.txt；不接受額外參數。")
+    if parsed["help"]:
+        return 0
+
     package_names = read_requirement_names(REQUIREMENTS_FILE)
     locked_lines, missing = resolve_locked_requirements(package_names)
 
@@ -66,7 +78,8 @@ def main() -> None:
 
     write_lock_file(LOCK_FILE, locked_lines)
     print(f"✅ 已輸出鎖版本檔：{LOCK_FILE}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    run_cli_entrypoint(main)

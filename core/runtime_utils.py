@@ -140,6 +140,20 @@ def validate_cli_args(argv, *, value_options=(), flag_options=()):
         raise ValueError(f"不支援的位置參數: {raw_arg}")
 
 
+def parse_no_arg_cli(argv, default_program, *, description=""):
+    args = list(sys.argv if argv is None else argv)
+    program_name = resolve_cli_program_name(args, default_program)
+
+    if has_help_flag(args):
+        print(f"用法: python {program_name}")
+        if description:
+            print(f"說明: {description}")
+        return {"help": True, "program_name": program_name}
+
+    validate_cli_args(args)
+    return {"help": False, "program_name": program_name}
+
+
 def run_cli_entrypoint(main_func, *args, handled_exceptions=(FileNotFoundError, ValueError, RuntimeError), error_formatter=None, **kwargs):
     try:
         raise SystemExit(main_func(*args, **kwargs))

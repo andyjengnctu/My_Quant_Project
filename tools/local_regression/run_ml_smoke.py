@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
 
 REQUIRED_PARAM_KEYS = [
@@ -25,7 +26,11 @@ REQUIRED_PARAM_KEYS = [
 ]
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parsed = parse_no_arg_cli(argv, "tools/local_regression/run_ml_smoke.py", description="執行 reduced optimizer smoke test；不接受額外參數。")
+    if parsed["help"]:
+        return 0
+
     manifest = load_manifest()
     run_dir = resolve_run_dir("ml_smoke")
     dataset_info = ensure_reduced_dataset()
@@ -84,4 +89,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

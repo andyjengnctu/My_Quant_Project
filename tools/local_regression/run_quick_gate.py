@@ -12,15 +12,41 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
-    ([sys.executable, "tools/validate/cli.py", "--help"], "python tools/validate/cli.py"),
-    ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
-    ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
+    ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
+    ([sys.executable, "apps/smart_downloader.py", "--help"], "python apps/smart_downloader.py"),
+    ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),
+    ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
+    ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
     ([sys.executable, "tools/debug/trade_log.py", "--help"], "python tools/debug/trade_log.py"),
+    ([sys.executable, "tools/downloader/main.py", "--help"], "python tools/downloader/main.py"),
+    ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
+    ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
+    ([sys.executable, "tools/local_regression/run_ml_smoke.py", "--help"], "python tools/local_regression/run_ml_smoke.py"),
+    ([sys.executable, "tools/local_regression/run_quick_gate.py", "--help"], "python tools/local_regression/run_quick_gate.py"),
+    ([sys.executable, "tools/optimizer/main.py", "--help"], "python tools/optimizer/main.py"),
+    ([sys.executable, "tools/portfolio_sim/main.py", "--help"], "python tools/portfolio_sim/main.py"),
+    ([sys.executable, "tools/scanner/main.py", "--help"], "python tools/scanner/main.py"),
+    ([sys.executable, "tools/validate/cli.py", "--help"], "python tools/validate/cli.py"),
+    ([sys.executable, "tools/validate/main.py", "--help"], "python tools/validate/main.py"),
+    ([sys.executable, "tools/validate/preflight_env.py", "--help"], "python tools/validate/preflight_env.py"),
+]
+NO_ARG_CLI_TARGETS = [
+    "requirements/export_requirements_lock.py",
+    "tools/local_regression/run_chain_checks.py",
+    "tools/local_regression/run_ml_smoke.py",
+    "tools/local_regression/run_quick_gate.py",
+]
+RUN_ALL_CLI_CASES = [
+    (["--only"], "--only 缺少值"),
+    (["--only="], "--only 不可為空"),
+    (["--only", "bad"], "--only 只接受"),
+    (["--bad"], "不支援的參數"),
 ]
 
 
@@ -95,6 +121,27 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
     return results
 
 
+def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
+    results = []
+    no_arg_cases = [
+        (["--bad"], "不支援的參數"),
+        (["bad"], "不支援的位置參數"),
+    ]
+    for target in NO_ARG_CLI_TARGETS:
+        for suffix_args, expected in no_arg_cases:
+            outcome = run_command([sys.executable, target, *suffix_args], timeout=timeout)
+            combined = f"{outcome['stdout']}\n{outcome['stderr']}"
+            ok = outcome["returncode"] != 0 and expected in combined
+            results.append(summarize_result(f"generic_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=expected))
+
+    for suffix_args, expected in RUN_ALL_CLI_CASES:
+        outcome = run_command([sys.executable, "tools/local_regression/run_all.py", *suffix_args], timeout=timeout)
+        combined = f"{outcome['stdout']}\n{outcome['stderr']}"
+        ok = outcome["returncode"] != 0 and expected in combined
+        results.append(summarize_result(f"generic_cli::run_all.py::{' '.join(suffix_args)}", ok, detail=expected))
+    return results
+
+
 @contextmanager
 def temporary_missing_file(target_path: Path):
     backup_path = target_path.with_suffix(target_path.suffix + ".bak_local_regression")
@@ -162,7 +209,11 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     return results
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parsed = parse_no_arg_cli(argv, "tools/local_regression/run_quick_gate.py", description="執行 reduced quick gate 靜態與錯誤路徑檢查；不接受額外參數。")
+    if parsed["help"]:
+        return 0
+
     manifest = load_manifest()
     run_dir = resolve_run_dir("quick_gate")
     timeout = int(manifest["subprocess_timeout_sec"])
@@ -172,6 +223,7 @@ def main() -> int:
     steps.extend(run_static_checks())
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
+    steps.extend(check_generic_cli_errors(timeout))
     steps.extend(check_error_paths(timeout))
 
     failed = [step for step in steps if step["status"] != "PASS"]
@@ -191,4 +243,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)

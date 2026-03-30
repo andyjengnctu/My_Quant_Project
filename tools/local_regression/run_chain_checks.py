@@ -21,6 +21,7 @@ from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats
 from core.portfolio_ops import cleanup_extended_signals_for_day, execute_reserved_entries_for_day, settle_portfolio_positions, try_rotate_weakest_position
 from core.portfolio_stats import find_sim_start_idx
 from tools.debug.trade_log import run_debug_backtest
+from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 
 
@@ -237,7 +238,11 @@ def _build_highlights(summary_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    parsed = parse_no_arg_cli(argv, "tools/local_regression/run_chain_checks.py", description="執行 reduced chain checks；不接受額外參數。")
+    if parsed["help"]:
+        return 0
+
     manifest = load_manifest()
     run_dir = resolve_run_dir("chain_checks")
     dataset_info = ensure_reduced_dataset()
@@ -328,4 +333,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run_cli_entrypoint(main)
