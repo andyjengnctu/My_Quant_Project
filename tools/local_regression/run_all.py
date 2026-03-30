@@ -35,11 +35,12 @@ from tools.local_regression.common import (
 )
 
 SCRIPT_ORDER = [
-    ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json", 900),
-    ("consistency", "tools/validate/cli.py", "validate_consistency_summary.json", 900),
-    ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json", 900),
-    ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json", 900),
+    ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json"),
+    ("consistency", "tools/validate/cli.py", "validate_consistency_summary.json"),
+    ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json"),
+    ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json"),
 ]
+SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = [name for name, *_ in SCRIPT_ORDER]
 DATASET_REQUIRED_STEPS = {"consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
@@ -104,6 +105,13 @@ def _major_step_total(*, selected_steps: List[str], include_dataset: bool) -> in
     return 1 + (1 if include_dataset else 0) + len(selected_steps) + 1
 
 
+def _resolve_step_timeout(name: str, manifest: Dict[str, Any]) -> int:
+    if name == "ml_smoke":
+        base_timeout = max(int(manifest["ml_smoke_timeout_sec"]), int(manifest["subprocess_timeout_sec"]))
+        return base_timeout + SCRIPT_TIMEOUT_GRACE_SEC
+    return int(manifest["subprocess_timeout_sec"])
+
+
 def _suggest_rerun_command(failed_steps: List[str]) -> str:
     if not failed_steps:
         return ""
@@ -111,14 +119,26 @@ def _suggest_rerun_command(failed_steps: List[str]) -> str:
     return f"python tools/local_regression/run_all.py --only {joined}"
 
 
+def _safe_read_json_with_error(path: Path) -> Dict[str, Any]:
+    try:
+        return read_json_if_exists(path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {
+            "status": "FAIL",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "summary_file": path.name,
+        }
+
+
 def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
     return {
-        "preflight": read_json_if_exists(run_dir / "preflight_summary.json"),
-        "dataset_prepare": read_json_if_exists(run_dir / "dataset_prepare_summary.json"),
-        "quick_gate": read_json_if_exists(run_dir / "quick_gate_summary.json"),
-        "consistency": read_json_if_exists(run_dir / "validate_consistency_summary.json"),
-        "chain_checks": read_json_if_exists(run_dir / "chain_summary.json"),
-        "ml_smoke": read_json_if_exists(run_dir / "ml_smoke_summary.json"),
+        "preflight": _safe_read_json_with_error(run_dir / "preflight_summary.json"),
+        "dataset_prepare": _safe_read_json_with_error(run_dir / "dataset_prepare_summary.json"),
+        "quick_gate": _safe_read_json_with_error(run_dir / "quick_gate_summary.json"),
+        "consistency": _safe_read_json_with_error(run_dir / "validate_consistency_summary.json"),
+        "chain_checks": _safe_read_json_with_error(run_dir / "chain_summary.json"),
+        "ml_smoke": _safe_read_json_with_error(run_dir / "ml_smoke_summary.json"),
     }
 
 
@@ -249,22 +269,33 @@ def _run_script(
     process = None
     returncode = 1
     timed_out = False
+    error_type = ""
+    error_message = ""
 
     with log_path.open("w", encoding="utf-8") as log_file:
         log_file.write(f"$ {sys.executable} {relative_script}\n")
         log_file.flush()
         try:
-            process = subprocess.Popen(
-                [sys.executable, relative_script],
-                cwd=str(PROJECT_ROOT),
-                env=env,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            while True:
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, relative_script],
+                    cwd=str(PROJECT_ROOT),
+                    env=env,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                error_type = type(exc).__name__
+                error_message = str(exc)
+                returncode = 127
+                log_file.write(f"[test_suite] launch_failed: {error_type}: {error_message}\n")
+                log_file.flush()
+                process = None
+
+            while process is not None:
                 returncode = process.poll()
                 elapsed_sec = round(time.time() - started, 1)
                 if returncode is not None:
@@ -272,9 +303,15 @@ def _run_script(
                 if elapsed_sec >= timeout_sec:
                     timed_out = True
                     process.kill()
-                    process.wait(timeout=5)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired as exc:
+                        error_type = type(exc).__name__
+                        error_message = str(exc)
                     returncode = 124
                     log_file.write(f"\n[test_suite] TIMEOUT after {timeout_sec} seconds\n")
+                    if error_type:
+                        log_file.write(f"[test_suite] wait_after_kill_failed: {error_type}: {error_message}\n")
                     log_file.flush()
                     break
                 _emit_progress(progress_callback, "step_progress", {
@@ -288,7 +325,14 @@ def _run_script(
         finally:
             if process is not None and process.poll() is None:
                 process.kill()
-                process.wait(timeout=5)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired as exc:
+                    if not error_type:
+                        error_type = type(exc).__name__
+                        error_message = str(exc)
+                    log_file.write(f"[test_suite] final_wait_failed: {type(exc).__name__}: {exc}\n")
+                    log_file.flush()
 
     duration_sec = round(time.time() - started, 3)
     return {
@@ -296,10 +340,13 @@ def _run_script(
         "duration_sec": duration_sec,
         "timed_out": timed_out,
         "log_path": str(log_path),
+        "error_type": error_type,
+        "error_message": error_message,
     }
 
 
 def execute_all(
+
     progress_callback: Optional[ProgressCallback] = None,
     selected_steps: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -349,9 +396,9 @@ def execute_all(
                 run_dir / "preflight_summary.txt",
                 run_dir / "artifacts_manifest.json",
             ]
+            write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
             master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()]
             write_json(run_dir / "master_summary.json", master_summary)
-            write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
             bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
             archived_bundle = archive_bundle_history(bundle_path)
             root_bundle_copy = publish_root_bundle_copy(archived_bundle)
@@ -427,9 +474,9 @@ def execute_all(
                     run_dir / "dataset_prepare_summary.txt",
                     run_dir / "artifacts_manifest.json",
                 ]
+                write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
                 master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()]
                 write_json(run_dir / "master_summary.json", master_summary)
-                write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
                 bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
                 archived_bundle = archive_bundle_history(bundle_path)
                 root_bundle_copy = publish_root_bundle_copy(archived_bundle)
@@ -469,7 +516,8 @@ def execute_all(
         selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
         script_summaries: List[Dict[str, Any]] = []
         overall_ok = True
-        for script_offset, (name, relative_script, summary_name, timeout_sec) in enumerate(selected_script_order, start=next_major_index):
+        for script_offset, (name, relative_script, summary_name) in enumerate(selected_script_order, start=next_major_index):
+            timeout_sec = _resolve_step_timeout(name, manifest)
             _emit_progress(progress_callback, "step_start", {
                 "name": name,
                 "major_index": script_offset,
@@ -489,14 +537,22 @@ def execute_all(
             )
 
             summary_path = run_dir / summary_name
-            summary_payload = read_json_if_exists(summary_path)
             summary_exists = summary_path.exists()
+            summary_read_error = ""
+            try:
+                summary_payload = read_json_if_exists(summary_path)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                summary_payload = {}
+                summary_read_error = f"{type(exc).__name__}: {exc}"
             reported_status = summary_payload.get("status", "") if summary_payload else ""
             effective_status = "PASS"
             failure_reasons: List[str] = []
             if not summary_exists:
                 effective_status = "FAIL"
                 failure_reasons.append("missing_summary_file")
+            if summary_read_error:
+                effective_status = "FAIL"
+                failure_reasons.append("summary_unreadable")
             if run_result["timed_out"]:
                 effective_status = "FAIL"
                 failure_reasons.append("timed_out")
@@ -506,6 +562,9 @@ def execute_all(
             if reported_status != "PASS":
                 effective_status = "FAIL"
                 failure_reasons.append(f"reported_status={reported_status or 'missing'}")
+            if run_result.get("error_type"):
+                effective_status = "FAIL"
+                failure_reasons.append(f"launch_error={run_result['error_type']}")
             script_summary = {
                 "name": name,
                 "status": effective_status,
@@ -514,7 +573,10 @@ def execute_all(
                 "duration_sec": run_result["duration_sec"],
                 "summary_file": summary_path.name,
                 "summary_exists": summary_exists,
+                "summary_read_error": summary_read_error,
                 "timed_out": run_result["timed_out"],
+                "error_type": run_result.get("error_type", ""),
+                "error_message": run_result.get("error_message", ""),
                 "failure_reasons": failure_reasons,
             }
             script_summaries.append(script_summary)
