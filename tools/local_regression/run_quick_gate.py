@@ -163,6 +163,8 @@ def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
 @contextmanager
 def temporary_missing_file(target_path: Path):
     backup_path = target_path.with_suffix(target_path.suffix + ".bak_local_regression")
+    if backup_path.exists():
+        raise RuntimeError(f"暫存備份已存在，疑似上次中斷殘留: {backup_path}")
     if not target_path.exists():
         raise FileNotFoundError(target_path)
     shutil.move(target_path, backup_path)
@@ -176,6 +178,8 @@ def temporary_missing_file(target_path: Path):
 @contextmanager
 def temporary_file_content(target_path: Path, replacement_text: str):
     backup_path = target_path.with_suffix(target_path.suffix + ".bak_local_regression")
+    if backup_path.exists():
+        raise RuntimeError(f"暫存備份已存在，疑似上次中斷殘留: {backup_path}")
     if not target_path.exists():
         raise FileNotFoundError(target_path)
     shutil.move(target_path, backup_path)
@@ -195,13 +199,21 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     db_path = PROJECT_ROOT / "models" / "portfolio_ai_10pos_overnight_reduced.db"
     db_backup = db_path.with_suffix(db_path.suffix + ".bak_local_regression")
 
-    with temporary_missing_file(params_path):
-        outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
-    results.append(summarize_result("error_path::missing_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺參數檔應 fail-fast"))
+    try:
+        with temporary_missing_file(params_path):
+            outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
+    except (FileNotFoundError, RuntimeError) as exc:
+        results.append(summarize_result("error_path::missing_best_params", False, detail=f"前置條件不足，無法模擬缺參數檔: {type(exc).__name__}: {exc}"))
+    else:
+        results.append(summarize_result("error_path::missing_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺參數檔應 fail-fast"))
 
-    with temporary_file_content(params_path, "{not-valid-json"):
-        outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
-    results.append(summarize_result("error_path::broken_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞參數檔應 fail-fast"))
+    try:
+        with temporary_file_content(params_path, "{not-valid-json"):
+            outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
+    except (FileNotFoundError, RuntimeError) as exc:
+        results.append(summarize_result("error_path::broken_best_params", False, detail=f"前置條件不足，無法模擬壞參數檔: {type(exc).__name__}: {exc}"))
+    else:
+        results.append(summarize_result("error_path::broken_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞參數檔應 fail-fast"))
 
     original_db_exists = db_path.exists()
     if original_db_exists:
