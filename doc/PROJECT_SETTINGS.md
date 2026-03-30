@@ -11,10 +11,10 @@
 
 1. 檢查必須一次找出所有問題，包含程式、工具、統計口徑、交易限制、初始化順序、錯誤路徑等。
 2. `apps/test_suite.py` 為本專案本地動態回歸正式入口，限定在本地端驗證；其產出的 bundle 為本地動態驗證主要依據。
-3. `apps/test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced`進行測試。
-4. 使用者未上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 僅依本輪提供之程式、ZIP、檔案做靜態檢查。
-5. 使用者有上傳本地 `apps/test_suite.py` 產出的 bundle 時，assistant 才依該結果檢查本地動態回歸問題。
-6. 雖然`apps/test_suite.py` 限定在本地端測試，但 assistant 有責任在必要時檢查 `test_suite.py` 是否完整覆蓋應驗項目。
+3. `test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced`進行測試。
+4. 使用者未上傳本地 `test_suite.py` 產出的 bundle 時，assistant 僅依本輪提供之程式、ZIP、檔案做靜態檢查。
+5. 使用者有上傳本地 `test_suite.py` 產出的 bundle 時，assistant 才依該結果檢查本地動態回歸問題。
+6. 雖然`test_suite.py` 限定在本地端測試，但 assistant 有責任在必要時(如修改測試編排、正式入口、核心統計口徑、錯誤路徑後)檢查 `test_suite.py` 是否完整覆蓋應驗項目。
 
 ## C. 回覆、交付與輸出
 
