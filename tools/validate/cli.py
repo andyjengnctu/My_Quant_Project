@@ -5,7 +5,12 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from tools.validate import main
+
+def main(argv=None, environ=None):
+    from tools.validate import main as validate_main
+
+    return validate_main(argv=argv, environ=environ)
+
 
 __all__ = ["main"]
 

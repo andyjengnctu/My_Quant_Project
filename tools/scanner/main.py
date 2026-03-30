@@ -5,7 +5,18 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from tools.scanner.scan_runner import main, run_daily_scanner
+
+def main(argv=None, env=None):
+    from tools.scanner.scan_runner import main as scanner_main
+
+    return scanner_main(argv=argv, env=env)
+
+
+def run_daily_scanner(*args, **kwargs):
+    from tools.scanner.scan_runner import run_daily_scanner as _run_daily_scanner
+
+    return _run_daily_scanner(*args, **kwargs)
+
 
 __all__ = [
     "run_daily_scanner",
