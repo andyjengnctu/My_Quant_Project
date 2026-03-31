@@ -612,6 +612,7 @@ def execute_all(
                 "major_index": next_major_index,
                 "major_total": major_total,
             })
+            next_major_index += 1
 
         selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
         script_summaries: List[Dict[str, Any]] = []
@@ -713,16 +714,21 @@ def execute_all(
         suggested_rerun_command = _suggest_rerun_command(failed_step_names)
 
         write_json(run_dir / "master_summary.json", master_summary)
-        write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
+        artifacts_manifest_path = _write_stable_artifacts_manifest(run_dir)
 
         bundle_mode = "minimum_set" if overall_ok else "debug_bundle"
         bundle_paths = select_bundle_paths(run_dir, overall_ok=overall_ok)
         master_summary["bundle_mode"] = bundle_mode
-        master_summary["bundle_entries"] = [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths]
+        master_summary["bundle_entries"] = _build_bundle_entries(run_dir, bundle_paths)
         master_summary["failed_step_names"] = failed_step_names
         master_summary["suggested_rerun_command"] = suggested_rerun_command
         write_json(run_dir / "master_summary.json", master_summary)
-        write_json(run_dir / "artifacts_manifest.json", build_artifacts_manifest(run_dir))
+        artifacts_manifest_path = _write_stable_artifacts_manifest(run_dir)
+        if overall_ok and artifacts_manifest_path not in bundle_paths:
+            bundle_paths.append(artifacts_manifest_path)
+        master_summary["bundle_entries"] = _build_bundle_entries(run_dir, bundle_paths)
+        write_json(run_dir / "master_summary.json", master_summary)
+        _write_stable_artifacts_manifest(run_dir)
 
         bundle_path = build_bundle_zip(run_dir, str(manifest["bundle_name"]), include_paths=bundle_paths)
         archived_bundle = archive_bundle_history(bundle_path)
