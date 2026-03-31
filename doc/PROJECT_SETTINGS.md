@@ -15,7 +15,7 @@
 3. 檢查範圍必須包含程式、工具、統計口徑、交易限制、初始化順序、錯誤路徑與正式入口一致性等。
 4. `apps/test_suite.py` 為本專案本地動態回歸正式入口，限定在本地端驗證；其產出的 bundle 為本地動態驗證主要依據。
 5. `test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced`進行測試。
-6. 使用者未上傳本地 `test_suite.py` 產出的 bundle 時，assistant 僅依本輪提供之程式、ZIP、檔案做靜態檢查。
+6. 使用者未上傳本地 `test_suite.py` 產出的 bundle 時，代表目前的動態測試ALL PASSED，assistant 僅依本輪提供之程式、ZIP、檔案做靜態檢查。
 7. 使用者有上傳本地 `test_suite.py` 產出的 bundle 時，assistant 才依該結果檢查本地動態回歸問題。
 8. 雖然`test_suite.py` 限定在本地端測試，但 assistant 有責任在必要時(如修改測試編排、正式入口、核心統計口徑、錯誤路徑後)檢查 `test_suite.py` 是否完整覆蓋應驗項目。
 9. 檢查結束時，必須列出各階段的開始時間、結束時間、耗時秒數、總耗時、最耗時階段，不得以觀察、估計或近似描述替代。
