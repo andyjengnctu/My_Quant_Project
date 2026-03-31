@@ -146,12 +146,12 @@ def build_validate_dataset_prompt(default=DEFAULT_VALIDATE_DATASET_PROFILE):
 def build_missing_dataset_dir_message(profile_key, data_dir):
     normalized_key = normalize_dataset_profile_key(profile_key)
     if normalized_key == DATASET_PROFILE_REDUCED:
-        return f"找不到資料夾 {data_dir}，請先由本投資專案的 data.zip 取得 tw_stock_data_vip_reduced。"
+        return f"找不到資料夾 {data_dir}，請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
     return f"找不到資料夾 {data_dir}，請先執行 apps/smart_downloader.py！"
 
 
 def build_empty_dataset_dir_message(profile_key, data_dir):
     normalized_key = normalize_dataset_profile_key(profile_key)
     if normalized_key == DATASET_PROFILE_REDUCED:
-        return f"資料夾 {data_dir} 內沒有任何 CSV 檔案，請先由本投資專案的 data.zip 取得 tw_stock_data_vip_reduced。"
+        return f"資料夾 {data_dir} 內沒有任何 CSV 檔案；請先將 tw_stock_data_vip_reduced 放到 <repo>/data/。"
     return f"資料夾 {data_dir} 內沒有任何 CSV 檔案。"

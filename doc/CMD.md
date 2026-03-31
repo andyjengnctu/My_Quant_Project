@@ -148,12 +148,11 @@ outputs/local_regression/
 
 ### reduced 資料集
 
-若專案根目錄尚未有 `data/tw_stock_data_vip_reduced`，local regression 會優先嘗試：
-1. `<repo>/data.zip`
-2. 環境變數 `V16_PROJECT_DATA_ZIP`
-3. `/mnt/data/data.zip`
+local regression 與 validate 的 reduced 測試資料來源固定為：
+- `<repo>/data/tw_stock_data_vip_reduced`
 
-自動解壓其中的 `tw_stock_data_vip_reduced` 到 `<repo>/data/`。
+不再支援 `data.zip`、`V16_PROJECT_DATA_ZIP` 或 `/mnt/data/data.zip` 回退來源。
+打包給 ChatGPT 前，請先確認該資料夾已隨專案一併納入 ZIP。
 
 
 ### apps 清理

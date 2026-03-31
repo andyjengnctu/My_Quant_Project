@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import uuid
-import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
@@ -21,7 +20,6 @@ LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
 DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
-REDUCED_DATASET_STAMP = REDUCED_DATASET_DIR / ".dataset_source.json"
 MANIFEST_DEFAULTS: Dict[str, Any] = {
     "benchmark_ticker": "0050",
     "bundle_name": "to_chatgpt_bundle.zip",
@@ -415,139 +413,18 @@ def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
     return {"artifact_count": len(artifacts), "artifacts": artifacts}
 
 
-def _resolve_dataset_zip_path() -> Optional[Path]:
-    candidate_paths: List[Path] = []
-    env_zip = os.environ.get("V16_PROJECT_DATA_ZIP", "").strip()
-    if env_zip:
-        candidate_paths.append(Path(env_zip))
-    candidate_paths.append(PROJECT_ROOT / "data.zip")
-    candidate_paths.append(Path("/mnt/data/data.zip"))
-    return next((path for path in candidate_paths if path.is_file()), None)
-
-
-def _collect_reduced_zip_members(zip_path: Path) -> List[zipfile.ZipInfo]:
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        members = [m for m in zf.infolist() if not m.is_dir() and "tw_stock_data_vip_reduced/" in m.filename.replace("\\", "/")]
-    if not members:
-        raise FileNotFoundError(f"{zip_path} 內找不到 tw_stock_data_vip_reduced")
-    return members
-
-
-def _build_dataset_stamp(zip_path: Path, members: List[zipfile.ZipInfo]) -> Dict[str, Any]:
-    stat = zip_path.stat()
-    csv_members: List[str] = []
-    for member in members:
-        parts = [part for part in member.filename.replace("\\", "/").split("/") if part]
-        dataset_idx = parts.index("tw_stock_data_vip_reduced")
-        relative_parts = parts[dataset_idx + 1 :]
-        if relative_parts and relative_parts[-1].lower().endswith(".csv"):
-            csv_members.append("/".join(relative_parts))
-    csv_members = sorted(csv_members)
-    return {
-        "zip_path": str(zip_path.resolve()),
-        "zip_size": int(stat.st_size),
-        "zip_mtime_ns": int(stat.st_mtime_ns),
-        "csv_members": csv_members,
-        "csv_count": len(csv_members),
-    }
-
-
-def _read_dataset_stamp() -> Dict[str, Any]:
-    if not REDUCED_DATASET_STAMP.exists():
-        return {}
-    try:
-        payload = read_json(REDUCED_DATASET_STAMP)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _current_dataset_csv_members() -> List[str]:
-    if not REDUCED_DATASET_DIR.is_dir():
-        return []
-    return sorted(str(path.relative_to(REDUCED_DATASET_DIR)).replace("\\", "/") for path in REDUCED_DATASET_DIR.rglob("*.csv"))
-
-
-def _is_current_dataset_usable(*, zip_path: Optional[Path]) -> bool:
-    current_members = _current_dataset_csv_members()
-    if not current_members:
-        return False
-    if zip_path is None:
-        return True
-    stamp = _read_dataset_stamp()
-    if not stamp:
-        return False
-    try:
-        expected_members = _build_dataset_stamp(zip_path, _collect_reduced_zip_members(zip_path))
-    except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile):
-        return False
-    return (
-        stamp.get("zip_path") == expected_members["zip_path"]
-        and int(stamp.get("zip_size", -1)) == expected_members["zip_size"]
-        and int(stamp.get("zip_mtime_ns", -1)) == expected_members["zip_mtime_ns"]
-        and list(stamp.get("csv_members", [])) == expected_members["csv_members"]
-        and current_members == expected_members["csv_members"]
-    )
-
-
 def ensure_reduced_dataset() -> Dict[str, Any]:
-    zip_path = _resolve_dataset_zip_path()
-    if _is_current_dataset_usable(zip_path=zip_path):
-        stamp = _read_dataset_stamp()
-        return {
-            "dataset_dir": str(REDUCED_DATASET_DIR),
-            "source": stamp.get("zip_path", "existing" if zip_path is None else str(zip_path)),
-            "csv_count": len(_current_dataset_csv_members()),
-            "reused_existing": True,
-        }
-
-    if zip_path is None:
-        existing_members = _current_dataset_csv_members()
-        if existing_members:
-            return {
-                "dataset_dir": str(REDUCED_DATASET_DIR),
-                "source": "existing_without_zip",
-                "csv_count": len(existing_members),
-                "reused_existing": True,
-            }
-        raise FileNotFoundError(
-            f"找不到 data.zip；請把本投資專案的 data.zip 放到 {PROJECT_ROOT / 'data.zip'}，或設定 V16_PROJECT_DATA_ZIP。"
-        )
-
-    members = _collect_reduced_zip_members(zip_path)
-    dataset_stamp = _build_dataset_stamp(zip_path, members)
-
-    ensure_dir(PROJECT_ROOT / "data")
-    if REDUCED_DATASET_DIR.exists():
-        shutil.rmtree(REDUCED_DATASET_DIR, ignore_errors=True)
-
-    extracted_files = 0
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for member in members:
-            parts = [part for part in member.filename.replace("\\", "/").split("/") if part]
-            dataset_idx = parts.index("tw_stock_data_vip_reduced")
-            relative_parts = parts[dataset_idx:]
-            target_path = PROJECT_ROOT / "data" / Path(*relative_parts)
-            ensure_dir(target_path.parent)
-            with zf.open(member, "r") as src, open(target_path, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-            extracted_files += 1
-
     actual_members = _current_dataset_csv_members()
     if not actual_members:
-        raise FileNotFoundError(f"自動解壓後仍找不到 {REDUCED_DATASET_DIR}")
-    if actual_members != dataset_stamp["csv_members"]:
-        raise RuntimeError(
-            f"reduced 資料集解壓後檔案清單不一致；預期 {len(dataset_stamp['csv_members'])} 檔，實際 {len(actual_members)} 檔"
+        raise FileNotFoundError(
+            f"找不到 reduced dataset；請確認 {REDUCED_DATASET_DIR} 存在，且內含至少一個 CSV 檔案。"
         )
 
-    write_json(REDUCED_DATASET_STAMP, dataset_stamp)
     return {
         "dataset_dir": str(REDUCED_DATASET_DIR),
-        "source": str(zip_path),
-        "extracted_files": extracted_files,
+        "source": "repo_data_dir",
         "csv_count": len(actual_members),
-        "reused_existing": False,
+        "reused_existing": True,
     }
 
 

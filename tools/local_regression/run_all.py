@@ -454,9 +454,9 @@ def _safe_format_preflight_summary(payload: Dict[str, Any]) -> str:
         return "\n".join(lines)
 
 
-def _run_preflight(run_dir: Path) -> Dict[str, Any]:
+def _run_preflight(run_dir: Path, *, selected_step_names: List[str]) -> Dict[str, Any]:
     started = time.time()
-    payload = run_preflight()
+    payload = run_preflight(selected_steps=selected_step_names)
     duration_sec = round(time.time() - started, 3)
     payload_with_duration = {**payload, "duration_sec": duration_sec}
     write_json(run_dir / "preflight_summary.json", payload_with_duration)
@@ -752,7 +752,7 @@ def execute_all(
                 major_index=1,
                 major_total=major_total,
                 progress_callback=progress_callback,
-                func=lambda: _run_preflight(run_dir),
+                func=lambda: _run_preflight(run_dir, selected_step_names=selected_step_names),
             )
         except Exception as exc:
             preflight_duration_sec = round(time.time() - preflight_started, 3)
