@@ -139,6 +139,40 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             reasons.append(f"reported_status={reported_status}")
         return ", ".join(reasons)
 
+    def _payload_detail_text(payload: Dict[str, Any]) -> str:
+        if not payload:
+            return ""
+        details = []
+        error_type = str(payload.get("error_type", "") or "").strip()
+        if error_type:
+            details.append(f"error_type={error_type}")
+        error_message = str(payload.get("error_message", "") or payload.get("runtime_error", "") or "").strip()
+        if error_message:
+            details.append(f"error_message={error_message}")
+        failed_packages = [str(item).strip() for item in payload.get("failed_packages", []) if str(item).strip()]
+        if failed_packages:
+            details.append("failed_packages=" + ",".join(failed_packages))
+        failed_steps = [str(item).strip() for item in payload.get("failed_steps", []) if str(item).strip()]
+        if failed_steps:
+            details.append("failed_steps=" + ",".join(failed_steps))
+        failures = [str(item).strip() for item in payload.get("failures", []) if str(item).strip()]
+        if failures:
+            details.append("failures=" + ",".join(failures))
+        summary_write_error = str(payload.get("summary_write_error", "") or "").strip()
+        if summary_write_error:
+            details.append(f"summary_write_error={summary_write_error}")
+        if "fail_count" in payload:
+            try:
+                details.append(f"fail_count={int(payload.get('fail_count', 0))}")
+            except (TypeError, ValueError):
+                pass
+        if "failed_count" in payload:
+            try:
+                details.append(f"failed_count={int(payload.get('failed_count', 0))}")
+            except (TypeError, ValueError):
+                pass
+        return ", ".join(details)
+
     def _blocked_reason(step_name: str) -> str:
         if step_name not in not_run_step_names:
             return ""
@@ -160,7 +194,9 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             return "NOT_RUN", _blocked_reason(name)
         issue_text = _payload_issue_text(payload)
         if issue_text:
-            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), issue_text
+            payload_detail = _payload_detail_text(payload)
+            detail_text = ", ".join(part for part in [issue_text, payload_detail] if part)
+            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), detail_text
         if script_item:
             return script_item.get("status", "PASS"), ""
         reported_status = str(payload.get("status", "") or "").strip()
@@ -214,7 +250,8 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         item = script_map.get(key, {})
         status, detail = _step_overview(key, step_payloads.get(key, {}), item)
         if item:
-            print(f"- {STEP_LABELS.get(key, key):<13} {status:<8} {item.get('duration_sec', 0.0):>6.2f}s")
+            detail_suffix = f" | {detail}" if detail and status != "PASS" else ""
+            print(f"- {STEP_LABELS.get(key, key):<13} {status:<8} {item.get('duration_sec', 0.0):>6.2f}s{detail_suffix}")
         else:
             print(f"- {STEP_LABELS.get(key, key):<13} {status:<8} {detail}")
 

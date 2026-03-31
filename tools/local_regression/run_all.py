@@ -181,6 +181,19 @@ def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
     reported_status = str(payload.get("status", "") or "").strip()
     if reported_status != "PASS":
         reasons.append(f"reported_status={reported_status or 'missing'}")
+
+    error_type = str(payload.get("error_type", "") or "").strip()
+    if error_type:
+        reasons.append(f"error_type={error_type}")
+    error_message = str(payload.get("error_message", "") or payload.get("runtime_error", "") or "").strip()
+    if error_message:
+        reasons.append(f"error_message={error_message}")
+    failed_packages = [str(item).strip() for item in payload.get("failed_packages", []) if str(item).strip()]
+    if failed_packages:
+        reasons.append("failed_packages=" + ",".join(failed_packages))
+    summary_write_error = str(payload.get("summary_write_error", "") or "").strip()
+    if summary_write_error:
+        reasons.append(f"summary_write_error={summary_write_error}")
     return reasons
 
 
@@ -922,6 +935,25 @@ def execute_all(
             if reported_status != "PASS":
                 effective_status = "FAIL"
                 failure_reasons.append(f"reported_status={reported_status or 'missing'}")
+                failed_steps = [str(item).strip() for item in summary_payload.get("failed_steps", []) if str(item).strip()]
+                if failed_steps:
+                    failure_reasons.append("failed_steps=" + ",".join(failed_steps))
+                failures = [str(item).strip() for item in summary_payload.get("failures", []) if str(item).strip()]
+                if failures:
+                    failure_reasons.append("summary_failures=" + ",".join(failures))
+                runtime_error = str(summary_payload.get("runtime_error", "") or summary_payload.get("error_message", "") or "").strip()
+                if runtime_error:
+                    failure_reasons.append(f"summary_error={runtime_error}")
+                if "fail_count" in summary_payload:
+                    try:
+                        failure_reasons.append(f"fail_count={int(summary_payload.get('fail_count', 0))}")
+                    except (TypeError, ValueError):
+                        pass
+                if "failed_count" in summary_payload:
+                    try:
+                        failure_reasons.append(f"failed_count={int(summary_payload.get('failed_count', 0))}")
+                    except (TypeError, ValueError):
+                        pass
             if run_result.get("error_type"):
                 effective_status = "FAIL"
                 failure_reasons.append(f"launch_error={run_result['error_type']}")
