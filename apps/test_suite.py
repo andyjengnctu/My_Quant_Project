@@ -119,6 +119,9 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         "failures": result.get("failures", 0),
         "overall_status": result.get("overall_status", "FAIL"),
     }
+    selected_steps = set(result.get("selected_steps", []))
+    failed_step_names = set(result.get("failed_step_names", []))
+    not_run_step_names = set(result.get("not_run_step_names", []))
     step_payloads = result.get("step_payloads", {})
     quick = step_payloads.get("quick_gate", {})
     consistency = step_payloads.get("consistency", {})
@@ -136,6 +139,35 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             reasons.append(f"reported_status={reported_status}")
         return ", ".join(reasons)
 
+    def _blocked_reason(step_name: str) -> str:
+        if step_name not in not_run_step_names:
+            return ""
+        if "manifest" in failed_step_names:
+            return "blocked_by_manifest"
+        if step_name == "dataset_prepare" and "preflight" in failed_step_names:
+            return "blocked_by_preflight"
+        if step_name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"}:
+            if "preflight" in failed_step_names:
+                return "blocked_by_preflight"
+            if "dataset_prepare" in failed_step_names:
+                return "blocked_by_dataset_prepare"
+        return "blocked_before_step"
+
+    def _step_overview(name: str, payload: Dict[str, Any], script_item: Dict[str, Any]) -> tuple[str, str]:
+        if name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"} and name not in selected_steps:
+            return "SKIP", "not_selected"
+        if name in not_run_step_names:
+            return "NOT_RUN", _blocked_reason(name)
+        issue_text = _payload_issue_text(payload)
+        if issue_text:
+            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), issue_text
+        if script_item:
+            return script_item.get("status", "PASS"), ""
+        reported_status = str(payload.get("status", "") or "").strip()
+        if reported_status:
+            return reported_status, ""
+        return "FAIL", "missing_summary_file"
+
     print("\n" + "=" * 78)
     print(" Test Suite 結果整理")
     print("=" * 78)
@@ -148,32 +180,27 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         )
 
     preflight = result.get("preflight", {})
-    preflight_issue = _payload_issue_text(preflight)
-    if preflight_issue:
-        print(f"preflight   : FAIL | {preflight_issue}")
-    else:
+    preflight_status, preflight_detail = _step_overview("preflight", preflight, {})
+    if preflight_status == "PASS":
         failed_packages = preflight.get("failed_packages", [])
         failed_text = ", ".join(failed_packages) if failed_packages else "(none)"
         print(
-            f"preflight   : {preflight.get('status', 'N/A')} | "
+            f"preflight   : {preflight_status} | "
             f"{preflight.get('duration_sec', 0.0):.2f}s | failed_packages={failed_text}"
         )
+    else:
+        print(f"preflight   : {preflight_status} | {preflight_detail}")
+
     dataset_prepare = step_payloads.get("dataset_prepare", {})
-    dataset_issue = _payload_issue_text(dataset_prepare)
-    if dataset_issue:
-        print(f"dataset prep: FAIL | {dataset_issue}")
-    elif dataset_prepare.get("status") == "PASS":
+    dataset_status, dataset_detail = _step_overview("dataset_prepare", dataset_prepare, {})
+    if dataset_status == "PASS":
         print(
             f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
             f"csv_count={dataset_prepare.get('csv_count', 0)} | "
             f"source={dataset_prepare.get('source', '')}"
         )
     else:
-        print(
-            f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
-            f"{dataset_prepare.get('duration_sec', 0.0):.2f}s | "
-            f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
-        )
+        print(f"dataset prep: {dataset_status} | {dataset_detail}")
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
@@ -182,25 +209,27 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
-    if script_map:
-        print("\n[步驟摘要]")
-        for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke"):
-            item = script_map.get(key, {})
-            print(f"- {STEP_LABELS.get(key, key):<13} {item.get('status', 'N/A'):<4} {item.get('duration_sec', 0.0):>6.2f}s")
+    print("\n[步驟摘要]")
+    for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke"):
+        item = script_map.get(key, {})
+        status, detail = _step_overview(key, step_payloads.get(key, {}), item)
+        if item:
+            print(f"- {STEP_LABELS.get(key, key):<13} {status:<8} {item.get('duration_sec', 0.0):>6.2f}s")
+        else:
+            print(f"- {STEP_LABELS.get(key, key):<13} {status:<8} {detail}")
 
     print("\n[重點結果]")
     quick_script = script_map.get("quick_gate", {})
-    quick_issue = _payload_issue_text(quick) or ", ".join(quick_script.get("failure_reasons", []))
-    if quick_issue:
-        print(f"- quick gate : {quick_script.get('status', 'FAIL')} | {quick_issue}")
-    else:
+    quick_status, quick_detail = _step_overview("quick_gate", quick, quick_script)
+    if quick_status == "PASS":
         print(f"- quick gate : step_count={quick.get('step_count', 0)} | failed_count={quick.get('failed_count', 0)}")
+    else:
+        fallback = ", ".join(quick_script.get("failure_reasons", []))
+        print(f"- quick gate : {quick_status} | {quick_detail or fallback}")
 
     consistency_script = script_map.get("consistency", {})
-    consistency_issue = _payload_issue_text(consistency) or ", ".join(consistency_script.get("failure_reasons", []))
-    if consistency_issue:
-        print(f"- consistency: {consistency_script.get('status', 'FAIL')} | {consistency_issue}")
-    else:
+    consistency_status, consistency_detail = _step_overview("consistency", consistency, consistency_script)
+    if consistency_status == "PASS":
         print(
             "- consistency: "
             f"total_checks={consistency.get('total_checks', 0)} | "
@@ -208,12 +237,13 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             f"skip_count={consistency.get('skip_count', 0)} | "
             f"real_tickers={consistency.get('real_ticker_count', 0)}"
         )
+    else:
+        fallback = ", ".join(consistency_script.get("failure_reasons", []))
+        print(f"- consistency: {consistency_status} | {consistency_detail or fallback}")
 
     chain_script = script_map.get("chain_checks", {})
-    chain_issue = _payload_issue_text(chain) or ", ".join(chain_script.get("failure_reasons", []))
-    if chain_issue:
-        print(f"- chain checks: {chain_script.get('status', 'FAIL')} | {chain_issue}")
-    else:
+    chain_status, chain_detail = _step_overview("chain_checks", chain, chain_script)
+    if chain_status == "PASS":
         portfolio_snapshot = chain.get("portfolio_snapshot", {})
         highlights = chain.get("highlights", {})
         print(
@@ -228,17 +258,21 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         if blocked_by_counts:
             blocked_preview = ", ".join(f"{key}:{value}" for key, value in list(blocked_by_counts.items())[:6])
             print(f"  blocked_by : {blocked_preview}")
+    else:
+        fallback = ", ".join(chain_script.get("failure_reasons", []))
+        print(f"- chain checks: {chain_status} | {chain_detail or fallback}")
 
     ml_script = script_map.get("ml_smoke", {})
-    ml_issue = _payload_issue_text(ml) or ", ".join(ml_script.get("failure_reasons", []))
-    if ml_issue:
-        print(f"- ml smoke   : {ml_script.get('status', 'FAIL')} | {ml_issue}")
-    else:
+    ml_status, ml_detail = _step_overview("ml_smoke", ml, ml_script)
+    if ml_status == "PASS":
         print(
             "- ml smoke   : "
             f"db_trial_count={ml.get('db_trial_count', 0)} | "
             f"status={ml.get('status', 'N/A')}"
         )
+    else:
+        fallback = ", ".join(ml_script.get("failure_reasons", []))
+        print(f"- ml smoke   : {ml_status} | {ml_detail or fallback}")
 
     if result["overall_status"] != "PASS":
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]

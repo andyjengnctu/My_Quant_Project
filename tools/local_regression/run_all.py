@@ -121,6 +121,43 @@ def _suggest_rerun_command(failed_steps: List[str]) -> str:
     return f"python tools/local_regression/run_all.py --only {joined}"
 
 
+def _compute_not_run_step_names(
+    *,
+    selected_step_names: List[str],
+    failed_step_names: List[str],
+    completed_script_names: Optional[List[str]] = None,
+    include_dataset: bool,
+) -> List[str]:
+    completed = set(completed_script_names or [])
+    failed = set(failed_step_names)
+    not_run: List[str] = []
+
+    if "manifest" in failed:
+        not_run.append("preflight")
+        if include_dataset:
+            not_run.append("dataset_prepare")
+        for name in selected_step_names:
+            if name not in completed:
+                not_run.append(name)
+        return not_run
+
+    if "preflight" in failed:
+        if include_dataset:
+            not_run.append("dataset_prepare")
+        for name in selected_step_names:
+            if name not in completed:
+                not_run.append(name)
+        return not_run
+
+    if "dataset_prepare" in failed:
+        for name in selected_step_names:
+            if name not in completed:
+                not_run.append(name)
+        return not_run
+
+    return [name for name in selected_step_names if name not in completed]
+
+
 def _safe_read_json_with_error(path: Path) -> Dict[str, Any]:
     try:
         return read_json_if_exists(path)
@@ -249,6 +286,13 @@ def _finalize_early_failure(
     if dataset_prepare_payload is not None:
         step_payloads["dataset_prepare"] = dataset_prepare_payload
 
+    not_run_step_names = _compute_not_run_step_names(
+        selected_step_names=selected_step_names,
+        failed_step_names=failed_step_names,
+        completed_script_names=[],
+        include_dataset=dataset_prepare_payload is not None,
+    )
+
     master_summary = {
         "overall_status": "FAIL",
         "dataset": manifest["dataset"],
@@ -261,6 +305,7 @@ def _finalize_early_failure(
         "preflight": preflight_payload,
         "bundle_mode": bundle_mode,
         "failed_step_names": failed_step_names,
+        "not_run_step_names": not_run_step_names,
         "suggested_rerun_command": "",
     }
     if dataset_prepare_payload is not None:
@@ -295,6 +340,7 @@ def _finalize_early_failure(
         "step_payloads": step_payloads,
         "failures": len(failed_step_names),
         "failed_step_names": failed_step_names,
+        "not_run_step_names": not_run_step_names,
         "retention": {
             "removed_count": retention.get("removed_count", 0),
             "removed_bytes": retention.get("removed_bytes", 0),
@@ -469,6 +515,13 @@ def _write_manifest_failure_bundle(
         ]) + "\n",
     )
 
+    not_run_step_names = _compute_not_run_step_names(
+        selected_step_names=selected_step_names,
+        failed_step_names=["manifest"],
+        completed_script_names=[],
+        include_dataset=include_dataset,
+    )
+
     master_summary = {
         "overall_status": "FAIL",
         "dataset": fallback_manifest["dataset"],
@@ -480,6 +533,7 @@ def _write_manifest_failure_bundle(
         "failures": 1,
         "bundle_mode": "manifest_failed",
         "failed_step_names": ["manifest"],
+        "not_run_step_names": not_run_step_names,
         "suggested_rerun_command": "",
         "manifest": error_payload,
     }
@@ -512,6 +566,7 @@ def _write_manifest_failure_bundle(
         "step_payloads": {"manifest": error_payload},
         "failures": 1,
         "failed_step_names": ["manifest"],
+        "not_run_step_names": not_run_step_names,
         "retention": {
             "removed_count": retention.get("removed_count", 0),
             "removed_bytes": retention.get("removed_bytes", 0),
@@ -908,8 +963,15 @@ def execute_all(
             if reasons:
                 payload_failures.append({"name": required_name, "failure_reasons": reasons})
 
+        completed_script_names = [item["name"] for item in script_summaries]
         failed_script_names = [item["name"] for item in script_summaries if item["status"] != "PASS"]
         failed_step_names = failed_script_names + [item["name"] for item in payload_failures]
+        not_run_step_names = _compute_not_run_step_names(
+            selected_step_names=selected_step_names,
+            failed_step_names=failed_step_names,
+            completed_script_names=completed_script_names,
+            include_dataset=include_dataset,
+        )
         overall_status = "PASS" if (overall_ok and not payload_failures) else "FAIL"
         suggested_rerun_command = _suggest_rerun_command(failed_script_names)
         master_summary = {
@@ -924,6 +986,7 @@ def execute_all(
             "preflight": step_payloads["preflight"],
             "dataset_prepare": step_payloads["dataset_prepare"],
             "payload_failures": payload_failures,
+            "not_run_step_names": not_run_step_names,
         }
 
         write_json(run_dir / "master_summary.json", master_summary)
@@ -968,6 +1031,7 @@ def execute_all(
             "preflight": preflight_summary,
             "selected_steps": selected_step_names,
             "failed_step_names": failed_step_names,
+            "not_run_step_names": not_run_step_names,
             "suggested_rerun_command": suggested_rerun_command,
         }
         _emit_progress(progress_callback, "done", result)
