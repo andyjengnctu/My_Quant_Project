@@ -1,9 +1,13 @@
 ## Going
-- 提升驗證效率
-    - 當使用者提供最新程式ZIP與對應的本地 `apps/test_suite.py` bundle 時，不得重複執行 bundle已覆蓋且可由報告證明的驗證；僅在bundle缺項、顯示 FAIL、與 ZIP 不一致、本輪修改點未覆蓋、或使用者明確要求時補驗。
-    - 不需動態測試，我會在本地端執行test_suite.py動態測試，但需驗證我提供的boundle 測試結果，以及驗證test_suite.py本身是否涵蓋完整。
-    - 專案設定中，是否應將requirements/requirements.txt改為requirements/requirements-lock.txt?
+
 - 優化專案設定
+4. `apps/test_suite.py` 為本專案預設的動態回歸正式入口，僅限定在本地端執行。
+5. `apps/test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced` 進行測試。
+6. assistant 不得重複執行或重複驗證 `apps/test_suite.py` 已涵蓋之測試項目；
+7. assistant 須對 `apps/test_suite.py` 未涵蓋、且確有必要、且無法由靜態檢查完成之項目進行動態測試或補驗。
+8. assistant 須協助使用者完善 `apps/test_suite.py` 在本地端的動態測試；若發現其未覆蓋本專案設定，必須明確指出缺口、風險與修正方法，以節省在 GPT 上的測試時間。
+9. 每輪檢查必須先產出「專案設定條文覆蓋表」，逐條列出檢查狀態、檢查方式（test_suite.py 已覆蓋 / 靜態檢查 / 補充動態測試）、證據、風險與修正方法；在覆蓋表完成前，不得直接進入局部修補或交付 patch。
+
 - 先提升訓練分數
     - 將訓練參數集中，包含是否停利
     - 將限制式集中
