@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
+from core.output_paths import build_output_dir
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
@@ -108,6 +109,29 @@ def run_static_checks() -> List[Dict[str, Any]]:
             extra={"hits": bare_except_hits, "ast_parse_errors": bare_except_scan_errors},
         )
     )
+    return results
+
+
+def check_output_path_contract() -> List[Dict[str, Any]]:
+    results = []
+    invalid_cases = [
+        ("output_path_contract::empty_category", "", "category 必填"),
+        ("output_path_contract::nested_category", "local_regression/archive", "單一工具分類資料夾名稱"),
+    ]
+
+    for name, category, expected_text in invalid_cases:
+        try:
+            build_output_dir(PROJECT_ROOT, category)
+            ok = False
+            detail = "應拒絕不合法 category，但函式未拋出例外"
+        except ValueError as exc:
+            ok = expected_text in str(exc)
+            detail = str(exc)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result(name, ok, detail=detail))
+
     return results
 
 
@@ -303,6 +327,7 @@ def main(argv=None) -> int:
 
     steps: List[Dict[str, Any]] = []
     steps.extend(run_static_checks())
+    steps.extend(check_output_path_contract())
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_generic_cli_errors(timeout))
