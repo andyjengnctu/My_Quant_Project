@@ -244,8 +244,9 @@ def _finalize_early_failure(
             "removed_count": retention.get("removed_count", 0),
             "removed_bytes": retention.get("removed_bytes", 0),
         },
-        "major_index": major_index,
+        "major_index": major_total,
         "major_total": major_total,
+        "failed_at_major_index": major_index,
         "preflight": preflight_summary or preflight_payload,
         "selected_steps": selected_step_names,
         "suggested_rerun_command": "",
@@ -358,10 +359,13 @@ def _run_preflight(run_dir: Path) -> Dict[str, Any]:
 
 def _write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
     summary = dict(payload)
+    duration_sec = round(float(summary.get("duration_sec", 0.0) or 0.0), 3)
+    summary["duration_sec"] = duration_sec
     write_json(run_dir / "dataset_prepare_summary.json", summary)
     if summary.get("status") == "PASS":
         lines = [
             f"status      : {summary.get('status', 'PASS')}",
+            f"duration_sec: {duration_sec}",
             f"dataset_dir : {summary.get('dataset_dir', '')}",
             f"source      : {summary.get('source', '')}",
             f"csv_count   : {summary.get('csv_count', 0)}",
@@ -373,7 +377,12 @@ def _write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Di
     else:
         write_text(
             run_dir / "dataset_prepare_summary.txt",
-            f"dataset_prepare failed: {summary.get('error_type', '')}: {summary.get('error_message', '')}\n",
+            "\n".join([
+                f"status      : {summary.get('status', 'FAIL')}",
+                f"duration_sec: {duration_sec}",
+                f"error_type  : {summary.get('error_type', '')}",
+                f"error_msg   : {summary.get('error_message', '')}",
+            ]) + "\n",
         )
     return summary
 
@@ -548,12 +557,20 @@ def execute_all(
         dataset_info: Dict[str, Any] = {}
         next_major_index = 2
         if include_dataset:
+            _emit_progress(progress_callback, "step_start", {
+                "name": "dataset_prepare",
+                "major_index": next_major_index,
+                "major_total": major_total,
+                "timeout_sec": 0,
+            })
+            dataset_prepare_started = time.time()
             try:
                 dataset_info = ensure_reduced_dataset()
-                _write_dataset_prepare_summary(
+                dataset_prepare_summary = _write_dataset_prepare_summary(
                     run_dir,
                     {
                         "status": "PASS",
+                        "duration_sec": round(time.time() - dataset_prepare_started, 3),
                         **dataset_info,
                     },
                 )
@@ -562,10 +579,18 @@ def execute_all(
                     run_dir,
                     {
                         "status": "FAIL",
+                        "duration_sec": round(time.time() - dataset_prepare_started, 3),
                         "error_type": type(exc).__name__,
                         "error_message": str(exc),
                     },
                 )
+                _emit_progress(progress_callback, "step_finish", {
+                    "name": "dataset_prepare",
+                    "status": dataset_prepare_summary["status"],
+                    "duration_sec": dataset_prepare_summary["duration_sec"],
+                    "major_index": next_major_index,
+                    "major_total": major_total,
+                })
                 preflight_payload = read_json_if_exists(run_dir / "preflight_summary.json")
                 return _finalize_early_failure(
                     run_dir=run_dir,
@@ -580,6 +605,13 @@ def execute_all(
                     preflight_summary=preflight_summary,
                     progress_callback=progress_callback,
                 )
+            _emit_progress(progress_callback, "step_finish", {
+                "name": "dataset_prepare",
+                "status": dataset_prepare_summary["status"],
+                "duration_sec": dataset_prepare_summary["duration_sec"],
+                "major_index": next_major_index,
+                "major_total": major_total,
+            })
 
         selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
         script_summaries: List[Dict[str, Any]] = []

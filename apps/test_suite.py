@@ -18,6 +18,7 @@ STEP_LABELS = {
     "chain_checks": "chain checks",
     "ml_smoke": "ml smoke",
     "preflight": "preflight",
+    "dataset_prepare": "dataset prepare",
 }
 
 
@@ -58,15 +59,6 @@ class ConsoleProgress:
 
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
         now = time.time()
-        if event == "dataset_ready":
-            line = self._step_text(
-                payload,
-                f"資料就緒 | {payload['dataset_info'].get('csv_count', 0)} 檔 reduced",
-                done=True,
-            )
-            self._finish_line(line)
-            return
-
         if event == "step_start":
             label = STEP_LABELS.get(payload["name"], payload["name"])
             self._render_inline(self._step_text(payload, f"準備執行 {label}", done=False))
@@ -137,12 +129,14 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     if dataset_prepare:
         if dataset_prepare.get("status") == "PASS":
             print(
-                f"dataset prep: PASS | csv_count={dataset_prepare.get('csv_count', 0)} | "
+                f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
+                f"csv_count={dataset_prepare.get('csv_count', 0)} | "
                 f"source={dataset_prepare.get('source', '')}"
             )
         else:
             print(
                 f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
+                f"{dataset_prepare.get('duration_sec', 0.0):.2f}s | "
                 f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
             )
     retention = result.get("retention", {})
