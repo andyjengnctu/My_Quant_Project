@@ -1,9 +1,16 @@
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
 from core.backtest_core import (
     build_cash_capped_entry_plan,
     calc_entry_price,
     resize_candidate_plan_to_capital,
     evaluate_history_candidate_metrics,
+    run_v16_backtest,
 )
+from core.portfolio_fast_data import get_pit_stats_from_index
 
 from .checks import add_check, make_synthetic_validation_params
 
@@ -143,4 +150,89 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     summary["stale_top_ticker"] = stale_top_ticker
     summary["cash_capped_top_ticker"] = cash_capped_top_ticker
     summary["available_cash"] = available_cash
+    return results, summary
+
+
+def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    case_id = "SYNTH_PIT_SAME_DAY_EXIT_EXCLUDED"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exit_dates = [
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 3),
+    ]
+    stats_index = {
+        "exit_dates": exit_dates,
+        "cum_trade_count": np.array([1, 2], dtype=np.int32),
+        "cum_win_count": np.array([1, 1], dtype=np.int32),
+        "cum_win_r_sum": np.array([1.0, 1.0], dtype=np.float64),
+        "cum_loss_r_sum": np.array([0.0, -1.0], dtype=np.float64),
+        "cum_total_r_sum": np.array([1.0, 0.0], dtype=np.float64),
+    }
+
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 2),
+        params,
+    )
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 3),
+        params,
+    )
+
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_trade_count_excludes_same_day_exit", 0, same_day_trade_count)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "same_day_candidate_uses_pre_exit_history_only", True, same_day_candidate, note="PIT 統計在 exit_date 當天不得偷看同日剛結束的交易。")
+
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
+    add_check(results, "synthetic_pit_same_day_exit_excluded", case_id, "next_day_candidate_includes_prior_exit", True, next_day_candidate)
+
+    summary["same_day_trade_count"] = int(same_day_trade_count)
+    summary["next_day_trade_count"] = int(next_day_trade_count)
+    return results, summary
+
+
+def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 5
+    params.min_history_ev = 0.5
+    params.min_history_win_rate = 0.8
+
+    case_id = "SYNTH_SINGLE_BACKTEST_NOT_GATED_BY_OWN_HISTORY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 101.0],
+            "High": [100.0, 101.0, 102.0],
+            "Low": [100.0, 99.0, 100.0],
+            "Close": [100.0, 100.0, 101.0],
+            "Volume": [1000.0, 1000.0, 1000.0],
+        },
+        index=pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+    )
+    precomputed_signals = (
+        np.array([1.0, 1.0, 1.0], dtype=np.float64),
+        np.array([True, False, False], dtype=bool),
+        np.array([False, True, False], dtype=bool),
+        np.array([100.0, np.nan, np.nan], dtype=np.float64),
+    )
+
+    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
+
+    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "trade_executes_even_when_history_threshold_unmet", 1, int(stats["trade_count"]))
+    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "history_filter_result_can_still_be_false_after_trade", False, bool(stats["is_candidate"]))
+    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "position_closed_after_indicator_sell", 0, int(stats["current_position"]))
+    add_check(results, "synthetic_single_backtest_not_gated_by_own_history", case_id, "winning_trade_recorded", True, float(stats["asset_growth"]) > 0.0)
+
+    summary["trade_count"] = int(stats["trade_count"])
+    summary["is_candidate"] = bool(stats["is_candidate"])
     return results, summary
