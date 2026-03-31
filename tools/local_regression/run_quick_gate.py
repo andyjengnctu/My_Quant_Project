@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
+from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
@@ -131,6 +132,66 @@ def check_output_path_contract() -> List[Dict[str, Any]]:
             ok = False
             detail = f"{type(exc).__name__}: {exc}"
         results.append(summarize_result(name, ok, detail=detail))
+
+    return results
+
+
+def check_outputs_root_layout() -> List[Dict[str, Any]]:
+    results = []
+    outputs_root = PROJECT_ROOT / "outputs"
+    stray_entries = []
+
+    if outputs_root.exists():
+        for child in sorted(outputs_root.iterdir()):
+            if child.is_dir():
+                continue
+            entry_type = "symlink" if child.is_symlink() else "file"
+            stray_entries.append(f"{entry_type}:{child.name}")
+
+    detail = "outputs/ 根目錄無散落檔案" if not stray_entries else ", ".join(stray_entries)
+    results.append(
+        summarize_result(
+            "outputs_root_layout::root_has_only_category_dirs",
+            not stray_entries,
+            detail=detail,
+            extra={"stray_entries": stray_entries},
+        )
+    )
+    return results
+
+
+def check_dataset_profile_contract() -> List[Dict[str, Any]]:
+    results = []
+
+    supported_profiles = sorted(DATASET_PROFILE_SPECS.keys())
+    results.append(
+        summarize_result(
+            "dataset_profile_contract::supported_profiles",
+            supported_profiles == ["full", "reduced"],
+            detail=f"supported={supported_profiles}",
+            extra={"supported_profiles": supported_profiles},
+        )
+    )
+
+    results.append(
+        summarize_result(
+            "dataset_profile_contract::validate_default_is_reduced",
+            DEFAULT_VALIDATE_DATASET_PROFILE == "reduced",
+            detail=f"DEFAULT_VALIDATE_DATASET_PROFILE={DEFAULT_VALIDATE_DATASET_PROFILE}",
+        )
+    )
+
+    try:
+        normalize_dataset_profile_key("raw")
+        ok = False
+        detail = 'normalize_dataset_profile_key("raw") 不應通過'
+    except ValueError as exc:
+        ok = "不支援的資料集模式" in str(exc)
+        detail = str(exc)
+    except Exception as exc:
+        ok = False
+        detail = f"{type(exc).__name__}: {exc}"
+    results.append(summarize_result("dataset_profile_contract::raw_profile_rejected", ok, detail=detail))
 
     return results
 
@@ -328,6 +389,8 @@ def main(argv=None) -> int:
     steps: List[Dict[str, Any]] = []
     steps.extend(run_static_checks())
     steps.extend(check_output_path_contract())
+    steps.extend(check_outputs_root_layout())
+    steps.extend(check_dataset_profile_contract())
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_generic_cli_errors(timeout))
