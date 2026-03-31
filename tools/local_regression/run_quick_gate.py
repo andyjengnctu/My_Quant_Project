@@ -16,7 +16,7 @@ from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
-from core.log_utils import append_issue_log, resolve_log_dir
+from core.log_utils import append_issue_log, build_timestamped_log_path, resolve_log_dir
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
@@ -236,6 +236,7 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
         ("log_path_contract::append_issue_log_parent_escape_rejected", "../outside.log", "不可包含 . 或 .."),
         ("log_path_contract::append_issue_log_absolute_outside_project_rejected", "/tmp/outside.log", "必須落在專案目錄內"),
         ("log_path_contract::append_issue_log_root_file_rejected", "outside.log", "必須包含目錄"),
+        ("log_path_contract::append_issue_log_outputs_root_file_rejected", "outputs/outside.log", "不可直接輸出到 outputs/ 根目錄"),
     ]
 
     for name, log_path, expected_text in invalid_path_cases:
@@ -243,6 +244,24 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
             append_issue_log(log_path, ["probe"])
             ok = False
             detail = "應拒絕不合法 log_path，但函式未拋出例外"
+        except ValueError as exc:
+            ok = expected_text in str(exc)
+            detail = str(exc)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result(name, ok, detail=detail))
+
+    invalid_prefix_cases = [
+        ("log_path_contract::build_timestamped_log_path_parent_escape_prefix_rejected", "../outside", "不可包含路徑分隔或 . / .."),
+        ("log_path_contract::build_timestamped_log_path_nested_prefix_rejected", "nested/prefix", "不可包含路徑分隔或 . / .."),
+    ]
+
+    for name, prefix, expected_text in invalid_prefix_cases:
+        try:
+            build_timestamped_log_path(prefix, log_dir=str(PROJECT_ROOT / "outputs" / "smart_downloader"), timestamp="20260331_000000")
+            ok = False
+            detail = "應拒絕不合法 prefix，但函式未拋出例外"
         except ValueError as exc:
             ok = expected_text in str(exc)
             detail = str(exc)

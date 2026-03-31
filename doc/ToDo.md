@@ -1,12 +1,7 @@
 ## Going
 
 - 優化專案設定
-4. `apps/test_suite.py` 為本專案預設的動態回歸正式入口，僅限定在本地端執行。
-5. `apps/test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced` 進行測試。
-6. assistant 不得重複執行或重複驗證 `apps/test_suite.py` 已涵蓋之測試項目；
-7. assistant 須對 `apps/test_suite.py` 未涵蓋、且確有必要、且無法由靜態檢查完成之項目進行動態測試或補驗。
-8. assistant 須協助使用者完善 `apps/test_suite.py` 在本地端的動態測試；若發現其未覆蓋本專案設定，必須明確指出缺口、風險與修正方法，以節省在 GPT 上的測試時間。
-9. 每輪檢查必須先產出「專案設定條文覆蓋表」，逐條列出檢查狀態、檢查方式（test_suite.py 已覆蓋 / 靜態檢查 / 補充動態測試）、證據、風險與修正方法；在覆蓋表完成前，不得直接進入局部修補或交付 patch。
+    - 在相同的程式下，為什麼ml smoke test有時過、有時不過 (reported_status=FAIL, failures=missing_best_params_for_qualified_trial)
 
 - 先提升訓練分數
     - 將訓練參數集中，包含是否停利

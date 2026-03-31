@@ -8,6 +8,26 @@ from core.runtime_utils import get_taipei_now
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT_PATH = Path(PROJECT_ROOT).resolve()
+OUTPUTS_ROOT_PATH = (PROJECT_ROOT_PATH / "outputs").resolve()
+
+
+def _normalize_log_file_prefix(prefix):
+    if prefix is None:
+        raise ValueError("prefix 必填，且不可包含路徑分隔或 . / ..")
+
+    raw_prefix = os.fspath(prefix).strip()
+    if not raw_prefix:
+        raise ValueError("prefix 必填，且不可包含路徑分隔或 . / ..")
+
+    prefix_path = Path(raw_prefix)
+    if prefix_path.is_absolute():
+        raise ValueError("prefix 不可為絕對路徑")
+
+    parts = prefix_path.parts
+    if len(parts) != 1 or parts[0] in {"", ".", ".."}:
+        raise ValueError("prefix 不可包含路徑分隔或 . / ..")
+
+    return parts[0]
 
 
 def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only):
@@ -43,9 +63,10 @@ def resolve_log_dir(log_dir=None):
 
 def build_timestamped_log_path(prefix, log_dir=None, timestamp=None):
     resolved_log_dir = resolve_log_dir(log_dir)
+    normalized_prefix = _normalize_log_file_prefix(prefix)
     os.makedirs(resolved_log_dir, exist_ok=True)
     ts = timestamp or get_taipei_now().strftime("%Y%m%d_%H%M%S")
-    return os.path.join(resolved_log_dir, f"{prefix}_{ts}.log")
+    return os.path.join(resolved_log_dir, f"{normalized_prefix}_{ts}.log")
 
 
 def write_issue_log(prefix, lines, log_dir=None, timestamp=None):
@@ -64,6 +85,10 @@ def append_issue_log(log_path, lines):
         return log_path
 
     resolved_log_path = _resolve_project_scoped_path(log_path, field_name="log_path", allow_file_name_only=False)
+    resolved_log_path_obj = Path(resolved_log_path)
+    if resolved_log_path_obj.parent == OUTPUTS_ROOT_PATH:
+        raise ValueError("log_path 不可直接輸出到 outputs/ 根目錄")
+
     resolved_log_dir = os.path.dirname(resolved_log_path)
 
     os.makedirs(resolved_log_dir, exist_ok=True)
