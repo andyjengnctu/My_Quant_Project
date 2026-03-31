@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -132,6 +133,20 @@ def _safe_read_json_with_error(path: Path) -> Dict[str, Any]:
         }
 
 
+def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
+    if not payload:
+        return ["missing_summary_file"]
+
+    reasons: List[str] = []
+    if payload.get("error_type"):
+        reasons.append("summary_unreadable")
+
+    reported_status = str(payload.get("status", "") or "").strip()
+    if reported_status != "PASS":
+        reasons.append(f"reported_status={reported_status or 'missing'}")
+    return reasons
+
+
 def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
     return {
         "preflight": _safe_read_json_with_error(run_dir / "preflight_summary.json"),
@@ -146,6 +161,45 @@ def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
 def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, payload: Dict[str, Any]) -> None:
     if progress_callback is not None:
         progress_callback(event, payload)
+
+
+def _run_inline_step_with_progress(
+    *,
+    name: str,
+    major_index: int,
+    major_total: int,
+    progress_callback: Optional[ProgressCallback],
+    func: Callable[[], Dict[str, Any]],
+) -> Dict[str, Any]:
+    holder: Dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            holder["result"] = func()
+        except BaseException as exc:
+            holder["exc"] = exc
+
+    started = time.time()
+    worker = threading.Thread(target=_runner, name=f"local_regression::{name}", daemon=True)
+    worker.start()
+    last_emit_ts = 0.0
+    while worker.is_alive():
+        worker.join(timeout=0.2)
+        if not worker.is_alive():
+            break
+        now = time.time()
+        if now - last_emit_ts >= 0.2:
+            last_emit_ts = now
+            _emit_progress(progress_callback, "step_progress", {
+                "name": name,
+                "major_index": major_index,
+                "major_total": major_total,
+                "elapsed_sec": round(now - started, 1),
+                "timeout_sec": 0,
+            })
+    if "exc" in holder:
+        raise holder["exc"]
+    return holder["result"]
 
 
 def _build_bundle_entries(run_dir: Path, bundle_paths: List[Path]) -> List[str]:
@@ -625,7 +679,13 @@ def execute_all(
         })
         preflight_started = time.time()
         try:
-            preflight_summary = _run_preflight(run_dir)
+            preflight_summary = _run_inline_step_with_progress(
+                name="preflight",
+                major_index=1,
+                major_total=major_total,
+                progress_callback=progress_callback,
+                func=lambda: _run_preflight(run_dir),
+            )
         except Exception as exc:
             preflight_duration_sec = round(time.time() - preflight_started, 3)
             preflight_runtime_error = f"{type(exc).__name__}: {exc}"
@@ -690,16 +750,31 @@ def execute_all(
                 "timeout_sec": 0,
             })
             dataset_prepare_started = time.time()
-            try:
-                dataset_info = ensure_reduced_dataset()
-                dataset_prepare_summary = _safe_write_dataset_prepare_summary(
+
+            def _prepare_dataset() -> Dict[str, Any]:
+                dataset_info_local = ensure_reduced_dataset()
+                return _safe_write_dataset_prepare_summary(
                     run_dir,
                     {
                         "status": "PASS",
                         "duration_sec": round(time.time() - dataset_prepare_started, 3),
-                        **dataset_info,
+                        **dataset_info_local,
                     },
                 )
+
+            try:
+                dataset_prepare_summary = _run_inline_step_with_progress(
+                    name="dataset_prepare",
+                    major_index=next_major_index,
+                    major_total=major_total,
+                    progress_callback=progress_callback,
+                    func=_prepare_dataset,
+                )
+                dataset_info = {
+                    key: dataset_prepare_summary[key]
+                    for key in ("dataset_dir", "source", "csv_count", "reused_existing", "extracted_files")
+                    if key in dataset_prepare_summary
+                }
             except Exception as exc:
                 dataset_prepare_summary = _safe_write_dataset_prepare_summary(
                     run_dir,
@@ -827,26 +902,35 @@ def execute_all(
 
         write_text(run_dir / "console_tail.txt", gather_recent_console_tail(run_dir) + "\n")
         step_payloads = _read_step_payloads(run_dir)
+        payload_failures = []
+        for required_name in ["preflight", *(["dataset_prepare"] if include_dataset else [])]:
+            reasons = _payload_failure_reasons(step_payloads.get(required_name, {}))
+            if reasons:
+                payload_failures.append({"name": required_name, "failure_reasons": reasons})
+
+        failed_script_names = [item["name"] for item in script_summaries if item["status"] != "PASS"]
+        failed_step_names = failed_script_names + [item["name"] for item in payload_failures]
+        overall_status = "PASS" if (overall_ok and not payload_failures) else "FAIL"
+        suggested_rerun_command = _suggest_rerun_command(failed_script_names)
         master_summary = {
-            "overall_status": "PASS" if overall_ok else "FAIL",
+            "overall_status": overall_status,
             "dataset": manifest["dataset"],
             "dataset_info": dataset_info,
             "timestamp": taipei_now().isoformat(),
             "git_commit": resolve_git_commit(),
             "scripts": script_summaries,
             "selected_steps": selected_step_names,
-            "failures": sum(1 for item in script_summaries if item["status"] != "PASS"),
+            "failures": len(failed_step_names),
             "preflight": step_payloads["preflight"],
             "dataset_prepare": step_payloads["dataset_prepare"],
+            "payload_failures": payload_failures,
         }
-        failed_step_names = [item["name"] for item in script_summaries if item["status"] != "PASS"]
-        suggested_rerun_command = _suggest_rerun_command(failed_step_names)
 
         write_json(run_dir / "master_summary.json", master_summary)
         artifacts_manifest_path = _write_stable_artifacts_manifest(run_dir)
 
-        bundle_mode = "minimum_set" if overall_ok else "debug_bundle"
-        bundle_paths = select_bundle_paths(run_dir, overall_ok=overall_ok)
+        bundle_mode = "minimum_set" if overall_status == "PASS" else "debug_bundle"
+        bundle_paths = select_bundle_paths(run_dir, overall_ok=overall_status == "PASS")
         master_summary["bundle_mode"] = bundle_mode
         master_summary["bundle_entries"] = _build_bundle_entries(run_dir, bundle_paths)
         master_summary["failed_step_names"] = failed_step_names
@@ -865,7 +949,7 @@ def execute_all(
         retention = _apply_output_retention(manifest)
 
         result = {
-            "overall_status": master_summary["overall_status"],
+            "overall_status": overall_status,
             "dataset": manifest["dataset"],
             "bundle": str(root_bundle_copy),
             "archived_bundle": str(archived_bundle),

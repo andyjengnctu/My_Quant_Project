@@ -48,13 +48,14 @@ class ConsoleProgress:
         print()
         self.last_line_width = 0
 
-    def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool) -> str:
+    def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool, progress_index: int | None = None) -> str:
         major_index = int(payload.get("major_index", 0) or 0)
         major_total = int(payload.get("major_total", 1) or 1)
+        display_index = major_index if progress_index is None else int(progress_index)
         elapsed_total = time.time() - self.suite_started
         return (
-            f"[{major_index}/{major_total}] "
-            f"{self._build_bar(major_index, major_total, done=done)} "
+            f"[{display_index}/{major_total}] "
+            f"{self._build_bar(display_index, major_total, done=done)} "
             f"{body} | 累計 {elapsed_total:.1f}s"
         )
 
@@ -99,8 +100,18 @@ class ConsoleProgress:
             return
 
         if event == "done":
-            symbol = "✓" if payload["overall_status"] == "PASS" else "✗"
-            self._finish_line(self._step_text(payload, f"{symbol} 完成 | {payload['overall_status']}", done=True))
+            if payload["overall_status"] == "PASS":
+                self._finish_line(self._step_text(payload, f"✓ 完成 | {payload['overall_status']}", done=True))
+            else:
+                failed_at = int(payload.get("failed_at_major_index", payload.get("major_index", 0)) or 0)
+                self._finish_line(
+                    self._step_text(
+                        payload,
+                        f"✗ 結束 | {payload['overall_status']}",
+                        done=False,
+                        progress_index=failed_at,
+                    )
+                )
 
 def _print_human_summary(result: Dict[str, Any]) -> None:
     master = {
@@ -114,6 +125,17 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     chain = step_payloads.get("chain_checks", {})
     ml = step_payloads.get("ml_smoke", {})
 
+    def _payload_issue_text(payload: Dict[str, Any]) -> str:
+        if not payload:
+            return "missing_summary_file"
+        reasons = []
+        if payload.get("error_type"):
+            reasons.append("summary_unreadable")
+        reported_status = str(payload.get("status", "") or "").strip()
+        if reported_status and reported_status != "PASS":
+            reasons.append(f"reported_status={reported_status}")
+        return ", ".join(reasons)
+
     print("\n" + "=" * 78)
     print(" Test Suite 結果整理")
     print("=" * 78)
@@ -126,7 +148,10 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         )
 
     preflight = result.get("preflight", {})
-    if preflight:
+    preflight_issue = _payload_issue_text(preflight)
+    if preflight_issue:
+        print(f"preflight   : FAIL | {preflight_issue}")
+    else:
         failed_packages = preflight.get("failed_packages", [])
         failed_text = ", ".join(failed_packages) if failed_packages else "(none)"
         print(
@@ -134,19 +159,21 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             f"{preflight.get('duration_sec', 0.0):.2f}s | failed_packages={failed_text}"
         )
     dataset_prepare = step_payloads.get("dataset_prepare", {})
-    if dataset_prepare:
-        if dataset_prepare.get("status") == "PASS":
-            print(
-                f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
-                f"csv_count={dataset_prepare.get('csv_count', 0)} | "
-                f"source={dataset_prepare.get('source', '')}"
-            )
-        else:
-            print(
-                f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
-                f"{dataset_prepare.get('duration_sec', 0.0):.2f}s | "
-                f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
-            )
+    dataset_issue = _payload_issue_text(dataset_prepare)
+    if dataset_issue:
+        print(f"dataset prep: FAIL | {dataset_issue}")
+    elif dataset_prepare.get("status") == "PASS":
+        print(
+            f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
+            f"csv_count={dataset_prepare.get('csv_count', 0)} | "
+            f"source={dataset_prepare.get('source', '')}"
+        )
+    else:
+        print(
+            f"dataset prep: {dataset_prepare.get('status', 'N/A')} | "
+            f"{dataset_prepare.get('duration_sec', 0.0):.2f}s | "
+            f"{dataset_prepare.get('error_type', '')}: {dataset_prepare.get('error_message', '')}"
+        )
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
@@ -162,34 +189,56 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             print(f"- {STEP_LABELS.get(key, key):<13} {item.get('status', 'N/A'):<4} {item.get('duration_sec', 0.0):>6.2f}s")
 
     print("\n[重點結果]")
-    print(f"- quick gate : step_count={quick.get('step_count', 0)} | failed_count={quick.get('failed_count', 0)}")
-    print(
-        "- consistency: "
-        f"total_checks={consistency.get('total_checks', 0)} | "
-        f"fail_count={consistency.get('fail_count', 0)} | "
-        f"skip_count={consistency.get('skip_count', 0)} | "
-        f"real_tickers={consistency.get('real_ticker_count', 0)}"
-    )
+    quick_script = script_map.get("quick_gate", {})
+    quick_issue = _payload_issue_text(quick) or ", ".join(quick_script.get("failure_reasons", []))
+    if quick_issue:
+        print(f"- quick gate : {quick_script.get('status', 'FAIL')} | {quick_issue}")
+    else:
+        print(f"- quick gate : step_count={quick.get('step_count', 0)} | failed_count={quick.get('failed_count', 0)}")
 
-    portfolio_snapshot = chain.get("portfolio_snapshot", {})
-    highlights = chain.get("highlights", {})
-    print(
-        "- chain checks: "
-        f"ticker_count={chain.get('ticker_count', 0)} | "
-        f"traded_ticker_count={highlights.get('traded_ticker_count', 0)} | "
-        f"missed_buy_ticker_count={highlights.get('missed_buy_ticker_count', 0)} | "
-        f"trade_rows={portfolio_snapshot.get('trade_rows', 0)} | "
-        f"reserved_buy_fill_rate={portfolio_snapshot.get('reserved_buy_fill_rate', 0.0)}"
-    )
-    blocked_by_counts = highlights.get("blocked_by_counts", {})
-    if blocked_by_counts:
-        blocked_preview = ", ".join(f"{key}:{value}" for key, value in list(blocked_by_counts.items())[:6])
-        print(f"  blocked_by : {blocked_preview}")
-    print(
-        "- ml smoke   : "
-        f"db_trial_count={ml.get('db_trial_count', 0)} | "
-        f"status={ml.get('status', 'N/A')}"
-    )
+    consistency_script = script_map.get("consistency", {})
+    consistency_issue = _payload_issue_text(consistency) or ", ".join(consistency_script.get("failure_reasons", []))
+    if consistency_issue:
+        print(f"- consistency: {consistency_script.get('status', 'FAIL')} | {consistency_issue}")
+    else:
+        print(
+            "- consistency: "
+            f"total_checks={consistency.get('total_checks', 0)} | "
+            f"fail_count={consistency.get('fail_count', 0)} | "
+            f"skip_count={consistency.get('skip_count', 0)} | "
+            f"real_tickers={consistency.get('real_ticker_count', 0)}"
+        )
+
+    chain_script = script_map.get("chain_checks", {})
+    chain_issue = _payload_issue_text(chain) or ", ".join(chain_script.get("failure_reasons", []))
+    if chain_issue:
+        print(f"- chain checks: {chain_script.get('status', 'FAIL')} | {chain_issue}")
+    else:
+        portfolio_snapshot = chain.get("portfolio_snapshot", {})
+        highlights = chain.get("highlights", {})
+        print(
+            "- chain checks: "
+            f"ticker_count={chain.get('ticker_count', 0)} | "
+            f"traded_ticker_count={highlights.get('traded_ticker_count', 0)} | "
+            f"missed_buy_ticker_count={highlights.get('missed_buy_ticker_count', 0)} | "
+            f"trade_rows={portfolio_snapshot.get('trade_rows', 0)} | "
+            f"reserved_buy_fill_rate={portfolio_snapshot.get('reserved_buy_fill_rate', 0.0)}"
+        )
+        blocked_by_counts = highlights.get("blocked_by_counts", {})
+        if blocked_by_counts:
+            blocked_preview = ", ".join(f"{key}:{value}" for key, value in list(blocked_by_counts.items())[:6])
+            print(f"  blocked_by : {blocked_preview}")
+
+    ml_script = script_map.get("ml_smoke", {})
+    ml_issue = _payload_issue_text(ml) or ", ".join(ml_script.get("failure_reasons", []))
+    if ml_issue:
+        print(f"- ml smoke   : {ml_script.get('status', 'FAIL')} | {ml_issue}")
+    else:
+        print(
+            "- ml smoke   : "
+            f"db_trial_count={ml.get('db_trial_count', 0)} | "
+            f"status={ml.get('status', 'N/A')}"
+        )
 
     if result["overall_status"] != "PASS":
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
