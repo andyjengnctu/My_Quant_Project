@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
