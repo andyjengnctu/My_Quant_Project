@@ -100,7 +100,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數；訓練結束後若記憶庫已有及格 trial，會同步匯出 best_params.json。")
         return 0
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
     from tools.optimizer.prep import load_all_raw_data
@@ -114,7 +114,7 @@ def main(argv=None, environ=None):
         resolve_trial_count_or_exit,
     )
     from tools.optimizer.session import close_study_storage
-    from tools.optimizer.study_utils import build_optimizer_db_file_path, resolve_optimizer_trial_count
+    from tools.optimizer.study_utils import build_optimizer_db_file_path, get_best_completed_trial_or_none, is_qualified_trial_value, resolve_optimizer_trial_count
 
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     configure_optuna_logging()
@@ -231,6 +231,16 @@ def main(argv=None, environ=None):
         print()
         session.profile_recorder.print_summary()
         session.print_optimizer_prep_summary()
+        best_trial = get_best_completed_trial_or_none(study)
+        if best_trial is not None and is_qualified_trial_value(best_trial.value):
+            export_status = export_best_params_if_requested(
+                study,
+                best_params_path=BEST_PARAMS_PATH,
+                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                colors=COLORS,
+            )
+            if export_status != 0:
+                return 1
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
