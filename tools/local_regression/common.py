@@ -414,6 +414,15 @@ def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
     return {"artifact_count": len(artifacts), "artifacts": artifacts}
 
 
+def _current_dataset_csv_members() -> List[str]:
+    if not REDUCED_DATASET_DIR.is_dir():
+        return []
+    return sorted(
+        str(path.relative_to(REDUCED_DATASET_DIR)).replace("\\", "/")
+        for path in REDUCED_DATASET_DIR.rglob("*.csv")
+    )
+
+
 def ensure_reduced_dataset() -> Dict[str, Any]:
     actual_members = _current_dataset_csv_members()
     if not actual_members:
