@@ -40,6 +40,8 @@ project/
 │  ├─ portfolio_exits.py          # 投組出場流程：汰弱換股、持倉結算、期末結算
 │  ├─ portfolio_ops.py            # 投組日內操作 façade：統一匯出 entries / exits 介面
 │  ├─ portfolio_stats.py          # 投組曲線/年度/年化統計與分數計算單一口徑
+│  ├─ position_step.py            # 單股持倉 K 棒步進與出場事件處理
+│  ├─ backtest_finalize.py        # 單股回測期末結算與統計彙整
 │  └─ runtime_utils.py            # 執行期共用工具：ProcessPool 啟動方法、Asia/Taipei 時間工具
 ├─ doc/
 │  ├─ ARCHITECTURE.md                 # 本檔；檔案樹、用途與依賴原則說明
@@ -85,6 +87,9 @@ project/
    ├─ debug/
    │  ├─ __init__.py                  # debug 子套件 façade；統一匯出 debug 公開介面
    │  ├─ backtest.py                  # 交易回放與明細列建構
+   │  ├─ entry_flow.py                # debug 買進 / 延續候選進場流程
+   │  ├─ exit_flow.py                 # debug 出場 / 錯失賣出 / 期末結算流程
+   │  ├─ log_rows.py                  # debug 明細列建構與半倉停利價 helper
    │  ├─ reporting.py                 # debug 報表輸出與虧損摘要
    │  └─ trade_log.py                 # 交易除錯入口、資料集解析與對外包裝
    ├─ optimizer/
@@ -104,6 +109,7 @@ project/
       ├─ __init__.py                  # validate 子套件 façade；統一匯出 validate 公開介面
       ├─ check_result_utils.py        # validate 檢查結果記錄、ticker 正規化與共用失敗/跳過判定
       ├─ checks.py                    # validate checks façade：統一匯出結果/統計/scanner 預期 helpers
+      ├─ cli.py                       # validate standalone CLI 薄入口
       ├─ main.py                      # 一致性驗證總控；資料集解析、真實掃描協調與結果彙整
       ├─ real_case_assertions.py      # 真實 ticker 驗證的 cross-check 規則與比對項目
       ├─ real_case_io.py              # 真實 ticker 驗證的 CSV 路徑解析與資料清洗載入
@@ -112,6 +118,7 @@ project/
       ├─ module_loader.py            # validate 模組動態載入、可恢復例外與模組快取
       ├─ portfolio_payloads.py        # validate 投組 payload、年度欄位與 completed trade 摘要 helper
       ├─ reporting.py                 # validate 報表輸出與 console summary
+      ├─ scanner_expectations.py      # scanner 預期 payload / reference check helper
       ├─ synthetic_cases.py           # synthetic suite 入口與 validator 編排
       ├─ synthetic_fixtures.py        # synthetic 測試資料與案例生成
       ├─ synthetic_param_cases.py     # synthetic 參數 guardrail / 排序與歷史門檻案例
@@ -120,8 +127,10 @@ project/
       ├─ synthetic_take_profit_cases.py # synthetic 半倉停利/不可執行半倉停利案例
       ├─ tool_adapters.py             # validate 對 apps/debug 工具的動態載入 façade
       ├─ tool_check_common.py         # smoke check 共用輸出抑制與日期欄位解析
+      ├─ tool_checks.py               # smoke check façade
       ├─ portfolio_tool_checks.py     # portfolio_sim smoke checks
       ├─ external_tool_checks.py      # scanner/downloader/debug smoke checks
+      ├─ preflight_env.py             # requirements 依賴 preflight 檢查
       └─ trade_rebuild.py             # trade log / completed trade 重建工具
 ```
 
@@ -156,8 +165,6 @@ project/
 - 新增、刪除、移動、拆分、合併檔案，或調整模組責任與依賴方向時，必須同步更新本文件與 `doc/CMD.md`。
 - 若本文件與實際程式不一致，應優先修正文件，不得放任過期。
 
-- `core/position_step.py`: 單股持倉 K 棒步進與出場事件處理。
-- `core/backtest_finalize.py`: 單股回測期末結算與統計彙整。
 
 
 ## Local Regression（reduced only）

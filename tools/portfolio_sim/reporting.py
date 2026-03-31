@@ -1,12 +1,10 @@
 import os
-import webbrowser
 
 import numpy as np
 import pandas as pd
 
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary
-from core.runtime_utils import should_auto_open_browser
 from core.output_paths import build_output_dir
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,9 +57,5 @@ def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_ye
         fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤</b> ({start_year} 至今)', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
         fig.write_html(DASHBOARD_HTML_PATH)
         print(f"{C_GREEN}📊 互動式網頁已生成: {DASHBOARD_HTML_PATH}{C_RESET}")
-        if should_auto_open_browser(os.environ):
-            webbrowser.open('file://' + os.path.realpath(DASHBOARD_HTML_PATH))
-        else:
-            print(f"{C_GRAY}ℹ️ 目前為非互動或無圖形環境，略過自動開啟瀏覽器。{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:
         print(f"{C_YELLOW}⚠️ Plotly 圖表輸出或開啟失敗: {format_exception_summary(e)}{C_RESET}")

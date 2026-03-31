@@ -1,11 +1,13 @@
 import os
 import sys
+import webbrowser
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.log_utils import format_exception_summary
+from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, should_auto_open_browser, validate_cli_args
 
 HELP_DESCRIPTION = "說明: 非互動模式會自動套用預設輸入；預設資料集為完整，路徑為 /data/tw_stock_data_vip。"
 LAZY_EXPORTS = {
@@ -28,7 +30,16 @@ def main(argv=None, env=None):
 
     from tools.portfolio_sim import main as portfolio_main
 
-    return portfolio_main(argv=argv, env=env)
+    exit_code = portfolio_main(argv=argv, env=env)
+    if exit_code == 0:
+        try:
+            from tools.portfolio_sim.reporting import DASHBOARD_HTML_PATH
+
+            if os.path.exists(DASHBOARD_HTML_PATH) and should_auto_open_browser(os.environ if env is None else env):
+                webbrowser.open('file://' + os.path.realpath(DASHBOARD_HTML_PATH))
+        except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as exc:
+            print(f"⚠️ 自動開啟投組報表失敗: {format_exception_summary(exc)}", file=sys.stderr)
+    return exit_code
 
 
 def __getattr__(name):
