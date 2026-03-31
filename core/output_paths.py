@@ -15,12 +15,12 @@ def normalize_output_category(category: str) -> str:
     normalized = category.strip()
     if not normalized:
         raise ValueError("category 必填，避免直接寫入 outputs/ 根目錄")
-    if _contains_any_path_separator(normalized):
-        raise ValueError("category 只能是 outputs/ 下的單一工具分類資料夾名稱")
 
     category_path = Path(normalized)
     if category_path.is_absolute():
         raise ValueError("category 不可為絕對路徑")
+    if _contains_any_path_separator(normalized):
+        raise ValueError("category 只能是 outputs/ 下的單一工具分類資料夾名稱")
 
     parts = category_path.parts
     if len(parts) != 1 or parts[0] in {"", ".", ".."}:
