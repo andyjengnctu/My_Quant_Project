@@ -42,7 +42,7 @@ SCRIPT_ORDER = [
 ]
 SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = [name for name, *_ in SCRIPT_ORDER]
-DATASET_REQUIRED_STEPS = {"consistency", "chain_checks", "ml_smoke"}
+DATASET_REQUIRED_STEPS = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -322,13 +322,30 @@ def _apply_output_retention(manifest: Dict[str, Any]) -> Dict[str, Any]:
     return apply_retention_rules(_build_retention_rules(manifest))
 
 
+def _safe_format_preflight_summary(payload: Dict[str, Any]) -> str:
+    try:
+        return format_preflight_summary(payload)
+    except Exception as exc:
+        lines = [
+            f"status          : {payload.get('status', 'FAIL')}",
+            f"python          : {payload.get('python_executable', sys.executable)}",
+            f"duration_sec    : {payload.get('duration_sec', 0.0)}",
+            f"runtime_error   : {payload.get('runtime_error', '')}",
+            f"formatter_error : {type(exc).__name__}: {exc}",
+        ]
+        failed_packages = payload.get("failed_packages", [])
+        if failed_packages:
+            lines.append("failed_packages : " + ", ".join(str(item) for item in failed_packages))
+        return "\n".join(lines)
+
+
 def _run_preflight(run_dir: Path) -> Dict[str, Any]:
     started = time.time()
     payload = run_preflight()
     duration_sec = round(time.time() - started, 3)
     payload_with_duration = {**payload, "duration_sec": duration_sec}
     write_json(run_dir / "preflight_summary.json", payload_with_duration)
-    write_text(run_dir / "preflight_summary.txt", format_preflight_summary(payload_with_duration) + "\n")
+    write_text(run_dir / "preflight_summary.txt", _safe_format_preflight_summary(payload_with_duration) + "\n")
     return {
         "status": payload_with_duration["status"],
         "duration_sec": duration_sec,
@@ -471,9 +488,11 @@ def execute_all(
             "major_total": major_total,
             "timeout_sec": 0,
         })
+        preflight_started = time.time()
         try:
             preflight_summary = _run_preflight(run_dir)
         except Exception as exc:
+            preflight_duration_sec = round(time.time() - preflight_started, 3)
             preflight_runtime_error = f"{type(exc).__name__}: {exc}"
             preflight_payload = {
                 "status": "FAIL",
@@ -486,16 +505,16 @@ def execute_all(
                 "runtime_error": preflight_runtime_error,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
-                "duration_sec": 0.0,
+                "duration_sec": preflight_duration_sec,
             }
             write_json(run_dir / "preflight_summary.json", preflight_payload)
             write_text(
                 run_dir / "preflight_summary.txt",
-                format_preflight_summary(preflight_payload) + f"\nruntime_error   : {preflight_runtime_error}\n",
+                _safe_format_preflight_summary(preflight_payload) + f"\nruntime_error   : {preflight_runtime_error}\n",
             )
             preflight_summary = {
                 "status": "FAIL",
-                "duration_sec": 0.0,
+                "duration_sec": preflight_duration_sec,
                 "failed_packages": [],
                 "python_executable": sys.executable,
                 "summary_file": "preflight_summary.json",
