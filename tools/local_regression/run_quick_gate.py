@@ -219,6 +219,7 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
     results = []
     invalid_dir_cases = [
         ("log_path_contract::resolve_log_dir_parent_escape_rejected", "../outputs/debug_trade_log", "不可包含 . 或 .."),
+        ("log_path_contract::resolve_log_dir_backslash_parent_escape_rejected", r"..\outputs\debug_trade_log", "不可包含 . 或 .."),
         ("log_path_contract::resolve_log_dir_absolute_outside_project_rejected", "/tmp/outside_logs", "必須落在專案目錄內"),
     ]
 
@@ -240,6 +241,7 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
         ("log_path_contract::append_issue_log_absolute_outside_project_rejected", "/tmp/outside.log", "必須落在專案目錄內"),
         ("log_path_contract::append_issue_log_root_file_rejected", "outside.log", "必須包含目錄"),
         ("log_path_contract::append_issue_log_outputs_root_file_rejected", "outputs/outside.log", "不可直接輸出到 outputs/ 根目錄"),
+        ("log_path_contract::append_issue_log_backslash_parent_escape_rejected", r"..\outside.log", "不可包含 . 或 .."),
     ]
 
     for name, log_path, expected_text in invalid_path_cases:
@@ -331,6 +333,7 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
     env_cases = [
         ("local_regression_contract::run_dir_env_outside_project_rejected", "/tmp/outside_local_regression", "必須落在"),
         ("local_regression_contract::run_dir_env_parent_escape_rejected", "../outside_local_regression", "不可包含 . 或 .."),
+        ("local_regression_contract::run_dir_env_backslash_parent_escape_rejected", r"..\outside_local_regression", "不可包含 . 或 .."),
     ]
     try:
         for name, env_value, expected_text in env_cases:
@@ -355,6 +358,18 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
             ok = False
             detail = f"{type(exc).__name__}: {exc}"
         results.append(summarize_result("local_regression_contract::run_dir_env_valid_under_staging", ok, detail=detail))
+
+        shutil.rmtree(valid_run_dir, ignore_errors=True)
+        os.environ[env_var] = r"outputs\local_regression\_staging\quick_gate_backslash_probe"
+        try:
+            resolved = resolve_run_dir("quick_gate")
+            expected = (PROJECT_ROOT / "outputs" / "local_regression" / "_staging" / "quick_gate_backslash_probe").resolve()
+            ok = Path(resolved).resolve() == expected and expected.exists()
+            detail = str(resolved)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result("local_regression_contract::run_dir_env_backslash_valid_under_staging", ok, detail=detail))
     finally:
         if original_env is None:
             os.environ.pop(env_var, None)

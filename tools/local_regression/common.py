@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import time
 import uuid
 import zipfile
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -63,12 +64,25 @@ MANIFEST_STR_FIELDS = {
 }
 
 
+
 class LocalRegressionError(RuntimeError):
     pass
 
 
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
 def _contains_any_path_separator(value: str) -> bool:
     return ("/" in value) or ("\\" in value)
+
+
+def _is_windows_absolute_path(raw_value: str) -> bool:
+    return bool(_WINDOWS_ABSOLUTE_PATH_RE.match(raw_value)) or raw_value.startswith("\\\\")
+
+
+def _split_cross_platform_parts(raw_value: str) -> tuple[str, tuple[str, ...]]:
+    normalized = raw_value.replace("\\", "/")
+    return normalized, PurePosixPath(normalized).parts
 
 
 def _normalize_bundle_name(bundle_name: Any) -> str:
@@ -92,18 +106,22 @@ def _normalize_bundle_name(bundle_name: Any) -> str:
     return normalized
 
 
+
 def _resolve_local_regression_run_dir_from_env(raw_value: str) -> Path:
     normalized = os.fspath(raw_value).strip()
     if normalized == "":
         raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可空白")
 
+    normalized_value, normalized_parts = _split_cross_platform_parts(normalized)
     path_obj = Path(normalized)
     if path_obj.is_absolute():
         resolved = path_obj.resolve()
+    elif _is_windows_absolute_path(normalized):
+        raise LocalRegressionError(f"V16_LOCAL_REGRESSION_RUN_DIR 必須落在 {(OUTPUT_ROOT / '_staging').resolve()}")
     else:
-        if any(part in {"", ".", ".."} for part in path_obj.parts):
+        if any(part in {"", ".", ".."} for part in normalized_parts):
             raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可包含 . 或 ..")
-        resolved = (PROJECT_ROOT / path_obj).resolve()
+        resolved = (PROJECT_ROOT / normalized_value).resolve()
 
     allowed_root = (OUTPUT_ROOT / "_staging").resolve()
     try:
@@ -113,7 +131,6 @@ def _resolve_local_regression_run_dir_from_env(raw_value: str) -> Path:
 
     ensure_dir(resolved)
     return resolved
-
 
 def taipei_now() -> datetime:
     return datetime.now(TAIPEI_TZ)

@@ -1,7 +1,8 @@
 # core/log_utils.py
 import os
+import re
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from core.runtime_utils import get_taipei_now
 
@@ -9,6 +10,7 @@ from core.runtime_utils import get_taipei_now
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_ROOT_PATH = Path(PROJECT_ROOT).resolve()
 OUTPUTS_ROOT_PATH = (PROJECT_ROOT_PATH / "outputs").resolve()
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def _contains_any_path_separator(value):
@@ -36,6 +38,15 @@ def _normalize_log_file_prefix(prefix):
     return parts[0]
 
 
+def _is_windows_absolute_path(raw_value):
+    return bool(_WINDOWS_ABSOLUTE_PATH_RE.match(raw_value)) or raw_value.startswith("\\\\")
+
+
+def _split_cross_platform_parts(raw_value):
+    normalized = raw_value.replace("\\", "/")
+    return normalized, PurePosixPath(normalized).parts
+
+
 def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only):
     if path_value is None:
         raise ValueError(f"{field_name} 必填，避免把檔案直接輸出到 outputs/ 根目錄")
@@ -44,13 +55,16 @@ def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only
     if not raw_value:
         raise ValueError(f"{field_name} 必填，避免把檔案直接輸出到 outputs/ 根目錄")
 
+    normalized_value, normalized_parts = _split_cross_platform_parts(raw_value)
     path_obj = Path(raw_value)
     if path_obj.is_absolute():
         resolved_path = path_obj.resolve(strict=False)
+    elif _is_windows_absolute_path(raw_value):
+        raise ValueError(f"{field_name} 必須落在專案目錄內，避免寫到專案外部")
     else:
-        if any(part in {"", ".", ".."} for part in path_obj.parts):
+        if any(part in {"", ".", ".."} for part in normalized_parts):
             raise ValueError(f"{field_name} 不可包含 . 或 ..，避免寫出專案目錄")
-        resolved_path = (PROJECT_ROOT_PATH / path_obj).resolve(strict=False)
+        resolved_path = (PROJECT_ROOT_PATH / normalized_value).resolve(strict=False)
 
     try:
         resolved_path.relative_to(PROJECT_ROOT_PATH)
