@@ -1,4 +1,3 @@
-from core.config import EV_CALC_METHOD
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -130,14 +129,14 @@ def build_backtest_stats(
     avg_loss = total_loss / loss_count if loss_count > 0 else 0
     payoff_ratio = (avg_win / avg_loss) if avg_loss > 0 else (99.9 if avg_win > 0 else 0.0)
 
-    if EV_CALC_METHOD == 'B':
-        win_rate_dec = full_wins / trade_count if trade_count > 0 else 0
-        avg_win_r = total_r_win / full_wins if full_wins > 0 else 0
-        avg_loss_r = total_r_loss / loss_count if loss_count > 0 else 0
-        payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
-        expected_value = (win_rate_dec * payoff_for_ev) - (1 - win_rate_dec)
-    else:
-        expected_value = (total_r_multiple / trade_count) if trade_count > 0 else 0.0
+    is_candidate, expected_value, _history_win_rate, _history_trade_count = evaluate_history_candidate_metrics(
+        trade_count,
+        full_wins,
+        total_r_multiple,
+        total_r_win,
+        total_r_loss,
+        params,
+    )
 
     final_equity = current_equity
     total_net_profit_pct = ((final_equity - params.initial_capital) / params.initial_capital) * 100
@@ -146,15 +145,6 @@ def build_backtest_stats(
     is_setup_today = buy_condition_last and (not had_open_position_at_end)
     buy_limit_today = adjust_long_buy_limit(close_last + atr_last * params.atr_buy_tol) if is_setup_today else float('nan')
     stop_loss_today = adjust_long_stop_price(buy_limit_today - atr_last * params.atr_times_init) if is_setup_today else float('nan')
-
-    is_candidate, _, _, _ = evaluate_history_candidate_metrics(
-        trade_count,
-        full_wins,
-        total_r_multiple,
-        total_r_win,
-        total_r_loss,
-        params,
-    )
 
     extended_candidate_today = None
     if (not had_open_position_at_end) and active_extended_signal is not None:
