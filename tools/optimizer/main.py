@@ -15,6 +15,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
+from core.model_paths import resolve_best_params_path, resolve_models_dir
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
 
@@ -30,8 +31,8 @@ def configure_optuna_logging():
 
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "best_params.json")
+MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
+BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2015
 TRAIN_ENABLE_ROTATION = False

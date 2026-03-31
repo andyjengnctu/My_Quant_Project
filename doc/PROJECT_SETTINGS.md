@@ -7,6 +7,17 @@
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀 `/doc/PROJECT_SETTINGS.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 
+## B. 標準測試流程
+
+1. 使用者要求「完整檢查」且本輪基準為 ZIP 時，先做環境 bootstrap 與 preflight；缺少套件時先補齊，再開始測試。
+2. 測試資料放在 `data/tw_stock_data_vip_reduced`. 
+3. 由於已知 `apps/test_suite.py` 耗時過長，改為拆開執行其正式組成步驟，順序為：
+    `tools/validate/preflight_env.py`、
+    `tools/local_regression/run_quick_gate.py` 
+    `tools/validate/cli.py --dataset reduced`、
+    `tools/local_regression/run_chain_checks.py`、
+    `tools/local_regression/run_ml_smoke.py`。
+
 ## C. 回覆、交付與輸出
 
 1. 只提供客觀分析與建議，不奉承；回答必須明確、精簡、避免重複。

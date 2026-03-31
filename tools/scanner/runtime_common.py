@@ -1,12 +1,13 @@
 import os
 
+from core.model_paths import resolve_best_params_path, resolve_models_dir
 from core.params_io import load_params_from_json
 from core.output_paths import build_output_dir
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "vip_scanner")
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
-BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "best_params.json")
+MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
+BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
 SCANNER_PROGRESS_EVERY = 25
 DEFAULT_SCANNER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1) // 2))
 

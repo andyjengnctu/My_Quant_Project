@@ -6,7 +6,6 @@ import py_compile
 import shutil
 import sys
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -14,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.model_paths import MODELS_DIR_ENV_VAR
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
@@ -439,85 +439,75 @@ def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
     return results
 
 
-@contextmanager
-def temporary_missing_file(target_path: Path):
-    backup_path = target_path.with_suffix(target_path.suffix + ".bak_local_regression")
-    if backup_path.exists():
-        raise RuntimeError(f"暫存備份已存在，疑似上次中斷殘留: {backup_path}")
-    if not target_path.exists():
-        raise FileNotFoundError(target_path)
-    shutil.move(target_path, backup_path)
-    try:
-        yield
-    finally:
-        if backup_path.exists():
-            shutil.move(backup_path, target_path)
+def _copy_file_if_exists(source_path: Path, target_path: Path) -> bool:
+    if not source_path.exists():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+    return True
 
 
-@contextmanager
-def temporary_file_content(target_path: Path, replacement_text: str):
-    backup_path = target_path.with_suffix(target_path.suffix + ".bak_local_regression")
-    if backup_path.exists():
-        raise RuntimeError(f"暫存備份已存在，疑似上次中斷殘留: {backup_path}")
-    if not target_path.exists():
-        raise FileNotFoundError(target_path)
-    shutil.move(target_path, backup_path)
-    try:
-        target_path.write_text(replacement_text, encoding="utf-8")
-        yield
-    finally:
-        if target_path.exists():
-            target_path.unlink()
-        if backup_path.exists():
-            shutil.move(backup_path, target_path)
+def _build_models_sandbox_dir(case_name: str) -> Path:
+    sandbox_root = Path(tempfile.mkdtemp(prefix=f"quick_gate_{case_name}_", dir=str(PROJECT_ROOT / "outputs" / "local_regression" / "_staging")))
+    return sandbox_root / "models"
 
 
 def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     results = []
     params_path = PROJECT_ROOT / "models" / "best_params.json"
     db_path = PROJECT_ROOT / "models" / "portfolio_ai_10pos_overnight_reduced.db"
-    db_backup = db_path.with_suffix(db_path.suffix + ".bak_local_regression")
 
-    try:
-        with temporary_missing_file(params_path):
-            outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
-    except (FileNotFoundError, RuntimeError) as exc:
-        results.append(summarize_result("error_path::missing_best_params", False, detail=f"前置條件不足，無法模擬缺參數檔: {type(exc).__name__}: {exc}"))
-    else:
-        results.append(summarize_result("error_path::missing_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺參數檔應 fail-fast"))
+    params_missing_models_dir = _build_models_sandbox_dir("missing_best_params")
+    params_missing_models_dir.mkdir(parents=True, exist_ok=True)
+    outcome = run_command(
+        [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
+        input_text="\n\n\n\n",
+        timeout=timeout,
+        env={MODELS_DIR_ENV_VAR: str(params_missing_models_dir)},
+    )
+    results.append(summarize_result("error_path::missing_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺參數檔應 fail-fast"))
 
-    try:
-        with temporary_file_content(params_path, "{not-valid-json"):
-            outcome = run_command([sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"], input_text="\n\n\n\n", timeout=timeout)
-    except (FileNotFoundError, RuntimeError) as exc:
-        results.append(summarize_result("error_path::broken_best_params", False, detail=f"前置條件不足，無法模擬壞參數檔: {type(exc).__name__}: {exc}"))
-    else:
-        results.append(summarize_result("error_path::broken_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞參數檔應 fail-fast"))
+    params_broken_models_dir = _build_models_sandbox_dir("broken_best_params")
+    params_broken_models_dir.mkdir(parents=True, exist_ok=True)
+    (params_broken_models_dir / "best_params.json").write_text("{not-valid-json", encoding="utf-8")
+    outcome = run_command(
+        [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
+        input_text="\n\n\n\n",
+        timeout=timeout,
+        env={MODELS_DIR_ENV_VAR: str(params_broken_models_dir)},
+    )
+    results.append(summarize_result("error_path::broken_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞參數檔應 fail-fast"))
 
-    original_db_exists = db_path.exists()
-    if db_backup.exists():
-        results.append(summarize_result("error_path::optimizer_db_backup_slot", False, detail=f"暫存備份已存在，疑似上次中斷殘留: {db_backup}"))
-        return results
-    if original_db_exists:
-        shutil.move(db_path, db_backup)
-    try:
-        db_path.write_text("not-a-sqlite-db", encoding="utf-8")
-        outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::broken_optimizer_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "壞 DB 應 fail-fast")))
+    broken_db_models_dir = _build_models_sandbox_dir("broken_optimizer_db")
+    broken_db_models_dir.mkdir(parents=True, exist_ok=True)
+    _copy_file_if_exists(params_path, broken_db_models_dir / "best_params.json")
+    sandbox_db_path = broken_db_models_dir / db_path.name
 
-        db_path.unlink(missing_ok=True)
-        outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::export_only_missing_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "無 DB export-only 應 fail-fast")))
+    sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")
+    outcome = run_command(
+        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        timeout=timeout,
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+    )
+    results.append(summarize_result("error_path::broken_optimizer_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "壞 DB 應 fail-fast")))
 
-        db_path.unlink(missing_ok=True)
-        import sqlite3
-        sqlite3.connect(db_path).close()
-        outcome = run_command([sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"], timeout=timeout, env={"V16_OPTIMIZER_TRIALS": "0"})
-        results.append(summarize_result("error_path::export_only_empty_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "空 DB export-only 應 fail-fast")))
-    finally:
-        db_path.unlink(missing_ok=True)
-        if original_db_exists and db_backup.exists():
-            shutil.move(db_backup, db_path)
+    sandbox_db_path.unlink(missing_ok=True)
+    outcome = run_command(
+        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        timeout=timeout,
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+    )
+    results.append(summarize_result("error_path::export_only_missing_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫不存在，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "無 DB export-only 應 fail-fast")))
+
+    import sqlite3
+
+    sqlite3.connect(sandbox_db_path).close()
+    outcome = run_command(
+        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+        timeout=timeout,
+        env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
+    )
+    results.append(summarize_result("error_path::export_only_empty_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "記憶庫為空，無法匯出" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "空 DB export-only 應 fail-fast")))
     return results
 
 
