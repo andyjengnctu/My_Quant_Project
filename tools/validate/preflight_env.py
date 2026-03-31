@@ -22,7 +22,7 @@ _IMPORT_NAME_OVERRIDES = {
 }
 _LOCAL_REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke")
 _LOCAL_REGRESSION_STEP_REQUIREMENTS = {
-    "quick_gate": {"numpy", "pandas", "openpyxl"},
+    "quick_gate": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},
     "consistency": {"numpy", "pandas", "openpyxl"},
     "chain_checks": {"numpy", "pandas", "openpyxl"},
     "ml_smoke": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},

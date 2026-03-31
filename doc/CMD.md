@@ -127,6 +127,7 @@ python tools/validate/preflight_env.py
 ```
 
 - `preflight_env.py` 只做檢查，不自動安裝依賴。
+- `python tools/validate/preflight_env.py --steps quick_gate,consistency` 可只檢查指定步驟所需套件；但 `quick_gate` 內含 optimizer export-only 錯誤路徑，所以仍需要 `optuna` 與 `SQLAlchemy`。
 - `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。
 - 日常流程先跑完整入口；只有完整入口已找出 FAIL 步驟時，才使用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 

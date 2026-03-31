@@ -106,6 +106,7 @@ def main(argv=None, environ=None):
     from tools.optimizer.prep import load_all_raw_data
     from tools.optimizer.runtime import (
         create_optimizer_study,
+        ensure_export_only_db_not_empty,
         ensure_optimizer_db_usable,
         export_best_params_if_requested,
         maybe_print_history_best,
@@ -117,7 +118,6 @@ def main(argv=None, environ=None):
     from tools.optimizer.study_utils import build_optimizer_db_file_path, get_best_completed_trial_or_none, is_qualified_trial_value, resolve_optimizer_trial_count
 
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
-    configure_optuna_logging()
     session = build_optimizer_session()
 
     try:
@@ -151,6 +151,7 @@ def main(argv=None, environ=None):
             return 1
         try:
             ensure_optimizer_db_usable(db_file)
+            ensure_export_only_db_not_empty(db_file)
             study = create_optimizer_study(db_name)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -184,6 +185,7 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端 (End-to-End) 投資組合極速 AI 訓練引擎啟動{C_RESET}")
