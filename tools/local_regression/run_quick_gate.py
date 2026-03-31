@@ -16,6 +16,7 @@ from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
+from core.log_utils import append_issue_log, resolve_log_dir
 from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
@@ -118,6 +119,9 @@ def check_output_path_contract() -> List[Dict[str, Any]]:
     invalid_cases = [
         ("output_path_contract::empty_category", "", "category 必填"),
         ("output_path_contract::nested_category", "local_regression/archive", "單一工具分類資料夾名稱"),
+        ("output_path_contract::dot_category", ".", "單一工具分類資料夾名稱"),
+        ("output_path_contract::parent_category", "..", "單一工具分類資料夾名稱"),
+        ("output_path_contract::absolute_category", str((PROJECT_ROOT / "outputs").resolve()), "不可為絕對路徑"),
     ]
 
     for name, category, expected_text in invalid_cases:
@@ -133,6 +137,16 @@ def check_output_path_contract() -> List[Dict[str, Any]]:
             detail = f"{type(exc).__name__}: {exc}"
         results.append(summarize_result(name, ok, detail=detail))
 
+    valid_path = str((PROJECT_ROOT / "outputs" / "local_regression").resolve())
+    try:
+        resolved = str(Path(build_output_dir(PROJECT_ROOT, "local_regression")).resolve())
+        ok = resolved == valid_path
+        detail = resolved
+    except Exception as exc:
+        ok = False
+        detail = f"{type(exc).__name__}: {exc}"
+    results.append(summarize_result("output_path_contract::valid_category_resolves_under_outputs", ok, detail=detail))
+
     return results
 
 
@@ -143,12 +157,14 @@ def check_outputs_root_layout() -> List[Dict[str, Any]]:
 
     if outputs_root.exists():
         for child in sorted(outputs_root.iterdir()):
+            if child.is_symlink():
+                stray_entries.append(f"symlink:{child.name}")
+                continue
             if child.is_dir():
                 continue
-            entry_type = "symlink" if child.is_symlink() else "file"
-            stray_entries.append(f"{entry_type}:{child.name}")
+            stray_entries.append(f"file:{child.name}")
 
-    detail = "outputs/ 根目錄無散落檔案" if not stray_entries else ", ".join(stray_entries)
+    detail = "outputs/ 根目錄無散落檔案或 symlink" if not stray_entries else ", ".join(stray_entries)
     results.append(
         summarize_result(
             "outputs_root_layout::root_has_only_category_dirs",
@@ -192,6 +208,48 @@ def check_dataset_profile_contract() -> List[Dict[str, Any]]:
         ok = False
         detail = f"{type(exc).__name__}: {exc}"
     results.append(summarize_result("dataset_profile_contract::raw_profile_rejected", ok, detail=detail))
+
+    return results
+
+
+def check_log_path_contract() -> List[Dict[str, Any]]:
+    results = []
+    invalid_dir_cases = [
+        ("log_path_contract::resolve_log_dir_parent_escape_rejected", "../outputs/debug_trade_log", "不可包含 . 或 .."),
+        ("log_path_contract::resolve_log_dir_absolute_outside_project_rejected", "/tmp/outside_logs", "必須落在專案目錄內"),
+    ]
+
+    for name, log_dir, expected_text in invalid_dir_cases:
+        try:
+            resolve_log_dir(log_dir)
+            ok = False
+            detail = "應拒絕不合法 log_dir，但函式未拋出例外"
+        except ValueError as exc:
+            ok = expected_text in str(exc)
+            detail = str(exc)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result(name, ok, detail=detail))
+
+    invalid_path_cases = [
+        ("log_path_contract::append_issue_log_parent_escape_rejected", "../outside.log", "不可包含 . 或 .."),
+        ("log_path_contract::append_issue_log_absolute_outside_project_rejected", "/tmp/outside.log", "必須落在專案目錄內"),
+        ("log_path_contract::append_issue_log_root_file_rejected", "outside.log", "必須包含目錄"),
+    ]
+
+    for name, log_path, expected_text in invalid_path_cases:
+        try:
+            append_issue_log(log_path, ["probe"])
+            ok = False
+            detail = "應拒絕不合法 log_path，但函式未拋出例外"
+        except ValueError as exc:
+            ok = expected_text in str(exc)
+            detail = str(exc)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result(name, ok, detail=detail))
 
     return results
 
@@ -391,6 +449,7 @@ def main(argv=None) -> int:
     steps.extend(check_output_path_contract())
     steps.extend(check_outputs_root_layout())
     steps.extend(check_dataset_profile_contract())
+    steps.extend(check_log_path_contract())
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_generic_cli_errors(timeout))
