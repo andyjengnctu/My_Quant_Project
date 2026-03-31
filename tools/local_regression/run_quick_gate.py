@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import os
 import py_compile
 import shutil
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List
@@ -17,7 +19,7 @@ from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path, resolve_log_dir
-from tools.local_regression.common import ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
+from tools.local_regression.common import MANIFEST_DEFAULTS, build_bundle_zip, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
@@ -119,6 +121,7 @@ def check_output_path_contract() -> List[Dict[str, Any]]:
     invalid_cases = [
         ("output_path_contract::empty_category", "", "category 必填"),
         ("output_path_contract::nested_category", "local_regression/archive", "單一工具分類資料夾名稱"),
+        ("output_path_contract::backslash_nested_category", r"local_regression\archive", "單一工具分類資料夾名稱"),
         ("output_path_contract::dot_category", ".", "單一工具分類資料夾名稱"),
         ("output_path_contract::parent_category", "..", "單一工具分類資料夾名稱"),
         ("output_path_contract::absolute_category", str((PROJECT_ROOT / "outputs").resolve()), "不可為絕對路徑"),
@@ -255,6 +258,7 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
     invalid_prefix_cases = [
         ("log_path_contract::build_timestamped_log_path_parent_escape_prefix_rejected", "../outside", "不可包含路徑分隔或 . / .."),
         ("log_path_contract::build_timestamped_log_path_nested_prefix_rejected", "nested/prefix", "不可包含路徑分隔或 . / .."),
+        ("log_path_contract::build_timestamped_log_path_backslash_prefix_rejected", r"nested\prefix", "不可包含路徑分隔或 . / .."),
     ]
 
     for name, prefix, expected_text in invalid_prefix_cases:
@@ -269,6 +273,94 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
             ok = False
             detail = f"{type(exc).__name__}: {exc}"
         results.append(summarize_result(name, ok, detail=detail))
+
+    return results
+
+
+def check_local_regression_contract() -> List[Dict[str, Any]]:
+    results = []
+    invalid_bundle_cases = [
+        ("local_regression_contract::manifest_bundle_name_parent_escape_rejected", "../escape.zip", "不可包含路徑分隔"),
+        ("local_regression_contract::manifest_bundle_name_nested_rejected", "nested/escape.zip", "不可包含路徑分隔"),
+        ("local_regression_contract::manifest_bundle_name_backslash_nested_rejected", r"nested\escape.zip", "不可包含路徑分隔"),
+        ("local_regression_contract::manifest_bundle_name_requires_zip_suffix", "escape_bundle", ".zip 副檔名"),
+    ]
+
+    temp_root = Path(tempfile.mkdtemp(prefix="quick_gate_manifest_contract_"))
+    try:
+        for name, bundle_name, expected_text in invalid_bundle_cases:
+            manifest_path = temp_root / f"{name.replace('::', '_')}.json"
+            write_json(manifest_path, {**MANIFEST_DEFAULTS, "bundle_name": bundle_name})
+            try:
+                load_manifest(manifest_path)
+                ok = False
+                detail = "應拒絕不合法 bundle_name，但 manifest 驗證未拋出例外"
+            except Exception as exc:
+                ok = expected_text in str(exc)
+                detail = f"{type(exc).__name__}: {exc}"
+            results.append(summarize_result(name, ok, detail=detail))
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    bundle_run_dir = Path(tempfile.mkdtemp(prefix="quick_gate_bundle_zip_"))
+    try:
+        probe_file = bundle_run_dir / "probe.txt"
+        probe_file.write_text("probe", encoding="utf-8")
+        try:
+            build_bundle_zip(bundle_run_dir, "../escape.zip", include_paths=[probe_file])
+            ok = False
+            detail = "應拒絕不合法 bundle_name，但 build_bundle_zip 未拋出例外"
+        except Exception as exc:
+            ok = "不可包含路徑分隔" in str(exc)
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result("local_regression_contract::build_bundle_zip_parent_escape_rejected", ok, detail=detail))
+
+        try:
+            bundle_path = build_bundle_zip(bundle_run_dir, "safe_bundle.zip", include_paths=[probe_file])
+            ok = bundle_path.parent.resolve() == bundle_run_dir.resolve() and bundle_path.name == "safe_bundle.zip" and bundle_path.exists()
+            detail = str(bundle_path)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result("local_regression_contract::build_bundle_zip_valid_name_stays_in_run_dir", ok, detail=detail))
+    finally:
+        shutil.rmtree(bundle_run_dir, ignore_errors=True)
+
+    env_var = "V16_LOCAL_REGRESSION_RUN_DIR"
+    original_env = os.environ.get(env_var)
+    env_cases = [
+        ("local_regression_contract::run_dir_env_outside_project_rejected", "/tmp/outside_local_regression", "必須落在"),
+        ("local_regression_contract::run_dir_env_parent_escape_rejected", "../outside_local_regression", "不可包含 . 或 .."),
+    ]
+    try:
+        for name, env_value, expected_text in env_cases:
+            os.environ[env_var] = env_value
+            try:
+                resolve_run_dir("quick_gate")
+                ok = False
+                detail = "應拒絕不合法 V16_LOCAL_REGRESSION_RUN_DIR，但函式未拋出例外"
+            except Exception as exc:
+                ok = expected_text in str(exc)
+                detail = f"{type(exc).__name__}: {exc}"
+            results.append(summarize_result(name, ok, detail=detail))
+
+        valid_run_dir = PROJECT_ROOT / "outputs" / "local_regression" / "_staging" / "quick_gate_env_probe"
+        shutil.rmtree(valid_run_dir, ignore_errors=True)
+        os.environ[env_var] = str(valid_run_dir)
+        try:
+            resolved = resolve_run_dir("quick_gate")
+            ok = Path(resolved).resolve() == valid_run_dir.resolve() and valid_run_dir.exists()
+            detail = str(resolved)
+        except Exception as exc:
+            ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        results.append(summarize_result("local_regression_contract::run_dir_env_valid_under_staging", ok, detail=detail))
+    finally:
+        if original_env is None:
+            os.environ.pop(env_var, None)
+        else:
+            os.environ[env_var] = original_env
+        shutil.rmtree(PROJECT_ROOT / "outputs" / "local_regression" / "_staging" / "quick_gate_env_probe", ignore_errors=True)
 
     return results
 
@@ -469,6 +561,7 @@ def main(argv=None) -> int:
     steps.extend(check_outputs_root_layout())
     steps.extend(check_dataset_profile_contract())
     steps.extend(check_log_path_contract())
+    steps.extend(check_local_regression_contract())
     steps.extend(check_help(timeout))
     steps.extend(check_dataset_cli_errors(timeout))
     steps.extend(check_generic_cli_errors(timeout))

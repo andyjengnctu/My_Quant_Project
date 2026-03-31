@@ -11,6 +11,10 @@ PROJECT_ROOT_PATH = Path(PROJECT_ROOT).resolve()
 OUTPUTS_ROOT_PATH = (PROJECT_ROOT_PATH / "outputs").resolve()
 
 
+def _contains_any_path_separator(value):
+    return ("/" in value) or ("\\" in value)
+
+
 def _normalize_log_file_prefix(prefix):
     if prefix is None:
         raise ValueError("prefix 必填，且不可包含路徑分隔或 . / ..")
@@ -18,6 +22,8 @@ def _normalize_log_file_prefix(prefix):
     raw_prefix = os.fspath(prefix).strip()
     if not raw_prefix:
         raise ValueError("prefix 必填，且不可包含路徑分隔或 . / ..")
+    if _contains_any_path_separator(raw_prefix):
+        raise ValueError("prefix 不可包含路徑分隔或 . / ..")
 
     prefix_path = Path(raw_prefix)
     if prefix_path.is_absolute():

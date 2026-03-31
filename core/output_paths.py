@@ -4,6 +4,10 @@ import os
 from pathlib import Path
 
 
+def _contains_any_path_separator(value: str) -> bool:
+    return ("/" in value) or ("\\" in value)
+
+
 def normalize_output_category(category: str) -> str:
     if not isinstance(category, str):
         raise TypeError(f"category 需要 str，收到 {type(category).__name__}")
@@ -11,6 +15,8 @@ def normalize_output_category(category: str) -> str:
     normalized = category.strip()
     if not normalized:
         raise ValueError("category 必填，避免直接寫入 outputs/ 根目錄")
+    if _contains_any_path_separator(normalized):
+        raise ValueError("category 只能是 outputs/ 下的單一工具分類資料夾名稱")
 
     category_path = Path(normalized)
     if category_path.is_absolute():

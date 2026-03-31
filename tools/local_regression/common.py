@@ -67,6 +67,54 @@ class LocalRegressionError(RuntimeError):
     pass
 
 
+def _contains_any_path_separator(value: str) -> bool:
+    return ("/" in value) or ("\\" in value)
+
+
+def _normalize_bundle_name(bundle_name: Any) -> str:
+    raw_value = os.fspath(bundle_name).strip()
+    if raw_value == "":
+        raise LocalRegressionError("manifest 欄位 bundle_name 不可空白")
+    if _contains_any_path_separator(raw_value):
+        raise LocalRegressionError("manifest 欄位 bundle_name 只能是單一 zip 檔名，不可包含路徑分隔")
+
+    bundle_path = Path(raw_value)
+    if bundle_path.is_absolute():
+        raise LocalRegressionError("manifest 欄位 bundle_name 不可為絕對路徑")
+
+    parts = bundle_path.parts
+    if len(parts) != 1 or parts[0] in {"", ".", ".."}:
+        raise LocalRegressionError("manifest 欄位 bundle_name 只能是單一 zip 檔名")
+
+    normalized = parts[0]
+    if not normalized.lower().endswith(".zip"):
+        raise LocalRegressionError("manifest 欄位 bundle_name 需要 .zip 副檔名")
+    return normalized
+
+
+def _resolve_local_regression_run_dir_from_env(raw_value: str) -> Path:
+    normalized = os.fspath(raw_value).strip()
+    if normalized == "":
+        raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可空白")
+
+    path_obj = Path(normalized)
+    if path_obj.is_absolute():
+        resolved = path_obj.resolve()
+    else:
+        if any(part in {"", ".", ".."} for part in path_obj.parts):
+            raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可包含 . 或 ..")
+        resolved = (PROJECT_ROOT / path_obj).resolve()
+
+    allowed_root = (OUTPUT_ROOT / "_staging").resolve()
+    try:
+        resolved.relative_to(allowed_root)
+    except ValueError as exc:
+        raise LocalRegressionError(f"V16_LOCAL_REGRESSION_RUN_DIR 必須落在 {allowed_root}") from exc
+
+    ensure_dir(resolved)
+    return resolved
+
+
 def taipei_now() -> datetime:
     return datetime.now(TAIPEI_TZ)
 
@@ -138,6 +186,7 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
             raise LocalRegressionError(f"manifest 欄位 {field_name} 不可空白")
         merged[field_name] = raw_value
 
+    merged["bundle_name"] = _normalize_bundle_name(merged["bundle_name"])
     dataset = merged["dataset"].lower()
     if dataset != "reduced":
         raise LocalRegressionError(f"local regression 只支援 reduced，收到: {dataset}")
@@ -238,9 +287,7 @@ def summarize_result(name: str, ok: bool, *, detail: str, extra: Optional[Dict[s
 def resolve_run_dir(script_name: str) -> Path:
     env_run_dir = os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip()
     if env_run_dir:
-        run_dir = Path(env_run_dir).resolve()
-        ensure_dir(run_dir)
-        return run_dir
+        return _resolve_local_regression_run_dir_from_env(env_run_dir)
     run_dir = OUTPUT_ROOT / "_staging" / f"{timestamp_text()}_{script_name}_{uuid.uuid4().hex[:8]}"
     ensure_dir(run_dir)
     return run_dir
@@ -259,7 +306,8 @@ def read_json_if_exists(path: Path) -> Dict[str, Any]:
 
 
 def build_bundle_zip(run_dir: Path, bundle_name: str, *, include_paths: Optional[List[Path]] = None) -> Path:
-    bundle_path = run_dir / bundle_name
+    normalized_bundle_name = _normalize_bundle_name(bundle_name)
+    bundle_path = run_dir / normalized_bundle_name
     if bundle_path.exists():
         bundle_path.unlink()
 
