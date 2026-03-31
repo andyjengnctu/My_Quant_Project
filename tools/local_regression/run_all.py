@@ -24,6 +24,7 @@ from tools.local_regression.common import (
     create_staging_run_dir,
     ensure_reduced_dataset,
     gather_recent_console_tail,
+    MANIFEST_DEFAULTS,
     load_manifest,
     publish_root_bundle_copy,
     read_json_if_exists,
@@ -387,6 +388,122 @@ def _write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Di
     return summary
 
 
+def _write_manifest_failure_bundle(
+    *,
+    run_dir: Path,
+    selected_step_names: List[str],
+    include_dataset: bool,
+    manifest_error: Exception,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Dict[str, Any]:
+    fallback_manifest = dict(MANIFEST_DEFAULTS)
+    major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
+    error_payload = {
+        "status": "FAIL",
+        "error_type": type(manifest_error).__name__,
+        "error_message": str(manifest_error),
+        "summary_file": "manifest_summary.json",
+        "summary_text_file": "manifest_summary.txt",
+    }
+    write_json(run_dir / "manifest_summary.json", error_payload)
+    write_text(
+        run_dir / "manifest_summary.txt",
+        "\n".join([
+            "status      : FAIL",
+            f"error_type  : {error_payload['error_type']}",
+            f"error_msg   : {error_payload['error_message']}",
+        ]) + "\n",
+    )
+
+    master_summary = {
+        "overall_status": "FAIL",
+        "dataset": fallback_manifest["dataset"],
+        "dataset_info": {},
+        "timestamp": taipei_now().isoformat(),
+        "git_commit": resolve_git_commit(),
+        "scripts": [],
+        "selected_steps": selected_step_names,
+        "failures": 1,
+        "bundle_mode": "manifest_failed",
+        "failed_step_names": ["manifest"],
+        "suggested_rerun_command": "",
+        "manifest": error_payload,
+    }
+    write_json(run_dir / "master_summary.json", master_summary)
+    artifacts_manifest_path = _write_stable_artifacts_manifest(run_dir)
+    bundle_paths = [
+        run_dir / "master_summary.json",
+        run_dir / "manifest_summary.json",
+        run_dir / "manifest_summary.txt",
+        artifacts_manifest_path,
+    ]
+    master_summary["bundle_entries"] = _build_bundle_entries(run_dir, bundle_paths)
+    write_json(run_dir / "master_summary.json", master_summary)
+    _write_stable_artifacts_manifest(run_dir)
+
+    bundle_path = build_bundle_zip(run_dir, str(fallback_manifest["bundle_name"]), include_paths=bundle_paths)
+    archived_bundle = archive_bundle_history(bundle_path)
+    root_bundle_copy = publish_root_bundle_copy(archived_bundle)
+    retention = _apply_output_retention(fallback_manifest)
+
+    result = {
+        "overall_status": "FAIL",
+        "dataset": fallback_manifest["dataset"],
+        "bundle": str(root_bundle_copy),
+        "archived_bundle": str(archived_bundle),
+        "root_bundle_copy": str(root_bundle_copy),
+        "bundle_mode": "manifest_failed",
+        "bundle_entries": _build_bundle_entries(run_dir, bundle_paths),
+        "scripts": [],
+        "step_payloads": {"manifest": error_payload},
+        "failures": 1,
+        "failed_step_names": ["manifest"],
+        "retention": {
+            "removed_count": retention.get("removed_count", 0),
+            "removed_bytes": retention.get("removed_bytes", 0),
+        },
+        "major_index": major_total,
+        "major_total": major_total,
+        "failed_at_major_index": 0,
+        "selected_steps": selected_step_names,
+        "suggested_rerun_command": "",
+    }
+    _emit_progress(progress_callback, "done", result)
+    return result
+
+
+def _safe_write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        return _write_dataset_prepare_summary(run_dir, payload)
+    except Exception as exc:
+        duration_sec = round(float(payload.get("duration_sec", 0.0) or 0.0), 3)
+        fallback_summary = {
+            "status": "FAIL",
+            "duration_sec": duration_sec,
+            "error_type": payload.get("error_type", type(exc).__name__),
+            "error_message": payload.get("error_message", str(exc)),
+            "summary_write_error": f"{type(exc).__name__}: {exc}",
+        }
+        try:
+            write_json(run_dir / "dataset_prepare_summary.json", fallback_summary)
+        except OSError:
+            pass
+        try:
+            write_text(
+                run_dir / "dataset_prepare_summary.txt",
+                "\n".join([
+                    f"status      : {fallback_summary['status']}",
+                    f"duration_sec: {duration_sec}",
+                    f"error_type  : {fallback_summary['error_type']}",
+                    f"error_msg   : {fallback_summary['error_message']}",
+                    f"write_error : {fallback_summary['summary_write_error']}",
+                ]) + "\n",
+            )
+        except OSError:
+            pass
+        return fallback_summary
+
+
 def _run_script(
     *,
     name: str,
@@ -483,11 +600,20 @@ def execute_all(
     progress_callback: Optional[ProgressCallback] = None,
     selected_steps: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    manifest = load_manifest()
-    run_dir = create_staging_run_dir()
-    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
     selected_step_names = _normalize_selected_steps(selected_steps)
     include_dataset = any(name in DATASET_REQUIRED_STEPS for name in selected_step_names)
+    run_dir = create_staging_run_dir()
+    try:
+        manifest = load_manifest()
+    except Exception as exc:
+        return _write_manifest_failure_bundle(
+            run_dir=run_dir,
+            selected_step_names=selected_step_names,
+            include_dataset=include_dataset,
+            manifest_error=exc,
+            progress_callback=progress_callback,
+        )
+    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
     major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
 
     try:
@@ -566,7 +692,7 @@ def execute_all(
             dataset_prepare_started = time.time()
             try:
                 dataset_info = ensure_reduced_dataset()
-                dataset_prepare_summary = _write_dataset_prepare_summary(
+                dataset_prepare_summary = _safe_write_dataset_prepare_summary(
                     run_dir,
                     {
                         "status": "PASS",
@@ -575,7 +701,7 @@ def execute_all(
                     },
                 )
             except Exception as exc:
-                dataset_prepare_summary = _write_dataset_prepare_summary(
+                dataset_prepare_summary = _safe_write_dataset_prepare_summary(
                     run_dir,
                     {
                         "status": "FAIL",
@@ -584,6 +710,8 @@ def execute_all(
                         "error_message": str(exc),
                     },
                 )
+
+            if dataset_prepare_summary["status"] != "PASS":
                 _emit_progress(progress_callback, "step_finish", {
                     "name": "dataset_prepare",
                     "status": dataset_prepare_summary["status"],
@@ -605,6 +733,7 @@ def execute_all(
                     preflight_summary=preflight_summary,
                     progress_callback=progress_callback,
                 )
+
             _emit_progress(progress_callback, "step_finish", {
                 "name": "dataset_prepare",
                 "status": dataset_prepare_summary["status"],

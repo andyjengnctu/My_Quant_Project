@@ -19,6 +19,7 @@ STEP_LABELS = {
     "ml_smoke": "ml smoke",
     "preflight": "preflight",
     "dataset_prepare": "dataset prepare",
+    "manifest": "manifest",
 }
 
 
@@ -117,6 +118,13 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(" Test Suite 結果整理")
     print("=" * 78)
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
+    manifest_payload = step_payloads.get("manifest", {})
+    if manifest_payload:
+        print(
+            f"manifest    : FAIL | {manifest_payload.get('error_type', '')}: "
+            f"{manifest_payload.get('error_message', '')}"
+        )
+
     preflight = result.get("preflight", {})
     if preflight:
         failed_packages = preflight.get("failed_packages", [])
