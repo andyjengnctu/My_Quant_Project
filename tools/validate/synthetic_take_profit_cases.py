@@ -5,8 +5,11 @@ import pandas as pd
 
 from core.backtest_core import calc_reference_candidate_qty, can_execute_half_take_profit
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.entry_plans import build_position_from_entry_fill
+from core.position_step import execute_bar_step
+from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 
-from .checks import add_check, build_expected_scanner_payload, run_scanner_reference_check
+from .checks import add_check, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
 from .synthetic_portfolio_common import (
     add_portfolio_stats_equality_checks,
@@ -15,6 +18,60 @@ from .synthetic_portfolio_common import (
     run_portfolio_core_check_for_dir,
 )
 from .tool_adapters import run_debug_trade_log_check, run_portfolio_sim_tool_check_for_dir, run_scanner_tool_check
+
+
+def validate_synthetic_same_bar_stop_priority_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    case_id = "SYNTH_SAME_BAR_STOP_PRIORITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    buy_price = 100.0
+    qty = 10
+    init_sl = 95.0
+    init_trail = 95.0
+    position = build_position_from_entry_fill(
+        buy_price=buy_price,
+        qty=qty,
+        init_sl=init_sl,
+        init_trail=init_trail,
+        params=params,
+        entry_type="normal",
+    )
+
+    stop_level = float(position["sl"])
+    tp_half_level = float(position["tp_half"])
+    entry_price = float(position["entry"])
+
+    updated_position, freed_cash, pnl_realized, events = execute_bar_step(
+        position,
+        y_atr=1.0,
+        y_ind_sell=False,
+        y_close=buy_price,
+        t_open=100.0,
+        t_high=tp_half_level + 1.0,
+        t_low=stop_level - 1.0,
+        t_close=98.0,
+        t_volume=1000.0,
+        params=params,
+    )
+
+    expected_exec_price = adjust_long_sell_fill_price(min(stop_level, 100.0))
+    expected_net_price = calc_net_sell_price(expected_exec_price, qty, params)
+    expected_freed_cash = expected_net_price * qty
+    expected_pnl = (expected_net_price - entry_price) * qty
+
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "stop_event_emitted", True, "STOP" in events)
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "tp_half_event_suppressed", False, "TP_HALF" in events, note="同 K 棒同時碰到停損 / 停利時，必須以最壞停損計算。")
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "position_fully_closed", 0, int(updated_position["qty"]))
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "sold_half_remains_false", False, bool(updated_position["sold_half"]))
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "freed_cash_matches_stop_only", expected_freed_cash, float(freed_cash), tol=0.01)
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "realized_pnl_matches_stop_only", expected_pnl, float(pnl_realized), tol=0.01)
+    add_check(results, "synthetic_same_bar_stop_priority", case_id, "position_realized_pnl_matches_stop_only", expected_pnl, float(updated_position["realized_pnl"]), tol=0.01)
+
+    summary["events"] = list(events)
+    summary["expected_pnl"] = round(float(expected_pnl), 4)
+    return results, summary
 
 
 def validate_synthetic_half_tp_full_year_case(base_params):

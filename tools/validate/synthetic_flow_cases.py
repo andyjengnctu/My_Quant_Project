@@ -3,7 +3,10 @@ import tempfile
 
 import pandas as pd
 
-from .checks import add_check, add_fail_result, build_expected_scanner_payload, run_scanner_reference_check
+from core.portfolio_entries import execute_reserved_entries_for_day
+from core.portfolio_fast_data import pack_prepared_stock_data
+
+from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
 from .synthetic_portfolio_common import (
     add_portfolio_stats_equality_checks,
@@ -14,6 +17,105 @@ from .synthetic_portfolio_common import (
     run_portfolio_core_check_for_dir,
 )
 from .tool_adapters import run_portfolio_sim_tool_check_for_dir, run_scanner_tool_check
+
+
+def validate_synthetic_missed_buy_no_replacement_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    case_id = "SYNTH_MISSED_BUY_NO_REPLACEMENT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    miss_df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0],
+            "High": [101.0, 100.5],
+            "Low": [99.0, 99.5],
+            "Close": [100.0, 100.0],
+            "Volume": [1000.0, 0.0],
+            "ATR": [1.0, 1.0],
+            "buy_limit": [100.0, 100.0],
+            "is_setup": [True, False],
+            "ind_sell_signal": [False, False],
+        },
+        index=dates,
+    )
+    alt_df = pd.DataFrame(
+        {
+            "Open": [50.0, 50.0],
+            "High": [51.0, 51.0],
+            "Low": [49.0, 49.0],
+            "Close": [50.0, 50.5],
+            "Volume": [1000.0, 1000.0],
+            "ATR": [1.0, 1.0],
+            "buy_limit": [50.0, 50.0],
+            "is_setup": [True, False],
+            "ind_sell_signal": [False, False],
+        },
+        index=dates,
+    )
+
+    all_dfs_fast = {
+        "9801": pack_prepared_stock_data(miss_df),
+        "9802": pack_prepared_stock_data(alt_df),
+    }
+    today = pd.Timestamp("2024-01-03")
+    orderable_candidates_today = [
+        {
+            "ticker": "9801",
+            "type": "normal",
+            "limit_px": 100.0,
+            "init_sl": 95.0,
+            "init_trail": 95.0,
+            "ev": 2.0,
+            "today_pos": 1,
+            "yesterday_pos": 0,
+        },
+        {
+            "ticker": "9802",
+            "type": "normal",
+            "limit_px": 50.0,
+            "init_sl": 47.5,
+            "init_trail": 47.5,
+            "ev": 1.0,
+            "today_pos": 1,
+            "yesterday_pos": 0,
+        },
+    ]
+
+    portfolio = {}
+    active_extended_signals = {}
+    sold_today = set()
+    trade_history = []
+    initial_cash = 1_000_000.0
+    cash, total_missed_buys = execute_reserved_entries_for_day(
+        portfolio=portfolio,
+        active_extended_signals=active_extended_signals,
+        orderable_candidates_today=orderable_candidates_today,
+        sold_today=sold_today,
+        all_dfs_fast=all_dfs_fast,
+        today=today,
+        params=params,
+        cash=initial_cash,
+        available_cash=initial_cash,
+        max_positions=1,
+        trade_history=trade_history,
+        is_training=False,
+        total_missed_buys=0,
+    )
+
+    alt_buy_rows = [row for row in trade_history if row.get("Ticker") == "9802" and str(row.get("Type", "")).startswith("買進")]
+    miss_rows = [row for row in trade_history if row.get("Ticker") == "9801" and str(row.get("Type", "")) == "錯失買進(新訊號)"]
+
+    add_check(results, "synthetic_missed_buy_no_replacement", case_id, "missed_buy_count", 1, int(total_missed_buys))
+    add_check(results, "synthetic_missed_buy_no_replacement", case_id, "portfolio_stays_empty", 0, len(portfolio))
+    add_check(results, "synthetic_missed_buy_no_replacement", case_id, "alternate_ticker_not_bought_same_day", 0, len(alt_buy_rows), note="當日未成交後，不得改掛下一順位股票。")
+    add_check(results, "synthetic_missed_buy_no_replacement", case_id, "miss_row_recorded", 1, len(miss_rows))
+    add_check(results, "synthetic_missed_buy_no_replacement", case_id, "cash_unchanged_without_fill", initial_cash, float(cash), tol=0.01)
+
+    summary["missed_buy_count"] = int(total_missed_buys)
+    summary["alternate_buy_rows"] = len(alt_buy_rows)
+    return results, summary
 
 
 def validate_synthetic_extended_miss_buy_case(base_params):

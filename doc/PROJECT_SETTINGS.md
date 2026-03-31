@@ -16,7 +16,8 @@
 4. `apps/test_suite.py` 為本專案預設的動態回歸正式入口，僅限定在本地端執行，不得在 GPT 端執行。
 5. `apps/test_suite.py` 限定使用 `data/tw_stock_data_vip_reduced` 進行測試。
 6. assistant 不得重複執行或重複驗證 `apps/test_suite.py` 已涵蓋之測試項目；
-7. assistant 須對 `apps/test_suite.py` 未涵蓋進行驗證，並須針對缺口協助使用者完善 `apps/test_suite.py` 在本地端的動態測試，以節省在 GPT 上的測試時間。
+7. assistant 僅可對 `apps/test_suite.py` 未涵蓋、且確有必要、且無法由靜態檢查完成之項目進行補充驗證；且不得因此執行或重建 `apps/test_suite.py` 本體流程。
+8. assistant 須協助使用者完善 `apps/test_suite.py` 在本地端的動態測試；若發現其未覆蓋本專案設定，必須明確指出缺口、風險與修正方法，以節省在 GPT 上的測試時間。
 
 ## C. 回覆、交付與輸出
 
