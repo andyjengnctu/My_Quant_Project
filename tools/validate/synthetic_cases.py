@@ -29,12 +29,13 @@ from .synthetic_unit_cases import (
     validate_portfolio_stats_unit_case,
     validate_price_utils_unit_case,
 )
+from .synthetic_meta_cases import (
+    validate_registry_checklist_entry_consistency_case,
+)
 
 
-def run_synthetic_consistency_suite(base_params):
-    all_results = []
-    summaries = []
-    validators = [
+def get_synthetic_validators():
+    return [
         validate_synthetic_same_day_buy_sell_forbidden_case,
         validate_synthetic_intraday_reprice_forbidden_case,
         validate_synthetic_no_intraday_switch_after_failed_fill_case,
@@ -60,7 +61,14 @@ def run_synthetic_consistency_suite(base_params):
         validate_price_utils_unit_case,
         validate_history_filters_unit_case,
         validate_portfolio_stats_unit_case,
+        validate_registry_checklist_entry_consistency_case,
     ]
+
+
+def run_synthetic_consistency_suite(base_params):
+    all_results = []
+    summaries = []
+    validators = get_synthetic_validators()
 
     for validator in validators:
         results, summary = validator(base_params)
