@@ -84,7 +84,7 @@
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | PARTIAL | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑與訊息可定位；外部 API / downloader 類失敗與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
-| B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
+| B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已新增 dataset wrapper / local regression / no-arg CLI contract 案例，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數與位置參數拒絕；更多 scanner / optimizer 實驗型 CLI 與 reporting 子工具仍可補 | `tools/validate/synthetic_cli_cases.py`, `apps/*.py`, `core/runtime_utils.py` |
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，且已補 validate summary / optimizer profile / issue report 的 output contract 與 bundle/archive/root-copy/retention lifecycle contract；完整 rerun 覆寫與更多 artifact 類型仍可補 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py` |
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
@@ -152,6 +152,8 @@
 | D33 | `validate_sanitize_ohlcv_expected_behavior_case` | 已補髒資料清洗 expected behavior：負成交量修正、零量保留、重複日期去重、亂序排序與 OHLC/NaN 壞列清除 |
 | D34 | `validate_sanitize_ohlcv_failfast_case` | 已補缺少日期欄、缺必要欄位、全列無效、清洗後列數不足的 fail-fast |
 | D35 | `validate_load_clean_df_data_quality_case` | 已補 `real_case_io.load_clean_df()` 與資料清洗整合案例，確認 sanitize stats 與清洗後排序/列數一致 |
+| D36 | `validate_dataset_cli_contract_case` | 已補 dataset wrapper CLI 契約：help、預設 passthrough、`--dataset` 值傳遞、未知參數與位置參數拒絕 |
+| D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化、help 與未知參數 / 位置參數拒絕 |
 | D19 | rerun / cache pollution checks | 釘死重跑一致性 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline，並已納入 `apps/test_suite.py` / `run_all.py` 固定步驟 |
 | D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time；記憶體回歸仍未納入 |
@@ -179,7 +181,7 @@
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | 已新增 scanner header / strategy dashboard output sanity case，直接檢查關鍵欄位與格式；完整 reporting schema 與輸出相容性仍未補齊 | `tools/validate/synthetic_display_cases.py`, `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑與訊息可定位；外部 API / downloader 類失敗與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
-| 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
+| 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已新增 dataset wrapper / local regression / no-arg CLI contract 案例，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數與位置參數拒絕；更多 scanner / optimizer 實驗型 CLI 與 reporting 子工具仍可補 | `tools/validate/synthetic_cli_cases.py`, `apps/*.py`, `core/runtime_utils.py` |
 | 品質 | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | quick gate 已測部分，且已補 validate summary / optimizer profile / issue report 的 output contract 與 bundle/archive/root-copy/retention lifecycle contract；完整 rerun 覆寫與更多 artifact 類型仍可補 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py` |
 | 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 
@@ -256,6 +258,8 @@
 | D33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 | 2026-04-02 |
 | D34 | `validate_sanitize_ohlcv_failfast_case` | B14 | 2026-04-02 |
 | D35 | `validate_load_clean_df_data_quality_case` | B14 | 2026-04-02 |
+| D36 | `validate_dataset_cli_contract_case` | B16 | 2026-04-02 |
+| D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 
 ## G. 逐項收斂紀錄
 
@@ -295,6 +299,8 @@
 | 2026-04-02 | D33 | 新增資料清洗 expected behavior 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_expected_behavior_case` |
 | 2026-04-02 | D34 | 新增資料清洗 fail-fast 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_failfast_case` |
 | 2026-04-02 | D35 | 新增 `load_clean_df` 資料品質整合案例並驗證 | TODO -> DONE | `validate_load_clean_df_data_quality_case` |
+| 2026-04-02 | D36 | 新增 dataset wrapper CLI 契約案例並驗證 | TODO -> DONE | `validate_dataset_cli_contract_case` |
+| 2026-04-02 | D37 | 新增 local regression / no-arg CLI 契約案例並驗證 | TODO -> DONE | `validate_local_regression_cli_contract_case` |
 
 ## H. 完成判準
 

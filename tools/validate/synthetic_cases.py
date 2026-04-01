@@ -52,6 +52,10 @@ from .synthetic_data_quality_cases import (
     validate_sanitize_ohlcv_expected_behavior_case,
     validate_sanitize_ohlcv_failfast_case,
 )
+from .synthetic_cli_cases import (
+    validate_dataset_cli_contract_case,
+    validate_local_regression_cli_contract_case,
+)
 
 
 def get_synthetic_validators():
@@ -94,6 +98,8 @@ def get_synthetic_validators():
         validate_sanitize_ohlcv_expected_behavior_case,
         validate_sanitize_ohlcv_failfast_case,
         validate_load_clean_df_data_quality_case,
+        validate_dataset_cli_contract_case,
+        validate_local_regression_cli_contract_case,
     ]
 
 

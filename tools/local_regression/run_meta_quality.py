@@ -35,6 +35,7 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_display_cases.py",
     "tools/validate/synthetic_error_cases.py",
     "tools/validate/synthetic_data_quality_cases.py",
+    "tools/validate/synthetic_cli_cases.py",
     "core/price_utils.py",
     "core/history_filters.py",
     "core/portfolio_stats.py",
