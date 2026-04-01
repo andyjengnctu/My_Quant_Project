@@ -274,8 +274,9 @@ def validate_artifact_lifecycle_contract_case(_base_params):
             with zipfile.ZipFile(rebundle_path, "r") as zf:
                 rebundle_members = sorted(zf.namelist())
                 rebundle_console = zf.read("console_tail.txt").decode("utf-8")
+            rebundle_console_normalized = rebundle_console.replace("\r\n", "\n")
             add_check(results, "artifact_contract", case_id, "rerun_bundle_overwrites_run_dir_zip", ["console_tail.txt", "master_summary.json"], rebundle_members)
-            add_check(results, "artifact_contract", case_id, "rerun_bundle_contains_latest_console_tail", "tail updated\n", rebundle_console)
+            add_check(results, "artifact_contract", case_id, "rerun_bundle_contains_latest_console_tail", "tail updated\n", rebundle_console_normalized)
 
             archived_bundle_2 = local_common.archive_bundle_history(rebundle_path)
             root_copy_2 = local_common.publish_root_bundle_copy(archived_bundle_2)
@@ -283,7 +284,8 @@ def validate_artifact_lifecycle_contract_case(_base_params):
             add_check(results, "artifact_contract", case_id, "root_bundle_only_latest_copy_kept", [root_copy_2.name], root_bundles_after_second)
             with zipfile.ZipFile(root_copy_2, "r") as zf:
                 root_console = zf.read("console_tail.txt").decode("utf-8")
-            add_check(results, "artifact_contract", case_id, "root_bundle_copy_matches_latest_archive_contents", "tail updated\n", root_console)
+            root_console_normalized = root_console.replace("\r\n", "\n")
+            add_check(results, "artifact_contract", case_id, "root_bundle_copy_matches_latest_archive_contents", "tail updated\n", root_console_normalized)
 
             old_archive = output_root / "to_chatgpt_bundle_20260101_000000_old.zip"
             old_archive.write_text("old\n", encoding="utf-8")
