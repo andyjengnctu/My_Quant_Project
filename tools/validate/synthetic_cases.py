@@ -51,6 +51,9 @@ from .synthetic_contract_cases import (
     validate_output_contract_case,
 )
 from .synthetic_error_cases import (
+    validate_downloader_main_error_path_case,
+    validate_downloader_market_date_fallback_case,
+    validate_downloader_sync_error_path_case,
     validate_module_loader_error_path_case,
     validate_params_io_error_path_case,
     validate_preflight_error_path_case,
@@ -62,6 +65,7 @@ from .synthetic_data_quality_cases import (
 )
 from .synthetic_cli_cases import (
     validate_dataset_cli_contract_case,
+    validate_extended_tool_cli_contract_case,
     validate_local_regression_cli_contract_case,
 )
 
@@ -118,11 +122,15 @@ def get_synthetic_validators():
         validate_params_io_error_path_case,
         validate_module_loader_error_path_case,
         validate_preflight_error_path_case,
+        validate_downloader_market_date_fallback_case,
+        validate_downloader_sync_error_path_case,
+        validate_downloader_main_error_path_case,
         validate_sanitize_ohlcv_expected_behavior_case,
         validate_sanitize_ohlcv_failfast_case,
         validate_load_clean_df_data_quality_case,
         validate_dataset_cli_contract_case,
         validate_local_regression_cli_contract_case,
+        validate_extended_tool_cli_contract_case,
         validate_model_io_schema_case,
         validate_ranking_scoring_sanity_case,
         validate_scanner_worker_repeatability_case,

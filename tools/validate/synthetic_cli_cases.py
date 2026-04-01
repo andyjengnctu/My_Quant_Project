@@ -196,3 +196,51 @@ def validate_local_regression_cli_contract_case(_base_params):
 
     summary["no_arg_case_count"] = len(no_arg_cases)
     return results, summary
+
+
+def validate_extended_tool_cli_contract_case(_base_params):
+    case_id = "CLI_EXTENDED_TOOL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    app_test_suite = importlib.import_module("apps.test_suite")
+    debug_trade_log = importlib.import_module("tools.debug.trade_log")
+    optimizer_main = importlib.import_module("tools.optimizer.main")
+    portfolio_sim_main = importlib.import_module("tools.portfolio_sim.main")
+    scan_runner = importlib.import_module("tools.scanner.scan_runner")
+    validate_main = importlib.import_module("tools.validate.main")
+
+    dataset_cases = [
+        ("tools/optimizer/main.py", optimizer_main.main, "environ", {}),
+        ("tools/portfolio_sim/main.py", portfolio_sim_main.main, "env", {"V16_AUTO_OPEN_BROWSER": "0"}),
+        ("tools/scanner/scan_runner.py", scan_runner.main, "env", {"TEST": "1"}),
+        ("tools/validate/main.py", validate_main.main, "environ", {}),
+        ("tools/debug/trade_log.py", debug_trade_log.main, "environ", {}),
+    ]
+
+    for program, main_func, env_kw, env_value in dataset_cases:
+        metric_prefix = program.replace("/", "_").replace(".", "_")
+        kwargs = {env_kw: env_value}
+        rc, help_text = _capture_stdout(main_func, [program, "--help"], **kwargs)
+        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
+        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
+        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_dataset_choices", True, "reduced|full" in help_text)
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_invalid_flag_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--bad"], **kwargs), "不支援的參數")
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_missing_dataset_value_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--dataset"], **kwargs), "缺少值")
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_empty_dataset_value_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--dataset="], **kwargs), "不能為空")
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "extra"], **kwargs), "不支援的位置參數")
+
+    no_dataset_cases = [
+        ("apps/test_suite.py", app_test_suite.main, {}),
+    ]
+
+    for program, main_func, kwargs in no_dataset_cases:
+        metric_prefix = program.replace("/", "_").replace(".", "_")
+        rc, help_text = _capture_stdout(main_func, [program, "--help"], **kwargs)
+        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_rc", 0, rc)
+        add_check(results, "cli_contract", case_id, f"{metric_prefix}_help_usage", True, f"用法: python {program}" in help_text)
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_invalid_flag_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "--bad"], **kwargs), "不支援的參數")
+        _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, kwargs=kwargs: main_func([program, "extra"], **kwargs), "不支援的位置參數")
+
+    summary["extended_case_count"] = len(dataset_cases) + len(no_dataset_cases)
+    return results, summary
