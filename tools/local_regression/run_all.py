@@ -41,6 +41,7 @@ SCRIPT_ORDER = [
     ("consistency", "tools/validate/cli.py", "validate_consistency_summary.json"),
     ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json"),
     ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json"),
+    ("meta_quality", "tools/local_regression/run_meta_quality.py", "meta_quality_summary.json"),
 ]
 SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = [name for name, *_ in SCRIPT_ORDER]
@@ -198,14 +199,13 @@ def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
 
 
 def _read_step_payloads(run_dir: Path) -> Dict[str, Any]:
-    return {
+    payloads = {
         "preflight": _safe_read_json_with_error(run_dir / "preflight_summary.json"),
         "dataset_prepare": _safe_read_json_with_error(run_dir / "dataset_prepare_summary.json"),
-        "quick_gate": _safe_read_json_with_error(run_dir / "quick_gate_summary.json"),
-        "consistency": _safe_read_json_with_error(run_dir / "validate_consistency_summary.json"),
-        "chain_checks": _safe_read_json_with_error(run_dir / "chain_summary.json"),
-        "ml_smoke": _safe_read_json_with_error(run_dir / "ml_smoke_summary.json"),
     }
+    for name, _, summary_name in SCRIPT_ORDER:
+        payloads[name] = _safe_read_json_with_error(run_dir / summary_name)
+    return payloads
 
 
 def _emit_progress(progress_callback: Optional[ProgressCallback], event: str, payload: Dict[str, Any]) -> None:
@@ -1076,8 +1076,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv if argv is None else argv)
     if has_help_flag(args):
         program_name = resolve_cli_program_name(args, "tools/local_regression/run_all.py")
-        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke]")
-        print("說明: 預設先跑完整 reduced regression；若完整入口已找出失敗步驟，可再用 --only 只重跑指定步驟。")
+        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke,meta_quality]")
+        print("說明: 預設先跑完整 reduced regression（含 meta quality）；若完整入口已找出失敗步驟，可再用 --only 只重跑指定步驟。")
         return 0
 
     try:

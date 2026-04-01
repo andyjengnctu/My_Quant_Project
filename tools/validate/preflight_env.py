@@ -20,12 +20,13 @@ _IMPORT_NAME_OVERRIDES = {
     "scikit-learn": "sklearn",
     "sqlalchemy": "sqlalchemy",
 }
-_LOCAL_REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke")
+_LOCAL_REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality")
 _LOCAL_REGRESSION_STEP_REQUIREMENTS = {
     "quick_gate": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},
     "consistency": {"numpy", "pandas", "openpyxl"},
     "chain_checks": {"numpy", "pandas", "openpyxl"},
     "ml_smoke": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},
+    "meta_quality": {"coverage", "numpy", "pandas", "openpyxl"},
 }
 
 
@@ -87,7 +88,12 @@ def _resolve_checked_requirement_names(requirement_names: List[str], selected_st
     for step_name in normalized_steps:
         required_packages.update(_LOCAL_REGRESSION_STEP_REQUIREMENTS[step_name])
 
-    selected_requirements = [name for name in requirement_names if name in required_packages]
+    selected_requirements: List[str] = []
+    seen = set()
+    for name in [*requirement_names, *sorted(required_packages)]:
+        if name in required_packages and name not in seen:
+            selected_requirements.append(name)
+            seen.add(name)
     return selected_requirements, normalized_steps, "local_regression_steps"
 
 
@@ -187,7 +193,7 @@ def main(argv=None) -> int:
     validate_cli_args(argv, value_options=("--steps",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/validate/preflight_env.py")
-        print(f"用法: python {program_name} [--steps quick_gate,consistency,chain_checks,ml_smoke]")
+        print(f"用法: python {program_name} [--steps quick_gate,consistency,chain_checks,ml_smoke,meta_quality]")
         print("說明: 預設檢查 requirements 全部套件；若指定 --steps，則只檢查 local regression 所選步驟所需套件；不自動安裝。")
         return 0
 

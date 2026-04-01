@@ -17,6 +17,7 @@ STEP_LABELS = {
     "consistency": "consistency",
     "chain_checks": "chain checks",
     "ml_smoke": "ml smoke",
+    "meta_quality": "meta quality",
     "preflight": "preflight",
     "dataset_prepare": "dataset prepare",
     "manifest": "manifest",
@@ -127,6 +128,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     consistency = step_payloads.get("consistency", {})
     chain = step_payloads.get("chain_checks", {})
     ml = step_payloads.get("ml_smoke", {})
+    meta = step_payloads.get("meta_quality", {})
 
     def _payload_issue_text(payload: Dict[str, Any]) -> str:
         if not payload:
@@ -180,7 +182,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             return "blocked_by_manifest"
         if step_name == "dataset_prepare" and "preflight" in failed_step_names:
             return "blocked_by_preflight"
-        if step_name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"}:
+        if step_name in {"quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"}:
             if "preflight" in failed_step_names:
                 return "blocked_by_preflight"
             if "dataset_prepare" in failed_step_names:
@@ -188,7 +190,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         return "blocked_before_step"
 
     def _step_overview(name: str, payload: Dict[str, Any], script_item: Dict[str, Any]) -> tuple[str, str]:
-        if name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"} and name not in selected_steps:
+        if name in {"quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"} and name not in selected_steps:
             return "SKIP", "not_selected"
         if name in not_run_step_names:
             return "NOT_RUN", _blocked_reason(name)
@@ -246,7 +248,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     print("\n[步驟摘要]")
-    for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke"):
+    for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"):
         item = script_map.get(key, {})
         status, detail = _step_overview(key, step_payloads.get(key, {}), item)
         if item:
@@ -311,6 +313,22 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         fallback = ", ".join(ml_script.get("failure_reasons", []))
         print(f"- ml smoke   : {ml_status} | {ml_detail or fallback}")
 
+    meta_script = script_map.get("meta_quality", {})
+    meta_status, meta_detail = _step_overview("meta_quality", meta, meta_script)
+    if meta_status == "PASS":
+        coverage = meta.get("coverage", {})
+        checklist = meta.get("checklist", {})
+        totals = coverage.get("totals", {})
+        print(
+            "- meta quality: "
+            f"fail_count={meta.get('fail_count', 0)} | "
+            f"coverage_percent={totals.get('percent_covered', 0.0)} | "
+            f"todo_ids={len(checklist.get('todo_ids', []))}"
+        )
+    else:
+        fallback = ", ".join(meta_script.get("failure_reasons", []))
+        print(f"- meta quality: {meta_status} | {meta_detail or fallback}")
+
     if result["overall_status"] != "PASS":
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
         if not failed_names:
@@ -330,7 +348,7 @@ def main(argv=None) -> int:
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/test_suite.py")
         print(f"用法: python {program_name}")
-        print("說明: reduced 一鍵測試正式入口；先跑完整 regression，若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
+        print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試（含 meta quality），若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
 
     from tools.local_regression.run_all import execute_all

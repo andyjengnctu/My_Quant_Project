@@ -195,8 +195,8 @@ tools/validate/
 - `run_quick_gate.py`：靜態檢查、CLI 錯誤路徑、缺參數 / 壞參數 / optimizer export-only 壞 DB fail-fast。
 - `run_chain_checks.py`：對 reduced 內實際 discover 到的全部 ticker 執行單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳，並額外做雙跑 digest 對比，檢查重跑一致性；輸出全量 chain summary / chain details。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke，並以固定 seed 做雙跑一致性檢查，確認 optimizer 結果可重現。
-- `run_meta_quality.py`：targeted meta quality 工具；對 synthetic coverage suite 產出 line / branch coverage baseline，並正式檢查 checklist 主表、未完成摘要、已完成摘要的一致性。
-- `run_all.py`：先執行 `tools/validate/preflight_env.py` 等價檢查；通過後才一鍵串接 quick gate / consistency / chain checks / ml smoke，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；另支援 `--only ...`，讓完整入口失敗後只重跑指定步驟；對外提供 apps 使用的 progress callback。
+- `run_meta_quality.py`：meta quality 工具；對 synthetic coverage suite 產出 line / branch coverage baseline，並正式檢查 checklist 主表、未完成摘要、已完成摘要的一致性；已納入 `apps/test_suite.py` / `run_all.py` 單一入口。
+- `run_all.py`：先執行 `tools/validate/preflight_env.py` 等價檢查；通過後才一鍵串接 quick gate / consistency / chain checks / ml smoke / meta quality，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；另支援 `--only ...`，讓完整入口失敗後只重跑指定步驟；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced dataset 存在性檢查、bundle 打包。
 - `preflight_env.py`：根據 `requirements/requirements.txt` 檢查目前 Python 環境是否已具備必要套件；若由 local regression 指定步驟呼叫，則只檢查該步驟實際需要的套件；`quick_gate` 因含 optimizer export-only 錯誤路徑，仍需 `optuna` 與 `SQLAlchemy`；只檢查、不自動安裝。
 
@@ -207,7 +207,7 @@ tools/validate/
 
 
 ### 測試入口收斂
-- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
+- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口，且必須串接所有已實作測試；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
 - `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
 - 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。
 
