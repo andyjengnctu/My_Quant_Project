@@ -20,6 +20,7 @@
 4. 在 test suite 完全收斂前，`doc/TEST_SUITE_CHECKLIST.md` 中標記為 `TODO` 與 `PARTIAL` 的項目，仍須由 GPT 端補驗，以維持整體完整性。
 5. 已標記為 `DONE` 的項目，原則上以 test suite 為主，GPT 端不重複完整執行；但若本輪改動直接影響相關模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍須做定向複核。
 6. GPT 端補驗應以差異化驗證為原則：優先補 `TODO`、`PARTIAL` 與本輪改動直接影響的高風險 invariant，避免重跑已穩定覆蓋項目。
+7. 每輪開始時，GPT 除了讀取 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`，也必須主動檢查目前 checklist 是否已足夠支撐本輪完整性判斷；檢查範圍不只包含正式邏輯與跨工具契約，也包含 test suite 本身的註冊完整性、自我驗證與收斂缺口。若不足，須明確指出缺口並先回寫或更新 checklist。
 
 ## C. 回覆、交付與輸出
 

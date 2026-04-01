@@ -26,6 +26,7 @@
 5. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 6. 在 test suite 完全收斂前，`TODO` 與 `PARTIAL` 項目仍由 GPT 端補驗；`DONE` 項目原則上不重複完整執行，但若本輪改動直接影響其模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍需做定向複核。
 7. GPT 端補驗應採差異化驗證：只補缺口與高風險影響面，不重跑已穩定覆蓋且與本輪改動無關的完整動態流程。
+8. 每輪開始時，GPT 也必須檢查本清單是否仍足夠支撐本輪完整性判斷；檢查範圍不只包含正式邏輯與跨工具契約，也包含 test suite 本身的註冊完整性、自我驗證、coverage 與收斂缺口。若不足，須先把缺口回寫到本清單，再執行後續驗證或修改。
 
 ## A. 分層原則
 
@@ -90,6 +91,10 @@
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | TODO | 尚未看到文件一致性檢查 | doc command contract checks |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | TODO | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | TODO | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
+| B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | TODO | `DONE` 項目需可對應實際 test function 與正式入口註冊，避免文件已完成但主流程未執行 | `tools/validate/synthetic_cases.py`, meta checks under `tools/validate/` |
+| B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | TODO | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
+| B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | TODO | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | TODO | 需定期判斷本清單是否仍足夠覆蓋正式邏輯、跨工具契約、test suite 自身正確性與收斂缺口；不足時需先回寫本清單 | checklist review + meta checks |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -143,6 +148,10 @@
 | D19 | rerun / cache pollution checks | 釘死重跑一致性 |
 | D20 | coverage report baseline | 將完整性從主觀判斷改為客觀數字 |
 | D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
+| D22 | registry / checklist / main-entry consistency checks | 確認 `DONE` 項目皆已映射到實際 test function 與正式入口 |
+| D23 | known-bad fault injection checks | 確認關鍵規則被故意破壞時，既有測試真的會 fail |
+| D24 | independent oracle / golden numeric cases | 關鍵數值規則以手算或獨立 oracle 驗證，不與 production 共用同邏輯 |
+| D25 | checklist sufficiency review | 每輪先判斷 checklist 是否已足夠覆蓋完整性，包含 test suite 本身 |
 
 ## E. 未完成缺口摘要
 
@@ -170,6 +179,10 @@
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | 尚未看到文件一致性檢查 | doc command contract checks |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | 覆蓋率 | B22 | line / branch coverage 報表 | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
+| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `DONE` 項目需可對應實際 test function 與正式入口註冊，避免文件已完成但主流程未執行 | `tools/validate/synthetic_cases.py`, meta checks under `tools/validate/` |
+| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
+| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
+| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 需定期判斷本清單是否仍足夠覆蓋正式邏輯、跨工具契約、test suite 自身正確性與收斂缺口；不足時需先回寫本清單 | checklist review + meta checks |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
@@ -187,6 +200,10 @@
 | D19 | rerun / cache pollution checks | TODO | B18 |
 | D20 | coverage report baseline | TODO | B22 |
 | D21 | performance baseline checks | TODO | B19 |
+| D22 | registry / checklist / main-entry consistency checks | TODO | B23 |
+| D23 | known-bad fault injection checks | TODO | B24 |
+| D24 | independent oracle / golden numeric cases | TODO | B25 |
+| D25 | checklist sufficiency review | TODO | B26 |
 
 ## F. 已完成覆蓋摘要
 
@@ -243,6 +260,8 @@
 1. `B1` 區 `P0` 項目全數至少達到 `DONE`。
 2. `B1` 區其餘項目不得低於 `PARTIAL`，且缺口需可明確說明。
 3. `B2` 區 `B11`、`B12`、`B13`、`B14`、`B18`、`B22` 至少達到 `PARTIAL`。
-4. 有固定的 coverage baseline 與 reduced dataset regression baseline。
-5. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
-6. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
+4. `B23`、`B24`、`B25`、`B26` 至少達到 `PARTIAL`，以證明 checklist 與 test suite 本身正確性已被納入收斂。
+5. 有固定的 coverage baseline 與 reduced dataset regression baseline。
+6. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
+7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；若不足，須先更新 checklist 再進行後續驗證或修改。
+8. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
