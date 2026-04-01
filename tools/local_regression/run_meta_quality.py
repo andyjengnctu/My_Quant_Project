@@ -216,11 +216,25 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
 
     totals = payload.get("totals", {}) if isinstance(payload, dict) else {}
     files_payload = payload.get("files", {}) if isinstance(payload, dict) else {}
+
+    project_root_norm = str(PROJECT_ROOT).replace("\\", "/").rstrip("/")
+
+    def _normalize_coverage_key(raw_path: str) -> str:
+        normalized = str(raw_path).replace("\\", "/")
+        if project_root_norm and normalized.startswith(project_root_norm + "/"):
+            normalized = normalized[len(project_root_norm) + 1 :]
+        return normalized.lstrip("/")
+
+    normalized_files_payload = {
+        _normalize_coverage_key(raw_key): file_info
+        for raw_key, file_info in files_payload.items()
+    }
+
     key_files: Dict[str, Dict[str, Any]] = {}
     missing_targets: List[str] = []
     zero_covered_targets: List[str] = []
     for rel_path in COVERAGE_TARGETS:
-        file_info = files_payload.get(rel_path)
+        file_info = normalized_files_payload.get(_normalize_coverage_key(rel_path))
         summary = dict(file_info.get("summary", {})) if isinstance(file_info, dict) else {}
         if not summary:
             missing_targets.append(rel_path)
