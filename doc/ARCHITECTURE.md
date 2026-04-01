@@ -48,6 +48,7 @@ project/
 │  ├─ CMD.md                          # 常用指令與操作說明
 │  ├─ FINMIND_API_TOKEN.md            # API token 說明
 │  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
+│  ├─ TEST_SUITE_CHECKLIST.md         # test suite 收斂清單；區分長期固定測試與可隨策略升級調整之測試
 │  └─ ToDo.md                         # 待辦事項與後續整理筆記
 ├─ data/
 │  ├─ tw_stock_data_vip/              # 專案內保留的資料佔位與名單檔
@@ -141,7 +142,7 @@ project/
 - `tools/debug/`：交易除錯子系統；`trade_log.py` 保留 CLI 與資料集解析，`backtest.py` 只保留 debug 回測主控 façade，買進 / 延續候選進場已拆到 `entry_flow.py`，出場 / 錯失賣出 / 期末結算已拆到 `exit_flow.py`，明細列建構與半倉停利價 helper 集中到 `log_rows.py`，`reporting.py` 專責 Excel 匯出與虧損摘要。
 - `core/`：核心規則與共用計算，應作為單一真理來源；目前 `portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控與最終整合，當日候選池掃描 / normal / extended 候選規格與排序已抽至 `portfolio_candidates.py`，快取市場資料/PIT 統計索引抽至 `portfolio_fast_data.py`，日內操作 façade 保留於 `portfolio_ops.py`，其中盤前買進執行/延續訊號清理抽至 `portfolio_entries.py`，汰弱換股/持倉結算/期末結算抽至 `portfolio_exits.py`，曲線/年度/年化統計與分數計算抽至 `portfolio_stats.py`。`backtest_core.py` 已縮為單股 K 棒推進與回測總控；單棒持倉步進抽至 `position_step.py`，回測收尾與統計彙整抽至 `backtest_finalize.py`；跳價/成本/股數/漲跌停口徑抽至 `price_utils.py`，技術指標與訊號生成抽至 `signal_utils.py`，`trade_plans.py` 已縮為 façade，歷史績效候選門檻抽至 `history_filters.py`，候選/掛單/成交後部位建立抽至 `entry_plans.py`，延續訊號狀態、延續候選與延續掛單規格抽至 `extended_signals.py`。`display.py` 已縮為 façade，ANSI 色彩/表格與共用參數 helper 抽至 `display_common.py`，scanner header 輸出抽至 `scanner_display.py`，strategy dashboard 與對比表輸出抽至 `strategy_dashboard.py`。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
-- `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件。
+- `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件；`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂主清單，維護長期固定測試、可隨策略升級調整之測試、優先級與狀態。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。
 - 執行期資料集預設優先使用 `/data/`；若執行環境不存在 `/data/`，則自動退回 `project/data/`。因此 Linux 可直接使用 `/data/...`，Windows 等無 `/data` 的環境可直接使用專案根目錄下的 `data/...`。
 - `requirements/`：環境相依與版本鎖定，不放商業邏輯。
@@ -164,6 +165,7 @@ project/
 
 - 新增、刪除、移動、拆分、合併檔案，或調整模組責任與依賴方向時，必須同步更新本文件與 `doc/CMD.md`。
 - 若本文件與實際程式不一致，應優先修正文件，不得放任過期。
+- 若測試入口、測試分層、主要測試責任或 test suite 維護方式有變動，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md` 與本文件；若連帶影響操作方式，再同步更新 `doc/CMD.md`。
 
 
 

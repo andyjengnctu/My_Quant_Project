@@ -1,0 +1,164 @@
+# Test Suite 收斂清單
+
+目的：整理 `apps/test_suite.py` 與其本地動態測試組成步驟的覆蓋範圍、缺口、優先順序與建議落點，供後續逐項收斂。
+
+範圍：
+- 納入 `PROJECT_SETTINGS.md` 中的長期規則。
+- 納入未明列於專案設定、但對正確性、穩定性、可重現性與可維護性必要的測試項目。
+- 不納入暫時專案特例：`apps/portfolio_sim.py` 自動開瀏覽器、只使用還原價不考慮 raw。
+
+狀態定義：
+- `DONE`：已確認有明確測試覆蓋。
+- `PARTIAL`：已有部分覆蓋，但仍有缺口。
+- `TODO`：目前未見足夠覆蓋，應補。
+- `N/A`：明確不納入正式長期 test suite。
+
+優先級：
+- `P0`：直接影響交易正確性、統計口徑或未來函數。
+- `P1`：高價值補強，避免回歸或誤判。
+- `P2`：品質與工具鏈補強。
+
+收斂原則：
+1. 先補長期固定測試，再補可隨策略升級調整的測試。
+2. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要。
+3. 若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+4. 優先補 synthetic / unit / contract test；避免讓 GPT 端重跑本地完整動態流程。
+5. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
+6. 在 test suite 完全收斂前，`TODO` 與 `PARTIAL` 項目仍由 GPT 端補驗；`DONE` 項目原則上不重複完整執行，但若本輪改動直接影響其模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍需做定向複核。
+7. GPT 端補驗應採差異化驗證：只補缺口與高風險影響面，不重跑已穩定覆蓋且與本輪改動無關的完整動態流程。
+
+## A. 分層原則
+
+### A1. 長期固定測試
+這類測試不應因策略從規則式升級到 ML / DRL / LLM 而改變；主要驗證不可變規格、跨工具契約與基礎品質屬性。
+
+應優先納入：
+- 交易規則 invariant。
+- 統計口徑一致性。
+- 費稅後淨值與 Round-Trip 定義。
+- 候選 / 掛單 / 成交 / miss buy 分層。
+- 禁止未來函數。
+- fail-fast、壞輸入、資料韌性。
+- CLI / artifact / schema 契約。
+- coverage baseline、重跑一致性、效能 baseline。
+
+### A2. 可隨策略升級調整的測試
+這類測試可隨策略演進調整，但仍應保留，以避免實驗型改動破壞對外介面與最基本可用性。
+
+只建議驗證：
+- 模型輸入 / 輸出 schema。
+- 同 seed 的可重現性。
+- ranking / scoring 輸出的範圍、型別、排序穩定性。
+- optimizer / scanner / reporting 的最低可用性。
+
+避免寫成：
+- 某模型分數必須等於固定小數。
+- 某版本一定挑到某一檔股票。
+- 驗證大量內部中間變數與執行順序。
+- 在測試中重寫一份策略邏輯。
+
+## B. 長期固定測試清單
+
+### B1. 專案設定對應清單（不含暫時特例）
+
+| ID | 優先級 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|---|
+| B01 | P0 | 杜絕未來函數 | PARTIAL | 已有 PIT same-day exit 類測試，但不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
+| B02 | P1 | 同 K 棒停利/停損取最壞停損 | DONE | 已有明確 synthetic case | 既有 synthetic case |
+| B03 | P0 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | PARTIAL | 缺少直接手算對帳案例，無法釘死全部欄位一致 | `tools/validate/synthetic_take_profit_cases.py` |
+| B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | PARTIAL | 已有部分覆蓋，但應直接斷言 `completed_trades` 與 `avg_win/avg_loss` | `tools/validate/synthetic_take_profit_cases.py` |
+| B05 | P0 | 只能盤前掛單；盤中不得新增/改單/換股 | PARTIAL | 已有部分 related case，但缺直接禁止盤中改單與換股 | `tools/validate/synthetic_flow_cases.py` |
+| B06 | P0 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 | PARTIAL | 已有 same-day sell block / T+1 rotation 類測試，但缺買入當日不得賣出的直接 case | `tools/validate/synthetic_flow_cases.py` |
+| B07 | P0 | 未成交不得同日盤中自動改掛其他股票 | PARTIAL | 已有 missed buy no replacement 類測試，但應補更直接的盤中換股 case | `tools/validate/synthetic_flow_cases.py` |
+| B08 | P0 | 停利/停損只能對已持有部位預先設定 | TODO | 尚未看到直接 assertion | `tools/validate/synthetic_take_profit_cases.py` |
+| B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | TODO | 尚未看到清楚釘死各層狀態不可混用的 synthetic case | `tools/validate/synthetic_flow_cases.py` |
+| B10 | P1 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | PARTIAL | 已有相關 case，但建議補更直接的 cross-tool assertion | `tools/validate/synthetic_history_cases.py` |
+
+### B2. 未明列於專案設定，但正式 test suite 應納入
+
+| ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|---|---|
+| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | TODO | `portfolio_sim` / `scanner` / `debug_trade_log` / `validate` 對同事件欄位語意需一致 | contract tests under `tools/validate/` |
+| B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | TODO | optimizer / scanner / regression 缺明確 deterministic assertion | `tools/local_regression/`, `tools/optimizer/` |
+| B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | TODO | 價格、稅費、部位 sizing、全贏/全輸/零交易等需 unit test | `core/price_utils.py`, `core/portfolio_stats.py`, `core/history_filters.py` |
+| B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | PARTIAL | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
+| B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | PARTIAL | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
+| B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
+| B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
+| B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | TODO | 同指令連跑兩次結果是否一致尚未被正式釘住 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
+| B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | TODO | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
+| B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | TODO | 尚未看到文件一致性檢查 | doc command contract checks |
+| B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | TODO | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
+| B22 | P2 | 覆蓋率 | line / branch coverage 報表 | TODO | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
+
+## C. 可隨策略升級調整的測試清單
+
+| ID | 優先級 | 類別 | 項目 | 原則 | 建議落點 |
+|---|---|---|---|---|---|
+| C01 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | 驗輸入欄位、輸出欄位、型別、缺值處理；不驗固定分數 | `tools/optimizer/`, `tools/scanner/` |
+| C02 | P1 | 重現性 | 同 seed 下 optimizer / model inference 可重現 | 驗結果穩定在可接受範圍；不綁死搜尋路徑細節 | `tools/local_regression/`, `tools/optimizer/` |
+| C03 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | 驗排序值可用、方向一致、型別正確；不驗固定名次 | `core/buy_sort.py`, `tools/scanner/` |
+| C04 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | 驗 CLI 與輸出仍可用；不驗內部中間流程 | `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
+| C05 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | 驗欄位存在與語意；不驗具體績效數值 | `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
+
+## D. 建議先補的測試項目
+
+### D1. 長期固定測試：先收斂
+
+| ID | 建議測試名稱 | 目標 |
+|---|---|---|
+| D01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | 直接釘死不得當沖、買入當日不可賣出 |
+| D02 | `validate_synthetic_intraday_reprice_forbidden_case` | 直接釘死盤中不得改單 |
+| D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | 直接釘死未成交不得同日換股 |
+| D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | 直接釘死 stop/tp 只能作用於已持有部位 |
+| D05 | `validate_synthetic_fee_tax_net_equity_case` | 將 cash / final_equity / equity_curve / trade pnl 逐欄位對帳 |
+
+### D2. 長期固定測試：接續補強
+
+| ID | 建議測試名稱 | 目標 |
+|---|---|---|
+| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | 補強半倉與 completed trade 口徑 |
+| D07 | `validate_synthetic_missed_sell_accounting_case` | 補強 missed sell、trade log、stats 一致 |
+| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | 補強候選 / 掛單 / 成交 / miss buy 分層 |
+| D09 | `validate_synthetic_portfolio_history_filter_only_case` | 補強 history filter 僅用於投組層 / scanner |
+| D10 | `validate_synthetic_lookahead_prev_day_only_case` | 補強盤前只能讀前一日資料 |
+| D11 | `tests_unit_price_utils.py` | 釘死 tick、費率、稅金、sizing、half sell qty 邊界 |
+| D12 | `tests_unit_history_filters.py` | 釘死 EV、win rate、trade count 邊界 |
+| D13 | `tests_unit_portfolio_stats.py` | 釘死年化、MDD、R²、空序列邊界 |
+
+### D3. 可隨策略升級調整：最低維護線
+
+| ID | 建議項目 | 目標 |
+|---|---|---|
+| D14 | model input / output schema checks | 模型升級後仍符合介面契約 |
+| D15 | deterministic regression for optimizer/scanner | 在固定 seed 下維持可重現 |
+| D16 | ranking / scoring output sanity checks | 排序值可比較、無 NaN、方向一致 |
+| D17 | reporting schema compatibility checks | 新策略輸出不破壞既有報表 |
+
+### D4. 品質補強
+
+| ID | 建議項目 | 目標 |
+|---|---|---|
+| D18 | contract tests for CSV / XLSX / JSON outputs | 釘死輸出 schema |
+| D19 | rerun / cache pollution checks | 釘死重跑一致性 |
+| D20 | coverage report baseline | 將完整性從主觀判斷改為客觀數字 |
+| D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
+
+## E. 逐項收斂紀錄
+
+使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。
+
+| 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
+|---|---|---|---|---|
+| YYYY-MM-DD | D01 | 新增 synthetic case 並驗證 | TODO -> DONE |  |
+| YYYY-MM-DD | D20 | 建立 coverage baseline | TODO -> PARTIAL |  |
+
+## F. 完成判準
+
+可視為 test suite 已明顯收斂的最低條件：
+1. `B1` 區 `P0` 項目全數至少達到 `DONE`。
+2. `B1` 區其餘項目不得低於 `PARTIAL`，且缺口需可明確說明。
+3. `B2` 區 `B11`、`B12`、`B13`、`B14`、`B18`、`B22` 至少達到 `PARTIAL`。
+4. 有固定的 coverage baseline 與 reduced dataset regression baseline。
+5. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
+6. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。

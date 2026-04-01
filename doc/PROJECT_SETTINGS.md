@@ -1,11 +1,11 @@
 # 專案設定
 
-1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`；本檔所有條文均為強制規則，不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
+1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
 
 ## A. 工作基準與執行紀律
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
-2. 每次開始前，必須先回報當前工作基準與已讀 `/doc/PROJECT_SETTINGS.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
+2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 
 ## B. 標準測試流程
 
@@ -17,6 +17,9 @@
     `tools/validate/cli.py --dataset reduced`、
     `tools/local_regression/run_chain_checks.py`、
     `tools/local_regression/run_ml_smoke.py`。
+4. 在 test suite 完全收斂前，`doc/TEST_SUITE_CHECKLIST.md` 中標記為 `TODO` 與 `PARTIAL` 的項目，仍須由 GPT 端補驗，以維持整體完整性。
+5. 已標記為 `DONE` 的項目，原則上以 test suite 為主，GPT 端不重複完整執行；但若本輪改動直接影響相關模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍須做定向複核。
+6. GPT 端補驗應以差異化驗證為原則：優先補 `TODO`、`PARTIAL` 與本輪改動直接影響的高風險 invariant，避免重跑已穩定覆蓋項目。
 
 ## C. 回覆、交付與輸出
 
@@ -38,6 +41,7 @@
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。
 8. 架構或模組責任有變動時，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+9. 凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 
 ## E. 交易與策略原則
 
@@ -52,7 +56,7 @@
 9. 候選資格、是否掛單、是否成交、是否 miss buy、歷史績效統計，必須分層定義，不得混用。
 10. 單股回測不得使用該檔自身歷史績效 filter 作為買入閘門；歷史績效 filter 只能用於投組層與scanner。
 
-## F. 專案特例 (不納入test_suite)
+## F. 專案特例
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. 暫時只使用還原價，不考慮 raw。
