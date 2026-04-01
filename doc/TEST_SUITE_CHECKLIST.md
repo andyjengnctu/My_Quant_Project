@@ -90,7 +90,7 @@
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | PARTIAL | 已新增 scanner header / strategy dashboard sanity、validate console summary、portfolio yearly report 與 `apps/test_suite.py` 人類可讀摘要相容性案例；完整 reporting export schema 與更多報表路徑仍未補齊 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` |
-| B22 | P2 | 覆蓋率 | line / branch coverage 報表 | PARTIAL | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但尚未覆蓋 chain / ml smoke / display 路徑 | `tools/local_regression/run_meta_quality.py` |
+| B22 | P2 | 覆蓋率 | line / branch coverage 報表 | PARTIAL | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已補 formal helper probe 覆蓋 chain checks / ml smoke / display / test_suite summary path；但仍未形成更完整的正式路徑 coverage gate | `tools/local_regression/run_meta_quality.py` |
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已新增 meta registry case 與 `run_meta_quality.py` formal-entry 檢查；同時校驗 `DONE` 摘要、對應 test function、synthetic 主入口、`run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
@@ -178,7 +178,7 @@
 | 契約 | B11 | 跨工具 schema / 欄位語意一致 | 已新增 missed sell / trade log / stats 一致性案例，並補上 validate summary / optimizer profile / issue report 的 CSV / XLSX / JSON contract；其他事件欄位語意與更多工具輸出仍未全面補齊 | contract tests under `tools/validate/` |
 | 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查，且 `run_chain_checks.py` 已納入 scanner reduced snapshot 雙跑 digest；其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
 | 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 已在 `run_chain_checks.py` 補 chain + scanner reduced snapshot 雙跑 digest、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
-| Meta | B22 | line / branch coverage 報表 | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但尚未覆蓋 chain / ml smoke / display 路徑 | `tools/local_regression/run_meta_quality.py` |
+| Meta | B22 | line / branch coverage 報表 | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已補 formal helper probe 覆蓋 chain checks / ml smoke / display / test_suite summary path；但仍未形成更完整的正式路徑 coverage gate | `tools/local_regression/run_meta_quality.py` |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | 已新增 scanner header / strategy dashboard sanity、validate console summary、portfolio yearly report 與 `apps/test_suite.py` 人類可讀摘要相容性案例；完整 reporting export schema 與更多報表路徑仍未補齊 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑與訊息可定位；外部 API / downloader 類失敗與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
@@ -288,7 +288,7 @@
 | 2026-04-01 | D24 | 新增 independent oracle golden case 並驗證 | TODO -> DONE | validate_independent_oracle_golden_case |
 | 2026-04-01 | D15 | 新增 optimizer fixed-seed 雙跑一致性檢查 | TODO -> PARTIAL | `run_ml_smoke.py` 已比較雙跑 trial / best_params digest；scanner 尚未補 |
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
-| 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py`；尚未覆蓋 chain / ml smoke / display 路徑 |
+| 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py` |
 | 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py`；每輪是否足夠仍需人工判斷 |
 | 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
@@ -306,6 +306,8 @@
 | 2026-04-02 | D41 | 新增 scanner reduced snapshot 雙跑 digest 並驗證 | TODO -> DONE | `run_chain_checks.py` 已將 scanner 候選 / 狀態 / issue line 納入 rerun consistency payload |
 | 2026-04-02 | D14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
 | 2026-04-02 | D16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
+
+| 2026-04-02 | D20 | 擴充 `run_meta_quality.py` coverage probe 到 formal helper path | PARTIAL -> PARTIAL | 已補 chain checks / ml smoke / display / test_suite summary path，仍未形成更完整的正式路徑 coverage gate |
 
 ## H. 完成判準
 

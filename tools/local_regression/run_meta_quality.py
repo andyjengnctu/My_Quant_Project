@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Set
+from contextlib import redirect_stdout
+import io
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -38,6 +40,14 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_data_quality_cases.py",
     "tools/validate/synthetic_cli_cases.py",
     "tools/validate/synthetic_strategy_cases.py",
+    "tools/local_regression/run_chain_checks.py",
+    "tools/local_regression/run_ml_smoke.py",
+    "apps/test_suite.py",
+    "tools/validate/reporting.py",
+    "tools/portfolio_sim/reporting.py",
+    "core/scanner_display.py",
+    "core/strategy_dashboard.py",
+    "core/display_common.py",
     "core/price_utils.py",
     "core/history_filters.py",
     "core/portfolio_stats.py",
@@ -290,6 +300,169 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
     }
 
 
+def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
+    from apps import test_suite as test_suite_module
+    from core.scanner_display import print_scanner_header
+    from core.strategy_dashboard import print_strategy_dashboard
+    from tools.local_regression import run_chain_checks as chain_checks_module
+    from tools.local_regression import run_ml_smoke as ml_smoke_module
+    from tools.portfolio_sim import reporting as portfolio_reporting
+    from tools.validate.reporting import print_console_summary
+
+    probe_dir = coverage_dir / "formal_helper_probe"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+
+    def _silent_call(callable_obj):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            callable_obj()
+        return buffer.getvalue()
+
+    valid_params_payload = {
+        "atr_len": 14,
+        "atr_times_init": 2.0,
+        "atr_times_trail": 3.0,
+        "atr_buy_tol": 1.0,
+        "high_len": 20,
+        "tp_percent": 0.25,
+        "min_history_trades": 5,
+        "min_history_ev": 0.1,
+        "min_history_win_rate": 0.55,
+    }
+    params_path = probe_dir / "coverage_best_params.json"
+    params_path.write_text(json.dumps(valid_params_payload, ensure_ascii=False), encoding="utf-8")
+    profile_path = probe_dir / "optimizer_profile_summary_probe.json"
+    profile_path.write_text(json.dumps({"trial_count": 1, "avg": {"objective_wall_sec": 1.234}}, ensure_ascii=False), encoding="utf-8")
+
+    params_info = ml_smoke_module._load_params_payload(params_path)
+    profile_info = ml_smoke_module._read_latest_profile_metrics({profile_path.name: profile_path})
+    ml_smoke_module._canonical_payload_digest(params_info["payload"])
+    probe_run_a = {
+        "label": "probe-a",
+        "status": "PASS",
+        "db_trial_count": 1,
+        "qualified_trial_count": 1,
+        "best_trial_value": 0.5,
+        "best_params_digest": "abc",
+        "optimizer_profile_trial_count": 1,
+        "optimizer_profile_avg_objective_wall_sec": profile_info["optimizer_profile_avg_objective_wall_sec"],
+        "failures": [],
+    }
+    probe_run_b = {
+        "label": "probe-b",
+        "status": "PASS",
+        "db_trial_count": 1,
+        "qualified_trial_count": 1,
+        "best_trial_value": 0.5,
+        "best_params_digest": "abc",
+        "optimizer_profile_trial_count": 1,
+        "optimizer_profile_avg_objective_wall_sec": profile_info["optimizer_profile_avg_objective_wall_sec"],
+        "failures": [],
+    }
+    ml_smoke_module._build_repro_summary(probe_run_a, probe_run_b)
+
+    normalized_row = chain_checks_module._normalize_scanner_candidate_row({
+        "kind": "buy",
+        "ticker": "2330",
+        "proj_cost": 12345.6789,
+        "expected_value": 1.23456789,
+        "sort_value": 2.34567891,
+        "text": "probe",
+    })
+    chain_checks_module._build_highlights([
+        {"ticker": "2330", "filled_count": 2, "portfolio_missed_buy_count": 0, "sanitize_dropped": 0, "blocked_by": "filled_or_missed_buy"},
+        {"ticker": "2317", "filled_count": 0, "portfolio_missed_buy_count": 1, "sanitize_dropped": 1, "blocked_by": "cash"},
+    ])
+    canonical_chain_payload = chain_checks_module._canonical_chain_payload({
+        "summary_rows": [normalized_row],
+        "highlights": {"traded_ticker_count": 1},
+        "scanner_snapshot": {"candidate_count": 1},
+    })
+    chain_checks_module._payload_digest(canonical_chain_payload)
+
+    _silent_call(lambda: print_scanner_header({
+        "high_len": 20,
+        "atr_len": 14,
+        "atr_buy_tol": 1.0,
+        "atr_times_init": 2.0,
+        "atr_times_trail": 3.0,
+        "tp_percent": 0.25,
+        "use_bb": False,
+        "use_kc": False,
+        "use_vol": False,
+        "min_history_trades": 5,
+        "min_history_win_rate": 0.55,
+        "min_history_ev": 0.1,
+    }))
+    _silent_call(lambda: print_strategy_dashboard(
+        {"high_len": 20, "atr_len": 14, "atr_buy_tol": 1.0, "atr_times_init": 2.0, "atr_times_trail": 3.0, "tp_percent": 0.25, "use_bb": False, "use_kc": False, "use_vol": False, "min_history_trades": 5, "min_history_win_rate": 0.55, "min_history_ev": 0.1},
+        title="coverage-probe",
+        mode_display="投組模式",
+        max_pos=3,
+        trades=2,
+        missed_b=0,
+        missed_s=0,
+        final_eq=1000000,
+        avg_exp=50.0,
+        sys_ret=1.0,
+        bm_ret=0.5,
+        sys_mdd=2.0,
+        bm_mdd=3.0,
+        win_rate=50.0,
+        payoff=1.2,
+        ev=0.2,
+        benchmark_ticker="0050",
+        max_exp=60.0,
+        r_sq=0.9,
+        m_win_rate=50.0,
+        bm_r_sq=0.8,
+        bm_m_win_rate=40.0,
+        normal_trades=2,
+        extended_trades=0,
+        annual_trades=2.0,
+        reserved_buy_fill_rate=100.0,
+        annual_return_pct=1.0,
+        bm_annual_return_pct=0.5,
+        min_full_year_return_pct=1.0,
+        bm_min_full_year_return_pct=0.2,
+    ))
+
+    _silent_call(lambda: print_console_summary(
+        df_results=__import__("pandas").DataFrame([{"ticker": "2330", "module": "stats", "metric": "ev", "status": "PASS", "passed": True, "expected": "1", "actual": "1", "note": ""}]),
+        df_failed=__import__("pandas").DataFrame([], columns=["ticker", "module", "metric", "status", "passed", "expected", "actual", "note"]),
+        df_summary=__import__("pandas").DataFrame([{"ticker": "2330", "synthetic": False}]),
+        csv_path="outputs/validate/coverage_probe.csv",
+        xlsx_path="outputs/validate/coverage_probe.xlsx",
+        elapsed_time=1.23,
+        real_summary_count=1,
+        real_tickers=["2330"],
+        normalize_ticker_text=lambda value: str(value).strip(),
+        max_console_fail_preview=3,
+    ))
+    _silent_call(lambda: portfolio_reporting.print_yearly_return_report([{"year": 2024, "year_return_pct": 1.23, "is_full_year": True, "start_date": "2024-01-02", "end_date": "2024-12-31"}]))
+    _silent_call(lambda: test_suite_module._print_human_summary({
+        "overall_status": "PASS",
+        "failures": 0,
+        "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "failed_step_names": [],
+        "not_run_step_names": [],
+        "scripts": [{"name": "quick_gate", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "consistency", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "chain_checks", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "ml_smoke", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "meta_quality", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}],
+        "step_payloads": {"quick_gate": {"status": "PASS", "step_count": 1}, "consistency": {"status": "PASS", "total_checks": 1, "fail_count": 0, "skip_count": 0, "real_ticker_count": 1}, "chain_checks": {"status": "PASS", "ticker_count": 1, "highlights": {"blocked_by_counts": {}}, "portfolio_snapshot": {"trade_rows": 1, "reserved_buy_fill_rate": 100.0}}, "ml_smoke": {"status": "PASS", "db_trial_count": 1}, "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 1.0}}, "checklist": {"todo_ids": []}}},
+        "preflight": {"status": "PASS", "failed_packages": []},
+        "bundle_mode": "minimum_set",
+        "archived_bundle": "outputs/local_regression/probe.zip",
+        "root_bundle_copy": "probe.zip",
+        "bundle_entries": ["master_summary.json"],
+        "retention": {"removed_count": 0, "removed_bytes": 0},
+    }))
+
+    return {
+        "ml_params_keys": sorted(params_info["payload"].keys()),
+        "profile_trial_count": profile_info["optimizer_profile_trial_count"],
+        "normalized_ticker": normalized_row["ticker"],
+    }
+
+
 def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
     import coverage
     from core.params_io import load_params_from_json
@@ -309,9 +482,10 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
         base_params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
         cov.start()
         results, summaries = run_synthetic_consistency_suite(base_params)
+        formal_helper_probe = _exercise_coverage_formal_helpers(coverage_dir)
         synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
         run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
-        run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count}, ensure_ascii=False)
+        run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count, "formal_helper_probe": formal_helper_probe}, ensure_ascii=False)
     except BaseException as exc:
         run_result["returncode"] = 1
         run_result["stderr"] = f"{type(exc).__name__}: {exc}"
