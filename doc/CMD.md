@@ -10,7 +10,7 @@ SQLAlchemy 2.0.48
 yfinance 1.2.0
 
 # 打包
-$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
+$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); $arch=Join-Path (Get-Location) "arch"; New-Item -ItemType Directory -Path $arch -Force | Out-Null; Get-ChildItem -Path . -File -Filter "${branch}_*.zip" | Move-Item -Destination $arch -Force; git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
 
 # 重現環境
 python -m pip install -r requirements/requirements-lock.txt
