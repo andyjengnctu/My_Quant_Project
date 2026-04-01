@@ -42,6 +42,11 @@ from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
     validate_output_contract_case,
 )
+from .synthetic_error_cases import (
+    validate_module_loader_error_path_case,
+    validate_params_io_error_path_case,
+    validate_preflight_error_path_case,
+)
 
 
 def get_synthetic_validators():
@@ -78,6 +83,9 @@ def get_synthetic_validators():
         validate_display_reporting_sanity_case,
         validate_output_contract_case,
         validate_artifact_lifecycle_contract_case,
+        validate_params_io_error_path_case,
+        validate_module_loader_error_path_case,
+        validate_preflight_error_path_case,
     ]
 
 
