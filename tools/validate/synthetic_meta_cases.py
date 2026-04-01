@@ -51,7 +51,7 @@ def _load_done_d_rows():
         parsed.append(
             {
                 "id": cols[0],
-                "name": cols[1].strip("`").strip(),
+                "name": cols[1].replace("`", "").strip(),
                 "b_id": cols[2],
                 "done_date": cols[3],
             }
@@ -171,14 +171,37 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     add_check(results, "meta_registry", case_id, "done_d_names_unique", len(done_d_names), len(done_d_name_set))
 
     for row in done_d_rows:
-        add_check(
-            results,
-            "meta_registry",
-            case_id,
-            f"{row['id']}_registered_in_main_entry",
-            True,
-            row["name"] in validator_name_set,
-        )
+        test_name = row["name"]
+        if test_name.startswith("validate_"):
+            add_check(
+                results,
+                "meta_registry",
+                case_id,
+                f"{row['id']}_registered_in_main_entry",
+                True,
+                test_name in validator_name_set,
+            )
+        elif test_name.startswith("run_") or ".py" in test_name:
+            declared_script = test_name.split()[0]
+            if declared_script == "run_meta_quality.py":
+                declared_script = "tools/local_regression/run_meta_quality.py"
+            add_check(
+                results,
+                "meta_registry",
+                case_id,
+                f"{row['id']}_declared_non_synthetic_entry_exists",
+                True,
+                (PROJECT_ROOT / declared_script).exists(),
+            )
+        else:
+            add_check(
+                results,
+                "meta_registry",
+                case_id,
+                f"{row['id']}_entry_name_recognized",
+                True,
+                False,
+            )
 
     done_b_ids = [row["b_id"] for row in done_b_rows]
     mapped_b_ids = {row["b_id"] for row in done_d_rows}

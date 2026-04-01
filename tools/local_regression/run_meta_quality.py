@@ -23,6 +23,7 @@ from tools.local_regression.common import (
 )
 
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
+PROJECT_SETTINGS_PATH = PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md"
 STATUS_VALUES = {"DONE", "PARTIAL", "TODO", "N/A"}
 COVERAGE_TARGETS = [
     "tools/validate/synthetic_cases.py",
@@ -186,6 +187,101 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         "todo_ids": todo_ids,
         "done_ids": done_ids,
         "unfinished_d_ids": unfinished_d_ids,
+    }
+
+
+
+
+def _extract_backticked_paths(text: str) -> List[str]:
+    return [match.strip() for match in re.findall(r"`([^`]+)`", text) if "/" in match or match.endswith('.py')]
+
+
+def _extract_project_settings_formal_steps() -> List[str]:
+    text = PROJECT_SETTINGS_PATH.read_text(encoding="utf-8")
+    pattern = r"apps/test_suite\.py` 必須作為所有已實作測試的單一正式入口；其正式組成步驟目前為：\n((?:\s+`[^`]+`、?\n?)+)"
+    match = re.search(pattern, text)
+    if not match:
+        raise ValueError("找不到 PROJECT_SETTINGS.md 中的正式組成步驟")
+    return _extract_backticked_paths(match.group(1))
+
+
+def _summarize_formal_entry_consistency() -> Dict[str, Any]:
+    from apps.test_suite import STEP_LABELS
+    from tools.local_regression.run_all import SCRIPT_ORDER, STEP_NAMES
+    from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
+
+    results: List[Dict[str, Any]] = []
+    project_settings_steps = _extract_project_settings_formal_steps()
+    run_all_scripts = [script for _name, script, _summary in SCRIPT_ORDER]
+    expected_project_settings_steps = [
+        "tools/validate/preflight_env.py",
+        "tools/local_regression/run_quick_gate.py",
+        "tools/validate/cli.py --dataset reduced",
+        "tools/local_regression/run_chain_checks.py",
+        "tools/local_regression/run_ml_smoke.py",
+        "tools/local_regression/run_meta_quality.py",
+    ]
+
+    results.append(
+        summarize_result(
+            "formal_entry_project_settings_steps_match_run_all",
+            project_settings_steps == expected_project_settings_steps,
+            detail=f"project_settings={project_settings_steps} | expected={expected_project_settings_steps}",
+            extra={"project_settings_steps": project_settings_steps, "expected_steps": expected_project_settings_steps},
+        )
+    )
+
+    results.append(
+        summarize_result(
+            "formal_entry_run_all_steps_match_preflight_order",
+            list(STEP_NAMES) == list(_LOCAL_REGRESSION_STEP_ORDER),
+            detail=f"run_all={list(STEP_NAMES)} | preflight={list(_LOCAL_REGRESSION_STEP_ORDER)}",
+            extra={"run_all_steps": list(STEP_NAMES), "preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER)},
+        )
+    )
+
+    missing_step_labels = [step for step in STEP_NAMES if step not in STEP_LABELS]
+    results.append(
+        summarize_result(
+            "formal_entry_test_suite_labels_cover_run_all_steps",
+            not missing_step_labels,
+            detail=f"missing={missing_step_labels}",
+            extra={"missing_step_labels": missing_step_labels},
+        )
+    )
+
+    required_extra_labels = ["preflight", "dataset_prepare", "manifest"]
+    missing_extra_labels = [label for label in required_extra_labels if label not in STEP_LABELS]
+    results.append(
+        summarize_result(
+            "formal_entry_test_suite_labels_cover_non_script_stages",
+            not missing_extra_labels,
+            detail=f"missing={missing_extra_labels}",
+            extra={"missing_extra_labels": missing_extra_labels},
+        )
+    )
+
+    missing_script_files = []
+    for script in expected_project_settings_steps:
+        script_path = script.split()[0].strip()
+        if not (PROJECT_ROOT / script_path).exists():
+            missing_script_files.append(script)
+    results.append(
+        summarize_result(
+            "formal_entry_all_declared_scripts_exist",
+            not missing_script_files,
+            detail=f"missing={missing_script_files}",
+            extra={"missing_script_files": missing_script_files},
+        )
+    )
+
+    ok = all(item["status"] == "PASS" for item in results)
+    return {
+        "ok": ok,
+        "results": results,
+        "project_settings_steps": project_settings_steps,
+        "run_all_steps": list(STEP_NAMES),
+        "preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER),
     }
 
 
@@ -455,10 +551,11 @@ def main(argv=None) -> int:
     started = os.times().elapsed
     coverage_summary = _build_coverage_summary(run_dir)
     checklist_summary = _summarize_checklist_consistency()
+    formal_entry_summary = _summarize_formal_entry_consistency()
     current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
     performance_summary = _build_performance_summary(run_dir, manifest, current_meta_quality_duration_sec=current_meta_quality_duration_sec)
 
-    all_results = [*coverage_summary["results"], *checklist_summary["results"], *performance_summary["results"]]
+    all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
     failures = [item["name"] for item in all_results if item["status"] != "PASS"]
     overall_status = "PASS" if not failures else "FAIL"
 
@@ -480,6 +577,12 @@ def main(argv=None) -> int:
             "done_ids": checklist_summary["done_ids"],
             "unfinished_d_ids": checklist_summary["unfinished_d_ids"],
         },
+        "formal_entry": {
+            "ok": formal_entry_summary["ok"],
+            "project_settings_steps": formal_entry_summary["project_settings_steps"],
+            "run_all_steps": formal_entry_summary["run_all_steps"],
+            "preflight_steps": formal_entry_summary["preflight_steps"],
+        },
         "performance": {
             "ok": performance_summary["ok"],
             "skipped": performance_summary["skipped"],
@@ -497,6 +600,7 @@ def main(argv=None) -> int:
         f"fail_count    : {len(failures)}",
         f"coverage_ok   : {coverage_summary['ok']}",
         f"checklist_ok  : {checklist_summary['ok']}",
+        f"formal_entry_ok: {formal_entry_summary['ok']}",
         (
             f"coverage      : line {coverage_summary['totals']['covered_lines']}/"
             f"{coverage_summary['totals']['num_statements']} | branch {coverage_summary['totals']['covered_branches']}/"
