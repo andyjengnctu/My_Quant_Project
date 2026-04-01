@@ -34,6 +34,7 @@ HELP_TARGETS = [
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
     ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
     ([sys.executable, "tools/local_regression/run_ml_smoke.py", "--help"], "python tools/local_regression/run_ml_smoke.py"),
+    ([sys.executable, "tools/local_regression/run_meta_quality.py", "--help"], "python tools/local_regression/run_meta_quality.py"),
     ([sys.executable, "tools/local_regression/run_quick_gate.py", "--help"], "python tools/local_regression/run_quick_gate.py"),
     ([sys.executable, "tools/optimizer/main.py", "--help"], "python tools/optimizer/main.py"),
     ([sys.executable, "tools/portfolio_sim/main.py", "--help"], "python tools/portfolio_sim/main.py"),
@@ -46,6 +47,7 @@ NO_ARG_CLI_TARGETS = [
     "requirements/export_requirements_lock.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
+    "tools/local_regression/run_meta_quality.py",
     "tools/local_regression/run_quick_gate.py",
 ]
 RUN_ALL_CLI_CASES = [
