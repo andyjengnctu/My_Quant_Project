@@ -7,3 +7,4 @@ requests
 yfinance
 FinMind
 plotly
+coverage
