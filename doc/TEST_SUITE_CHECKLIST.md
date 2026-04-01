@@ -85,7 +85,7 @@
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | PARTIAL | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | PARTIAL | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
-| B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，且已補一層 validate summary / optimizer profile / issue report 的 output contract；bundle / retention / rerun 覆寫 lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
+| B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，且已補 validate summary / optimizer profile / issue report 的 output contract 與 bundle/archive/root-copy/retention lifecycle contract；完整 rerun 覆寫與更多 artifact 類型仍可補 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py` |
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
@@ -145,6 +145,7 @@
 | ID | 建議項目 | 目標 |
 |---|---|---|
 | D18 | contract tests for CSV / XLSX / JSON outputs | 已補 validate summary / optimizer profile / issue report 的 schema contract；更多工具輸出仍可補 |
+| D28 | `validate_artifact_lifecycle_contract_case` | 已補 bundle/archive/root-copy/retention lifecycle contract；完整 rerun 覆寫與更多 artifact 類型仍可補 |
 | D19 | rerun / cache pollution checks | 釘死重跑一致性 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline，並已納入 `apps/test_suite.py` / `run_all.py` 固定步驟 |
 | D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time；記憶體回歸仍未納入 |
@@ -174,7 +175,7 @@
 | 品質 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
-| 品質 | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | quick gate 已測部分，且已補一層 validate summary / optimizer profile / issue report 的 output contract；bundle / retention / rerun 覆寫 lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
+| 品質 | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | quick gate 已測部分，且已補 validate summary / optimizer profile / issue report 的 output contract 與 bundle/archive/root-copy/retention lifecycle contract；完整 rerun 覆寫與更多 artifact 類型仍可補 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py` |
 | 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 
 ### E2. 目前所有 `TODO` 的主表項目摘要
@@ -191,6 +192,7 @@
 | D16 | ranking / scoring output sanity checks | TODO | C03 |
 | D17 | reporting schema compatibility checks | TODO | C05 / B21 |
 | D18 | contract tests for CSV / XLSX / JSON outputs | PARTIAL | B11 / B17 |
+| D28 | `validate_artifact_lifecycle_contract_case` | PARTIAL | B17 |
 | D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | PARTIAL | B22 |
 | D21 | performance baseline checks | PARTIAL | B19 |
@@ -283,3 +285,5 @@
 6. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
 7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；若不足，須先更新 checklist 再進行後續驗證或修改。
 8. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
+
+| 2026-04-01 | D28 | 新增 artifact lifecycle contract case 並驗證 | TODO -> PARTIAL | validate_artifact_lifecycle_contract_case |

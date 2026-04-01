@@ -3,12 +3,15 @@ import io
 import json
 import os
 import tempfile
+import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
 
+from core.output_retention import RetentionRule, apply_retention_rules
+from tools.local_regression import common as local_common
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
 from tools.validate.reporting import write_issue_excel_report
@@ -41,13 +44,11 @@ REQUIRED_PROFILE_SUMMARY_AVG_KEYS = {
 }
 
 
-
 def _read_csv_rows(csv_path: Path):
     with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)
         return reader.fieldnames or [], rows
-
 
 
 def validate_output_contract_case(_base_params):
@@ -167,4 +168,84 @@ def validate_output_contract_case(_base_params):
 
     summary["json_contract_keys"] = sorted(REQUIRED_VALIDATE_SUMMARY_KEYS)
     summary["profile_fields"] = len(PROFILE_FIELDS)
+    return results, summary
+
+
+def validate_artifact_lifecycle_contract_case(_base_params):
+    case_id = "ARTIFACT_LIFECYCLE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="artifact_lifecycle_") as temp_dir:
+        temp_path = Path(temp_dir)
+        project_root = temp_path / "project_root"
+        run_dir = temp_path / "run_dir"
+        output_root = project_root / "outputs" / "local_regression"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        output_root.mkdir(parents=True, exist_ok=True)
+        (project_root / "outputs" / "summary_tools").mkdir(parents=True, exist_ok=True)
+        probe_a = run_dir / "master_summary.json"
+        probe_b = run_dir / "console_tail.txt"
+        probe_a.write_text('{\"status\":\"PASS\"}\n', encoding="utf-8")
+        probe_b.write_text('tail\n', encoding="utf-8")
+
+        old_project_root = local_common.PROJECT_ROOT
+        old_output_root = local_common.OUTPUT_ROOT
+        local_common.PROJECT_ROOT = project_root
+        local_common.OUTPUT_ROOT = output_root
+        try:
+            bundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_a, probe_b])
+            add_check(results, "artifact_contract", case_id, "bundle_zip_exists", True, bundle_path.exists())
+            with zipfile.ZipFile(bundle_path, 'r') as zf:
+                zip_members = sorted(zf.namelist())
+            add_check(results, "artifact_contract", case_id, "bundle_zip_member_list", ["console_tail.txt", "master_summary.json"], zip_members)
+
+            archived_bundle = local_common.archive_bundle_history(bundle_path)
+            add_check(results, "artifact_contract", case_id, "archive_bundle_exists", True, archived_bundle.exists())
+            add_check(results, "artifact_contract", case_id, "archive_bundle_removed_from_run_dir", False, bundle_path.exists())
+            add_check(results, "artifact_contract", case_id, "archive_bundle_stays_under_output_root", str(output_root.resolve()), str(archived_bundle.parent.resolve()))
+
+            stale_root_bundle = project_root / "to_chatgpt_bundle_old.zip"
+            stale_root_bundle.write_text("stale\n", encoding="utf-8")
+            root_copy_1 = local_common.publish_root_bundle_copy(archived_bundle)
+            add_check(results, "artifact_contract", case_id, "root_bundle_copy_exists", True, root_copy_1.exists())
+            root_bundles_after_first = sorted(path.name for path in project_root.glob("to_chatgpt_bundle*.zip"))
+            add_check(results, "artifact_contract", case_id, "root_bundle_old_copy_removed_on_publish", [root_copy_1.name], root_bundles_after_first)
+
+            rebundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_a])
+            archived_bundle_2 = local_common.archive_bundle_history(rebundle_path)
+            root_copy_2 = local_common.publish_root_bundle_copy(archived_bundle_2)
+            root_bundles_after_second = sorted(path.name for path in project_root.glob("to_chatgpt_bundle*.zip"))
+            add_check(results, "artifact_contract", case_id, "root_bundle_only_latest_copy_kept", [root_copy_2.name], root_bundles_after_second)
+
+            old_archive = output_root / "to_chatgpt_bundle_20260101_000000_old.zip"
+            old_archive.write_text("old\n", encoding="utf-8")
+            retention_now = local_common.taipei_now()
+            old_ts = retention_now.timestamp() - 40 * 86400
+            os.utime(old_archive, (old_ts, old_ts))
+            new_ts = retention_now.timestamp()
+            os.utime(archived_bundle, (new_ts, new_ts))
+            os.utime(archived_bundle_2, (new_ts, new_ts))
+            retention = apply_retention_rules(
+                [
+                    RetentionRule(
+                        name="bundle_history",
+                        target_dir=output_root,
+                        patterns=["to_chatgpt_bundle*.zip"],
+                        keep_last_n=2,
+                        max_age_days=30,
+                    )
+                ],
+                now=retention_now,
+            )
+            add_check(results, "artifact_contract", case_id, "retention_removed_old_archive_count", 1, retention.get("removed_count"))
+            add_check(results, "artifact_contract", case_id, "retention_removed_old_archive_missing", False, old_archive.exists())
+            remaining_archives = sorted(path.name for path in output_root.glob("to_chatgpt_bundle*.zip"))
+            add_check(results, "artifact_contract", case_id, "retention_keeps_recent_archives", sorted([archived_bundle.name, archived_bundle_2.name]), remaining_archives)
+        finally:
+            local_common.PROJECT_ROOT = old_project_root
+            local_common.OUTPUT_ROOT = old_output_root
+
+    summary["archive_retention_checked"] = True
+    summary["root_copy_overwrite_checked"] = True
     return results, summary

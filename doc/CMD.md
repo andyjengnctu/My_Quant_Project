@@ -203,3 +203,6 @@ local regression 與 validate 的 reduced 測試資料來源固定為：
 - `outputs/local_regression/` 歷史 bundle：保留最近 20 份，刪除超過 30 天
 - `validate_consistency`、`portfolio_sim`：保留最近 10 份，刪除超過 30 天
 - `ml_optimizer`、`vip_scanner`、`smart_downloader`、`debug_trade_log`：保留最近 5 份，刪除超過 14 天
+
+
+- `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。

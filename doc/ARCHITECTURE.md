@@ -240,3 +240,6 @@ tools/validate/
 
 - `core/output_retention.py`：集中管理 output retention，提供雙門檻（最近 N 份 + 最多 D 天）清理。
 - 由 `tools/local_regression/run_all.py` 在 `apps/test_suite.py` 結束後自動觸發，不新增獨立 cleanup app。
+
+
+- `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。

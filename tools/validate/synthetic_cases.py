@@ -39,6 +39,7 @@ from .synthetic_display_cases import (
     validate_display_reporting_sanity_case,
 )
 from .synthetic_contract_cases import (
+    validate_artifact_lifecycle_contract_case,
     validate_output_contract_case,
 )
 
@@ -76,6 +77,7 @@ def get_synthetic_validators():
         validate_cmd_document_contract_case,
         validate_display_reporting_sanity_case,
         validate_output_contract_case,
+        validate_artifact_lifecycle_contract_case,
     ]
 
 
