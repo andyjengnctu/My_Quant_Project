@@ -5,9 +5,17 @@ import pandas as pd
 
 from core.backtest_core import calc_reference_candidate_qty, can_execute_half_take_profit
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
-from core.entry_plans import build_position_from_entry_fill
+from core.entry_plans import (
+    build_cash_capped_entry_plan,
+    build_normal_candidate_plan,
+    build_position_from_entry_fill,
+    execute_pre_market_entry_plan,
+)
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
+from core.portfolio_fast_data import calc_mark_to_market_equity, pack_prepared_stock_data, prep_stock_data_and_trades
+from core.portfolio_engine import run_portfolio_timeline
+from .synthetic_frame_utils import build_synthetic_baseline_frame, set_synthetic_bar
 
 from .checks import add_check, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -71,6 +79,170 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
 
     summary["events"] = list(events)
     summary["expected_pnl"] = round(float(expected_pnl), 4)
+    return results, summary
+
+
+def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    case_id = "SYNTH_EXIT_ORDERS_ONLY_FOR_HELD_POSITIONS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    position = build_position_from_entry_fill(
+        buy_price=100.0,
+        qty=10,
+        init_sl=95.0,
+        init_trail=95.0,
+        params=params,
+        entry_type="normal",
+    )
+    position["qty"] = 0
+
+    updated_position, freed_cash, pnl_realized, events = execute_bar_step(
+        position,
+        y_atr=1.0,
+        y_ind_sell=True,
+        y_close=100.0,
+        t_open=90.0,
+        t_high=120.0,
+        t_low=80.0,
+        t_close=85.0,
+        t_volume=1000.0,
+        params=params,
+    )
+
+    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_events", [], list(events))
+    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_freed_cash", 0.0, float(freed_cash), tol=0.01)
+    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_has_no_realized_pnl", 0.0, float(pnl_realized), tol=0.01)
+    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_position_stays_zero", 0, int(updated_position["qty"]))
+    add_check(results, "synthetic_exit_orders_only_for_held_positions", case_id, "zero_qty_realized_pnl_stays_zero", 0.0, float(updated_position["realized_pnl"]), tol=0.01)
+
+    summary["events"] = list(events)
+    return results, summary
+
+
+def validate_synthetic_fee_tax_net_equity_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    case_id = "SYNTH_FEE_TAX_NET_EQUITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, 56, open_price=103.8, high_price=104.0, low_price=100.0, close_price=101.0)
+    set_synthetic_bar(df, 57, open_price=101.0, high_price=101.2, low_price=99.5, close_price=100.0)
+    set_synthetic_bar(df, 58, open_price=100.0, high_price=100.2, low_price=99.7, close_price=100.1)
+    set_synthetic_bar(df, 59, open_price=100.1, high_price=100.4, low_price=99.8, close_price=100.2)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, {"9821": df})
+        primary_path = os.path.join(temp_dir, "9821.csv")
+
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, params, max_positions=1, enable_rotation=False, start_year=2024, benchmark_ticker="9821"
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, params, max_positions=1, enable_rotation=False, start_year=2024, benchmark_ticker="9821"
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_fee_tax_net_equity", case_id, core_stats, sim_stats)
+
+        raw_df = pd.read_csv(primary_path)
+        clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, "9821", min_rows=get_required_min_rows(params))
+        prep_df, standalone_logs = prep_stock_data_and_trades(clean_df, params)
+        fast_df = pack_prepared_stock_data(prep_df)
+        sorted_dates = list(prep_df.index)
+        setup_date = prep_df.index[55]
+        entry_date = prep_df.index[56]
+        exit_date = prep_df.index[57]
+
+        candidate_plan = build_normal_candidate_plan(
+            float(prep_df.loc[setup_date, "buy_limit"]),
+            float(prep_df.loc[setup_date, "ATR"]),
+            params.initial_capital,
+            params,
+        )
+        entry_plan = build_cash_capped_entry_plan(candidate_plan, params.initial_capital, params)
+        if entry_plan is None:
+            raise ValueError("synthetic_fee_tax_net_equity_case 應產生有效 entry_plan")
+
+        entry_result = execute_pre_market_entry_plan(
+            entry_plan=entry_plan,
+            t_open=float(prep_df.loc[entry_date, "Open"]),
+            t_high=float(prep_df.loc[entry_date, "High"]),
+            t_low=float(prep_df.loc[entry_date, "Low"]),
+            t_close=float(prep_df.loc[entry_date, "Close"]),
+            t_volume=float(prep_df.loc[entry_date, "Volume"]),
+            y_close=float(prep_df.loc[setup_date, "Close"]),
+            params=params,
+            entry_type="normal",
+        )
+        if not entry_result["filled"]:
+            raise ValueError("synthetic_fee_tax_net_equity_case 應在 entry_date 成交")
+
+        entry_qty = int(entry_plan["qty"])
+        entry_cash_after_buy = float(params.initial_capital - entry_result["entry_price"] * entry_qty)
+        expected_entry_day_equity = calc_mark_to_market_equity(
+            entry_cash_after_buy,
+            {"9821": dict(entry_result["position"])},
+            {"9821": fast_df},
+            entry_date,
+            params,
+        )
+
+        exit_position = dict(entry_result["position"])
+        updated_position, freed_cash, pnl_realized, events = execute_bar_step(
+            exit_position,
+            y_atr=float(prep_df.loc[entry_date, "ATR"]),
+            y_ind_sell=bool(prep_df.loc[entry_date, "ind_sell_signal"]),
+            y_close=float(prep_df.loc[entry_date, "Close"]),
+            t_open=float(prep_df.loc[exit_date, "Open"]),
+            t_high=float(prep_df.loc[exit_date, "High"]),
+            t_low=float(prep_df.loc[exit_date, "Low"]),
+            t_close=float(prep_df.loc[exit_date, "Close"]),
+            t_volume=float(prep_df.loc[exit_date, "Volume"]),
+            params=params,
+        )
+        expected_final_eq = float(entry_cash_after_buy + freed_cash)
+        expected_total_return = (expected_final_eq - params.initial_capital) / params.initial_capital * 100.0
+
+        all_dfs_fast = {"9821": fast_df}
+        all_trade_logs = {"9821": standalone_logs}
+        timeline_result = run_portfolio_timeline(
+            all_dfs_fast=all_dfs_fast,
+            all_standalone_logs=all_trade_logs,
+            sorted_dates=sorted_dates,
+            start_year=2024,
+            params=params,
+            max_positions=1,
+            enable_rotation=False,
+            benchmark_ticker="9821",
+            benchmark_data=fast_df,
+            is_training=False,
+            profile_stats={},
+            verbose=False,
+        )
+        df_equity = timeline_result[0]
+        df_trades = timeline_result[1]
+        actual_final_eq = float(timeline_result[8])
+        actual_total_return = float(timeline_result[2])
+
+        entry_row = df_equity[df_equity["Date"] == entry_date.strftime("%Y-%m-%d")].iloc[0]
+        exit_row = df_equity[df_equity["Date"] == exit_date.strftime("%Y-%m-%d")].iloc[0]
+        exit_trade_row = df_trades[df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"])].iloc[0]
+        actual_entry_cash = float(entry_row["Equity"] - entry_row["Invested_Amount"])
+
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_qty_positive", True, entry_qty > 0)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_event_is_stop", True, "STOP" in events)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_day_cash_matches_net_entry_cost", entry_cash_after_buy, actual_entry_cash, tol=0.01)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "entry_day_equity_marks_to_net_sell_value", expected_entry_day_equity, float(entry_row["Equity"]), tol=0.01)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_trade_total_pnl_matches_net_realized_pnl", float(updated_position["realized_pnl"]), float(exit_trade_row["該筆總損益"]), tol=0.01)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "exit_day_equity_matches_final_cash", expected_final_eq, float(exit_row["Equity"]), tol=0.01)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "final_equity_matches_net_cash", expected_final_eq, actual_final_eq, tol=0.01)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "total_return_matches_net_final_equity", expected_total_return, actual_total_return, tol=0.0001)
+        add_check(results, "synthetic_fee_tax_net_equity", case_id, "pnl_matches_net_cash_delta", params.initial_capital + float(pnl_realized), expected_final_eq, tol=0.01)
+
+    summary["expected_final_eq"] = round(expected_final_eq, 4)
+    summary["entry_qty"] = entry_qty
     return results, summary
 
 
