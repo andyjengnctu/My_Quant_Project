@@ -184,19 +184,76 @@ def validate_artifact_lifecycle_contract_case(_base_params):
         run_dir.mkdir(parents=True, exist_ok=True)
         output_root.mkdir(parents=True, exist_ok=True)
         (project_root / "outputs" / "summary_tools").mkdir(parents=True, exist_ok=True)
-        probe_a = run_dir / "master_summary.json"
-        probe_b = run_dir / "console_tail.txt"
-        probe_a.write_text('{\"status\":\"PASS\"}\n', encoding="utf-8")
-        probe_b.write_text('tail\n', encoding="utf-8")
+        probe_master = run_dir / "master_summary.json"
+        probe_console = run_dir / "console_tail.txt"
+        probe_preflight = run_dir / "preflight_summary.json"
+        probe_preflight_txt = run_dir / "preflight_summary.txt"
+        probe_dataset = run_dir / "dataset_prepare_summary.json"
+        probe_dataset_txt = run_dir / "dataset_prepare_summary.txt"
+        probe_quick = run_dir / "quick_gate_summary.json"
+        probe_validate = run_dir / "validate_consistency_summary.json"
+        probe_chain_json = run_dir / "chain_summary.json"
+        probe_chain_csv = run_dir / "chain_summary.csv"
+        probe_ml = run_dir / "ml_smoke_summary.json"
+        nested_fail = run_dir / "nested" / "debug.log"
+        nested_fail.parent.mkdir(parents=True, exist_ok=True)
+
+        for path, content in [
+            (probe_master, '{"status":"PASS"}\n'),
+            (probe_console, 'tail\n'),
+            (probe_preflight, '{"status":"PASS"}\n'),
+            (probe_preflight_txt, 'preflight ok\n'),
+            (probe_dataset, '{"status":"PASS"}\n'),
+            (probe_dataset_txt, 'dataset ok\n'),
+            (probe_quick, '{"status":"PASS"}\n'),
+            (probe_validate, '{"status":"PASS"}\n'),
+            (probe_chain_json, '{"status":"PASS"}\n'),
+            (probe_chain_csv, 'ticker,status\n1101,PASS\n'),
+            (probe_ml, '{"status":"PASS"}\n'),
+            (nested_fail, 'debug\n'),
+        ]:
+            path.write_text(content, encoding="utf-8")
 
         old_project_root = local_common.PROJECT_ROOT
         old_output_root = local_common.OUTPUT_ROOT
         local_common.PROJECT_ROOT = project_root
         local_common.OUTPUT_ROOT = output_root
         try:
-            bundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_a, probe_b])
+            preferred_pass_paths = local_common.select_bundle_paths(run_dir, overall_ok=True)
+            preferred_pass_names = [path.name for path in preferred_pass_paths]
+            add_check(
+                results,
+                "artifact_contract",
+                case_id,
+                "select_bundle_paths_pass_minimum_set",
+                [
+                    "master_summary.json",
+                    "preflight_summary.json",
+                    "preflight_summary.txt",
+                    "dataset_prepare_summary.json",
+                    "dataset_prepare_summary.txt",
+                    "quick_gate_summary.json",
+                    "validate_consistency_summary.json",
+                    "chain_summary.json",
+                    "chain_summary.csv",
+                    "ml_smoke_summary.json",
+                    "console_tail.txt",
+                ],
+                preferred_pass_names,
+            )
+            preferred_fail_paths = local_common.select_bundle_paths(run_dir, overall_ok=False)
+            preferred_fail_rel = sorted(str(path.relative_to(run_dir)).replace("\\", "/") for path in preferred_fail_paths)
+            add_check(results, "artifact_contract", case_id, "select_bundle_paths_fail_includes_nested_debug_files", True, "nested/debug.log" in preferred_fail_rel)
+
+            manifest_payload = local_common.build_artifacts_manifest(run_dir)
+            add_check(results, "artifact_contract", case_id, "artifacts_manifest_counts_all_files", 12, manifest_payload.get("artifact_count"))
+            manifest_paths = [item.get("relative_path") for item in manifest_payload.get("artifacts", [])]
+            add_check(results, "artifact_contract", case_id, "artifacts_manifest_uses_posix_relative_paths", True, all(isinstance(item, str) and "\\" not in item and not item.startswith("/") for item in manifest_paths))
+            add_check(results, "artifact_contract", case_id, "artifacts_manifest_includes_nested_debug_file", True, "nested/debug.log" in manifest_paths)
+
+            bundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_master, probe_console])
             add_check(results, "artifact_contract", case_id, "bundle_zip_exists", True, bundle_path.exists())
-            with zipfile.ZipFile(bundle_path, 'r') as zf:
+            with zipfile.ZipFile(bundle_path, "r") as zf:
                 zip_members = sorted(zf.namelist())
             add_check(results, "artifact_contract", case_id, "bundle_zip_member_list", ["console_tail.txt", "master_summary.json"], zip_members)
 
@@ -212,11 +269,21 @@ def validate_artifact_lifecycle_contract_case(_base_params):
             root_bundles_after_first = sorted(path.name for path in project_root.glob("to_chatgpt_bundle*.zip"))
             add_check(results, "artifact_contract", case_id, "root_bundle_old_copy_removed_on_publish", [root_copy_1.name], root_bundles_after_first)
 
-            rebundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_a])
+            probe_console.write_text("tail updated\n", encoding="utf-8")
+            rebundle_path = local_common.build_bundle_zip(run_dir, "to_chatgpt_bundle.zip", include_paths=[probe_master, probe_console])
+            with zipfile.ZipFile(rebundle_path, "r") as zf:
+                rebundle_members = sorted(zf.namelist())
+                rebundle_console = zf.read("console_tail.txt").decode("utf-8")
+            add_check(results, "artifact_contract", case_id, "rerun_bundle_overwrites_run_dir_zip", ["console_tail.txt", "master_summary.json"], rebundle_members)
+            add_check(results, "artifact_contract", case_id, "rerun_bundle_contains_latest_console_tail", "tail updated\n", rebundle_console)
+
             archived_bundle_2 = local_common.archive_bundle_history(rebundle_path)
             root_copy_2 = local_common.publish_root_bundle_copy(archived_bundle_2)
             root_bundles_after_second = sorted(path.name for path in project_root.glob("to_chatgpt_bundle*.zip"))
             add_check(results, "artifact_contract", case_id, "root_bundle_only_latest_copy_kept", [root_copy_2.name], root_bundles_after_second)
+            with zipfile.ZipFile(root_copy_2, "r") as zf:
+                root_console = zf.read("console_tail.txt").decode("utf-8")
+            add_check(results, "artifact_contract", case_id, "root_bundle_copy_matches_latest_archive_contents", "tail updated\n", root_console)
 
             old_archive = output_root / "to_chatgpt_bundle_20260101_000000_old.zip"
             old_archive.write_text("old\n", encoding="utf-8")
@@ -248,4 +315,6 @@ def validate_artifact_lifecycle_contract_case(_base_params):
 
     summary["archive_retention_checked"] = True
     summary["root_copy_overwrite_checked"] = True
+    summary["pass_fail_bundle_selection_checked"] = True
+    summary["artifacts_manifest_checked"] = True
     return results, summary
