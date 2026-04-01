@@ -2,8 +2,10 @@ import io
 from contextlib import redirect_stdout
 
 from core.display_common import _strip_ansi
+from core import display as display_module
 from core.scanner_display import print_scanner_header
 from core.strategy_dashboard import print_strategy_dashboard
+from tools.scanner.reporting import print_scanner_start_banner, print_scanner_summary
 
 from .checks import add_check
 
@@ -81,6 +83,39 @@ def validate_display_reporting_sanity_case(_base_params):
             bm_min_full_year_return_pct=-2.1,
         )
     )
+
+    banner_text = _capture_output(lambda: print_scanner_start_banner("2026-04-02 12:34:56"))
+    add_check(results, "display_reporting", case_id, "scanner_banner_has_title_and_time", True, "啟動【v16 尊爵版】極速平行掃描儀" in banner_text and "2026-04-02 12:34:56" in banner_text)
+
+    scanner_summary_text = _capture_output(
+        lambda: print_scanner_summary(
+            count_scanned=77,
+            elapsed_time=12.34,
+            count_history_qualified=5,
+            count_skipped_insufficient=2,
+            count_sanitized_candidates=1,
+            max_workers=6,
+            pool_start_method="spawn",
+            candidate_rows=[
+                {"kind": "extended", "sort_value": 1.2, "ticker": "1101", "text": "1101 | sort=1.2"},
+                {"kind": "buy", "sort_value": 3.4, "ticker": "2330", "text": "2330 | sort=3.4"},
+            ],
+            scanner_issue_log_path="outputs/scanner/scanner_issue_log.csv",
+        )
+    )
+    add_check(results, "display_reporting", case_id, "scanner_summary_has_counts_and_runtime", True, "共掃描 77 檔標的" in scanner_summary_text and "耗時 12.34 秒" in scanner_summary_text and "max_workers: 6" in scanner_summary_text and "start_method: spawn" in scanner_summary_text)
+    add_check(results, "display_reporting", case_id, "scanner_summary_sorts_buy_before_extended", True, scanner_summary_text.find("[新訊號] 2330 | sort=3.4") < scanner_summary_text.find("[延續候選] 1101 | sort=1.2"))
+    add_check(results, "display_reporting", case_id, "scanner_summary_has_candidate_stats_and_issue_path", True, "候選統計：新訊號 1 檔 | 延續候選 1 檔" in scanner_summary_text and "outputs/scanner/scanner_issue_log.csv" in scanner_summary_text)
+
+    reexport_checks = all(
+        getattr(display_module, name) is obj
+        for name, obj in {
+            "print_scanner_header": print_scanner_header,
+            "print_strategy_dashboard": print_strategy_dashboard,
+            "_strip_ansi": _strip_ansi,
+        }.items()
+    )
+    add_check(results, "display_reporting", case_id, "core_display_reexports_expected_symbols", True, reexport_checks)
     add_check(results, "display_reporting", case_id, "dashboard_contains_title", True, "策略測試儀表板" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式: 投組模式 | 最大持股: 5 檔" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:3) | 年化交易次數: 4.25 次/年" in dashboard_text)
@@ -92,5 +127,7 @@ def validate_display_reporting_sanity_case(_base_params):
     add_check(results, "display_reporting", case_id, "dashboard_contains_filter_summary", True, "濾網參數 : 布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (短7>長21)" in dashboard_text)
 
     summary["scanner_lines"] = len([line for line in scanner_text.splitlines() if line.strip()])
+    summary["scanner_summary_lines"] = len([line for line in scanner_summary_text.splitlines() if line.strip()])
+    summary["banner_lines"] = len([line for line in banner_text.splitlines() if line.strip()])
     summary["dashboard_lines"] = len([line for line in dashboard_text.splitlines() if line.strip()])
     return results, summary
