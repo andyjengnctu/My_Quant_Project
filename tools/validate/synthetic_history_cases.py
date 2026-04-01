@@ -11,7 +11,7 @@ from core.backtest_core import (
     run_v16_backtest,
 )
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
-from core.portfolio_fast_data import get_pit_stats_from_index
+from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check
 
@@ -279,6 +279,60 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
     summary["scanner_status"] = None if scanner_result is None else scanner_result.get("status")
     return results, summary
 
+
+
+
+def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 2
+    params.min_history_ev = 0.1
+    params.min_history_win_rate = 0.5
+
+    case_id = "SYNTH_PIT_MULTIPLE_SAME_DAY_EXITS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    trade_logs = [
+        {"exit_date": datetime(2024, 1, 3), "pnl": 120.0, "r_mult": 1.2},
+        {"exit_date": datetime(2024, 1, 2), "pnl": 50.0, "r_mult": 0.5},
+        {"exit_date": datetime(2024, 1, 2), "pnl": -20.0, "r_mult": -0.2},
+    ]
+    stats_index = build_trade_stats_index(trade_logs)
+
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 2),
+        params,
+    )
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 3),
+        params,
+    )
+    after_all_candidate, after_all_ev, after_all_win_rate, after_all_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 4),
+        params,
+    )
+
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_trade_count_excludes_all_same_day_exits", 0, same_day_trade_count)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_candidate_stays_blocked_without_prior_day_history", False, same_day_candidate)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_expected_value_excludes_all_same_day_exits", 0.0, same_day_ev)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "same_day_win_rate_excludes_all_same_day_exits", 0.0, same_day_win_rate)
+
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_trade_count_includes_only_prior_day_exits", 2, next_day_trade_count)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_expected_value_uses_prior_day_batch_only", 0.15, next_day_ev, tol=1e-9)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_win_rate_uses_prior_day_batch_only", 0.5, next_day_win_rate, tol=1e-9)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "next_day_candidate_uses_prior_day_batch_only", True, next_day_candidate, note="同日多筆 exit 也必須整批排除，僅能在下一交易日一起進入 PIT 歷史。")
+
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_trade_count_includes_later_day_exit", 3, after_all_trade_count)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_expected_value_includes_full_history", 0.5, after_all_ev, tol=1e-9)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_win_rate_includes_full_history", 2.0 / 3.0, after_all_win_rate, tol=1e-9)
+    add_check(results, "synthetic_pit_multiple_same_day_exits", case_id, "after_all_candidate_includes_full_history", True, after_all_candidate)
+
+    summary["next_day_trade_count"] = int(next_day_trade_count)
+    summary["after_all_trade_count"] = int(after_all_trade_count)
+    return results, summary
 
 def validate_synthetic_lookahead_prev_day_only_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)

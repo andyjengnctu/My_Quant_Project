@@ -64,7 +64,7 @@
 
 | ID | 優先級 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|
-| B01 | P0 | 杜絕未來函數 | PARTIAL | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
+| B01 | P0 | 杜絕未來函數 | PARTIAL | 已新增 prev-day-only PIT case 與 multiple-same-day-exits PIT case，補強盤前只能讀前一日已完成歷史、同日多筆 exit 需整批延後到下一交易日才可見；但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
 | B02 | P1 | 同 K 棒停利/停損取最壞停損 | DONE | 已有明確 synthetic case | 既有 synthetic case |
 | B03 | P0 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | DONE | 已新增直接手算對帳案例，逐欄位檢查 entry cash / entry equity / exit pnl / final equity / total return | `tools/validate/synthetic_take_profit_cases.py` |
 | B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | DONE | 已新增直接案例，斷言半倉列不得提前帶完整 `該筆總損益`，完整 Round-Trip 僅在尾倉結算列完成 | `tools/validate/synthetic_take_profit_cases.py` |
@@ -127,6 +127,7 @@
 | D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | 已完成；補強候選 / 掛單 / 成交 / miss buy 分層 |
 | D09 | `validate_synthetic_portfolio_history_filter_only_case` | 已完成；補強 history filter 僅用於投組層 / scanner |
 | D10 | `validate_synthetic_lookahead_prev_day_only_case` | 已完成；補強盤前只能讀前一日資料 |
+| D44 | `validate_synthetic_pit_multiple_same_day_exits_case` | 已完成；補強同日多筆 exit 需整批排除，僅能在下一交易日一起進入 PIT 歷史 |
 | D11 | `tests_unit_price_utils.py` | 已完成；釘死 tick、費率、稅金、sizing、half sell qty 邊界 |
 | D12 | `tests_unit_history_filters.py` | 已完成；釘死 EV、win rate、trade count 邊界 |
 | D13 | `tests_unit_portfolio_stats.py` | 已完成；釘死年化、MDD、R²、空序列邊界 |
@@ -176,7 +177,7 @@
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
-| 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
+| 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 與 multiple-same-day-exits PIT case，補強盤前只能讀前一日已完成歷史、同日多筆 exit 需整批延後到下一交易日才可見；但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
 | 契約 | B11 | 跨工具 schema / 欄位語意一致 | 已新增 missed sell / trade log / stats 一致性案例，並補上 validate summary / optimizer profile / issue report 的 CSV / XLSX / JSON contract；其他事件欄位語意與更多工具輸出仍未全面補齊 | contract tests under `tools/validate/` |
 | 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查、optimizer profile trial count 對比，`run_chain_checks.py` 已納入 scanner reduced snapshot 雙跑 digest，且新增 scanner worker repeatability case；其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
 | 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 已在 `run_chain_checks.py` 補 chain + scanner reduced snapshot 雙跑 digest、`run_ml_smoke.py` 補固定 seed 雙跑，並新增 optimizer raw cache rerun / mutation isolation case；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
@@ -241,6 +242,7 @@
 | D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 | 2026-04-01 |
 | D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 | 2026-04-01 |
 | D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 | 2026-04-01 |
+| D44 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 | 2026-04-02 |
 | D11 | `validate_price_utils_unit_case` | B13 | 2026-04-01 |
 | D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
 | D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
@@ -279,6 +281,7 @@
 | 2026-04-01 | D08 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_candidate_order_fill_layer_separation_case |
 | 2026-04-01 | D09 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_portfolio_history_filter_only_case |
 | 2026-04-01 | D10 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_lookahead_prev_day_only_case |
+| 2026-04-02 | D44 | 新增 multiple same-day PIT synthetic case 並驗證 | TODO -> DONE | validate_synthetic_pit_multiple_same_day_exits_case |
 | 2026-04-01 | D07 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_missed_sell_accounting_case |
 | 2026-04-01 | D11 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_price_utils_unit_case |
 | 2026-04-01 | D18 | 新增 CSV / XLSX / JSON output contract case 並驗證 | TODO -> PARTIAL | validate_output_contract_case |
