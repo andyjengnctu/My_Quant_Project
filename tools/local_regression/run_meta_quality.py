@@ -40,6 +40,7 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_data_quality_cases.py",
     "tools/validate/synthetic_cli_cases.py",
     "tools/validate/synthetic_strategy_cases.py",
+    "tools/validate/synthetic_regression_cases.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
     "apps/test_suite.py",

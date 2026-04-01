@@ -237,6 +237,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
         "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
         "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
         "best_params_digest_match": first_run["best_params_digest"] == second_run["best_params_digest"],
+        "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
     all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
     return {

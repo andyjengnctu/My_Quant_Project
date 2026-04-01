@@ -68,6 +68,10 @@ from .synthetic_strategy_cases import (
     validate_model_io_schema_case,
     validate_ranking_scoring_sanity_case,
 )
+from .synthetic_regression_cases import (
+    validate_optimizer_raw_cache_rerun_consistency_case,
+    validate_scanner_worker_repeatability_case,
+)
 
 
 def get_synthetic_validators():
@@ -119,6 +123,8 @@ def get_synthetic_validators():
         validate_local_regression_cli_contract_case,
         validate_model_io_schema_case,
         validate_ranking_scoring_sanity_case,
+        validate_scanner_worker_repeatability_case,
+        validate_optimizer_raw_cache_rerun_consistency_case,
     ]
 
 
