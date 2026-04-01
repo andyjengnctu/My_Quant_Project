@@ -62,6 +62,11 @@ from .synthetic_cli_cases import (
     validate_local_regression_cli_contract_case,
 )
 
+from .synthetic_strategy_cases import (
+    validate_model_io_schema_case,
+    validate_ranking_scoring_sanity_case,
+)
+
 
 def get_synthetic_validators():
     return [
@@ -108,6 +113,8 @@ def get_synthetic_validators():
         validate_load_clean_df_data_quality_case,
         validate_dataset_cli_contract_case,
         validate_local_regression_cli_contract_case,
+        validate_model_io_schema_case,
+        validate_ranking_scoring_sanity_case,
     ]
 
 

@@ -135,9 +135,9 @@
 
 | ID | 建議項目 | 目標 |
 |---|---|---|
-| D14 | model input / output schema checks | 模型升級後仍符合介面契約 |
+| D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
 | D15 | deterministic regression for optimizer/scanner | 在固定 seed 下維持可重現 |
-| D16 | ranking / scoring output sanity checks | 排序值可比較、無 NaN、方向一致 |
+| D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
 | D17 | reporting schema compatibility checks | 新策略輸出不破壞既有報表 |
 
 ### D4. 品質補強
@@ -195,9 +195,7 @@
 
 | ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
-| D14 | model input / output schema checks | TODO | C01 |
 | D15 | deterministic regression for optimizer/scanner | PARTIAL | C02 / B12 |
-| D16 | ranking / scoring output sanity checks | TODO | C03 |
 | D17 | reporting schema compatibility checks | PARTIAL | C05 / B21 |
 | D18 | contract tests for CSV / XLSX / JSON outputs | PARTIAL | B11 / B17 |
 | D28 | `validate_artifact_lifecycle_contract_case` | PARTIAL | B17 |
@@ -265,6 +263,8 @@
 | D36 | `validate_dataset_cli_contract_case` | B16 | 2026-04-02 |
 | D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | B12 / B18 | 2026-04-02 |
+| D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
+| D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 
 ## G. 逐項收斂紀錄
 
@@ -307,6 +307,8 @@
 | 2026-04-02 | D36 | 新增 dataset wrapper CLI 契約案例並驗證 | TODO -> DONE | `validate_dataset_cli_contract_case` |
 | 2026-04-02 | D37 | 新增 local regression / no-arg CLI 契約案例並驗證 | TODO -> DONE | `validate_local_regression_cli_contract_case` |
 | 2026-04-02 | D41 | 新增 scanner reduced snapshot 雙跑 digest 並驗證 | TODO -> DONE | `run_chain_checks.py` 已將 scanner 候選 / 狀態 / issue line 納入 rerun consistency payload |
+| 2026-04-02 | D14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
+| 2026-04-02 | D16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
 
 ## H. 完成判準
 
