@@ -26,10 +26,12 @@ from .synthetic_portfolio_cases import (
 )
 from .synthetic_unit_cases import (
     validate_history_filters_unit_case,
+    validate_independent_oracle_golden_case,
     validate_portfolio_stats_unit_case,
     validate_price_utils_unit_case,
 )
 from .synthetic_meta_cases import (
+    validate_known_bad_fault_injection_case,
     validate_registry_checklist_entry_consistency_case,
 )
 
@@ -61,7 +63,9 @@ def get_synthetic_validators():
         validate_price_utils_unit_case,
         validate_history_filters_unit_case,
         validate_portfolio_stats_unit_case,
+        validate_independent_oracle_golden_case,
         validate_registry_checklist_entry_consistency_case,
+        validate_known_bad_fault_injection_case,
     ]
 
 

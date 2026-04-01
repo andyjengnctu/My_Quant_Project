@@ -92,8 +92,8 @@
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | TODO | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | TODO | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | PARTIAL | 已新增 meta registry case，校驗 `DONE` 摘要、對應 test function 與 synthetic 主入口註冊一致；非 synthetic 正式步驟仍未納入 | `tools/validate/synthetic_meta_cases.py`, meta checks under `tools/validate/` |
-| B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | TODO | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
-| B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | TODO | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
+| B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
+| B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
 | B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | PARTIAL | 已以文件規則要求每輪先做 sufficiency review，並於實作前先校正 checklist；但仍缺可執行 formal check | checklist review + meta checks |
 
 ## C. 可隨策略升級調整的測試清單
@@ -149,8 +149,8 @@
 | D20 | coverage report baseline | 將完整性從主觀判斷改為客觀數字 |
 | D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；確認 `DONE` 項目皆已映射到實際 test function 與 synthetic 主入口 |
-| D23 | known-bad fault injection checks | 確認關鍵規則被故意破壞時，既有測試真的會 fail |
-| D24 | independent oracle / golden numeric cases | 關鍵數值規則以手算或獨立 oracle 驗證，不與 production 共用同邏輯 |
+| D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
+| D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
 | D25 | checklist sufficiency review | 每輪先判斷 checklist 是否已足夠覆蓋完整性，包含 test suite 本身 |
 
 ## E. 未完成缺口摘要
@@ -180,8 +180,8 @@
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | 尚未看到文件一致性檢查 | doc command contract checks |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | 覆蓋率 | B22 | line / branch coverage 報表 | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
-| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
-| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
+| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
+| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
@@ -195,8 +195,8 @@
 | D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | TODO | B22 |
 | D21 | performance baseline checks | TODO | B19 |
-| D23 | known-bad fault injection checks | TODO | B24 |
-| D24 | independent oracle / golden numeric cases | TODO | B25 |
+| D23 | known-bad fault injection checks | DONE | B24 |
+| D24 | independent oracle / golden numeric cases | DONE | B25 |
 | D25 | checklist sufficiency review | PARTIAL | B26 |
 
 ## F. 已完成覆蓋摘要
@@ -217,6 +217,8 @@
 | 規則 | B08 | 停利/停損只能對已持有部位預先設定 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
 | 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
+| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
+| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -236,6 +238,8 @@
 | D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
 | D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
 | D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
+| D23 | `validate_known_bad_fault_injection_case` | B24 | 2026-04-01 |
+| D24 | `validate_independent_oracle_golden_case` | B25 | 2026-04-01 |
 
 ## G. 逐項收斂紀錄
 
@@ -257,6 +261,8 @@
 | 2026-04-01 | D12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
 | 2026-04-01 | D13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
 | 2026-04-01 | D22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |
+| 2026-04-01 | D23 | 新增 meta fault-injection case 並驗證 | TODO -> DONE | validate_known_bad_fault_injection_case |
+| 2026-04-01 | D24 | 新增 independent oracle golden case 並驗證 | TODO -> DONE | validate_independent_oracle_golden_case |
 | 2026-04-01 | D15 | 新增 optimizer fixed-seed 雙跑一致性檢查 | TODO -> PARTIAL | `run_ml_smoke.py` 已比較雙跑 trial / best_params digest；scanner 尚未補 |
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
 | 2026-04-01 | D25 | 將每輪 sufficiency review 納入文件並依實際狀態校正 | TODO -> PARTIAL | 仍缺 formal executable check |

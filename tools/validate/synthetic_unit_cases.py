@@ -58,6 +58,10 @@ def validate_history_filters_unit_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
     params = V16StrategyParams()
 
+    params.min_history_trades = 0
+    params.min_history_ev = -1e9
+    params.min_history_win_rate = 0.0
+
     original_ev_method = history_filters.EV_CALC_METHOD
     try:
         params.min_history_trades = 0
@@ -142,4 +146,83 @@ def validate_portfolio_stats_unit_case(_base_params):
     add_check(results, "unit_portfolio_stats", case_id, "calc_annual_return_pct_end_value_non_positive", -100.0, calc_annual_return_pct(100.0, 0.0, 2.0), tol=1e-9)
 
     summary["full_year_count"] = full_year_stats["full_year_count"]
+    return results, summary
+
+
+
+def _oracle_net_sell_price(price: float, qty: int, params) -> float:
+    gross = float(price) * int(qty)
+    fee_total = max(gross * float(params.sell_fee), float(params.min_fee))
+    tax_total = gross * float(params.tax_rate)
+    return (gross - fee_total - tax_total) / max(int(qty), 1)
+
+
+def _oracle_position_size(buy_price: float, stop_price: float, capital: float, risk_fraction: float, params) -> int:
+    if stop_price >= buy_price or capital <= 0 or risk_fraction <= 0:
+        return 0
+    risk_budget = capital * risk_fraction
+    max_qty = int(capital // buy_price)
+    best_qty = 0
+    for qty in range(max_qty, 0, -1):
+        entry_total = buy_price * qty + max(buy_price * qty * params.buy_fee, params.min_fee)
+        if entry_total > capital + 1e-9:
+            continue
+        exit_total = stop_price * qty - max(stop_price * qty * params.sell_fee, params.min_fee) - (stop_price * qty * params.tax_rate)
+        if (entry_total - exit_total) <= risk_budget + 1e-9:
+            best_qty = qty
+            break
+    return best_qty
+
+
+def _oracle_history_expected_value(method: str, trade_count: int, win_count: int, total_r_sum: float, avg_win_r: float, avg_loss_r: float) -> float:
+    if trade_count <= 0:
+        return 0.0
+    win_rate = win_count / trade_count
+    if method == 'A':
+        return total_r_sum / trade_count
+    if avg_loss_r < 0:
+        payoff = abs(avg_win_r / avg_loss_r) if avg_loss_r != 0 else 99.9
+    elif win_count == trade_count:
+        payoff = 99.9
+    else:
+        payoff = 0.0
+    return win_rate * payoff - (1.0 - win_rate)
+
+
+def validate_independent_oracle_golden_case(_base_params):
+    import core.history_filters as history_filters
+
+    case_id = 'UNIT_INDEPENDENT_ORACLE_GOLDEN'
+    results = []
+    summary = {'ticker': case_id, 'synthetic': True}
+    params = V16StrategyParams()
+
+    params.min_history_trades = 0
+    params.min_history_ev = -1e9
+    params.min_history_win_rate = 0.0
+
+    original_ev_method = history_filters.EV_CALC_METHOD
+    try:
+        oracle_net = _oracle_net_sell_price(100.0, 10, params)
+        prod_net = calc_net_sell_price(100.0, 10, params)
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_net_sell_price_matches_production', oracle_net, prod_net, tol=1e-9)
+
+        oracle_qty = _oracle_position_size(100.0, 95.0, 10_000.0, 0.02, params)
+        prod_qty = calc_position_size(100.0, 95.0, 10_000.0, 0.02, params)
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_position_size_matches_production', oracle_qty, prod_qty)
+
+        history_filters.EV_CALC_METHOD = 'A'
+        method_a = evaluate_history_candidate_metrics(4, 3, 2.0, 3.0, -1.0, params)
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_a_matches_production', _oracle_history_expected_value('A', 4, 3, 2.0, 3.0, -1.0), method_a[1], tol=1e-9)
+
+        history_filters.EV_CALC_METHOD = 'B'
+        method_b = evaluate_history_candidate_metrics(4, 2, 0.0, 4.0, -1.0, params)
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_b_matches_production', _oracle_history_expected_value('B', 4, 2, 0.0, 4.0, -1.0), method_b[1], tol=1e-9)
+
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_calc_sim_years_matches_production', 366.0 / 365.25, calc_sim_years(list(pd.to_datetime(['2024-12-31', '2025-12-31'])), start_idx=0), tol=1e-9)
+        add_check(results, 'unit_independent_oracle', case_id, 'oracle_annual_return_pct_matches_production', 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
+    finally:
+        history_filters.EV_CALC_METHOD = original_ev_method
+
+    summary['oracle_checks'] = 6
     return results, summary
