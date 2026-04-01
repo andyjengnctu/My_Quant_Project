@@ -143,7 +143,7 @@ python tools/validate/preflight_env.py
 
 - `preflight_env.py` 只做檢查，不自動安裝依賴。
 - `python tools/validate/preflight_env.py --steps quick_gate,consistency` 可只檢查指定步驟所需套件；但 `quick_gate` 內含 optimizer export-only 錯誤路徑，所以仍需要 `optuna` 與 `SQLAlchemy`。
-- `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。兩者都會串接所有已實作測試，包含 `meta_quality`。
+- `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。兩者都會串接所有已實作測試，包含 `meta_quality`。`meta_quality` 目前也會讀取同輪 step summary 與 optimizer profile summary，檢查 reduced performance baseline。
 - 日常流程先跑完整入口；只有完整入口已找出 FAIL 步驟時，才使用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。`meta_quality` 也已納入完整入口。
 
 ### 輸出位置
@@ -161,6 +161,7 @@ outputs/local_regression/
 - `outputs/local_regression/` 保留歷史 bundle。
 - 專案根目錄只保留最新一份同名 copy，方便直接上傳給 ChatGPT。
 - `apps/test_suite.py` 結束時會在主控台印出整體 PASS/FAIL、五個步驟摘要（quick gate / consistency / chain checks / ml smoke / meta quality）、全量 ticker 摘要，以及兩個 bundle 路徑。
+- `tools/local_regression/manifest.json` 內的 `performance_*_max_sec` 與 `performance_optimizer_trial_avg_max_sec` 可調整 reduced performance baseline 門檻。
 
 ### reduced 資料集
 

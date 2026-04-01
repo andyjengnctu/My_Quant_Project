@@ -11,6 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
+
 from core.model_paths import BEST_PARAMS_PATH_ENV_VAR, MODELS_DIR_ENV_VAR
 from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
@@ -91,12 +93,53 @@ def _canonical_payload_digest(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
+def _collect_optimizer_profile_summaries() -> Dict[str, Path]:
+    if not ML_OPTIMIZER_OUTPUT_DIR.exists():
+        return {}
+    return {
+        path.name: path
+        for path in ML_OPTIMIZER_OUTPUT_DIR.glob("optimizer_profile_summary_*.json")
+        if path.is_file()
+    }
+
+
+def _read_latest_profile_metrics(new_paths: Dict[str, Path]) -> Dict[str, Any]:
+    if not new_paths:
+        return {
+            "optimizer_profile_summary_path": "",
+            "optimizer_profile_trial_count": 0,
+            "optimizer_profile_avg_objective_wall_sec": None,
+            "optimizer_profile_read_error": "",
+        }
+    latest_path = max(new_paths.values(), key=lambda path: path.stat().st_mtime)
+    try:
+        payload = json.loads(latest_path.read_text(encoding="utf-8"))
+        avg_payload = payload.get("avg", {}) if isinstance(payload, dict) else {}
+        return {
+            "optimizer_profile_summary_path": str(latest_path),
+            "optimizer_profile_trial_count": int(payload.get("trial_count", 0) or 0),
+            "optimizer_profile_avg_objective_wall_sec": (
+                None if avg_payload.get("objective_wall_sec") in (None, "") else float(avg_payload.get("objective_wall_sec"))
+            ),
+            "optimizer_profile_read_error": "",
+        }
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {
+            "optimizer_profile_summary_path": str(latest_path),
+            "optimizer_profile_trial_count": 0,
+            "optimizer_profile_avg_objective_wall_sec": None,
+            "optimizer_profile_read_error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     label_dir = ensure_dir(parent_run_dir / label)
     models_dir = ensure_dir(label_dir / "models")
     params_path = models_dir / "best_params.json"
     db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
     failures = []
+
+    before_profile_summaries = _collect_optimizer_profile_summaries()
 
     outcome = run_command(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
@@ -126,6 +169,12 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             ]
         ),
     )
+
+    after_profile_summaries = _collect_optimizer_profile_summaries()
+    new_profile_summaries = {
+        name: path for name, path in after_profile_summaries.items() if name not in before_profile_summaries
+    }
+    profile_metrics = _read_latest_profile_metrics(new_profile_summaries)
 
     if outcome.get("timed_out"):
         failures.append("optimizer_timed_out")
@@ -172,6 +221,10 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         "best_params_digest": payload_digest,
         "db_read_error": db_metrics["db_read_error"],
         "best_params_read_error": params_info["params_read_error"],
+        "optimizer_profile_summary_path": profile_metrics["optimizer_profile_summary_path"],
+        "optimizer_profile_trial_count": profile_metrics["optimizer_profile_trial_count"],
+        "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
+        "optimizer_profile_read_error": profile_metrics["optimizer_profile_read_error"],
         "failures": failures,
     }
     write_json(label_dir / "ml_smoke_summary.json", result)
@@ -200,6 +253,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "qualified_trial_count": first_run["qualified_trial_count"],
                 "best_trial_value": first_run["best_trial_value"],
                 "best_params_digest": first_run["best_params_digest"],
+                "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
+                "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": first_run["failures"],
             },
             {
@@ -209,6 +264,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "qualified_trial_count": second_run["qualified_trial_count"],
                 "best_trial_value": second_run["best_trial_value"],
                 "best_params_digest": second_run["best_params_digest"],
+                "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
+                "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": second_run["failures"],
             },
         ],
@@ -248,6 +305,10 @@ def main(argv=None) -> int:
         "best_trial_value": first_run["best_trial_value"],
         "best_params_keys": first_run["best_params_keys"],
         "best_params_read_error": first_run["best_params_read_error"],
+        "optimizer_profile_summary_path": first_run["optimizer_profile_summary_path"],
+        "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
+        "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
+        "optimizer_profile_read_error": first_run["optimizer_profile_read_error"],
         "runtime_error": "",
         "optimizer_repro": repro_summary,
         "failures": failures,

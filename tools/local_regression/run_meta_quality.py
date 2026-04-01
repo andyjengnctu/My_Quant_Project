@@ -37,6 +37,18 @@ COVERAGE_TARGETS = [
     "core/portfolio_stats.py",
 ]
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
+PERFORMANCE_STEP_FILES = {
+    "quick_gate": "quick_gate_summary.json",
+    "consistency": "validate_consistency_summary.json",
+    "chain_checks": "chain_summary.json",
+    "ml_smoke": "ml_smoke_summary.json",
+}
+PERFORMANCE_MANIFEST_KEYS = {
+    "quick_gate": "performance_quick_gate_max_sec",
+    "consistency": "performance_consistency_max_sec",
+    "chain_checks": "performance_chain_checks_max_sec",
+    "ml_smoke": "performance_ml_smoke_max_sec",
+}
 
 
 def _extract_table_rows(text: str, heading: str) -> List[List[str]]:
@@ -310,19 +322,143 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float) -> Dict[str, Any]:
+    has_shared_run_dir = bool(os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip())
+    available_step_files = {name: run_dir / file_name for name, file_name in PERFORMANCE_STEP_FILES.items()}
+    if not has_shared_run_dir and not any(path.exists() for path in available_step_files.values()):
+        results = [
+            summarize_result(
+                "performance_baseline_skipped_without_shared_run_dir",
+                True,
+                detail="standalone run_meta_quality 無 shared run_dir；略過 step performance baseline",
+            )
+        ]
+        return {
+            "ok": True,
+            "skipped": True,
+            "results": results,
+            "step_durations": {},
+            "optimizer_trial_avg_objective_wall_sec": None,
+            "optimizer_profile_trial_count": 0,
+            "total_duration_sec": current_meta_quality_duration_sec,
+        }
+
+    results: List[Dict[str, Any]] = []
+    step_durations: Dict[str, float] = {}
+    missing_step_files: List[str] = []
+    for step_name, path in available_step_files.items():
+        if not path.exists():
+            missing_step_files.append(step_name)
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        step_durations[step_name] = round(float(payload.get("duration_sec", 0.0) or 0.0), 3)
+
+    results.append(
+        summarize_result(
+            "performance_required_step_summaries_present",
+            not missing_step_files,
+            detail=f"missing={missing_step_files}",
+            extra={"missing_step_files": missing_step_files},
+        )
+    )
+
+    for step_name, duration_sec in step_durations.items():
+        budget_key = PERFORMANCE_MANIFEST_KEYS[step_name]
+        budget_sec = float(manifest[budget_key])
+        results.append(
+            summarize_result(
+                f"performance_{step_name}_within_budget",
+                duration_sec <= budget_sec,
+                detail=f"duration={duration_sec:.3f}s | budget={budget_sec:.3f}s",
+                extra={"duration_sec": duration_sec, "budget_sec": budget_sec},
+            )
+        )
+
+    meta_quality_budget_sec = float(manifest["performance_meta_quality_max_sec"])
+    results.append(
+        summarize_result(
+            "performance_meta_quality_within_budget",
+            current_meta_quality_duration_sec <= meta_quality_budget_sec,
+            detail=f"duration={current_meta_quality_duration_sec:.3f}s | budget={meta_quality_budget_sec:.3f}s",
+            extra={"duration_sec": current_meta_quality_duration_sec, "budget_sec": meta_quality_budget_sec},
+        )
+    )
+
+    total_duration_sec = round(sum(step_durations.values()) + float(current_meta_quality_duration_sec), 3)
+    total_budget_sec = float(manifest["performance_total_max_sec"])
+    results.append(
+        summarize_result(
+            "performance_total_suite_within_budget",
+            total_duration_sec <= total_budget_sec,
+            detail=f"duration={total_duration_sec:.3f}s | budget={total_budget_sec:.3f}s",
+            extra={"duration_sec": total_duration_sec, "budget_sec": total_budget_sec},
+        )
+    )
+
+    ml_smoke_payload = {}
+    ml_smoke_path = available_step_files["ml_smoke"]
+    if ml_smoke_path.exists():
+        ml_smoke_payload = json.loads(ml_smoke_path.read_text(encoding="utf-8"))
+    optimizer_trial_avg = ml_smoke_payload.get("optimizer_profile_avg_objective_wall_sec")
+    optimizer_profile_trial_count = int(ml_smoke_payload.get("optimizer_profile_trial_count", 0) or 0)
+    optimizer_trial_budget_sec = float(manifest["performance_optimizer_trial_avg_max_sec"])
+    optimizer_profile_ready = optimizer_trial_avg not in (None, "")
+    results.append(
+        summarize_result(
+            "performance_optimizer_profile_present",
+            optimizer_profile_ready,
+            detail=(
+                f"avg_objective_wall_sec={optimizer_trial_avg} | trial_count={optimizer_profile_trial_count}"
+                if optimizer_profile_ready
+                else "optimizer profile summary missing"
+            ),
+            extra={
+                "optimizer_profile_trial_count": optimizer_profile_trial_count,
+                "optimizer_profile_avg_objective_wall_sec": optimizer_trial_avg,
+            },
+        )
+    )
+    if optimizer_profile_ready:
+        optimizer_trial_avg_value = float(optimizer_trial_avg)
+        results.append(
+            summarize_result(
+                "performance_optimizer_avg_trial_within_budget",
+                optimizer_trial_avg_value <= optimizer_trial_budget_sec,
+                detail=f"avg_objective_wall={optimizer_trial_avg_value:.3f}s | budget={optimizer_trial_budget_sec:.3f}s",
+                extra={"duration_sec": optimizer_trial_avg_value, "budget_sec": optimizer_trial_budget_sec},
+            )
+        )
+    else:
+        optimizer_trial_avg_value = None
+
+    ok = all(item["status"] == "PASS" for item in results)
+    return {
+        "ok": ok,
+        "skipped": False,
+        "results": results,
+        "step_durations": step_durations,
+        "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_value,
+        "optimizer_profile_trial_count": optimizer_profile_trial_count,
+        "total_duration_sec": total_duration_sec,
+    }
+
+
 def main(argv=None) -> int:
     cli = parse_no_arg_cli(argv, "tools/local_regression/run_meta_quality.py", description="執行 coverage baseline 與 checklist sufficiency formal check")
     if cli["help"]:
         return 0
 
-    load_manifest()
+    manifest = load_manifest()
     ensure_reduced_dataset()
     run_dir = resolve_run_dir("meta_quality")
 
+    started = os.times().elapsed
     coverage_summary = _build_coverage_summary(run_dir)
     checklist_summary = _summarize_checklist_consistency()
+    current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
+    performance_summary = _build_performance_summary(run_dir, manifest, current_meta_quality_duration_sec=current_meta_quality_duration_sec)
 
-    all_results = [*coverage_summary["results"], *checklist_summary["results"]]
+    all_results = [*coverage_summary["results"], *checklist_summary["results"], *performance_summary["results"]]
     failures = [item["name"] for item in all_results if item["status"] != "PASS"]
     overall_status = "PASS" if not failures else "FAIL"
 
@@ -344,6 +480,14 @@ def main(argv=None) -> int:
             "done_ids": checklist_summary["done_ids"],
             "unfinished_d_ids": checklist_summary["unfinished_d_ids"],
         },
+        "performance": {
+            "ok": performance_summary["ok"],
+            "skipped": performance_summary["skipped"],
+            "step_durations": performance_summary["step_durations"],
+            "optimizer_profile_trial_count": performance_summary["optimizer_profile_trial_count"],
+            "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
+            "total_duration_sec": performance_summary["total_duration_sec"],
+        },
         "results": all_results,
     }
     write_json(run_dir / "meta_quality_summary.json", summary)
@@ -363,6 +507,13 @@ def main(argv=None) -> int:
         f"partial_ids   : {', '.join(checklist_summary['partial_ids']) if checklist_summary['partial_ids'] else '(none)'}",
         f"todo_ids      : {', '.join(checklist_summary['todo_ids']) if checklist_summary['todo_ids'] else '(none)'}",
         f"done_ids      : {', '.join(checklist_summary['done_ids']) if checklist_summary['done_ids'] else '(none)'}",
+        f"performance_ok: {performance_summary['ok']}",
+        f"perf_total    : {performance_summary['total_duration_sec']:.3f}s",
+        (
+            f"perf_opt_trial: {performance_summary['optimizer_trial_avg_objective_wall_sec']:.3f}s"
+            if performance_summary['optimizer_trial_avg_objective_wall_sec'] is not None
+            else "perf_opt_trial: (missing)"
+        ),
     ]
     if failures:
         lines.append("failed_checks : " + ", ".join(failures))
@@ -373,6 +524,8 @@ def main(argv=None) -> int:
         "coverage_percent": coverage_summary["totals"]["percent_covered"],
         "checklist_partial_ids": checklist_summary["partial_ids"],
         "checklist_todo_ids": checklist_summary["todo_ids"],
+        "performance_total_duration_sec": performance_summary["total_duration_sec"],
+        "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
     }, ensure_ascii=False))
     return 0 if overall_status == "PASS" else 1
 

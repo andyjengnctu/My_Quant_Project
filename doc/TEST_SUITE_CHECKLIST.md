@@ -87,7 +87,7 @@
 | B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
-| B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | TODO | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
+| B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | PARTIAL | 已新增 scanner header / strategy dashboard output sanity case，直接檢查關鍵欄位、百分比與 benchmark/ticker 顯示；完整 reporting schema 與輸出相容性仍未補齊 | `tools/validate/synthetic_display_cases.py`, `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | PARTIAL | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但尚未覆蓋 chain / ml smoke / display 路徑 | `tools/local_regression/run_meta_quality.py` |
@@ -147,7 +147,7 @@
 | D18 | contract tests for CSV / XLSX / JSON outputs | 釘死輸出 schema |
 | D19 | rerun / cache pollution checks | 釘死重跑一致性 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline，並已納入 `apps/test_suite.py` / `run_all.py` 固定步驟 |
-| D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
+| D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；確認 `DONE` 項目皆已映射到實際 test function 與 synthetic 主入口 |
 | D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
 | D27 | `validate_display_reporting_sanity_case` | 釘死 scanner header / strategy dashboard 關鍵欄位與格式 sanity |
@@ -175,12 +175,12 @@
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
 | 品質 | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
+| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 
 ### E2. 目前所有 `TODO` 的主表項目摘要
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
-| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
@@ -193,7 +193,7 @@
 | D18 | contract tests for CSV / XLSX / JSON outputs | TODO | B11 / B17 |
 | D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | PARTIAL | B22 |
-| D21 | performance baseline checks | TODO | B19 |
+| D21 | performance baseline checks | PARTIAL | B19 |
 | D25 | checklist sufficiency review | PARTIAL | B26 |
 | D27 | `validate_display_reporting_sanity_case` | PARTIAL | B21 |
 
@@ -267,6 +267,7 @@
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
 | 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py`；尚未覆蓋 chain / ml smoke / display 路徑 |
 | 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py`；每輪是否足夠仍需人工判斷 |
+| 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
 | 2026-04-01 | D27 | 新增 display/reporting sanity case 並驗證 | TODO -> PARTIAL | validate_display_reporting_sanity_case |
 
