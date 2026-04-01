@@ -246,6 +246,69 @@ def validate_synthetic_fee_tax_net_equity_case(base_params):
     return results, summary
 
 
+
+
+def validate_synthetic_missed_sell_accounting_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    case_id = "SYNTH_MISSED_SELL_ACCOUNTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = build_synthetic_baseline_frame("2024-01-01", 60)
+    set_synthetic_bar(df, 55, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
+    set_synthetic_bar(df, 56, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2, volume=1000)
+    set_synthetic_bar(df, 57, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5, volume=0)
+    set_synthetic_bar(df, 58, open_price=101.4, high_price=101.9, low_price=100.9, close_price=101.1, volume=1000)
+    set_synthetic_bar(df, 59, open_price=101.1, high_price=101.3, low_price=100.8, close_price=101.0, volume=1000)
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, {"9851": df})
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, params, max_positions=1, enable_rotation=False, start_year=2024, benchmark_ticker="9851"
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, params, max_positions=1, enable_rotation=False, start_year=2024, benchmark_ticker="9851"
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_missed_sell_accounting", case_id, core_stats, sim_stats)
+
+        primary_path = os.path.join(temp_dir, "9851.csv")
+        raw_df = pd.read_csv(primary_path)
+        debug_input_df, _debug_sanitize_stats = sanitize_ohlcv_dataframe(
+            raw_df,
+            "9851",
+            min_rows=get_required_min_rows(params),
+        )
+        debug_df, _debug_module_path = run_debug_trade_log_check("9851", debug_input_df, params)
+        action_series = debug_df["動作"].fillna("") if debug_df is not None and len(debug_df) > 0 else pd.Series(dtype=str)
+        missed_sell_rows = int((action_series == "錯失賣出").sum())
+        missed_sell_row = debug_df[action_series == "錯失賣出"].iloc[0] if missed_sell_rows > 0 else None
+        portfolio_missed_rows = (
+            sim_stats["df_trades"][sim_stats["df_trades"]["Type"].fillna("") == "錯失賣出"].copy()
+            if not sim_stats["df_trades"].empty else pd.DataFrame()
+        )
+        completed_trades = sim_stats["portfolio_completed_trades"]
+        completed_trade_pnl = float(completed_trades[0]["total_pnl"]) if completed_trades else None
+        final_exit_rows = (
+            sim_stats["df_trades"][sim_stats["df_trades"]["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)"])].copy()
+            if not sim_stats["df_trades"].empty else pd.DataFrame()
+        )
+        final_exit_total_pnl = float(final_exit_rows.iloc[-1]["該筆總損益"]) if len(final_exit_rows) > 0 else None
+        missed_sell_total_pnl = float(portfolio_missed_rows.iloc[0]["該筆總損益"]) if len(portfolio_missed_rows) > 0 else None
+        missed_sell_note = None if missed_sell_row is None else missed_sell_row.get("備註")
+
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "core_total_missed_sells", 1, int(core_stats["total_missed_sells"]))
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "portfolio_total_missed_sells", 1, int(sim_stats["total_missed_sells"]))
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "portfolio_missed_sell_rows", 1, int(sim_stats["portfolio_missed_sell_rows"]))
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "df_trades_missed_sell_rows", 1, len(portfolio_missed_rows))
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "debug_missed_sell_rows", 1, missed_sell_rows)
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "missed_sell_note_marks_block_reason", True, missed_sell_note == "零量，當日無法賣出")
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "missed_sell_row_carries_pre_exit_realized_pnl", 0.0, missed_sell_total_pnl, tol=0.01)
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "eventual_exit_keeps_round_trip_trade_count", 1, int(sim_stats["trade_count"]))
+        add_check(results, "synthetic_missed_sell_accounting", case_id, "eventual_exit_round_trip_pnl_matches_completed_trade", completed_trade_pnl, final_exit_total_pnl, tol=0.01)
+
+    summary["missed_sell_rows"] = missed_sell_rows
+    return results, summary
+
 def validate_synthetic_half_tp_full_year_case(base_params):
     case = build_synthetic_half_tp_full_year_case(base_params)
     results = []

@@ -144,11 +144,55 @@
 | D20 | coverage report baseline | 將完整性從主觀判斷改為客觀數字 |
 | D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
 
-## E. 已完成覆蓋摘要
+## E. 未完成缺口摘要
+
+說明：本節只作為目前所有未完成項目的快速索引，方便優先查看 `PARTIAL` 與 `TODO`；主維護來源仍是本檔前文各表格，不另作第二份主清單。
+
+### E1. 目前所有 `PARTIAL` 的主表項目摘要
+
+| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|
+| 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
+| 品質 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
+| 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
+| 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
+| 品質 | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
+
+### E2. 目前所有 `TODO` 的主表項目摘要
+
+| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|
+| 契約 | B11 | 跨工具 schema / 欄位語意一致 | `portfolio_sim` / `scanner` / `debug_trade_log` / `validate` 對同事件欄位語意需一致 | contract tests under `tools/validate/` |
+| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | optimizer / scanner / regression 缺明確 deterministic assertion | `tools/local_regression/`, `tools/optimizer/` |
+| 邊界值 | B13 | 數值穩定性、rounding、tick、odd lot | 價格、稅費、部位 sizing、全贏/全輸/零交易等需 unit test | `core/price_utils.py`, `core/portfolio_stats.py`, `core/history_filters.py` |
+| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 同指令連跑兩次結果是否一致尚未被正式釘住 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
+| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
+| 文件 | B20 | `doc/CMD.md` 指令與實作一致 | 尚未看到文件一致性檢查 | doc command contract checks |
+| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
+| 覆蓋率 | B22 | line / branch coverage 報表 | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
+
+### E3. 目前所有未完成的建議測試項目摘要
+
+| ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
+|---|---|---|---|
+| D07 | `validate_synthetic_missed_sell_accounting_case` | TODO | B11 |
+| D11 | `tests_unit_price_utils.py` | TODO | B13 |
+| D12 | `tests_unit_history_filters.py` | TODO | B13 |
+| D13 | `tests_unit_portfolio_stats.py` | TODO | B13 |
+| D14 | model input / output schema checks | TODO | C01 |
+| D15 | deterministic regression for optimizer/scanner | TODO | C02 |
+| D16 | ranking / scoring output sanity checks | TODO | C03 |
+| D17 | reporting schema compatibility checks | TODO | C05 |
+| D18 | contract tests for CSV / XLSX / JSON outputs | TODO | B11 / B17 |
+| D19 | rerun / cache pollution checks | TODO | B18 |
+| D20 | coverage report baseline | TODO | B22 |
+| D21 | performance baseline checks | TODO | B19 |
+
+## F. 已完成覆蓋摘要
 
 說明：本節只作為目前所有 `DONE` 項目的快速索引；不區分原本既有或本輪新增。主維護來源仍是本檔前文各表格與收斂紀錄，不另作第二份主清單。
 
-### E1. 目前所有 `DONE` 的主表項目摘要
+### F1. 目前所有 `DONE` 的主表項目摘要
 
 | 類型 | ID | 項目 | 對應測試入口 | 完成日期 |
 |---|---|---|---|---|
@@ -162,7 +206,7 @@
 | 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
 
-### E2. 目前所有 `DONE` 的建議測試項目摘要
+### F2. 目前所有 `DONE` 的建議測試項目摘要
 
 | ID | 建議測試名稱 | 對應主表項目 | 完成日期 |
 |---|---|---|---|
@@ -176,7 +220,7 @@
 | D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 | 2026-04-01 |
 | D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 | 2026-04-01 |
 
-## F. 逐項收斂紀錄
+## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。
 
@@ -193,7 +237,7 @@
 | 2026-04-01 | D10 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_lookahead_prev_day_only_case |
 | YYYY-MM-DD | D20 | 建立 coverage baseline | TODO -> PARTIAL |  |
 
-## G. 完成判準
+## H. 完成判準
 
 可視為 test suite 已明顯收斂的最低條件：
 1. `B1` 區 `P0` 項目全數至少達到 `DONE`。

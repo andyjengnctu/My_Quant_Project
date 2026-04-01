@@ -12,6 +12,7 @@ from .synthetic_flow_cases import (
 from .synthetic_take_profit_cases import (
     validate_synthetic_exit_orders_only_for_held_positions_case,
     validate_synthetic_fee_tax_net_equity_case,
+    validate_synthetic_missed_sell_accounting_case,
     validate_synthetic_half_tp_full_year_case,
     validate_synthetic_round_trip_pnl_only_on_tail_exit_case,
     validate_synthetic_same_bar_stop_priority_case,
@@ -28,6 +29,7 @@ __all__ = [
     "validate_synthetic_same_day_buy_sell_forbidden_case",
     "validate_synthetic_exit_orders_only_for_held_positions_case",
     "validate_synthetic_fee_tax_net_equity_case",
+    "validate_synthetic_missed_sell_accounting_case",
     "validate_synthetic_half_tp_full_year_case",
     "validate_synthetic_round_trip_pnl_only_on_tail_exit_case",
     "validate_synthetic_same_bar_stop_priority_case",
