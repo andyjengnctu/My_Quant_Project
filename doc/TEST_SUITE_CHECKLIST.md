@@ -63,16 +63,16 @@
 
 | ID | 優先級 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|
-| B01 | P0 | 杜絕未來函數 | PARTIAL | 已有 PIT same-day exit 類測試，但不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
+| B01 | P0 | 杜絕未來函數 | PARTIAL | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
 | B02 | P1 | 同 K 棒停利/停損取最壞停損 | DONE | 已有明確 synthetic case | 既有 synthetic case |
 | B03 | P0 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | DONE | 已新增直接手算對帳案例，逐欄位檢查 entry cash / entry equity / exit pnl / final equity / total return | `tools/validate/synthetic_take_profit_cases.py` |
-| B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | PARTIAL | 已有部分覆蓋，但應直接斷言 `completed_trades` 與 `avg_win/avg_loss` | `tools/validate/synthetic_take_profit_cases.py` |
+| B04 | P1 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | DONE | 已新增直接案例，斷言半倉列不得提前帶完整 `該筆總損益`，完整 Round-Trip 僅在尾倉結算列完成 | `tools/validate/synthetic_take_profit_cases.py` |
 | B05 | P0 | 只能盤前掛單；盤中不得新增/改單/換股 | DONE | 已新增直接禁止盤中改單 case，並以 failed fill / same-day sell / rotation case 共同覆蓋盤中新增與換股 | `tools/validate/synthetic_flow_cases.py` |
 | B06 | P0 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 | DONE | 已新增買入當日不可賣出的直接 case；同日賣出後不得再投入則由既有 same-day sell block / rotation T+1 case 覆蓋 | `tools/validate/synthetic_flow_cases.py` |
 | B07 | P0 | 未成交不得同日盤中自動改掛其他股票 | DONE | 已新增直接 failed fill 後不得同日換股 case | `tools/validate/synthetic_flow_cases.py` |
 | B08 | P0 | 停利/停損只能對已持有部位預先設定 | DONE | 已新增 zero-qty position direct assertion，確認無持倉時 stop/tp / indicator sell 不得產生任何 exit event | `tools/validate/synthetic_take_profit_cases.py` |
-| B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | TODO | 尚未看到清楚釘死各層狀態不可混用的 synthetic case | `tools/validate/synthetic_flow_cases.py` |
-| B10 | P1 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | PARTIAL | 已有相關 case，但建議補更直接的 cross-tool assertion | `tools/validate/synthetic_history_cases.py` |
+| B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | DONE | 已新增 candidate / filled / missed-buy 三層直接案例，釘死狀態不得混用 | `tools/validate/synthetic_flow_cases.py` |
+| B10 | P1 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | DONE | 已新增 cross-tool case，直接對照單股回測仍成交、scanner 端仍拒絕非 candidate | `tools/validate/synthetic_history_cases.py` |
 
 ### B2. 未明列於專案設定，但正式 test suite 應納入
 
@@ -117,11 +117,11 @@
 
 | ID | 建議測試名稱 | 目標 |
 |---|---|---|
-| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | 補強半倉與 completed trade 口徑 |
+| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | 已完成；補強半倉與 completed trade 口徑 |
 | D07 | `validate_synthetic_missed_sell_accounting_case` | 補強 missed sell、trade log、stats 一致 |
-| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | 補強候選 / 掛單 / 成交 / miss buy 分層 |
-| D09 | `validate_synthetic_portfolio_history_filter_only_case` | 補強 history filter 僅用於投組層 / scanner |
-| D10 | `validate_synthetic_lookahead_prev_day_only_case` | 補強盤前只能讀前一日資料 |
+| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | 已完成；補強候選 / 掛單 / 成交 / miss buy 分層 |
+| D09 | `validate_synthetic_portfolio_history_filter_only_case` | 已完成；補強 history filter 僅用於投組層 / scanner |
+| D10 | `validate_synthetic_lookahead_prev_day_only_case` | 已完成；補強盤前只能讀前一日資料 |
 | D11 | `tests_unit_price_utils.py` | 釘死 tick、費率、稅金、sizing、half sell qty 邊界 |
 | D12 | `tests_unit_history_filters.py` | 釘死 EV、win rate、trade count 邊界 |
 | D13 | `tests_unit_portfolio_stats.py` | 釘死年化、MDD、R²、空序列邊界 |
@@ -154,10 +154,13 @@
 |---|---|---|---|---|
 | 規則 | B02 | 同 K 棒停利/停損取最壞停損 | 既有 synthetic case | 既有 |
 | 規則 | B03 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
+| 規則 | B04 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
 | 規則 | B05 | 只能盤前掛單；盤中不得新增/改單/換股 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B06 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B07 | 未成交不得同日盤中自動改掛其他股票 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B08 | 停利/停損只能對已持有部位預先設定 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
+| 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
+| 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
 
 ### E2. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -168,6 +171,10 @@
 | D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 | 2026-04-01 |
 | D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 | 2026-04-01 |
 | D05 | `validate_synthetic_fee_tax_net_equity_case` | B03 | 2026-04-01 |
+| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 | 2026-04-01 |
+| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 | 2026-04-01 |
+| D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 | 2026-04-01 |
+| D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 | 2026-04-01 |
 
 ## F. 逐項收斂紀錄
 
@@ -180,6 +187,10 @@
 | 2026-04-01 | D03 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_no_intraday_switch_after_failed_fill_case |
 | 2026-04-01 | D04 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_exit_orders_only_for_held_positions_case |
 | 2026-04-01 | D05 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_fee_tax_net_equity_case |
+| 2026-04-01 | D06 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_round_trip_pnl_only_on_tail_exit_case |
+| 2026-04-01 | D08 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_candidate_order_fill_layer_separation_case |
+| 2026-04-01 | D09 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_portfolio_history_filter_only_case |
+| 2026-04-01 | D10 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_lookahead_prev_day_only_case |
 | YYYY-MM-DD | D20 | 建立 coverage baseline | TODO -> PARTIAL |  |
 
 ## G. 完成判準

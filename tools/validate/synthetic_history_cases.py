@@ -10,9 +10,10 @@ from core.backtest_core import (
     evaluate_history_candidate_metrics,
     run_v16_backtest,
 )
+from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.portfolio_fast_data import get_pit_stats_from_index
 
-from .checks import add_check, make_synthetic_validation_params
+from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check
 
 
 def validate_synthetic_history_ev_threshold_case(base_params):
@@ -235,4 +236,93 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
 
     summary["trade_count"] = int(stats["trade_count"])
     summary["is_candidate"] = bool(stats["is_candidate"])
+    return results, summary
+
+
+
+def validate_synthetic_portfolio_history_filter_only_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 5
+    params.min_history_ev = 0.5
+    params.min_history_win_rate = 0.8
+
+    case_id = "SYNTH_PORTFOLIO_HISTORY_FILTER_ONLY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from .synthetic_portfolio_common import build_synthetic_half_tp_full_year_case
+    from .synthetic_fixtures import write_synthetic_csv_bundle
+    from .tool_adapters import run_scanner_tool_check
+    import os
+    import tempfile
+
+    case = build_synthetic_half_tp_full_year_case(base_params)
+    ticker = case["primary_ticker"]
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        file_path = os.path.join(temp_dir, f"{ticker}.csv")
+        raw_df = pd.read_csv(file_path)
+        min_rows_needed = get_required_min_rows(params)
+        df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+
+        single_stats = run_v16_backtest(df.copy(), params)
+        scanner_ref_stats = run_scanner_reference_check(ticker, file_path, params)
+        scanner_result, _scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
+
+        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_trade_executes_even_when_history_threshold_unmet", True, int(single_stats["trade_count"]) > 0)
+        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_history_gate_remains_false", False, bool(single_stats["is_candidate"]))
+        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "scanner_reference_candidate_remains_false", False, bool(scanner_ref_stats["is_candidate"]))
+        add_check(results, "synthetic_portfolio_history_filter_only", case_id, "scanner_tool_rejects_non_candidate_history_gate", None, None if scanner_result is None else scanner_result.get("status"), note="history filter 僅能作用於投組層 / scanner，不得回頭阻斷單股回測本身。")
+
+    summary["single_trade_count"] = int(single_stats["trade_count"])
+    summary["scanner_status"] = None if scanner_result is None else scanner_result.get("status")
+    return results, summary
+
+
+def validate_synthetic_lookahead_prev_day_only_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 1
+    params.min_history_ev = 0.5
+    params.min_history_win_rate = 0.5
+
+    case_id = "SYNTH_LOOKAHEAD_PREV_DAY_ONLY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exit_dates = [
+        datetime(2024, 1, 2),
+        datetime(2024, 1, 3),
+    ]
+    stats_index = {
+        "exit_dates": exit_dates,
+        "cum_trade_count": np.array([1, 1], dtype=np.int32),
+        "cum_win_count": np.array([1, 1], dtype=np.int32),
+        "cum_win_r_sum": np.array([1.0, 1.0], dtype=np.float64),
+        "cum_loss_r_sum": np.array([0.0, 0.0], dtype=np.float64),
+        "cum_total_r_sum": np.array([1.0, 1.0], dtype=np.float64),
+    }
+
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 2),
+        params,
+    )
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+        stats_index,
+        datetime(2024, 1, 3),
+        params,
+    )
+
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_trade_count_uses_previous_day_only", 0, same_day_trade_count)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_candidate_blocked_without_prior_history", False, same_day_candidate)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_expected_value_excludes_same_day_exit", 0.0, same_day_ev)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "same_day_win_rate_excludes_same_day_exit", 0.0, same_day_win_rate)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_trade_count_includes_prior_exit", 1, next_day_trade_count)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_candidate_unlocked_by_prior_exit_only", True, next_day_candidate, note="盤前決策只能讀前一日已完成歷史，不得偷看同日才剛結束的交易。")
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_expected_value_includes_prior_exit", 1.0, next_day_ev)
+    add_check(results, "synthetic_lookahead_prev_day_only", case_id, "next_day_win_rate_includes_prior_exit", 1.0, next_day_win_rate)
+
+    summary["same_day_trade_count"] = int(same_day_trade_count)
+    summary["next_day_trade_count"] = int(next_day_trade_count)
     return results, summary

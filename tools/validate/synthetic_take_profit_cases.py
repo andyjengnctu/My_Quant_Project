@@ -281,6 +281,43 @@ def validate_synthetic_half_tp_full_year_case(base_params):
     return results, summary
 
 
+def validate_synthetic_round_trip_pnl_only_on_tail_exit_case(base_params):
+    case = build_synthetic_half_tp_full_year_case(base_params)
+    results = []
+    summary = {"ticker": "SYNTH_ROUND_TRIP_PNL_ONLY_ON_TAIL_EXIT", "synthetic": True}
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, case["frames"])
+        core_stats = run_portfolio_core_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        sim_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir, case["params"], max_positions=case["max_positions"],
+            enable_rotation=case["enable_rotation"], start_year=case["start_year"], benchmark_ticker=case["benchmark_ticker"]
+        )
+        add_portfolio_stats_equality_checks(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], core_stats, sim_stats)
+
+        df_trades = sim_stats["df_trades"].copy()
+        half_rows = df_trades[df_trades["Type"].fillna("") == "半倉停利"].copy() if not df_trades.empty else pd.DataFrame()
+        full_exit_rows = df_trades[df_trades["Type"].fillna("").isin(["全倉結算(停損)", "全倉結算(指標)", "期末強制結算", "汰弱賣出(Open, T+1再評估買進)"])].copy() if not df_trades.empty else pd.DataFrame()
+        completed_trades = sim_stats["portfolio_completed_trades"]
+        completed_trade_pnl = float(completed_trades[0]["total_pnl"]) if completed_trades else None
+        half_row_total_pnl = None if half_rows.empty else half_rows.iloc[0]["該筆總損益"]
+        final_exit_total_pnl = None if full_exit_rows.empty else float(full_exit_rows.iloc[-1]["該筆總損益"])
+        half_exit_count = int(completed_trades[0]["half_exit_count"]) if completed_trades else None
+
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "half_take_profit_rows", 1, len(half_rows))
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "completed_trade_count_counts_round_trip_only", 1, int(sim_stats["trade_count"]))
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "rebuilt_completed_trade_count", 1, len(completed_trades))
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "completed_trade_records_half_exit_count", 1, half_exit_count)
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "half_take_profit_row_has_no_round_trip_total_pnl", True, pd.isna(half_row_total_pnl), note="半倉停利只視為現金回收，不得在半倉列提前結算完整 Round-Trip PnL。")
+        add_check(results, "synthetic_round_trip_pnl_only_on_tail_exit", summary["ticker"], "final_exit_row_carries_round_trip_total_pnl", completed_trade_pnl, final_exit_total_pnl, tol=0.01)
+
+    summary["completed_trade_count"] = len(completed_trades)
+    return results, summary
+
+
 def validate_synthetic_unexecutable_half_tp_case(base_params):
     case = build_synthetic_unexecutable_half_tp_case(base_params)
     results = []

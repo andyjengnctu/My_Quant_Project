@@ -13,6 +13,7 @@ from .synthetic_portfolio_common import (
     add_portfolio_stats_equality_checks,
     build_synthetic_competing_candidates_case,
     build_synthetic_extended_miss_buy_case,
+    build_synthetic_half_tp_full_year_case,
     build_synthetic_rotation_t_plus_one_case,
     build_synthetic_same_day_sell_block_case,
     run_portfolio_core_check_for_dir,
@@ -121,6 +122,101 @@ def _run_failed_fill_no_switch_scenario(base_params, *, case_id, module_name, in
     summary["alternate_buy_rows"] = len(alt_buy_rows)
     return results, summary
 
+
+
+
+def _run_entry_layer_outcome_case(params, *, low_on_entry_day, volume_on_entry_day):
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [101.0, 102.0],
+            "Low": [99.0, low_on_entry_day],
+            "Close": [100.0, 101.8],
+            "Volume": [1000.0, volume_on_entry_day],
+            "ATR": [1.0, 1.0],
+            "buy_limit": [100.0, 100.0],
+            "is_setup": [True, False],
+            "ind_sell_signal": [False, False],
+        },
+        index=dates,
+    )
+    all_dfs_fast = {"9831": pack_prepared_stock_data(df)}
+    orderable_candidates_today = [
+        {
+            "ticker": "9831",
+            "type": "normal",
+            "limit_px": 100.0,
+            "init_sl": 95.0,
+            "init_trail": 95.0,
+            "ev": 2.0,
+            "today_pos": 1,
+            "yesterday_pos": 0,
+        }
+    ]
+    portfolio = {}
+    trade_history = []
+    cash, total_missed_buys = execute_reserved_entries_for_day(
+        portfolio=portfolio,
+        active_extended_signals={},
+        orderable_candidates_today=orderable_candidates_today,
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        today=pd.Timestamp("2024-01-03"),
+        params=params,
+        cash=1_000_000.0,
+        available_cash=1_000_000.0,
+        max_positions=1,
+        trade_history=trade_history,
+        is_training=False,
+        total_missed_buys=0,
+    )
+    return {
+        "portfolio": portfolio,
+        "trade_history": trade_history,
+        "cash": cash,
+        "total_missed_buys": total_missed_buys,
+    }
+
+
+def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    case_id = "SYNTH_CANDIDATE_ORDER_FILL_LAYER_SEPARATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    candidate_case = build_synthetic_half_tp_full_year_case(base_params)
+    candidate_case["params"].initial_capital = 50.0
+    candidate_case["params"].fixed_risk = 1.0
+    candidate_case["frames"][candidate_case["primary_ticker"]] = candidate_case["frames"][candidate_case["primary_ticker"]].iloc[:271].copy()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, candidate_case["frames"])
+        ticker = candidate_case["primary_ticker"]
+        file_path = os.path.join(temp_dir, f"{ticker}.csv")
+        scanner_result, _scanner_module_path = run_scanner_tool_check(ticker, file_path, candidate_case["params"])
+
+    filled_outcome = _run_entry_layer_outcome_case(params, low_on_entry_day=99.5, volume_on_entry_day=1000.0)
+    missed_outcome = _run_entry_layer_outcome_case(params, low_on_entry_day=100.5, volume_on_entry_day=1000.0)
+
+    filled_buy_rows = [row for row in filled_outcome["trade_history"] if str(row.get("Type", "")).startswith("買進")]
+    filled_miss_rows = [row for row in filled_outcome["trade_history"] if str(row.get("Type", "")).startswith("錯失買進")]
+    missed_buy_rows = [row for row in missed_outcome["trade_history"] if str(row.get("Type", "")).startswith("買進")]
+    missed_miss_rows = [row for row in missed_outcome["trade_history"] if str(row.get("Type", "")).startswith("錯失買進")]
+
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "candidate_only_status_when_qty_zero", "candidate", None if scanner_result is None else scanner_result.get("status"))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "candidate_only_has_no_projected_order_cost", None, None if scanner_result is None else scanner_result.get("proj_cost"), note="候選資格成立但 projected qty 為 0 時，只能保留 candidate，不得混成掛單或 miss buy。")
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_records_buy_row", 1, len(filled_buy_rows))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_has_no_missed_buy", 0, int(filled_outcome["total_missed_buys"]))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_does_not_emit_missed_buy_row", 0, len(filled_miss_rows))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "filled_order_enters_portfolio", 1, len(filled_outcome["portfolio"]))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_does_not_emit_buy_row", 0, len(missed_buy_rows))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_count_tracks_unfilled_order", 1, int(missed_outcome["total_missed_buys"]))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_row_emitted_once", 1, len(missed_miss_rows))
+    add_check(results, "synthetic_candidate_order_fill_layer_separation", case_id, "missed_buy_does_not_enter_portfolio", 0, len(missed_outcome["portfolio"]))
+
+    summary["candidate_only_status"] = None if scanner_result is None else scanner_result.get("status")
+    return results, summary
 
 def validate_synthetic_intraday_reprice_forbidden_case(base_params):
     return _run_failed_fill_no_switch_scenario(
