@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import shlex
 from unittest.mock import patch
 
 from .checks import add_check
@@ -7,6 +8,7 @@ from .checks import add_check
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
+CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 
 
 def _extract_table_rows(text: str, heading: str):
@@ -75,6 +77,77 @@ def _load_done_b_rows():
         )
     return parsed
 
+
+
+
+def _extract_cmd_python_commands():
+    commands = []
+    for raw_line in CMD_PATH.read_text(encoding="utf-8").splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith(("#", "- ", "```")):
+            continue
+        if not stripped.startswith("python "):
+            continue
+        command = stripped.split("#", 1)[0].strip()
+        if command:
+            commands.append(command)
+    return commands
+
+
+def validate_cmd_document_contract_case(_base_params):
+    from tools.local_regression.run_all import STEP_NAMES
+    from tools.local_regression.run_quick_gate import HELP_TARGETS
+    from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
+
+    case_id = "META_CMD_DOCUMENT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    commands = _extract_cmd_python_commands()
+    unique_commands = list(dict.fromkeys(commands))
+    help_script_paths = {str(cmd[1]).replace("\\", "/") for cmd, _ in HELP_TARGETS if len(cmd) >= 2 and str(cmd[1]).endswith(".py")}
+    project_command_count = 0
+
+    add_check(results, "meta_cmd_contract", case_id, "cmd_python_commands_nonempty", True, bool(unique_commands))
+
+    for command in unique_commands:
+        command = command.replace("\\", "/")
+        parts = shlex.split(command, posix=True)
+        if len(parts) < 2 or parts[0] != "python":
+            continue
+        if parts[1] == "-m":
+            if parts[2:4] == ["pip", "install"] and "-r" in parts:
+                req_idx = parts.index("-r")
+                req_path = PROJECT_ROOT / parts[req_idx + 1]
+                add_check(results, "meta_cmd_contract", case_id, "cmd_requirements_lock_exists", True, req_path.exists())
+            continue
+
+        script_rel = parts[1].replace("\\", "/")
+        project_command_count += 1
+        script_path = PROJECT_ROOT / script_rel
+        metric_prefix = script_rel.replace("/", "_").replace(".", "_")
+        add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_script_exists", True, script_path.is_file())
+        add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_covered_by_help_target", True, script_rel in help_script_paths)
+
+        if "--dataset" in parts:
+            dataset_value = parts[parts.index("--dataset") + 1]
+            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_dataset_value_valid", True, dataset_value in {"full", "reduced"})
+
+        if script_rel == "tools/local_regression/run_all.py" and "--only" in parts:
+            only_value = parts[parts.index("--only") + 1]
+            only_steps = [token.strip() for token in only_value.split(",") if token.strip()]
+            invalid_steps = [step for step in only_steps if step not in STEP_NAMES]
+            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_only_steps_valid", [], invalid_steps)
+
+        if script_rel == "tools/validate/preflight_env.py" and "--steps" in parts:
+            steps_value = parts[parts.index("--steps") + 1]
+            step_names = [token.strip() for token in steps_value.split(",") if token.strip()]
+            invalid_steps = [step for step in step_names if step not in _LOCAL_REGRESSION_STEP_ORDER]
+            add_check(results, "meta_cmd_contract", case_id, f"{metric_prefix}_preflight_steps_valid", [], invalid_steps)
+
+    summary["command_count"] = len(unique_commands)
+    summary["project_command_count"] = project_command_count
+    return results, summary
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
     from tools.validate.synthetic_cases import get_synthetic_validators

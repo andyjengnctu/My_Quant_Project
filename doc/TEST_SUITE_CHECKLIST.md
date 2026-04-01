@@ -88,8 +88,8 @@
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | TODO | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
-| B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | TODO | 尚未看到文件一致性檢查 | doc command contract checks |
-| B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | TODO | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
+| B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
+| B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | PARTIAL | 已新增 scanner header / strategy dashboard output sanity case，直接檢查關鍵欄位、百分比與 benchmark/ticker 顯示；完整 reporting schema 與輸出相容性仍未補齊 | `tools/validate/synthetic_display_cases.py`, `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | PARTIAL | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但尚未覆蓋 chain / ml smoke / display 路徑 | `tools/local_regression/run_meta_quality.py` |
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | PARTIAL | 已新增 meta registry case，校驗 `DONE` 摘要、對應 test function 與 synthetic 主入口註冊一致；非 synthetic 正式步驟仍未納入 | `tools/validate/synthetic_meta_cases.py`, meta checks under `tools/validate/` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
@@ -149,6 +149,8 @@
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline，並已納入 `apps/test_suite.py` / `run_all.py` 固定步驟 |
 | D21 | performance baseline checks | 避免功能 PASS 但效能明顯退化 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；確認 `DONE` 項目皆已映射到實際 test function 與 synthetic 主入口 |
+| D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
+| D27 | `validate_display_reporting_sanity_case` | 釘死 scanner header / strategy dashboard 關鍵欄位與格式 sanity |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
 | D25 | checklist sufficiency review | 已補 `run_meta_quality.py` formal check；每輪仍須結合本輪改動與剩餘缺口做人工判斷 |
@@ -168,6 +170,7 @@
 | Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | 已新增 meta registry case，校驗 `DONE` 摘要、對應 test function 與 synthetic 主入口註冊一致；非 synthetic 正式步驟仍未納入 | `tools/validate/synthetic_meta_cases.py`, meta checks under `tools/validate/` |
 | Meta | B22 | line / branch coverage 報表 | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但尚未覆蓋 chain / ml smoke / display 路徑 | `tools/local_regression/run_meta_quality.py` |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
+| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | 已新增 scanner header / strategy dashboard output sanity case，直接檢查關鍵欄位與格式；完整 reporting schema 與輸出相容性仍未補齊 | `tools/validate/synthetic_display_cases.py`, `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | 品質 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
@@ -178,8 +181,6 @@
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
 | 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
-| 文件 | B20 | `doc/CMD.md` 指令與實作一致 | 尚未看到文件一致性檢查 | doc command contract checks |
-| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
@@ -188,14 +189,13 @@
 | D14 | model input / output schema checks | TODO | C01 |
 | D15 | deterministic regression for optimizer/scanner | PARTIAL | C02 / B12 |
 | D16 | ranking / scoring output sanity checks | TODO | C03 |
-| D17 | reporting schema compatibility checks | TODO | C05 |
+| D17 | reporting schema compatibility checks | TODO | C05 / B21 |
 | D18 | contract tests for CSV / XLSX / JSON outputs | TODO | B11 / B17 |
 | D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | PARTIAL | B22 |
 | D21 | performance baseline checks | TODO | B19 |
-| D23 | known-bad fault injection checks | DONE | B24 |
-| D24 | independent oracle / golden numeric cases | DONE | B25 |
 | D25 | checklist sufficiency review | PARTIAL | B26 |
+| D27 | `validate_display_reporting_sanity_case` | PARTIAL | B21 |
 
 ## F. 已完成覆蓋摘要
 
@@ -215,6 +215,7 @@
 | 規則 | B08 | 停利/停損只能對已持有部位預先設定 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
 | 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
+| 文件 | B20 | `doc/CMD.md` 指令與實作一致 | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
@@ -236,6 +237,7 @@
 | D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
 | D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
 | D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
+| D26 | `validate_cmd_document_contract_case` | B20 | 2026-04-01 |
 | D23 | `validate_known_bad_fault_injection_case` | B24 | 2026-04-01 |
 | D24 | `validate_independent_oracle_golden_case` | B25 | 2026-04-01 |
 
@@ -265,6 +267,8 @@
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
 | 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py`；尚未覆蓋 chain / ml smoke / display 路徑 |
 | 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py`；每輪是否足夠仍需人工判斷 |
+| 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
+| 2026-04-01 | D27 | 新增 display/reporting sanity case 並驗證 | TODO -> PARTIAL | validate_display_reporting_sanity_case |
 
 ## H. 完成判準
 
