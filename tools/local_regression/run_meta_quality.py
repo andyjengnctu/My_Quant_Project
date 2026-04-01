@@ -33,6 +33,7 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_flow_cases.py",
     "tools/validate/synthetic_take_profit_cases.py",
     "tools/validate/synthetic_display_cases.py",
+    "tools/validate/synthetic_reporting_cases.py",
     "tools/validate/synthetic_error_cases.py",
     "tools/validate/synthetic_data_quality_cases.py",
     "tools/validate/synthetic_cli_cases.py",

@@ -38,6 +38,11 @@ from .synthetic_meta_cases import (
 from .synthetic_display_cases import (
     validate_display_reporting_sanity_case,
 )
+from .synthetic_reporting_cases import (
+    validate_portfolio_yearly_report_schema_case,
+    validate_test_suite_summary_reporting_case,
+    validate_validate_console_summary_reporting_case,
+)
 from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
     validate_output_contract_case,
@@ -90,6 +95,9 @@ def get_synthetic_validators():
         validate_known_bad_fault_injection_case,
         validate_cmd_document_contract_case,
         validate_display_reporting_sanity_case,
+        validate_validate_console_summary_reporting_case,
+        validate_portfolio_yearly_report_schema_case,
+        validate_test_suite_summary_reporting_case,
         validate_output_contract_case,
         validate_artifact_lifecycle_contract_case,
         validate_params_io_error_path_case,
