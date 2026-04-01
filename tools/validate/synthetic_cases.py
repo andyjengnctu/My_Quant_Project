@@ -39,6 +39,8 @@ from .synthetic_display_cases import (
     validate_display_reporting_sanity_case,
 )
 from .synthetic_reporting_cases import (
+    validate_issue_excel_report_schema_case,
+    validate_portfolio_export_report_artifacts_case,
     validate_portfolio_yearly_report_schema_case,
     validate_test_suite_summary_reporting_case,
     validate_validate_console_summary_reporting_case,
@@ -103,6 +105,8 @@ def get_synthetic_validators():
         validate_validate_console_summary_reporting_case,
         validate_portfolio_yearly_report_schema_case,
         validate_test_suite_summary_reporting_case,
+        validate_issue_excel_report_schema_case,
+        validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,
         validate_artifact_lifecycle_contract_case,
         validate_params_io_error_path_case,

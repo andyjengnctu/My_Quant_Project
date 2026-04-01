@@ -1,7 +1,13 @@
 import io
+import sys
+import tempfile
+import types
 from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from apps import test_suite as test_suite_module
 from core.display_common import _strip_ansi
@@ -144,4 +150,124 @@ def validate_test_suite_summary_reporting_case(_base_params):
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_retention", True, "retention  : removed=2 | bytes=4096" in summary_text)
 
     summary["test_suite_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_issue_excel_report_schema_case(_base_params):
+    case_id = "VALIDATE_ISSUE_EXCEL_REPORT_SCHEMA"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.validate.reporting import write_issue_excel_report
+
+    df_failed = pd.DataFrame([
+        {"ticker": 23, "module": "stats", "metric": "ev", "expected": "1.0", "actual": "0.2", "note": "EV mismatch"},
+        {"ticker": 1101, "module": "flow", "metric": "missed_sell", "expected": "0", "actual": "1", "note": "unexpected miss"},
+    ])
+    df_failed_summary = pd.DataFrame([
+        {"ticker": 23, "failed_checks": 1},
+        {"ticker": 1101, "failed_checks": 1},
+    ])
+    df_failed_module = pd.DataFrame([
+        {"module": "stats", "failed_checks": 1},
+        {"module": "flow", "failed_checks": 1},
+    ])
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        report_path = write_issue_excel_report(
+            df_failed=df_failed,
+            df_failed_summary=df_failed_summary,
+            df_failed_module=df_failed_module,
+            timestamp="20260402_120000",
+            output_dir=tmp_dir,
+            normalize_ticker=lambda value: str(value).strip().zfill(4),
+        )
+        workbook = load_workbook(report_path)
+        failed_only = workbook["failed_only"]
+        failed_tickers = workbook["failed_tickers"]
+        failed_modules = workbook["failed_modules"]
+
+        add_check(results, "reporting_schema", case_id, "issue_excel_path_exists", True, Path(report_path).is_file())
+        add_check(results, "reporting_schema", case_id, "issue_excel_filename_pattern", True, str(report_path).endswith("consistency_issues_20260402_120000.xlsx"))
+        add_check(results, "reporting_schema", case_id, "issue_excel_sheet_names", ["failed_only", "failed_tickers", "failed_modules"], workbook.sheetnames)
+        add_check(results, "reporting_schema", case_id, "issue_excel_failed_only_header", ["ticker", "module", "metric", "expected", "actual", "note"], [cell.value for cell in failed_only[1]])
+        add_check(results, "reporting_schema", case_id, "issue_excel_failed_summary_header", ["ticker", "failed_checks"], [cell.value for cell in failed_tickers[1]])
+        add_check(results, "reporting_schema", case_id, "issue_excel_failed_module_header", ["module", "failed_checks"], [cell.value for cell in failed_modules[1]])
+        add_check(results, "reporting_schema", case_id, "issue_excel_ticker_normalized_and_text", True, failed_only["A2"].value == "0023" and failed_only["A2"].number_format == "@" and failed_tickers["A2"].value == "0023" and failed_tickers["A2"].number_format == "@")
+
+    summary["issue_excel_rows"] = int(len(df_failed))
+    return results, summary
+
+
+def validate_portfolio_export_report_artifacts_case(_base_params):
+    case_id = "PORTFOLIO_EXPORT_REPORT_ARTIFACTS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df_eq = pd.DataFrame([
+        {"Date": "2024-01-02", "Strategy_Return_Pct": 0.0, "Benchmark_0050_Pct": 0.0},
+        {"Date": "2024-01-03", "Strategy_Return_Pct": 1.2, "Benchmark_0050_Pct": 0.5},
+    ])
+    df_tr = pd.DataFrame([
+        {"ticker": "2330", "entry_date": "2024-01-02", "exit_date": "2024-01-03", "net_pnl": 1234.0},
+    ])
+    df_yearly = pd.DataFrame([
+        {"year": 2024, "year_return_pct": 1.2, "is_full_year": False, "start_date": "2024-01-02", "end_date": "2024-01-03", "year_label": "2024", "year_type": "非完整"},
+    ])
+
+    class _FakeFigure:
+        def __init__(self):
+            self.traces = []
+            self.layout = {}
+
+        def add_trace(self, trace):
+            self.traces.append(trace)
+
+        def update_layout(self, **kwargs):
+            self.layout.update(kwargs)
+
+        def write_html(self, path):
+            Path(path).write_text(
+                f"title={self.layout.get('title','')}\ntrace_count={len(self.traces)}\n",
+                encoding="utf-8",
+            )
+
+    fake_go = types.ModuleType("plotly.graph_objects")
+    fake_go.Figure = _FakeFigure
+    fake_go.Scatter = lambda **kwargs: {"kind": "scatter", **kwargs}
+    fake_plotly = types.ModuleType("plotly")
+    fake_plotly.graph_objects = fake_go
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        xlsx_path = Path(tmp_dir) / "portfolio_report.xlsx"
+        html_path = Path(tmp_dir) / "portfolio_dashboard.html"
+        with patch.object(portfolio_reporting, "REPORT_XLSX_PATH", str(xlsx_path)), \
+             patch.object(portfolio_reporting, "DASHBOARD_HTML_PATH", str(html_path)), \
+             patch.dict(sys.modules, {"plotly": fake_plotly, "plotly.graph_objects": fake_go}):
+            export_text = _capture_output(
+                lambda: portfolio_reporting.export_portfolio_reports(
+                    df_eq=df_eq,
+                    df_tr=df_tr,
+                    df_yearly=df_yearly,
+                    benchmark_ticker="0050",
+                    start_year=2024,
+                )
+            )
+
+        workbook = load_workbook(xlsx_path)
+        eq_ws = workbook["Equity Curve"]
+        tr_ws = workbook["Trade History"]
+        yr_ws = workbook["Yearly Returns"]
+        html_text = html_path.read_text(encoding="utf-8")
+
+        add_check(results, "reporting_schema", case_id, "portfolio_export_xlsx_exists", True, xlsx_path.is_file())
+        add_check(results, "reporting_schema", case_id, "portfolio_export_html_exists", True, html_path.is_file())
+        add_check(results, "reporting_schema", case_id, "portfolio_export_sheet_names", ["Equity Curve", "Trade History", "Yearly Returns"], workbook.sheetnames)
+        add_check(results, "reporting_schema", case_id, "portfolio_export_equity_header", ["Date", "Strategy_Return_Pct", "Benchmark_0050_Pct"], [cell.value for cell in eq_ws[1]])
+        add_check(results, "reporting_schema", case_id, "portfolio_export_trade_header", ["ticker", "entry_date", "exit_date", "net_pnl"], [cell.value for cell in tr_ws[1]])
+        add_check(results, "reporting_schema", case_id, "portfolio_export_yearly_header", ["year", "year_return_pct", "is_full_year", "start_date", "end_date", "year_label", "year_type"], [cell.value for cell in yr_ws[1]])
+        add_check(results, "reporting_schema", case_id, "portfolio_export_html_trace_count", True, "trace_count=2" in html_text)
+        add_check(results, "reporting_schema", case_id, "portfolio_export_console_paths", True, str(xlsx_path) in export_text and str(html_path) in export_text)
+
+    summary["portfolio_export_rows"] = int(len(df_eq))
     return results, summary

@@ -208,4 +208,4 @@ local regression 與 validate 的 reduced 測試資料來源固定為：
 - `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。
 
 
-- `tools/validate/synthetic_reporting_cases.py`：檢查 validate console summary、portfolio yearly report、`apps/test_suite.py` 結果摘要的 reporting schema / 格式相容性。
+- `tools/validate/synthetic_reporting_cases.py`：檢查 validate console summary、issue Excel report、portfolio yearly/export report、`apps/test_suite.py` 結果摘要的 reporting schema / 格式相容性。
