@@ -38,6 +38,9 @@ from .synthetic_meta_cases import (
 from .synthetic_display_cases import (
     validate_display_reporting_sanity_case,
 )
+from .synthetic_contract_cases import (
+    validate_output_contract_case,
+)
 
 
 def get_synthetic_validators():
@@ -72,6 +75,7 @@ def get_synthetic_validators():
         validate_known_bad_fault_injection_case,
         validate_cmd_document_contract_case,
         validate_display_reporting_sanity_case,
+        validate_output_contract_case,
     ]
 
 
