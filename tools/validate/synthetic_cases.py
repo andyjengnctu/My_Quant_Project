@@ -47,6 +47,11 @@ from .synthetic_error_cases import (
     validate_params_io_error_path_case,
     validate_preflight_error_path_case,
 )
+from .synthetic_data_quality_cases import (
+    validate_load_clean_df_data_quality_case,
+    validate_sanitize_ohlcv_expected_behavior_case,
+    validate_sanitize_ohlcv_failfast_case,
+)
 
 
 def get_synthetic_validators():
@@ -86,6 +91,9 @@ def get_synthetic_validators():
         validate_params_io_error_path_case,
         validate_module_loader_error_path_case,
         validate_preflight_error_path_case,
+        validate_sanitize_ohlcv_expected_behavior_case,
+        validate_sanitize_ohlcv_failfast_case,
+        validate_load_clean_df_data_quality_case,
     ]
 
 
