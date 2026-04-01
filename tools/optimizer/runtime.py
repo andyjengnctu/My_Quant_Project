@@ -30,17 +30,21 @@ def prompt_existing_db_policy(db_file, colors):
         print(f"{colors['red']}🗑️ 已刪除舊記憶。{colors['reset']}")
 
 
-def create_optimizer_study(db_name):
+def create_optimizer_study(db_name, *, seed=None):
     try:
         import optuna
         from sqlalchemy.exc import SQLAlchemyError
 
-        return optuna.create_study(
-            study_name="portfolio_optimization_overnight",
-            storage=db_name,
-            load_if_exists=True,
-            direction="maximize",
-        )
+        create_kwargs = {
+            "study_name": "portfolio_optimization_overnight",
+            "storage": db_name,
+            "load_if_exists": True,
+            "direction": "maximize",
+        }
+        if seed is not None:
+            create_kwargs["sampler"] = optuna.samplers.TPESampler(seed=int(seed))
+
+        return optuna.create_study(**create_kwargs)
     except ModuleNotFoundError as exc:
         raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc, include_traceback=False)}") from exc
     except (sqlite3.Error, SQLAlchemyError, RuntimeError, ValueError, OSError) as exc:

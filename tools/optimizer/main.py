@@ -101,7 +101,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數；訓練結束後若記憶庫已有及格 trial，會同步匯出 best_params.json。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；訓練結束後若記憶庫已有及格 trial，會同步匯出 best_params.json。")
         return 0
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
     from tools.optimizer.prep import load_all_raw_data
@@ -116,7 +116,7 @@ def main(argv=None, environ=None):
         resolve_trial_count_or_exit,
     )
     from tools.optimizer.session import close_study_storage
-    from tools.optimizer.study_utils import build_optimizer_db_file_path, get_best_completed_trial_or_none, is_qualified_trial_value, resolve_optimizer_trial_count
+    from tools.optimizer.study_utils import build_optimizer_db_file_path, get_best_completed_trial_or_none, is_qualified_trial_value, resolve_optimizer_seed, resolve_optimizer_trial_count
 
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     session = build_optimizer_session()
@@ -146,6 +146,12 @@ def main(argv=None, environ=None):
     if trial_count_exit is not None:
         return trial_count_exit
 
+    try:
+        optimizer_seed, seed_source = resolve_optimizer_seed(environ)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     if session.n_trials == 0:
         if not os.path.exists(db_file):
             print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}{C_RESET}", file=sys.stderr)
@@ -153,7 +159,7 @@ def main(argv=None, environ=None):
         try:
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
-            study = create_optimizer_study(db_name)
+            study = create_optimizer_study(db_name, seed=optimizer_seed)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
@@ -196,12 +202,13 @@ def main(argv=None, environ=None):
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
+    print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
 
     try:
         prompt_existing_db_policy(db_file, COLORS)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
-        study = create_optimizer_study(db_name)
+        study = create_optimizer_study(db_name, seed=optimizer_seed)
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1

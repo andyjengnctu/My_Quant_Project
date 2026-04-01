@@ -10,6 +10,7 @@ from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_int
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
+OPTIMIZER_SEED_ENV_VAR = "V16_OPTIMIZER_SEED"
 DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
@@ -34,6 +35,14 @@ def resolve_optimizer_trial_count(environ):
         min_value=0,
     )
     return user_input, "UI/DEFAULT"
+
+
+def resolve_optimizer_seed(environ):
+    env_value = str(environ.get(OPTIMIZER_SEED_ENV_VAR, "")).strip()
+    if env_value == "":
+        return None, "ENV:UNSET"
+    seed = parse_int_strict(env_value, f"環境變數 {OPTIMIZER_SEED_ENV_VAR}", min_value=0)
+    return seed, f"ENV:{OPTIMIZER_SEED_ENV_VAR}"
 
 
 def build_optimizer_db_file_path(dataset_profile_key, models_dir):

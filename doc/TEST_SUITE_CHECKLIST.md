@@ -80,13 +80,13 @@
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
 | B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | PARTIAL | 已新增 missed sell / trade log / stats 一致性案例，但 broader schema 與其他事件欄位語意仍未全面補齊 | contract tests under `tools/validate/` |
-| B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | TODO | optimizer / scanner / regression 缺明確 deterministic assertion | `tools/local_regression/`, `tools/optimizer/` |
+| B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | PARTIAL | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查；scanner 與其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | PARTIAL | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | PARTIAL | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | PARTIAL | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | PARTIAL | quick gate 已測部分，但 artifact lifecycle 仍可補 | `core/output_paths.py`, `core/output_retention.py` |
-| B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | TODO | 同指令連跑兩次結果是否一致尚未被正式釘住 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
+| B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | TODO | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | TODO | 尚未看到文件一致性檢查 | doc command contract checks |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | TODO | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
@@ -94,7 +94,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | PARTIAL | 已新增 meta registry case，校驗 `DONE` 摘要、對應 test function 與 synthetic 主入口註冊一致；非 synthetic 正式步驟仍未納入 | `tools/validate/synthetic_meta_cases.py`, meta checks under `tools/validate/` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | TODO | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | TODO | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | TODO | 需定期判斷本清單是否仍足夠覆蓋正式邏輯、跨工具契約、test suite 自身正確性與收斂缺口；不足時需先回寫本清單 | checklist review + meta checks |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | PARTIAL | 已以文件規則要求每輪先做 sufficiency review，並於實作前先校正 checklist；但仍缺可執行 formal check | checklist review + meta checks |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -163,7 +163,10 @@
 |---|---|---|---|---|
 | 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
 | 契約 | B11 | 跨工具 schema / 欄位語意一致 | 已新增 missed sell / trade log / stats 一致性案例，但 broader schema 與其他事件欄位語意仍未全面補齊 | contract tests under `tools/validate/` |
+| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查；scanner 與其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
+| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 已在 `run_chain_checks.py` 補雙跑 digest 對比、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | 已新增 meta registry case，校驗 `DONE` 摘要、對應 test function 與 synthetic 主入口註冊一致；非 synthetic 正式步驟仍未納入 | `tools/validate/synthetic_meta_cases.py`, meta checks under `tools/validate/` |
+| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已以文件規則要求每輪先做 sufficiency review，並於實作前先校正 checklist；但仍缺可執行 formal check | checklist review + meta checks |
 | 品質 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | 已有部分清洗與 reduced dataset 檢查，但缺明確 fail-fast / expected behavior 測試 | `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | quick gate 有部分覆蓋，但 module 級錯誤路徑仍不足 | `core/params_io.py`, `tools/validate/preflight_env.py` |
 | 品質 | B16 | 互斥參數、預設值、help 與實作一致 | 已有 help / invalid args，但仍可補更多 CLI contract test | `apps/*.py`, `core/runtime_utils.py` |
@@ -173,31 +176,28 @@
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
-| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | optimizer / scanner / regression 缺明確 deterministic assertion | `tools/local_regression/`, `tools/optimizer/` |
-| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 同指令連跑兩次結果是否一致尚未被正式釘住 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 目前只有觀察值，沒有正式 gating | `tools/local_regression/` |
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | 尚未看到文件一致性檢查 | doc command contract checks |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | display 類模組缺專屬檢查 | `core/display.py`, `core/scanner_display.py`, `core/strategy_dashboard.py` |
 | 覆蓋率 | B22 | line / branch coverage 報表 | 目前無 coverage 基線，無法客觀判定完整性 | `coverage.py` / CI or local script |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | 需確認 same-day sell、same-bar stop priority、fee/tax、history filter misuse 等關鍵規則被破壞時，現有測試真的會失敗 | meta fault-injection checks under `tools/validate/` |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | 關鍵數值規則需保留手算或獨立 oracle case，避免 production 與 test 一起錯仍通過 | `tools/validate/synthetic_unit_cases.py`, dedicated golden-case helpers |
-| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 需定期判斷本清單是否仍足夠覆蓋正式邏輯、跨工具契約、test suite 自身正確性與收斂缺口；不足時需先回寫本清單 | checklist review + meta checks |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
 | ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
 | D14 | model input / output schema checks | TODO | C01 |
-| D15 | deterministic regression for optimizer/scanner | TODO | C02 |
+| D15 | deterministic regression for optimizer/scanner | PARTIAL | C02 / B12 |
 | D16 | ranking / scoring output sanity checks | TODO | C03 |
 | D17 | reporting schema compatibility checks | TODO | C05 |
 | D18 | contract tests for CSV / XLSX / JSON outputs | TODO | B11 / B17 |
-| D19 | rerun / cache pollution checks | TODO | B18 |
+| D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | TODO | B22 |
 | D21 | performance baseline checks | TODO | B19 |
 | D23 | known-bad fault injection checks | TODO | B24 |
 | D24 | independent oracle / golden numeric cases | TODO | B25 |
-| D25 | checklist sufficiency review | TODO | B26 |
+| D25 | checklist sufficiency review | PARTIAL | B26 |
 
 ## F. 已完成覆蓋摘要
 
@@ -257,6 +257,9 @@
 | 2026-04-01 | D12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
 | 2026-04-01 | D13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
 | 2026-04-01 | D22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |
+| 2026-04-01 | D15 | 新增 optimizer fixed-seed 雙跑一致性檢查 | TODO -> PARTIAL | `run_ml_smoke.py` 已比較雙跑 trial / best_params digest；scanner 尚未補 |
+| 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
+| 2026-04-01 | D25 | 將每輪 sufficiency review 納入文件並依實際狀態校正 | TODO -> PARTIAL | 仍缺 formal executable check |
 | YYYY-MM-DD | D20 | 建立 coverage baseline | TODO -> PARTIAL |  |
 
 ## H. 完成判準
