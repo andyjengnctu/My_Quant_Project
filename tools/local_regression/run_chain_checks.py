@@ -26,6 +26,79 @@ from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 
 
+def _normalize_scanner_candidate_row(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": str(item.get("kind", "")),
+        "ticker": str(item.get("ticker", "")),
+        "proj_cost": None if item.get("proj_cost") is None else round(float(item.get("proj_cost")), 6),
+        "expected_value": None if item.get("expected_value") is None else round(float(item.get("expected_value")), 6),
+        "sort_value": None if item.get("sort_value") is None else round(float(item.get("sort_value")), 6),
+        "text": str(item.get("text", "")),
+    }
+
+
+def _build_scanner_snapshot(params) -> Dict[str, Any]:
+    from apps import vip_scanner as vip_scanner_app
+
+    data_dir = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
+    csv_inputs, duplicate_issues = discover_unique_csv_inputs(str(data_dir))
+    csv_inputs = sorted(csv_inputs, key=lambda item: item[0])
+
+    candidate_rows = []
+    scanner_issue_lines = list(duplicate_issues)
+    status_rows = []
+    count_history_qualified = 0
+    count_skipped_insufficient = 0
+    count_sanitized_candidates = 0
+
+    for ticker, file_path in csv_inputs:
+        result = vip_scanner_app.process_single_stock(file_path=file_path, ticker=ticker, params=params)
+        if result is None:
+            status_rows.append({"ticker": str(ticker), "status": "not_candidate", "has_sanitize_issue": False})
+            continue
+
+        status, proj_cost, ev, sort_value, msg, result_ticker, sanitize_issue = result
+        normalized_ticker = str(result_ticker or ticker)
+        status_rows.append({
+            "ticker": normalized_ticker,
+            "status": str(status),
+            "has_sanitize_issue": bool(sanitize_issue),
+        })
+
+        if status in ["buy", "extended", "candidate"]:
+            count_history_qualified += 1
+            if sanitize_issue is not None:
+                count_sanitized_candidates += 1
+                scanner_issue_lines.append(f"[清洗] {sanitize_issue}")
+        elif status == "skip_insufficient":
+            count_skipped_insufficient += 1
+
+        if status in ["buy", "extended"]:
+            candidate_rows.append(_normalize_scanner_candidate_row({
+                "kind": status,
+                "ticker": normalized_ticker,
+                "proj_cost": proj_cost,
+                "expected_value": ev,
+                "sort_value": sort_value,
+                "text": msg,
+            }))
+
+    candidate_rows.sort(key=lambda item: (item["sort_value"], item["ticker"]), reverse=True)
+    return {
+        "entry_script": "apps/vip_scanner.py",
+        "count_scanned": len(csv_inputs),
+        "history_qualified_count": count_history_qualified,
+        "skipped_insufficient_count": count_skipped_insufficient,
+        "sanitized_candidate_count": count_sanitized_candidates,
+        "candidate_count": len(candidate_rows),
+        "candidate_rows": candidate_rows,
+        "status_rows": status_rows,
+        "duplicate_issue_count": len(duplicate_issues),
+        "scanner_issue_count": len(scanner_issue_lines),
+        "scanner_issue_lines": scanner_issue_lines,
+    }
+
+
 def load_market_context(params) -> Dict[str, Any]:
     data_dir = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
     csv_inputs, duplicate_issues = discover_unique_csv_inputs(str(data_dir))
@@ -242,7 +315,7 @@ def _build_highlights(summary_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 CHAIN_RERUN_COUNT = 2
 
 
-def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, portfolio_profile, df_equity, df_trades, failures, runtime_error="") -> Dict[str, Any]:
+def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, portfolio_profile, df_equity, df_trades, scanner_snapshot, failures, runtime_error="") -> Dict[str, Any]:
     duplicate_issues = list(context.get("duplicate_issues", []))
     skipped_rows = list(context.get("skipped", []))
     return {
@@ -256,6 +329,7 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
             "annual_return_pct": round(float(portfolio_profile.get("annual_return_pct", 0.0)), 4),
             "reserved_buy_fill_rate": round(float(portfolio_profile.get("reserved_buy_fill_rate", 0.0)), 4),
         },
+        "scanner_snapshot": scanner_snapshot,
         "ticker_count": len(context["discovered_tickers"]),
         "csv_count": int(context.get("csv_count", 0)),
         "duplicate_issue_count": len(duplicate_issues),
@@ -288,6 +362,8 @@ def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_po
         verbose=False,
     )
     df_equity, df_trades = portfolio_result[0], portfolio_result[1]
+    scanner_snapshot = _build_scanner_snapshot(params)
+
     replay_counts = build_target_replay_counts(
         tickers=all_tickers,
         all_dfs_fast=context["all_dfs_fast"],
@@ -345,6 +421,7 @@ def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_po
         portfolio_profile=portfolio_profile,
         df_equity=df_equity,
         df_trades=df_trades,
+        scanner_snapshot=scanner_snapshot,
         failures=failures,
     )
     return summary
@@ -353,6 +430,7 @@ def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_po
 def _canonical_chain_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "portfolio_snapshot": summary.get("portfolio_snapshot", {}),
+        "scanner_snapshot": summary.get("scanner_snapshot", {}),
         "ticker_count": summary.get("ticker_count", 0),
         "csv_count": summary.get("csv_count", 0),
         "duplicate_issue_count": summary.get("duplicate_issue_count", 0),
@@ -445,6 +523,7 @@ def main(argv=None) -> int:
             "dataset_info": dataset_info,
             "runtime_error": f"{type(exc).__name__}: {exc}",
             "portfolio_snapshot": {},
+            "scanner_snapshot": {},
             "ticker_count": 0,
             "csv_count": 0,
             "duplicate_issue_count": 0,
@@ -475,6 +554,11 @@ def main(argv=None) -> int:
                 "failures": summary.get("failures", []),
                 "runtime_error": summary.get("runtime_error", ""),
                 "rerun_consistency": summary.get("rerun_consistency", {}),
+                "scanner_snapshot": {
+                    "candidate_count": summary.get("scanner_snapshot", {}).get("candidate_count", 0),
+                    "history_qualified_count": summary.get("scanner_snapshot", {}).get("history_qualified_count", 0),
+                    "duplicate_issue_count": summary.get("scanner_snapshot", {}).get("duplicate_issue_count", 0),
+                },
             },
             ensure_ascii=False,
             indent=2,
