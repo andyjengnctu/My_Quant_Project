@@ -129,7 +129,27 @@ def _base_test_suite_result_payload():
             "consistency": {"status": "PASS", "total_checks": 2752, "fail_count": 0, "skip_count": 0, "real_ticker_count": 24},
             "chain_checks": {"status": "PASS", "ticker_count": 24, "highlights": {"traded_ticker_count": 7, "missed_buy_ticker_count": 2, "blocked_by_counts": {"cash": 3, "slots": 1}}, "portfolio_snapshot": {"trade_rows": 14, "reserved_buy_fill_rate": 83.33}},
             "ml_smoke": {"status": "PASS", "db_trial_count": 1},
-            "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 52.41}}, "checklist": {"todo_ids": []}},
+            "meta_quality": {
+                "status": "PASS",
+                "fail_count": 0,
+                "coverage": {
+                    "status": "DONE",
+                    "totals": {
+                        "percent_covered": 52.41,
+                        "covered_lines": 5241,
+                        "num_statements": 9000,
+                        "covered_branches": 1042,
+                        "num_branches": 2084,
+                    },
+                    "line_percent_covered": 58.23,
+                    "branch_percent_covered": 50.00,
+                    "line_min_percent": 50,
+                    "branch_min_percent": 45,
+                    "missing_targets": [],
+                    "zero_covered_targets": [],
+                },
+                "checklist": {"status": "PARTIAL", "partial_ids": ["B01", "B15", "B19", "B22", "B26"], "todo_ids": [], "done_ids": ["B21"]},
+            },
         },
         "preflight": {"status": "PASS", "duration_sec": 0.45, "failed_packages": []},
         "bundle_mode": "minimum_set",
@@ -151,7 +171,7 @@ def validate_test_suite_summary_reporting_case(_base_params):
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_title_and_bundle", True, "Test Suite 結果整理" in summary_text and "bundle 模式 : minimum_set" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_step_table", True, "[步驟摘要]" in summary_text and "quick gate" in summary_text and "meta quality" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_highlights", True, "step_count=88" in summary_text and "total_checks=2752" in summary_text and "db_trial_count=1" in summary_text)
-    add_check(results, "reporting_schema", case_id, "test_suite_summary_has_chain_and_meta_details", True, "blocked_by : cash:3, slots:1" in summary_text and "coverage_percent=52.41" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_summary_has_chain_and_meta_details", True, "blocked_by : cash:3, slots:1" in summary_text and "coverage_line=58.23" in summary_text and "coverage_branch=50.00" in summary_text and "checklist_status=PARTIAL" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_retention", True, "retention  : removed=2 | bytes=4096" in summary_text)
 
     summary["test_suite_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
@@ -364,7 +384,21 @@ def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
             {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
         ],
         "step_payloads": {
-            "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 51.23}}, "checklist": {"todo_ids": ["B15", "B19"]}},
+            "meta_quality": {
+                "status": "PASS",
+                "fail_count": 0,
+                "coverage": {
+                    "status": "DONE",
+                    "totals": {"percent_covered": 51.23, "covered_lines": 5123, "num_statements": 9000, "covered_branches": 980, "num_branches": 2100},
+                    "line_percent_covered": 56.92,
+                    "branch_percent_covered": 46.67,
+                    "line_min_percent": 50,
+                    "branch_min_percent": 45,
+                    "missing_targets": [],
+                    "zero_covered_targets": [],
+                },
+                "checklist": {"status": "TODO", "partial_ids": [], "todo_ids": ["B15", "B19"], "done_ids": ["B21"]},
+            },
         },
         "preflight": {"status": "PASS", "duration_sec": 0.18, "failed_packages": []},
         "bundle_mode": "minimum_set",
@@ -380,6 +414,57 @@ def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
     add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_unselected_steps", True, "quick gate    SKIP" in summary_text and "consistency   SKIP" in summary_text and "ml smoke      SKIP" in summary_text and "not_selected" in summary_text)
 
     summary["partial_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_checklist_status_sync_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_CHECKLIST_STATUS_SYNC"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
+    result_payload["step_payloads"]["meta_quality"]["checklist"] = {
+        "partial_ids": ["B01", "B19"],
+        "todo_ids": [],
+        "done_ids": ["B21"],
+    }
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_checklist_status_sync_uses_checklist_vocabulary", True, "checklist_status=PARTIAL" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_checklist_status_sync_lists_partial_and_done_ids", True, "partial=B01, B19" in summary_text and "done=B21" in summary_text)
+
+    summary["checklist_status_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+
+def validate_test_suite_summary_meta_quality_guardrail_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_META_QUALITY_GUARDRAIL_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
+    result_payload["step_payloads"]["meta_quality"] = {
+        "status": "PASS",
+        "fail_count": 0,
+        "coverage": {
+            "status": "PARTIAL",
+            "totals": {"percent_covered": 47.80, "covered_lines": 4300, "num_statements": 9000, "covered_branches": 820, "num_branches": 2100},
+            "line_percent_covered": 47.78,
+            "branch_percent_covered": 39.05,
+            "line_min_percent": 50,
+            "branch_min_percent": 45,
+            "missing_targets": ["tools/local_regression/run_all.py"],
+            "zero_covered_targets": ["apps/test_suite.py"],
+        },
+        "checklist": {"status": "TODO", "partial_ids": ["B22"], "todo_ids": ["B26"], "done_ids": ["B21"]},
+    }
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_thresholds", True, "line_min=50" in summary_text and "branch_min=45" in summary_text and "missing_cov=tools/local_regression/run_all.py" in summary_text and "zero_cov=apps/test_suite.py" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_checklist_status", True, "checklist_status=TODO" in summary_text and "partial=B22" in summary_text and "todo=B26" in summary_text)
+
+    summary["meta_quality_guardrail_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
     return results, summary
 
 

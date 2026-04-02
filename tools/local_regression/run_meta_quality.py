@@ -69,6 +69,17 @@ PERFORMANCE_MANIFEST_KEYS = {
 }
 
 
+def _ratio_percent(numerator: Any, denominator: Any) -> float:
+    try:
+        numerator_value = float(numerator or 0.0)
+        denominator_value = float(denominator or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if denominator_value <= 0.0:
+        return 0.0
+    return (numerator_value / denominator_value) * 100.0
+
+
 def _extract_table_rows(text: str, heading: str) -> List[List[str]]:
     pattern = rf"^### {re.escape(heading)}\n\n((?:\|.*\n)+)"
     match = re.search(pattern, text, flags=re.MULTILINE)
@@ -491,7 +502,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
+def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     import coverage
     from core.params_io import load_params_from_json
     from tools.validate.synthetic_cases import run_synthetic_consistency_suite
@@ -568,6 +579,11 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
             "num_branches": int(summary.get("num_branches", 0) or 0),
         }
 
+    line_percent_covered = _ratio_percent(totals.get("covered_lines", 0), totals.get("num_statements", 0))
+    branch_percent_covered = _ratio_percent(totals.get("covered_branches", 0), totals.get("num_branches", 0))
+    line_min_percent = float(manifest["coverage_line_min_percent"])
+    branch_min_percent = float(manifest["coverage_branch_min_percent"])
+
     results = [
         summarize_result(
             "coverage_synthetic_suite_runs_successfully",
@@ -590,6 +606,18 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
                 f"percent={totals.get('percent_covered', 0.0)}"
             ),
             extra={"totals": totals},
+        ),
+        summarize_result(
+            "coverage_line_percent_within_minimum",
+            line_percent_covered >= line_min_percent,
+            detail=f"line_percent={line_percent_covered:.2f} | min={line_min_percent:.2f}",
+            extra={"line_percent_covered": line_percent_covered, "line_min_percent": line_min_percent},
+        ),
+        summarize_result(
+            "coverage_branch_percent_within_minimum",
+            branch_percent_covered >= branch_min_percent,
+            detail=f"branch_percent={branch_percent_covered:.2f} | min={branch_min_percent:.2f}",
+            extra={"branch_percent_covered": branch_percent_covered, "branch_min_percent": branch_min_percent},
         ),
         summarize_result(
             "coverage_key_targets_present",
@@ -617,6 +645,10 @@ def _build_coverage_summary(run_dir: Path) -> Dict[str, Any]:
             "covered_branches": int(totals.get("covered_branches", 0) or 0),
             "num_branches": int(totals.get("num_branches", 0) or 0),
             "percent_covered": float(totals.get("percent_covered", 0.0) or 0.0),
+            "line_percent_covered": line_percent_covered,
+            "branch_percent_covered": branch_percent_covered,
+            "line_min_percent": line_min_percent,
+            "branch_min_percent": branch_min_percent,
             "synthetic_fail_count": synthetic_fail_count,
         },
         "key_files": key_files,
@@ -756,7 +788,7 @@ def main(argv=None) -> int:
     run_dir = resolve_run_dir("meta_quality")
 
     started = os.times().elapsed
-    coverage_summary = _build_coverage_summary(run_dir)
+    coverage_summary = _build_coverage_summary(run_dir, manifest)
     checklist_summary = _summarize_checklist_consistency()
     formal_entry_summary = _summarize_formal_entry_consistency()
     current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
@@ -772,13 +804,19 @@ def main(argv=None) -> int:
         "fail_count": len(failures),
         "coverage": {
             "ok": coverage_summary["ok"],
+            "status": "DONE" if coverage_summary["ok"] else "PARTIAL",
             "totals": coverage_summary["totals"],
             "json_file": coverage_summary["json_file"],
+            "line_percent_covered": coverage_summary["totals"]["line_percent_covered"],
+            "branch_percent_covered": coverage_summary["totals"]["branch_percent_covered"],
+            "line_min_percent": coverage_summary["totals"]["line_min_percent"],
+            "branch_min_percent": coverage_summary["totals"]["branch_min_percent"],
             "missing_targets": coverage_summary["missing_targets"],
             "zero_covered_targets": coverage_summary["zero_covered_targets"],
         },
         "checklist": {
             "ok": checklist_summary["ok"],
+            "status": "TODO" if checklist_summary["todo_ids"] else ("PARTIAL" if checklist_summary["partial_ids"] else "DONE"),
             "partial_ids": checklist_summary["partial_ids"],
             "todo_ids": checklist_summary["todo_ids"],
             "done_ids": checklist_summary["done_ids"],
@@ -810,8 +848,10 @@ def main(argv=None) -> int:
         f"formal_entry_ok: {formal_entry_summary['ok']}",
         (
             f"coverage      : line {coverage_summary['totals']['covered_lines']}/"
-            f"{coverage_summary['totals']['num_statements']} | branch {coverage_summary['totals']['covered_branches']}/"
-            f"{coverage_summary['totals']['num_branches']} | percent={coverage_summary['totals']['percent_covered']:.2f}"
+            f"{coverage_summary['totals']['num_statements']} ({coverage_summary['totals']['line_percent_covered']:.2f}%)"
+            f" | branch {coverage_summary['totals']['covered_branches']}/"
+            f"{coverage_summary['totals']['num_branches']} ({coverage_summary['totals']['branch_percent_covered']:.2f}%)"
+            f" | total={coverage_summary['totals']['percent_covered']:.2f}%"
         ),
         f"missing_cov   : {', '.join(coverage_summary['missing_targets']) if coverage_summary['missing_targets'] else '(none)'}",
         f"zero_cov      : {', '.join(coverage_summary['zero_covered_targets']) if coverage_summary['zero_covered_targets'] else '(none)'}",

@@ -363,8 +363,18 @@ def validate_local_regression_summary_contract_case(_base_params):
             "status": "PASS",
             "failures": [],
             "fail_count": 0,
-            "coverage": {"ok": True, "totals": {"percent_covered": 50.0}},
-            "checklist": {"ok": True, "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_d_ids": []},
+            "coverage": {
+                "ok": True,
+                "status": "DONE",
+                "totals": {"percent_covered": 50.0, "line_percent_covered": 55.0, "branch_percent_covered": 45.0, "line_min_percent": 50.0, "branch_min_percent": 45.0},
+                "line_percent_covered": 55.0,
+                "branch_percent_covered": 45.0,
+                "line_min_percent": 50.0,
+                "branch_min_percent": 45.0,
+                "missing_targets": [],
+                "zero_covered_targets": [],
+            },
+            "checklist": {"ok": True, "status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_d_ids": []},
             "formal_entry": {"ok": True, "project_settings_steps": [], "run_all_steps": [], "preflight_steps": []},
             "performance": {"ok": True, "skipped": False, "step_durations": {}},
             "results": [],
@@ -372,6 +382,8 @@ def validate_local_regression_summary_contract_case(_base_params):
         write_json(run_dir / "meta_quality_summary.json", meta_payload)
         meta_json = json.loads((run_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
         add_check(results, "output_contract", case_id, "meta_quality_summary_required_keys", [], sorted(REQUIRED_META_QUALITY_SUMMARY_KEYS - set(meta_json.keys())))
+        add_check(results, "output_contract", case_id, "meta_quality_summary_coverage_threshold_keys", [], sorted([key for key in ["status", "line_percent_covered", "branch_percent_covered", "line_min_percent", "branch_min_percent", "missing_targets", "zero_covered_targets"] if key not in meta_json.get("coverage", {})]))
+        add_check(results, "output_contract", case_id, "meta_quality_summary_checklist_status_key", True, meta_json.get("checklist", {}).get("status") == "DONE")
 
         selected_steps = ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
         completed_steps = ["quick_gate", "consistency"]

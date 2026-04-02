@@ -144,6 +144,54 @@ def _format_step_names(step_names: list[str]) -> str:
     return ", ".join(formatted) if formatted else "(none)"
 
 
+def _normalize_id_list(raw_values: Any) -> list[str]:
+    if not isinstance(raw_values, (list, tuple, set)):
+        return []
+    normalized = []
+    for item in raw_values:
+        text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _preview_id_list(raw_values: Any, *, limit: int = 6) -> str:
+    values = _normalize_id_list(raw_values)
+    if not values:
+        return "(none)"
+    preview = values[:limit]
+    if len(values) > limit:
+        preview.append(f"...(+{len(values) - limit})")
+    return ", ".join(preview)
+
+
+def _derive_checklist_status(checklist_payload: Dict[str, Any]) -> str:
+    explicit_status = str(checklist_payload.get("status", "") or "").strip().upper()
+    if explicit_status in {"DONE", "PARTIAL", "TODO", "N/A"}:
+        return explicit_status
+    todo_ids = _normalize_id_list(checklist_payload.get("todo_ids", []))
+    partial_ids = _normalize_id_list(checklist_payload.get("partial_ids", []))
+    done_ids = _normalize_id_list(checklist_payload.get("done_ids", []))
+    if todo_ids:
+        return "TODO"
+    if partial_ids:
+        return "PARTIAL"
+    if checklist_payload or done_ids or checklist_payload.get("ok") is True:
+        return "DONE"
+    return "N/A"
+
+
+def _coverage_percent(numerator: Any, denominator: Any) -> float:
+    try:
+        numerator_value = float(numerator or 0.0)
+        denominator_value = float(denominator or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if denominator_value <= 0.0:
+        return 0.0
+    return (numerator_value / denominator_value) * 100.0
+
+
 def _print_human_summary(result: Dict[str, Any]) -> None:
     master = {
         "scripts": result.get("scripts", []),
@@ -355,11 +403,32 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         coverage = meta.get("coverage", {})
         checklist = meta.get("checklist", {})
         totals = coverage.get("totals", {})
+        line_percent = float(coverage.get("line_percent_covered", _coverage_percent(totals.get("covered_lines", 0), totals.get("num_statements", 0))))
+        branch_percent = float(coverage.get("branch_percent_covered", _coverage_percent(totals.get("covered_branches", 0), totals.get("num_branches", 0))))
+        line_min_percent = coverage.get("line_min_percent")
+        branch_min_percent = coverage.get("branch_min_percent")
+        checklist_status = _derive_checklist_status(checklist)
+        missing_cov = _preview_id_list(coverage.get("missing_targets", []))
+        zero_cov = _preview_id_list(coverage.get("zero_covered_targets", []))
         print(
             "- meta quality: "
             f"fail_count={meta.get('fail_count', 0)} | "
-            f"coverage_percent={totals.get('percent_covered', 0.0)} | "
-            f"todo_ids={len(checklist.get('todo_ids', []))}"
+            f"coverage_line={line_percent:.2f} | "
+            f"coverage_branch={branch_percent:.2f} | "
+            f"checklist_status={checklist_status}"
+        )
+        print(
+            "  coverage    : "
+            f"line_min={_safe_display_text(line_min_percent)} | "
+            f"branch_min={_safe_display_text(branch_min_percent)} | "
+            f"missing_cov={missing_cov} | "
+            f"zero_cov={zero_cov}"
+        )
+        print(
+            "  checklist   : "
+            f"partial={_preview_id_list(checklist.get('partial_ids', []))} | "
+            f"todo={_preview_id_list(checklist.get('todo_ids', []))} | "
+            f"done={_preview_id_list(checklist.get('done_ids', []))}"
         )
     else:
         fallback = ", ".join(meta_script.get("failure_reasons", []))

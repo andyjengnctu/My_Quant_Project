@@ -13,6 +13,8 @@
   "performance_meta_quality_max_sec": 30,
   "performance_ml_smoke_max_sec": 45,
   "performance_optimizer_trial_avg_max_sec": 15,
+  "coverage_line_min_percent": 50,
+  "coverage_branch_min_percent": 45,
   "performance_quick_gate_max_sec": 45,
   "performance_total_max_sec": 180,
   "portfolio_enable_rotation": false,
