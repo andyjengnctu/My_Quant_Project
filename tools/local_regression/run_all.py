@@ -291,6 +291,7 @@ def _finalize_early_failure(
     bundle_mode: str,
     failed_step_names: List[str],
     preflight_payload: Dict[str, Any],
+    include_dataset: bool,
     dataset_prepare_payload: Optional[Dict[str, Any]] = None,
     preflight_summary: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[ProgressCallback] = None,
@@ -303,7 +304,7 @@ def _finalize_early_failure(
         selected_step_names=selected_step_names,
         failed_step_names=failed_step_names,
         completed_script_names=[],
-        include_dataset=dataset_prepare_payload is not None,
+        include_dataset=include_dataset,
     )
 
     master_summary = {
@@ -804,6 +805,7 @@ def execute_all(
                 bundle_mode="preflight_failed",
                 failed_step_names=["preflight"],
                 preflight_payload=preflight_payload,
+                include_dataset=include_dataset,
                 preflight_summary=preflight_summary,
                 progress_callback=progress_callback,
             )
@@ -872,6 +874,7 @@ def execute_all(
                     bundle_mode="dataset_prepare_failed",
                     failed_step_names=["dataset_prepare"],
                     preflight_payload=preflight_payload,
+                    include_dataset=include_dataset,
                     dataset_prepare_payload=dataset_prepare_summary,
                     preflight_summary=preflight_summary,
                     progress_callback=progress_callback,

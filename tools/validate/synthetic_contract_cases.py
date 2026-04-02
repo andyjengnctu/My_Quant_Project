@@ -6,6 +6,7 @@ import tempfile
 import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -15,7 +16,7 @@ from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
-from tools.local_regression.common import write_json, write_csv
+from tools.local_regression.common import write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report
 
 from .checks import add_check
@@ -410,6 +411,60 @@ def validate_local_regression_summary_contract_case(_base_params):
     summary["master_selected_step_count"] = len(selected_steps)
     return results, summary
 
+
+
+
+def _add_preflight_early_failure_dataset_contract_checks(results, case_id, *, work_dir: Path):
+    early_failure_manifest = dict(run_all_module.MANIFEST_DEFAULTS)
+    early_failure_manifest["dataset"] = "reduced"
+    early_failure_manifest["bundle_name"] = "preflight_failed_bundle.zip"
+    early_failure_dir = work_dir / "early_failure"
+    early_failure_dir.mkdir(parents=True, exist_ok=True)
+    early_preflight_payload = {
+        "status": "FAIL",
+        "python_executable": "python",
+        "python_version": "3.x",
+        "requirements_path": "requirements.txt",
+        "checked_packages": ["coverage"],
+        "failed_packages": ["coverage"],
+        "checks": [],
+        "duration_sec": 0.11,
+    }
+    write_json(early_failure_dir / "preflight_summary.json", early_preflight_payload)
+    write_text(early_failure_dir / "preflight_summary.txt", "status : FAIL\n")
+    with patch.object(run_all_module, "build_bundle_zip", return_value=early_failure_dir / "preflight_failed_bundle.zip"), \
+         patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path), \
+         patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path), \
+         patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}), \
+         patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"):
+        early_result = run_all_module._finalize_early_failure(
+            run_dir=early_failure_dir,
+            manifest=early_failure_manifest,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            major_index=1,
+            major_total=6,
+            bundle_mode="preflight_failed",
+            failed_step_names=["preflight"],
+            preflight_payload=early_preflight_payload,
+            include_dataset=True,
+        )
+    early_master = json.loads((early_failure_dir / "master_summary.json").read_text(encoding="utf-8"))
+    expected_not_run = ["dataset_prepare", "quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
+    add_check(results, "output_contract", case_id, "preflight_failed_early_summary_marks_dataset_prepare_not_run", expected_not_run, early_master.get("not_run_step_names"))
+    add_check(results, "output_contract", case_id, "preflight_failed_early_result_marks_dataset_prepare_not_run", expected_not_run, early_result.get("not_run_step_names"))
+
+
+def validate_run_all_preflight_early_failure_dataset_contract_case(_base_params):
+    case_id = "RUN_ALL_PREFLIGHT_EARLY_FAILURE_DATASET_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="run_all_preflight_fail_contract_") as temp_dir:
+        work_dir = Path(temp_dir)
+        _add_preflight_early_failure_dataset_contract_checks(results, case_id, work_dir=work_dir)
+
+    summary["checked_contract"] = "preflight_failed_dataset_prepare_not_run"
+    return results, summary
 
 def validate_artifact_lifecycle_contract_case(_base_params):
     case_id = "ARTIFACT_LIFECYCLE_CONTRACT"

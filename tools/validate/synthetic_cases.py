@@ -56,6 +56,7 @@ from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
     validate_local_regression_summary_contract_case,
     validate_output_contract_case,
+    validate_run_all_preflight_early_failure_dataset_contract_case,
 )
 from .synthetic_error_cases import (
     validate_downloader_main_error_path_case,
@@ -134,6 +135,7 @@ def get_synthetic_validators():
         validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,
         validate_local_regression_summary_contract_case,
+        validate_run_all_preflight_early_failure_dataset_contract_case,
         validate_artifact_lifecycle_contract_case,
         validate_params_io_error_path_case,
         validate_module_loader_error_path_case,
