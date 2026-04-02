@@ -80,13 +80,13 @@
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
 | B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract，主要跨工具 schema 與欄位語意已收斂 | contract tests under `tools/validate/` |
-| B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | PARTIAL | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查，且 `run_chain_checks.py` 已納入 scanner reduced snapshot 雙跑 digest；其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
+| B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | DONE | 已補 `run_ml_smoke.py` fixed-seed 雙跑、`run_chain_checks.py` scanner reduced snapshot 雙跑 digest、`validate_scanner_worker_repeatability_case` 與 `validate_scan_runner_repeatability_case`，正式入口與 scanner 入口重跑一致性已收斂 | `tools/local_regression/`, `tools/validate/synthetic_regression_cases.py` |
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | PARTIAL | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑，並新增 downloader market-date fallback / sync aggregation / main summary fail-fast；其他外部 API 與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
 | B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | DONE | 已補 dataset wrapper、local regression / no-arg CLI 與剩餘直接入口 CLI 契約，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數、缺值、空值與位置參數拒絕 | `tools/validate/synthetic_cli_cases.py`, `apps/*.py`, `core/runtime_utils.py` |
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | DONE | 已補 validate summary / optimizer profile / issue report 的 output contract，以及 bundle/archive/root-copy/retention lifecycle、PASS/FAIL bundle selection、artifacts manifest 與 rerun 覆寫內容契約 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py` |
-| B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | PARTIAL | 已在 `run_chain_checks.py` 補 chain + scanner reduced snapshot 雙跑 digest、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
+| B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | DONE | 已補 `run_chain_checks.py` 雙跑 digest、`run_ml_smoke.py` fixed-seed 雙跑、`validate_optimizer_raw_cache_rerun_consistency_case` 與 `validate_run_all_repeatability_case`，正式入口與 cache 汙染隔離已收斂 | `tools/local_regression/`, `tools/optimizer/raw_cache.py`, `tools/validate/synthetic_regression_cases.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report、`apps/test_suite.py` 人類可讀摘要與 `core/display.py` re-export 契約，主要 reporting/display 路徑已完成相容性覆蓋 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` |
@@ -136,7 +136,7 @@
 | ID | 建議項目 | 目標 |
 |---|---|---|
 | D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
-| D15 | deterministic regression for optimizer/scanner | 在固定 seed 下維持可重現 |
+| D15 | deterministic regression for optimizer/scanner | 已完成；已補 optimizer fixed-seed 雙跑、scanner worker repeatability 與 `scan_runner` 入口重跑一致性 |
 | D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
 | D17 | reporting schema compatibility checks | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性 |
 
@@ -158,7 +158,7 @@
 | D36 | `validate_dataset_cli_contract_case` | 已補 dataset wrapper CLI 契約：help、預設 passthrough、`--dataset` 值傳遞、未知參數與位置參數拒絕 |
 | D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化、help 與未知參數 / 位置參數拒絕 |
 | D45 | `validate_extended_tool_cli_contract_case` | 已補剩餘直接入口 CLI：`tools/optimizer/main.py`、`tools/portfolio_sim/main.py`、`tools/scanner/scan_runner.py`、`tools/validate/main.py`、`tools/debug/trade_log.py`、`apps/test_suite.py` 的 help 與參數拒絕契約 |
-| D19 | rerun / cache pollution checks | 釘死重跑一致性 |
+| D19 | rerun / cache pollution checks | 已完成；已補 raw cache rerun / mutation isolation、`run_all.py` 同 run dir rerun summary / bundle repeatability 與 chain snapshot 雙跑 digest |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | 已補 scanner reduced snapshot 雙跑 digest，確認 scanner 候選 / 狀態 / issue line 在同資料同參數下穩定一致 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline，並已納入 `apps/test_suite.py` / `run_all.py` 固定步驟 |
 | D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time；記憶體回歸仍未納入 |
@@ -181,8 +181,6 @@
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
 | 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
-| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | 已在 `run_ml_smoke.py` 加入固定 seed 雙跑一致性檢查，且 `run_chain_checks.py` 已納入 scanner reduced snapshot 雙跑 digest；其他入口仍未補齊 | `tools/local_regression/`, `tools/optimizer/` |
-| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | 已在 `run_chain_checks.py` 補 chain + scanner reduced snapshot 雙跑 digest、`run_ml_smoke.py` 補固定 seed 雙跑；其他工具與 cache 汙染路徑仍未全面補齊 | `tools/local_regression/`, `tools/optimizer/raw_cache.py` |
 | Meta | B22 | line / branch coverage 報表 | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已補 formal helper probe 覆蓋 chain checks / ml smoke / display / test_suite summary path；但仍未形成更完整的正式路徑 coverage gate | `tools/local_regression/run_meta_quality.py` |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑，並新增 downloader market-date fallback / sync aggregation / main summary fail-fast；其他外部 API 與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
@@ -197,9 +195,7 @@
 
 | ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
-| D15 | deterministic regression for optimizer/scanner | PARTIAL | C02 / B12 |
 | D18 | contract tests for CSV / XLSX / JSON outputs | DONE | B11 / B17 |
-| D19 | rerun / cache pollution checks | PARTIAL | B18 |
 | D20 | coverage report baseline | PARTIAL | B22 |
 | D21 | performance baseline checks | PARTIAL | B19 |
 | D25 | checklist sufficiency review | PARTIAL | B26 |
@@ -225,6 +221,8 @@
 | 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
 | 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
 | 契約 | B11 | 跨工具 schema / 欄位語意一致 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_portfolio_cases.py` | 2026-04-02 |
+| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | `tools/local_regression/run_ml_smoke.py`, `tools/local_regression/run_chain_checks.py`, `tools/validate/synthetic_regression_cases.py` | 2026-04-02 |
+| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | `tools/local_regression/run_chain_checks.py`, `tools/local_regression/run_ml_smoke.py`, `tools/validate/synthetic_regression_cases.py` | 2026-04-02 |
 | I/O | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | `tools/validate/synthetic_contract_cases.py` | 2026-04-02 |
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` | 2026-04-02 |
@@ -271,6 +269,8 @@
 | D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 | D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | B12 / B18 | 2026-04-02 |
+| D15 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
+| D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 
@@ -330,6 +330,11 @@
 | 2026-04-02 | D20 | 再擴充 `run_meta_quality.py` coverage probe 到 `run_all.py` helper path | PARTIAL -> PARTIAL | 已補 `_safe_format_preflight_summary` / `_write_dataset_prepare_summary` / `_compute_not_run_step_names` / `_build_bundle_entries` |
 
 - 2026-04-02：`D17` 收斂為已完成；新增 `D42`（issue Excel report schema）與 `D43`（portfolio export report artifacts），將 `B21` 的 reporting schema compatibility 從 console/yearly/test-suite summary 補到輸出檔 schema。
+
+| 2026-04-02 | D15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` + `validate_scan_runner_repeatability_case` + `run_ml_smoke.py` fixed-seed dual-run |
+| 2026-04-02 | D19 | 補 `run_all.py` 同 run dir rerun summary / bundle repeatability 後收斂完成 | PARTIAL -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` + `validate_run_all_repeatability_case` |
+| 2026-04-02 | B12 | 決定性主表收斂為 DONE | PARTIAL -> DONE | `run_ml_smoke.py` + `run_chain_checks.py` + `tools/validate/synthetic_regression_cases.py` |
+| 2026-04-02 | B18 | 重跑一致性 / 狀態汙染主表收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_chain_checks.py` + `tools/local_regression/run_ml_smoke.py` + `tools/validate/synthetic_regression_cases.py` |
 
 ## H. 完成判準
 

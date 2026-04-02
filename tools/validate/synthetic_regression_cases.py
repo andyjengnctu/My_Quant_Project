@@ -3,13 +3,17 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import sys
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 from unittest.mock import patch
 
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 from tools.optimizer.raw_cache import load_all_raw_data
 from tools.scanner.stock_processor import process_single_stock
@@ -157,4 +161,221 @@ def validate_optimizer_raw_cache_rerun_consistency_case(_base_params):
     add_check(results, "synthetic_regression", case_id, "raw_cache_negative_volume_corrected", 0.0, float(second_cache["2330"].loc[pd.Timestamp("2026-01-04"), "Volume"]))
 
     summary["ticker_count"] = len(second_cache)
+    return results, summary
+
+
+
+def _normalize_scan_summary_payload(payload: dict[str, object]) -> dict[str, object]:
+    candidate_rows = []
+    for item in payload.get("candidate_rows", []):
+        candidate_rows.append({
+            "kind": str(item.get("kind", "")),
+            "ticker": str(item.get("ticker", "")),
+            "text": str(item.get("text", "")),
+            "proj_cost": None if item.get("proj_cost") is None else round(float(item.get("proj_cost")), 6),
+            "ev": None if item.get("ev") is None else round(float(item.get("ev")), 6),
+            "sort_value": None if item.get("sort_value") is None else round(float(item.get("sort_value")), 6),
+        })
+    return {
+        "count_scanned": int(payload.get("count_scanned", 0) or 0),
+        "count_history_qualified": int(payload.get("count_history_qualified", 0) or 0),
+        "count_skipped_insufficient": int(payload.get("count_skipped_insufficient", 0) or 0),
+        "count_sanitized_candidates": int(payload.get("count_sanitized_candidates", 0) or 0),
+        "max_workers": int(payload.get("max_workers", 0) or 0),
+        "pool_start_method": str(payload.get("pool_start_method", "")),
+        "candidate_rows": candidate_rows,
+        "scanner_issue_log_name": Path(str(payload.get("scanner_issue_log_path", "") or "")).name,
+    }
+
+
+class _FakeFuture:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
+class _FakeExecutor:
+    def __init__(self, *args, **kwargs):
+        self._futures = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        future = _FakeFuture(fn(*args, **kwargs))
+        self._futures.append(future)
+        return future
+
+
+def validate_scan_runner_repeatability_case(base_params):
+    case_id = "SCAN_RUNNER_REPEATABILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.scanner import scan_runner
+
+    class _FakeParams:
+        def __init__(self, max_workers=2):
+            self.max_workers = max_workers
+
+    with TemporaryDirectory() as tmp_dir:
+        file_a = Path(tmp_dir) / '1101.csv'
+        file_b = Path(tmp_dir) / '2330.csv'
+        file_a.write_text('Date,Open,High,Low,Close,Volume\n2026-01-02,1,2,1,2,10\n', encoding='utf-8')
+        file_b.write_text('Date,Open,High,Low,Close,Volume\n2026-01-02,1,2,1,2,10\n', encoding='utf-8')
+        csv_inputs = [('1101', str(file_a)), ('2330', str(file_b))]
+        deterministic_results = {
+            '1101': ('buy', 1000.0, 1.25, 2.5, 'BUY-1101', '1101', None),
+            '2330': ('extended', 800.0, 1.1, 1.8, 'EXT-2330', '2330', 'sanitize-2330'),
+        }
+        collected = []
+
+        def _fake_process_single_stock(file_path, ticker, params):
+            return deterministic_results[str(ticker)]
+
+        def _fake_summary(**kwargs):
+            collected.append(_normalize_scan_summary_payload(kwargs))
+
+        with patch('core.data_utils.discover_unique_csv_inputs', return_value=(csv_inputs, ['dup.csv'])), \
+             patch('tools.scanner.scan_runner.ensure_runtime_dirs', return_value=None), \
+             patch('tools.scanner.scan_runner.resolve_scanner_max_workers', return_value=2), \
+             patch('tools.scanner.scan_runner.get_process_pool_executor_kwargs', return_value=({}, 'spawn')), \
+             patch('tools.scanner.scan_runner.ProcessPoolExecutor', _FakeExecutor), \
+             patch('tools.scanner.scan_runner.as_completed', side_effect=lambda futures: list(reversed(list(futures)))), \
+             patch('tools.scanner.scan_runner.print_scanner_start_banner', return_value=None), \
+             patch('tools.scanner.scan_runner.print_scanner_header', return_value=None), \
+             patch('tools.scanner.scan_runner.write_issue_log', return_value=str(Path(tmp_dir) / 'scanner_issues.log')), \
+             patch('tools.scanner.scan_runner.print_scanner_summary', side_effect=_fake_summary), \
+             patch('tools.scanner.scan_runner.time.time', side_effect=[100.0, 103.5, 200.0, 203.5]), \
+             patch('tools.scanner.stock_processor.process_single_stock', side_effect=_fake_process_single_stock):
+            with contextlib.redirect_stdout(io.StringIO()):
+                scan_runner.run_daily_scanner(tmp_dir, _FakeParams())
+                scan_runner.run_daily_scanner(tmp_dir, _FakeParams())
+
+    add_check(results, 'synthetic_regression', case_id, 'scan_runner_repeatable_summary_payload', collected[0], collected[1])
+    add_check(results, 'synthetic_regression', case_id, 'scan_runner_repeatable_candidate_order', [r['ticker'] for r in collected[0]['candidate_rows']], [r['ticker'] for r in collected[1]['candidate_rows']])
+    add_check(results, 'synthetic_regression', case_id, 'scan_runner_repeatable_issue_log_name', collected[0]['scanner_issue_log_name'], collected[1]['scanner_issue_log_name'])
+    summary['candidate_count'] = len(collected[0]['candidate_rows'])
+    return results, summary
+
+
+def _canonicalize_master_summary(payload: dict[str, object]) -> dict[str, object]:
+    scripts = []
+    for item in payload.get('scripts', []):
+        scripts.append({
+            'name': str(item.get('name', '')),
+            'status': str(item.get('status', '')),
+            'reported_status': str(item.get('reported_status', '')),
+            'summary_file': str(item.get('summary_file', '')),
+            'failure_reasons': list(item.get('failure_reasons', [])),
+            'timed_out': bool(item.get('timed_out', False)),
+        })
+    return {
+        'overall_status': str(payload.get('overall_status', '')),
+        'dataset': str(payload.get('dataset', '')),
+        'selected_steps': list(payload.get('selected_steps', [])),
+        'failures': int(payload.get('failures', 0) or 0),
+        'failed_step_names': list(payload.get('failed_step_names', [])),
+        'not_run_step_names': list(payload.get('not_run_step_names', [])),
+        'bundle_mode': str(payload.get('bundle_mode', '')),
+        'bundle_entries': list(payload.get('bundle_entries', [])),
+        'scripts': scripts,
+        'preflight_status': str((payload.get('preflight') or {}).get('status', '')),
+        'dataset_prepare_status': str((payload.get('dataset_prepare') or {}).get('status', '')),
+    }
+
+
+def validate_run_all_repeatability_case(_base_params):
+    case_id = 'RUN_ALL_REPEATABILITY'
+    results = []
+    summary = {'ticker': case_id, 'synthetic': True}
+
+    from tools.local_regression import run_all as run_all_module
+
+    project_tmp_root = PROJECT_ROOT / 'outputs' / 'validate' / '_tmp_raw_cache'
+    project_tmp_root.mkdir(parents=True, exist_ok=True)
+
+    with TemporaryDirectory(prefix='v16_run_all_', dir=str(project_tmp_root)) as tmp_dir:
+        run_dir = Path(tmp_dir) / 'staging'
+        run_dir.mkdir(parents=True, exist_ok=True)
+        fixed_now = datetime(2026, 4, 2, 8, 0, 0)
+        manifest = dict(run_all_module.MANIFEST_DEFAULTS)
+        manifest.update({'dataset': 'reduced', 'bundle_name': 'to_chatgpt_bundle.zip'})
+        summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
+
+        def _fake_run_preflight(run_dir_arg, *, selected_step_names):
+            payload = {
+                'status': 'PASS',
+                'duration_sec': 0.1,
+                'failed_packages': [],
+                'python_executable': sys.executable,
+                'summary_file': 'preflight_summary.json',
+                'summary_text_file': 'preflight_summary.txt',
+            }
+            (run_dir_arg / 'preflight_summary.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            (run_dir_arg / 'preflight_summary.txt').write_text('status: PASS\n', encoding='utf-8')
+            return payload
+
+        def _fake_dataset_info():
+            return {'dataset_dir': str(PROJECT_ROOT / 'data' / 'tw_stock_data_vip_reduced'), 'source': 'repo_data_dir', 'csv_count': 24, 'reused_existing': True}
+
+        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total):
+            payload = {'status': 'PASS', 'failures': [], 'failed_steps': [], 'failed_count': 0, 'fail_count': 0}
+            summary_name = summary_name_by_script[relative_script]
+            (run_dir / summary_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            log_path.write_text(f'{name}: PASS\n', encoding='utf-8')
+            return {
+                'returncode': 0,
+                'duration_sec': 0.2,
+                'timed_out': False,
+                'error_type': '',
+                'error_message': '',
+                'stdout': '',
+                'stderr': '',
+            }
+
+        def _fake_archive(bundle_path, **kwargs):
+            return bundle_path
+
+        def _fake_publish(bundle_path, **kwargs):
+            return bundle_path
+
+        with patch('tools.local_regression.run_all.create_staging_run_dir', return_value=run_dir), \
+             patch('tools.local_regression.run_all.load_manifest', return_value=manifest), \
+             patch('tools.local_regression.run_all._run_preflight', side_effect=_fake_run_preflight), \
+             patch('tools.local_regression.run_all.ensure_reduced_dataset', side_effect=_fake_dataset_info), \
+             patch('tools.local_regression.run_all._run_script', side_effect=_fake_run_script), \
+             patch('tools.local_regression.run_all.archive_bundle_history', side_effect=_fake_archive), \
+             patch('tools.local_regression.run_all.publish_root_bundle_copy', side_effect=_fake_publish), \
+             patch('tools.local_regression.run_all._apply_output_retention', return_value={'removed_count': 0, 'removed_bytes': 0, 'removed_entries': []}), \
+             patch('tools.local_regression.run_all.cleanup_staging_dir', return_value=None), \
+             patch('tools.local_regression.run_all.resolve_git_commit', return_value='deadbeef'), \
+             patch('tools.local_regression.run_all.taipei_now', return_value=fixed_now), \
+             patch('tools.local_regression.run_all.gather_recent_console_tail', return_value='tail text'):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc1 = run_all_module.main(['run_all.py'])
+            first_master = json.loads((run_dir / 'master_summary.json').read_text(encoding='utf-8'))
+            first_zip_members = sorted(zipfile.ZipFile(run_dir / 'to_chatgpt_bundle.zip').namelist())
+            first_digest = _payload_digest(_canonicalize_master_summary(first_master))
+
+            (run_dir / 'master_summary.json').write_text('{"tampered": true}\n', encoding='utf-8')
+            (run_dir / 'artifacts_manifest.json').write_text('{"tampered": true}\n', encoding='utf-8')
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc2 = run_all_module.main(['run_all.py'])
+            second_master = json.loads((run_dir / 'master_summary.json').read_text(encoding='utf-8'))
+            second_zip_members = sorted(zipfile.ZipFile(run_dir / 'to_chatgpt_bundle.zip').namelist())
+            second_digest = _payload_digest(_canonicalize_master_summary(second_master))
+
+    add_check(results, 'synthetic_regression', case_id, 'run_all_repeatable_return_code_first', 0, rc1)
+    add_check(results, 'synthetic_regression', case_id, 'run_all_repeatable_return_code_second', 0, rc2)
+    add_check(results, 'synthetic_regression', case_id, 'run_all_repeatable_master_summary_digest', first_digest, second_digest)
+    add_check(results, 'synthetic_regression', case_id, 'run_all_repeatable_bundle_members', first_zip_members, second_zip_members)
+    add_check(results, 'synthetic_regression', case_id, 'run_all_rerun_replaces_tampered_master_summary', False, bool(second_master.get('tampered', False)))
+    add_check(results, 'synthetic_regression', case_id, 'run_all_repeatable_not_run_step_names', [], second_master.get('not_run_step_names', []))
+    summary['bundle_member_count'] = len(second_zip_members)
     return results, summary
