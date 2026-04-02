@@ -18,9 +18,8 @@ from tools.local_regression import run_all as run_all_module
 from tools.local_regression import run_meta_quality as run_meta_quality_module
 from tools.local_regression import run_quick_gate as run_quick_gate_module
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
-from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
 from tools.local_regression.common import write_json, write_csv, write_text
-from tools.validate.reporting import write_issue_excel_report
+from tools.validate.reporting import LOCAL_REGRESSION_RUN_DIR_ENV, write_issue_excel_report, write_local_regression_summary
 from core.portfolio_fast_data import prep_stock_data_and_trades
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df

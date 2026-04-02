@@ -1,6 +1,10 @@
+import json
 import os
 
 import pandas as pd
+
+
+LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
 
 
 def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp, *, output_dir, normalize_ticker):
@@ -129,3 +133,36 @@ def print_console_summary(
     if not failed_non_real_summary.empty:
         print("\n失敗 synthetic/system 前覽：")
         print(failed_non_real_summary.to_string(index=False))
+
+def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok, peak_traced_memory_mb):
+    run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
+    if not run_dir:
+        return
+
+    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
+    if not real_data_coverage_ok:
+        fail_count += 1
+
+    summary = {
+        "status": "PASS" if (df_failed.empty and real_data_coverage_ok) else "FAIL",
+        "dataset": dataset_profile_key,
+        "dataset_source": dataset_source,
+        "data_dir": data_dir,
+        "csv_path": csv_path,
+        "xlsx_path": xlsx_path,
+        "output_dir": output_dir,
+        "elapsed_time_sec": round(float(elapsed_time), 3),
+        "real_ticker_count": int(len(selected_tickers)),
+        "real_data_coverage_ok": bool(real_data_coverage_ok),
+        "total_checks": int(len(df_results)),
+        "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
+        "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
+        "fail_count": fail_count,
+        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
+    }
+    os.makedirs(run_dir, exist_ok=True)
+    summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+

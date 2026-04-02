@@ -24,7 +24,6 @@ from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enab
 from core.output_paths import build_output_dir
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
-LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
@@ -93,40 +92,6 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
     )
 
 
-
-
-def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok, peak_traced_memory_mb):
-    run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
-    if not run_dir:
-        return
-
-    fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
-    if not real_data_coverage_ok:
-        fail_count += 1
-
-    summary = {
-        "status": "PASS" if (df_failed.empty and real_data_coverage_ok) else "FAIL",
-        "dataset": dataset_profile_key,
-        "dataset_source": dataset_source,
-        "data_dir": data_dir,
-        "csv_path": csv_path,
-        "xlsx_path": xlsx_path,
-        "output_dir": output_dir,
-        "elapsed_time_sec": round(float(elapsed_time), 3),
-        "real_ticker_count": int(len(selected_tickers)),
-        "real_data_coverage_ok": bool(real_data_coverage_ok),
-        "total_checks": int(len(df_results)),
-        "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
-        "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
-        "fail_count": fail_count,
-        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
-    }
-    os.makedirs(run_dir, exist_ok=True)
-    summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
-    with open(summary_path, "w", encoding="utf-8") as f:
-        import json
-        json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
 
 
 def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_runner, recoverable_exceptions):
@@ -218,7 +183,7 @@ def main(argv=None, environ=None):
         is_insufficient_data_error,
     )
     from tools.validate.real_cases import run_real_ticker_scan
-    from tools.validate.reporting import print_console_summary, write_issue_excel_report
+    from tools.validate.reporting import LOCAL_REGRESSION_RUN_DIR_ENV, print_console_summary, write_issue_excel_report, write_local_regression_summary
     from tools.validate.synthetic_cases import run_synthetic_consistency_suite
     from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 

@@ -9,8 +9,6 @@
 
 ## B. 標準測試流程
 
-## B. 標準測試流程
-
 1. `apps/test_suite.py`是本專案唯一動態測試入口，
 2. 每輪檢查開始前，GPT 端必須先檢查`apps/test_suite.py`是否仍有缺口。
 3. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供`apps/test_suite.py`補全。

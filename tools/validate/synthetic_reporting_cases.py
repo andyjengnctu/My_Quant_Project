@@ -52,8 +52,8 @@ def validate_validate_console_summary_reporting_case(_base_params):
             df_results=df_results,
             df_failed=df_failed,
             df_summary=df_summary,
-            csv_path="outputs/validate/consistency_full_scan_20260402.csv",
-            xlsx_path="outputs/validate/consistency_issues_20260402.xlsx",
+            csv_path="outputs/validate_consistency/consistency_full_scan_20260402.csv",
+            xlsx_path="outputs/validate_consistency/consistency_issues_20260402.xlsx",
             elapsed_time=12.34,
             real_summary_count=2,
             real_tickers=["1101", "1102"],
@@ -65,7 +65,7 @@ def validate_validate_console_summary_reporting_case(_base_params):
     add_check(results, "reporting_schema", case_id, "console_summary_has_title", True, "一致性回歸摘要" in console_text)
     add_check(results, "reporting_schema", case_id, "console_summary_has_counts", True, "PASS 數: 1" in console_text and "SKIP 數: 1" in console_text and "FAIL 數: 2" in console_text)
     add_check(results, "reporting_schema", case_id, "console_summary_has_problem_counts", True, "有問題真實股票數: 1" in console_text and "有問題 synthetic case 數: 1" in console_text and "有問題 system 項目數: 0" in console_text)
-    add_check(results, "reporting_schema", case_id, "console_summary_has_paths", True, "完整 CSV: outputs/validate/consistency_full_scan_20260402.csv" in console_text and "問題 Excel: outputs/validate/consistency_issues_20260402.xlsx" in console_text)
+    add_check(results, "reporting_schema", case_id, "console_summary_has_paths", True, "完整 CSV: outputs/validate_consistency/consistency_full_scan_20260402.csv" in console_text and "問題 Excel: outputs/validate_consistency/consistency_issues_20260402.xlsx" in console_text)
     add_check(results, "reporting_schema", case_id, "console_summary_has_fail_preview_sections", True, "失敗項前覽：" in console_text and "失敗真實股票前覽：" in console_text and "失敗 synthetic/system 前覽：" in console_text)
     add_check(results, "reporting_schema", case_id, "console_summary_has_fail_preview_details", True, "EV mismatch" in console_text and "Synthetic fail" in console_text)
 
