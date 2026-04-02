@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib
 import re
 import shlex
 from unittest.mock import patch
@@ -14,19 +15,45 @@ from .meta_contracts import summarize_single_formal_test_entry_contract
 
 
 def _extract_table_rows(text: str, heading: str):
-    pattern = rf"^### {re.escape(heading)}\n\n((?:\|.*\n)+)"
-    match = re.search(pattern, text, flags=re.MULTILINE)
-    if not match:
+    lines = text.splitlines()
+    heading_candidates = (f"### {heading}", f"## {heading}")
+    heading_index = None
+    for idx, raw_line in enumerate(lines):
+        if raw_line.strip() in heading_candidates:
+            heading_index = idx
+            break
+    if heading_index is None:
         raise AssertionError(f"找不到表格段落: {heading}")
-    lines = [line.strip() for line in match.group(1).splitlines() if line.strip().startswith("|")]
+
     data_lines = []
-    for line in lines[2:]:
-        cols = [part.strip() for part in line.strip("|").split("|")]
-        data_lines.append(cols)
+    seen_table = False
+    cursor = heading_index + 1
+    while cursor < len(lines):
+        stripped = lines[cursor].strip()
+        if stripped.startswith(("## ", "### ")):
+            break
+        if not stripped.startswith("|"):
+            cursor += 1
+            continue
+
+        block_lines = []
+        while cursor < len(lines) and lines[cursor].strip().startswith("|"):
+            block_lines.append(lines[cursor].strip())
+            cursor += 1
+        if block_lines:
+            seen_table = True
+            has_header = (
+                len(block_lines) >= 2
+                and set(block_lines[1].replace("|", "").replace(" ", "")) <= {"-"}
+            )
+            content_lines = block_lines[2:] if has_header else block_lines
+            for line in content_lines:
+                cols = [part.strip() for part in line.strip("|").split("|")]
+                data_lines.append(cols)
+
+    if not seen_table:
+        raise AssertionError(f"找不到表格內容: {heading}")
     return data_lines
-
-
-
 
 
 def _load_main_table_statuses():
@@ -42,6 +69,7 @@ def _load_main_table_statuses():
             if len(cols) > status_idx:
                 statuses[cols[0]] = cols[status_idx]
     return statuses
+
 
 def _load_done_d_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
@@ -80,6 +108,43 @@ def _load_done_b_rows():
     return parsed
 
 
+def _load_convergence_latest_statuses():
+    text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    rows = _extract_table_rows(text, "G. 逐項收斂紀錄")
+    statuses = {}
+    for cols in rows:
+        if len(cols) < 4:
+            continue
+        item_id = cols[1].strip()
+        transition = cols[3].strip()
+        if not item_id or not transition:
+            continue
+        statuses[item_id] = transition.split("->")[-1].strip()
+    return statuses
+
+
+def _load_imported_validate_names_from_main_entry():
+    synthetic_cases_module = importlib.import_module("tools.validate.synthetic_cases")
+    imported_names = set()
+    for name, obj in synthetic_cases_module.__dict__.items():
+        if name.startswith("validate_") and callable(obj):
+            imported_names.add(name)
+    return imported_names
+
+
+def _load_defined_validate_names_from_synthetic_case_modules():
+    validate_dir = PROJECT_ROOT / "tools" / "validate"
+    module_names = sorted(path.stem for path in validate_dir.glob("synthetic*_cases.py"))
+    defined_names = set()
+    for module_name in module_names:
+        module = importlib.import_module(f"tools.validate.{module_name}")
+        for name, obj in module.__dict__.items():
+            if not name.startswith("validate_") or not callable(obj):
+                continue
+            if getattr(obj, "__module__", "") != module.__name__:
+                continue
+            defined_names.add(name)
+    return defined_names
 
 
 def _extract_cmd_python_commands():
@@ -180,6 +245,9 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     validators = get_synthetic_validators()
     validator_names = [validator.__name__ for validator in validators]
     validator_name_set = set(validator_names)
+    imported_validate_names = _load_imported_validate_names_from_main_entry()
+    defined_validate_names = _load_defined_validate_names_from_synthetic_case_modules()
+    convergence_statuses = _load_convergence_latest_statuses()
     done_d_rows = _load_done_d_rows()
     done_b_rows = _load_done_b_rows()
     main_statuses = _load_main_table_statuses()
@@ -187,23 +255,34 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     add_check(results, "meta_registry", case_id, "validator_registry_not_empty", True, len(validators) > 0)
     add_check(results, "meta_registry", case_id, "validator_registry_names_unique", len(validator_names), len(validator_name_set))
 
+    missing_imported_names = sorted(imported_validate_names - validator_name_set)
+    extra_registry_names = sorted(validator_name_set - imported_validate_names)
+    missing_defined_names = sorted(defined_validate_names - validator_name_set)
+    orphan_registry_names = sorted(validator_name_set - defined_validate_names)
+
+    add_check(results, "meta_registry", case_id, "imported_validate_cases_all_registered", [], missing_imported_names)
+    add_check(results, "meta_registry", case_id, "registry_has_no_unimported_validate_case_names", [], extra_registry_names)
+    add_check(results, "meta_registry", case_id, "defined_validate_cases_all_registered", [], missing_defined_names)
+    add_check(results, "meta_registry", case_id, "registry_has_no_orphan_validate_case_names", [], orphan_registry_names)
+
     done_d_names = [row["name"] for row in done_d_rows]
     done_d_name_set = set(done_d_names)
     add_check(results, "meta_registry", case_id, "done_d_names_unique", len(done_d_names), len(done_d_name_set))
 
     for row in done_d_rows:
         test_name = row["name"]
-        if test_name.startswith("validate_"):
+        first_token = test_name.split()[0] if test_name.split() else test_name
+        if first_token.startswith("validate_"):
             add_check(
                 results,
                 "meta_registry",
                 case_id,
                 f"{row['id']}_registered_in_main_entry",
                 True,
-                test_name in validator_name_set,
+                first_token in validator_name_set,
             )
         elif test_name.startswith("run_") or ".py" in test_name:
-            declared_script = test_name.split()[0]
+            declared_script = first_token
             if declared_script == "run_meta_quality.py":
                 declared_script = "tools/local_regression/run_meta_quality.py"
             add_check(
@@ -224,6 +303,15 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
                 False,
             )
 
+        add_check(
+            results,
+            "meta_registry",
+            case_id,
+            f"{row['id']}_done_summary_matches_convergence_status",
+            "DONE",
+            convergence_statuses.get(row["id"], ""),
+        )
+
     done_b_ids = [row["b_id"] for row in done_b_rows]
     mapped_b_ids = {row["b_id"] for row in done_d_rows}
     for row in done_b_rows:
@@ -234,6 +322,14 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             f"{row['b_id']}_done_summary_status_matches_main_table",
             "DONE",
             main_statuses.get(row["b_id"]),
+        )
+        add_check(
+            results,
+            "meta_registry",
+            case_id,
+            f"{row['b_id']}_done_summary_matches_convergence_status",
+            "DONE",
+            convergence_statuses.get(row["b_id"], "DONE"),
         )
         if row["entry"] == "既有 synthetic case":
             continue
@@ -258,6 +354,8 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     summary["done_d_count"] = len(done_d_rows)
     summary["done_b_count"] = len(done_b_ids)
     summary["validator_count"] = len(validators)
+    summary["missing_imported_names"] = missing_imported_names
+    summary["missing_defined_names"] = missing_defined_names
     return results, summary
 
 

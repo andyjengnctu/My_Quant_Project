@@ -36,6 +36,8 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_history_cases.py",
     "tools/validate/synthetic_flow_cases.py",
     "tools/validate/synthetic_take_profit_cases.py",
+    "tools/validate/synthetic_contract_cases.py",
+    "tools/validate/synthetic_guardrail_cases.py",
     "tools/validate/synthetic_display_cases.py",
     "tools/validate/synthetic_reporting_cases.py",
     "tools/validate/synthetic_error_cases.py",
@@ -84,14 +86,43 @@ def _ratio_percent(numerator: Any, denominator: Any) -> float:
 
 
 def _extract_table_rows(text: str, heading: str) -> List[List[str]]:
-    pattern = rf"^### {re.escape(heading)}\n\n((?:\|.*\n)+)"
-    match = re.search(pattern, text, flags=re.MULTILINE)
-    if not match:
+    lines = text.splitlines()
+    heading_candidates = (f"### {heading}", f"## {heading}")
+    heading_index = None
+    for idx, raw_line in enumerate(lines):
+        if raw_line.strip() in heading_candidates:
+            heading_index = idx
+            break
+    if heading_index is None:
         raise ValueError(f"找不到表格段落: {heading}")
-    lines = [line.strip() for line in match.group(1).splitlines() if line.strip().startswith("|")]
+
     rows: List[List[str]] = []
-    for line in lines[2:]:
-        rows.append([part.strip() for part in line.strip("|").split("|")])
+    seen_table = False
+    cursor = heading_index + 1
+    while cursor < len(lines):
+        stripped = lines[cursor].strip()
+        if stripped.startswith(("## ", "### ")):
+            break
+        if not stripped.startswith("|"):
+            cursor += 1
+            continue
+
+        block_lines: List[str] = []
+        while cursor < len(lines) and lines[cursor].strip().startswith("|"):
+            block_lines.append(lines[cursor].strip())
+            cursor += 1
+        if block_lines:
+            seen_table = True
+            has_header = (
+                len(block_lines) >= 2
+                and set(block_lines[1].replace("|", "").replace(" ", "")) <= {"-"}
+            )
+            content_lines = block_lines[2:] if has_header else block_lines
+            for line in content_lines:
+                rows.append([part.strip() for part in line.strip("|").split("|")])
+
+    if not seen_table:
+        raise ValueError(f"找不到表格內容: {heading}")
     return rows
 
 
@@ -102,8 +133,10 @@ def _load_checklist_tables() -> Dict[str, List[List[str]]]:
         "B2": _extract_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
         "E1": _extract_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
         "E2": _extract_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
-        "F1": _extract_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要"),
         "E3": _extract_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
+        "F1": _extract_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要"),
+        "F2": _extract_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要"),
+        "G": _extract_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
 
@@ -123,6 +156,19 @@ def _ids_from_table(rows: List[List[str]], idx: int = 1) -> List[str]:
         if len(cols) > idx:
             values.append(cols[idx])
     return values
+
+
+def _latest_statuses_from_convergence_rows(rows: List[List[str]]) -> Dict[str, str]:
+    statuses: Dict[str, str] = {}
+    for cols in rows:
+        if len(cols) <= 3:
+            continue
+        item_id = cols[1].strip()
+        transition = cols[3].strip()
+        if not item_id or not transition:
+            continue
+        statuses[item_id] = transition.split("->")[-1].strip()
+    return statuses
 
 
 def _summarize_checklist_consistency() -> Dict[str, Any]:
@@ -146,7 +192,13 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
 
     e1_ids = sorted(_ids_from_table(tables["E1"]))
     e2_ids = sorted(_ids_from_table(tables["E2"]))
+    e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     f1_ids = sorted(_ids_from_table(tables["F1"]))
+    f2_ids = sorted(_ids_from_table(tables["F2"], idx=0))
+    convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
+    g_done_d_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status == "DONE")
+    g_unfinished_d_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status in {"PARTIAL", "TODO", "N/A"})
+    g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
 
     results.append(
         summarize_result(
@@ -199,6 +251,55 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             extra={"overlap": sorted(set(done_ids) & set(e1_ids))},
         )
     )
+    results.append(
+        summarize_result(
+            "checklist_done_d_summary_matches_convergence_done_records",
+            f2_ids == g_done_d_ids,
+            detail=f"f2={f2_ids} | g_done={g_done_d_ids}",
+            extra={"f2_ids": f2_ids, "g_done_d_ids": g_done_d_ids},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_unfinished_d_summary_matches_convergence_unfinished_records",
+            e3_ids == g_unfinished_d_ids,
+            detail=f"e3={e3_ids} | g_unfinished={g_unfinished_d_ids}",
+            extra={"e3_ids": e3_ids, "g_unfinished_d_ids": g_unfinished_d_ids},
+        )
+    )
+
+    done_d_missing_from_f2 = sorted(set(g_done_d_ids) - set(f2_ids))
+    done_d_missing_from_g = sorted(set(f2_ids) - set(g_done_d_ids))
+    results.append(
+        summarize_result(
+            "checklist_done_d_summary_has_no_missing_done_records",
+            not done_d_missing_from_f2,
+            detail=f"missing_from_f2={done_d_missing_from_f2}",
+            extra={"missing_from_f2": done_d_missing_from_f2},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_done_d_summary_all_have_convergence_records",
+            not done_d_missing_from_g,
+            detail=f"missing_from_g={done_d_missing_from_g}",
+            extra={"missing_from_g": done_d_missing_from_g},
+        )
+    )
+
+    mismatched_b_statuses = {
+        item_id: {"main": main_statuses.get(item_id, ""), "g": status}
+        for item_id, status in g_b_statuses.items()
+        if main_statuses.get(item_id, "") != status
+    }
+    results.append(
+        summarize_result(
+            "checklist_main_table_matches_convergence_b_statuses",
+            not mismatched_b_statuses,
+            detail=f"mismatch={sorted(mismatched_b_statuses.items())}",
+            extra={"mismatched_b_statuses": mismatched_b_statuses},
+        )
+    )
 
     unfinished_d_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] != "DONE")
     results.append(
@@ -218,9 +319,10 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         "todo_ids": todo_ids,
         "done_ids": done_ids,
         "unfinished_d_ids": unfinished_d_ids,
+        "done_d_ids": f2_ids,
+        "g_done_d_ids": g_done_d_ids,
+        "g_unfinished_d_ids": g_unfinished_d_ids,
     }
-
-
 
 
 def _extract_backticked_paths(text: str) -> List[str]:
