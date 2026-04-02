@@ -91,10 +91,10 @@
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report，以及 `apps/test_suite.py` 在 PASS / FAIL / manifest-blocked / partial-selected-steps / preflight-failed / dataset-prepare-failed / summary-unreadable 下的人類可讀摘要契約；另補 checklist status vocabulary sync 與 meta quality coverage line/branch/min-threshold/missing-zero-target guard 摘要顯示，並以 `run_all.py` contract 釘死 preflight 早退時 dataset_prepare 仍需標記為 `NOT_RUN`，避免 real path 誤落成 `missing_summary_file` | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `tools/validate/synthetic_contract_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py`, `tools/local_regression/run_all.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | DONE | 已將 `run_meta_quality.py` 的 synthetic coverage suite、formal helper probe、key target presence/hit 與 manifest 化 line / branch minimum threshold gate 收斂為正式路徑，並同步回寫 `meta_quality_summary.json` / `apps/test_suite.py` 摘要顯示 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |
-| B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已新增 meta registry case 與 `run_meta_quality.py` formal-entry 檢查；同時校驗 `DONE` 摘要、對應 test function、synthetic 主入口、`run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` |
+| B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | PARTIAL | 雖已有 meta registry case 與 `run_meta_quality.py` formal-entry 檢查，但目前 `tools/validate/synthetic_cases.py` 的 synthetic 主入口仍漏註冊部分已存在 `validate_*` case，且 formal check 尚未直接釘死 imported validate case 與正式註冊清單必須完全一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已將 `run_meta_quality.py` 的 formal check 擴充到主表 / E/F 摘要一致性、`apps/test_suite.py` 單一正式入口、`doc/CMD.md` / `doc/ARCHITECTURE.md` 單一入口宣告、legacy app test entry 缺失與可疑替代測試入口檔名檢查；test suite 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | PARTIAL | 雖已將 checklist sufficiency 納入 formal gate，但目前 `F2` 的 `DONE` 摘要曾漏列多個已完成 D 項，顯示 checklist 自身仍可能出現回寫缺口；formal check 也尚未直接釘死主表 / `F2` / `G` 收斂紀錄三者的完整同步 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -169,7 +169,7 @@
 | D67 | `validate_debug_trade_log_prepared_tool_contract_case` | 已補 `debug_trade_log` prepared-context 路徑與既有 raw-df 路徑等價契約，避免加速後明細列內容與逐筆損益 sequence 漂移 |
 | D68 | `validate_scanner_reference_clean_df_contract_case` | 已補 real-case `scanner_ref_stats` clean-df fast path 與既有 file-path 路徑等價契約，避免加速後 scanner 參考 stats 口徑漂移 |
 | D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | 已補 `run_meta_quality.py` 重用同輪 `validate_consistency` coverage artifacts 契約，避免同一輪再重跑一次 synthetic coverage suite |
-| D22 | registry / checklist / main-entry consistency checks | 已完成；確認 `DONE` 項目皆已映射到實際 test function 與 synthetic 主入口 |
+| D22 | registry / checklist / main-entry consistency checks | 已有初步檢查，但仍需補強 imported validate case 與 synthetic 正式註冊清單完整一致的 formal guard |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
 | D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
 | D27 | `validate_display_reporting_sanity_case` | 已補 scanner header / start banner / summary、strategy dashboard 與 `core/display.py` re-export 顯示契約 |
@@ -186,7 +186,7 @@
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
-| D25 | checklist sufficiency review | 已補 `run_meta_quality.py` formal check，並擴充到 `apps/test_suite.py` 單一正式入口、CMD / ARCHITECTURE 宣告與 legacy / 可疑替代入口檢查 |
+| D25 | checklist sufficiency review | 已有 formal check，但仍需補強主表 / `F2` / `G` 收斂紀錄完整同步 guard，避免 checklist 自身漏回寫時仍誤判為已收斂 |
 | D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
 
 ## E. 未完成缺口摘要
@@ -197,6 +197,8 @@
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
+| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | synthetic 主入口仍漏註冊部分已存在 `validate_*` case；formal check 尚未直接比對 imported validate case 與正式註冊清單完整一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py` |
+| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `F2` 的 `DONE` 摘要曾漏列多個已完成 D 項；formal check 尚未直接釘死主表 / `F2` / `G` 三者完整同步 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 
 ### E2. 目前所有 `TODO` 的主表項目摘要
 
@@ -207,6 +209,9 @@
 
 | ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
+| D70 | imported validate cases 與 synthetic 正式註冊清單完整一致 formal guard | TODO | B23 |
+| D71 | 主表 / `F2` / `G` 收斂紀錄完整同步 formal guard | TODO | B26 |
+| D72 | checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO | B26 |
 
 ## F. 已完成覆蓋摘要
 
@@ -238,10 +243,8 @@
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` | 2026-04-02 |
 | Meta | B22 | line / branch coverage 報表 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` | 2026-04-02 |
-| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` | 2026-04-02 |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
-| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` | 2026-04-02 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -302,6 +305,15 @@
 | D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
+| D42 | `validate_issue_excel_report_schema_case` | B21 | 2026-04-02 |
+| D43 | `validate_portfolio_export_report_artifacts_case` | B21 | 2026-04-02 |
+| D50 | `validate_test_suite_summary_failure_reporting_case` | B21 | 2026-04-02 |
+| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 | 2026-04-02 |
+| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 | 2026-04-02 |
+| D66 | `validate_scanner_prepared_tool_contract_case` | B19 | 2026-04-02 |
+| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 | 2026-04-02 |
+| D68 | `validate_scanner_reference_clean_df_contract_case` | B19 | 2026-04-02 |
+| D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 | 2026-04-02 |
 
 ## G. 逐項收斂紀錄
 
@@ -337,6 +349,11 @@
 | 2026-04-02 | D25 | 擴充 checklist sufficiency formal check 到單一正式入口與 legacy entry 檢查後收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/meta_contracts.py` |
 | 2026-04-02 | D59 | 新增單一正式測試入口契約案例並驗證 | NEW -> DONE | `validate_single_formal_test_entry_contract_case` |
 | 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/synthetic_meta_cases.py` + `tools/validate/meta_contracts.py` |
+| 2026-04-02 | B23 | 檢出 synthetic 主入口漏註冊既有 `validate_*` case，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cases.py` 尚未完整覆蓋 imported validate cases |
+| 2026-04-02 | B26 | 檢出 `F2` `DONE` 摘要漏列既有完成項目，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身仍有回寫 / 摘要失同步缺口 |
+| 2026-04-02 | D70 | 新增 imported validate cases vs synthetic registry formal guard 缺口 | NEW -> TODO | 需補 `tools/validate/synthetic_meta_cases.py` / `run_meta_quality.py` 檢查正式註冊完整性 |
+| 2026-04-02 | D71 | 新增主表 / `F2` / `G` 完整同步 formal guard 缺口 | NEW -> TODO | 需補 `run_meta_quality.py` / `meta_contracts.py` 檢查 checklist 自身同步性 |
+| 2026-04-02 | D72 | 新增 checklist `DONE` 摘要缺漏自動偵測缺口 | NEW -> TODO | 需阻擋 `F2` 遺漏已完成 D 項仍被判定為已收斂 |
 | 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
 | 2026-04-02 | D27 | 擴充 scanner summary / banner 與 display re-export 後收斂完成 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
@@ -402,7 +419,7 @@
 4. `B23`、`B24`、`B25`、`B26` 至少達到 `PARTIAL`，以證明 checklist 與 test suite 本身正確性已被納入收斂。
 5. 有固定的 coverage baseline 與 reduced dataset regression baseline。
 6. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
-7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；若不足，須先更新 checklist 再進行後續驗證或修改。
+7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；此判斷也包含 checklist 自身是否仍有缺口、摘要失同步、狀態過舊或未回寫項目；若不足，須先更新 checklist 再進行後續驗證或修改。
 8. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
 | 2026-04-02 | B19 / D21 | 去除 chain checks / consistency 內部重工以縮短 reduced suite 牆鐘時間 | DONE -> DONE | `run_chain_checks.py` 共用 prepared market context、改吃 prepared scanner snapshot 與 cached single-backtest stats；`prep_stock_data_and_trades()` 新增 optional stats 回傳，`real_case_runners.py` 改共用同一份 prepared backtest 結果 |
 | 2026-04-02 | D65 | 新增 portfolio_sim prepared tool contract case 並驗證 | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
@@ -424,4 +441,4 @@
 - `meta quality` 約 `1.41s ~ 9.82s`，其中同輪 coverage artifact reuse 生效後已降至約 `1.41s`
 - `total` 約 `104.82s ~ 107.62s`
 
-目前 checklist 主表與 D 項皆為 `DONE`。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
+目前正式 test suite 雖大致收斂，但 checklist 自身與 meta registry 仍有缺口：synthetic 主入口漏註冊部分既有 case，且 `F2` 的 `DONE` 摘要曾漏列既有完成項目；在補齊 formal guard 前，不宜再宣告主表與 D 項全數 `DONE`。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
