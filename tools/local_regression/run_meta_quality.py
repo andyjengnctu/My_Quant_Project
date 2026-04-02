@@ -58,10 +58,10 @@ COVERAGE_TARGETS = [
 ]
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = {
-    "quick_gate": "quick_gate_summary.json",
-    "consistency": "validate_consistency_summary.json",
-    "chain_checks": "chain_summary.json",
-    "ml_smoke": "ml_smoke_summary.json",
+    "quick_gate": ("quick_gate_summary.json",),
+    "consistency": ("validate_consistency_summary.json",),
+    "chain_checks": ("chain_summary.json", "chain_checks_summary.json"),
+    "ml_smoke": ("ml_smoke_summary.json",),
 }
 PERFORMANCE_MANIFEST_KEYS = {
     "quick_gate": "performance_quick_gate_max_sec",
@@ -712,7 +712,10 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
 
 def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_traced_memory_mb: float) -> Dict[str, Any]:
     has_shared_run_dir = bool(os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip())
-    available_step_files = {name: run_dir / file_name for name, file_name in PERFORMANCE_STEP_FILES.items()}
+    available_step_files = {
+        name: next((run_dir / file_name for file_name in file_names if (run_dir / file_name).exists()), run_dir / file_names[0])
+        for name, file_names in PERFORMANCE_STEP_FILES.items()
+    }
     if not has_shared_run_dir and not any(path.exists() for path in available_step_files.values()):
         results = [
             summarize_result(
@@ -744,7 +747,12 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
             missing_step_files.append(step_name)
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
-        step_durations[step_name] = round(float(payload.get("duration_sec", payload.get("elapsed_time_sec", 0.0)) or 0.0), 3)
+        duration_value = payload.get("duration_sec")
+        if duration_value in (None, ""):
+            duration_value = payload.get("elapsed_time_sec")
+        if duration_value in (None, ""):
+            duration_value = payload.get("duration_seconds")
+        step_durations[step_name] = round(float(duration_value or 0.0), 3)
         peak_memory_mb = payload.get("peak_traced_memory_mb")
         if peak_memory_mb in (None, ""):
             missing_memory_steps.append(step_name)

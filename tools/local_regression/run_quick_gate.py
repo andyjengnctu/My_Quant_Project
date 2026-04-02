@@ -5,6 +5,7 @@ import os
 import py_compile
 import shutil
 import sys
+import time
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -559,6 +560,7 @@ def main(argv=None) -> int:
 
     tracker = PeakTracedMemoryTracker()
     tracker.__enter__()
+    started = time.perf_counter()
     manifest = load_manifest()
     run_dir = resolve_run_dir("quick_gate")
     timeout = int(manifest["subprocess_timeout_sec"])
@@ -586,6 +588,7 @@ def main(argv=None) -> int:
         "failed_count": len(failed),
         "failed_steps": [step["name"] for step in failed],
         "steps": steps,
+        "duration_sec": round(time.perf_counter() - started, 3),
         "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(run_dir / "quick_gate_summary.json", summary)

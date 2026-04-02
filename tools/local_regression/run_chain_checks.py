@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
@@ -456,6 +457,7 @@ def main(argv=None) -> int:
 
     tracker = PeakTracedMemoryTracker()
     tracker.__enter__()
+    started = time.perf_counter()
     manifest = load_manifest()
     run_dir = resolve_run_dir("chain_checks")
     dataset_info = ensure_reduced_dataset()
@@ -545,6 +547,7 @@ def main(argv=None) -> int:
             },
         }
 
+    summary["duration_sec"] = round(time.perf_counter() - started, 3)
     summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
     write_json(run_dir / "chain_summary.json", summary)
     write_json(run_dir / "chain_checks_summary.json", summary)

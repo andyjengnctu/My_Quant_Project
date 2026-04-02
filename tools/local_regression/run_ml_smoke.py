@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -133,6 +134,9 @@ def _read_latest_profile_metrics(new_paths: Dict[str, Path]) -> Dict[str, Any]:
 
 
 def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
+    started = time.perf_counter()
     label_dir = ensure_dir(parent_run_dir / label)
     models_dir = ensure_dir(label_dir / "models")
     params_path = models_dir / "best_params.json"
@@ -226,9 +230,11 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
         "optimizer_profile_read_error": profile_metrics["optimizer_profile_read_error"],
         "failures": failures,
+        "duration_sec": round(time.perf_counter() - started, 3),
         "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(label_dir / "ml_smoke_summary.json", result)
+    tracker.__exit__(None, None, None)
     return result
 
 
@@ -258,6 +264,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": first_run["failures"],
+                "duration_sec": first_run.get("duration_sec", 0.0),
             },
             {
                 "label": second_run["label"],
@@ -269,6 +276,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": second_run["failures"],
+                "duration_sec": second_run.get("duration_sec", 0.0),
             },
         ],
     }
@@ -281,6 +289,7 @@ def main(argv=None) -> int:
 
     tracker = PeakTracedMemoryTracker()
     tracker.__enter__()
+    started = time.perf_counter()
     manifest = load_manifest()
     run_dir = resolve_run_dir("ml_smoke")
     dataset_info = ensure_reduced_dataset()
@@ -316,6 +325,7 @@ def main(argv=None) -> int:
         "runtime_error": "",
         "optimizer_repro": repro_summary,
         "failures": failures,
+        "duration_sec": round(time.perf_counter() - started, 3),
         "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(run_dir / "ml_smoke_summary.json", summary)

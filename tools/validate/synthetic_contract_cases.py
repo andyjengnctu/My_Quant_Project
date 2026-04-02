@@ -201,6 +201,7 @@ def validate_output_contract_case(_base_params):
                 df_failed=df_failed,
                 output_dir="outputs/validate_consistency",
                 real_data_coverage_ok=True,
+                peak_traced_memory_mb=12.345,
             )
         finally:
             if prev_run_dir is None:
@@ -334,6 +335,7 @@ def validate_local_regression_summary_contract_case(_base_params):
             "scanner_snapshot": {"candidate_count": 3},
             "rerun_consistency": {"enabled": True, "run_count": 2, "all_match": True, "runs": []},
             "failures": [],
+            "peak_traced_memory_mb": 45.678,
         }
         write_json(run_dir / "chain_summary.json", chain_payload)
         write_csv(run_dir / "chain_summary.csv", [{field: "" for field in CHAIN_SUMMARY_CSV_FIELDS}], fieldnames=CHAIN_SUMMARY_CSV_FIELDS)
@@ -358,6 +360,7 @@ def validate_local_regression_summary_contract_case(_base_params):
             "optimizer_profile_avg_objective_wall_sec": 4.5,
             "optimizer_repro": {"enabled": True, "all_match": True},
             "failures": [],
+            "peak_traced_memory_mb": 23.456,
         }
         write_json(run_dir / "ml_smoke_summary.json", ml_smoke_payload)
         ml_smoke_json = json.loads((run_dir / "ml_smoke_summary.json").read_text(encoding="utf-8"))
