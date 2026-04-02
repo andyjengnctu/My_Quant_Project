@@ -1,0 +1,379 @@
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, Mapping
+
+TEST_SUITE_STEP_LABELS = {
+    "quick_gate": "quick gate",
+    "consistency": "consistency",
+    "chain_checks": "chain checks",
+    "ml_smoke": "ml smoke",
+    "meta_quality": "meta quality",
+    "preflight": "preflight",
+    "dataset_prepare": "dataset prepare",
+    "manifest": "manifest",
+}
+
+
+def _is_dataset_prepare_required(selected_steps: set[str], dataset_required_steps: Iterable[str]) -> bool:
+    if not selected_steps:
+        return True
+    return any(name in dataset_required_steps for name in selected_steps)
+
+
+def _safe_display_text(value: Any, *, default: str = "(none)") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
+def _format_step_names(step_names: list[str], step_labels: Mapping[str, str]) -> str:
+    formatted = []
+    for raw_name in step_names:
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        label = step_labels.get(name, name)
+        formatted.append(f"{label}({name})" if label != name else name)
+    return ", ".join(formatted) if formatted else "(none)"
+
+
+def _normalize_id_list(raw_values: Any) -> list[str]:
+    if not isinstance(raw_values, (list, tuple, set)):
+        return []
+    normalized = []
+    for item in raw_values:
+        text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _preview_id_list(raw_values: Any, *, limit: int = 6) -> str:
+    values = _normalize_id_list(raw_values)
+    if not values:
+        return "(none)"
+    preview = values[:limit]
+    if len(values) > limit:
+        preview.append(f"...(+{len(values) - limit})")
+    return ", ".join(preview)
+
+
+def _derive_checklist_status(checklist_payload: Dict[str, Any]) -> str:
+    explicit_status = str(checklist_payload.get("status", "") or "").strip().upper()
+    if explicit_status in {"DONE", "PARTIAL", "TODO", "N/A"}:
+        return explicit_status
+    todo_ids = _normalize_id_list(checklist_payload.get("todo_ids", []))
+    partial_ids = _normalize_id_list(checklist_payload.get("partial_ids", []))
+    done_ids = _normalize_id_list(checklist_payload.get("done_ids", []))
+    if todo_ids:
+        return "TODO"
+    if partial_ids:
+        return "PARTIAL"
+    if checklist_payload or done_ids or checklist_payload.get("ok") is True:
+        return "DONE"
+    return "N/A"
+
+
+def _coverage_percent(numerator: Any, denominator: Any) -> float:
+    try:
+        numerator_value = float(numerator or 0.0)
+        denominator_value = float(denominator or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if denominator_value <= 0.0:
+        return 0.0
+    return (numerator_value / denominator_value) * 100.0
+
+
+def print_test_suite_human_summary(
+    result: Dict[str, Any],
+    *,
+    regression_step_order: list[str] | tuple[str, ...],
+    dataset_required_steps: Iterable[str],
+    step_labels: Mapping[str, str] | None = None,
+) -> None:
+    step_labels = TEST_SUITE_STEP_LABELS if step_labels is None else step_labels
+    regression_step_order = list(regression_step_order)
+
+    master_scripts = result.get("scripts", [])
+    master = {
+        "scripts": master_scripts,
+        "failures": result.get("failures", 0),
+        "overall_status": result.get("overall_status", "FAIL"),
+    }
+    selected_steps = set(result.get("selected_steps", []))
+    failed_step_names = set(result.get("failed_step_names", []))
+    not_run_step_names = set(result.get("not_run_step_names", []))
+    step_payloads = result.get("step_payloads", {})
+    if not selected_steps:
+        selected_steps = {
+            str(item.get("name", "")).strip()
+            for item in master_scripts
+            if str(item.get("name", "")).strip() in regression_step_order
+        }
+        if not selected_steps:
+            selected_steps = {name for name in regression_step_order if step_payloads.get(name)}
+    dataset_prepare_required = _is_dataset_prepare_required(selected_steps, dataset_required_steps)
+    quick = step_payloads.get("quick_gate", {})
+    consistency = step_payloads.get("consistency", {})
+    chain = step_payloads.get("chain_checks", {})
+    ml = step_payloads.get("ml_smoke", {})
+    meta = step_payloads.get("meta_quality", {})
+
+    def _payload_issue_text(payload: Dict[str, Any]) -> str:
+        if not payload:
+            return "missing_summary_file"
+        reasons = []
+        if payload.get("error_type"):
+            reasons.append("summary_unreadable")
+        reported_status = str(payload.get("status", "") or "").strip()
+        if reported_status and reported_status != "PASS":
+            reasons.append(f"reported_status={reported_status}")
+        return ", ".join(reasons)
+
+    def _payload_detail_text(payload: Dict[str, Any]) -> str:
+        if not payload:
+            return ""
+        details = []
+        error_type = str(payload.get("error_type", "") or "").strip()
+        if error_type:
+            details.append(f"error_type={error_type}")
+        error_message = str(payload.get("error_message", "") or payload.get("runtime_error", "") or "").strip()
+        if error_message:
+            details.append(f"error_message={error_message}")
+        failed_packages = [str(item).strip() for item in payload.get("failed_packages", []) if str(item).strip()]
+        if failed_packages:
+            details.append("failed_packages=" + ",".join(failed_packages))
+        failed_steps = [str(item).strip() for item in payload.get("failed_steps", []) if str(item).strip()]
+        if failed_steps:
+            details.append("failed_steps=" + ",".join(failed_steps))
+        failures = [str(item).strip() for item in payload.get("failures", []) if str(item).strip()]
+        if failures:
+            details.append("failures=" + ",".join(failures))
+        summary_write_error = str(payload.get("summary_write_error", "") or "").strip()
+        if summary_write_error:
+            details.append(f"summary_write_error={summary_write_error}")
+        if "fail_count" in payload:
+            try:
+                details.append(f"fail_count={int(payload.get('fail_count', 0))}")
+            except (TypeError, ValueError):
+                pass
+        if "failed_count" in payload:
+            try:
+                details.append(f"failed_count={int(payload.get('failed_count', 0))}")
+            except (TypeError, ValueError):
+                pass
+        return ", ".join(details)
+
+    def _blocked_reason(step_name: str) -> str:
+        if step_name not in not_run_step_names:
+            return ""
+        if "manifest" in failed_step_names:
+            return "blocked_by_manifest"
+        if step_name == "dataset_prepare" and "preflight" in failed_step_names:
+            return "blocked_by_preflight"
+        if step_name in {"quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"}:
+            if "preflight" in failed_step_names:
+                return "blocked_by_preflight"
+            if "dataset_prepare" in failed_step_names:
+                return "blocked_by_dataset_prepare"
+        return "blocked_before_step"
+
+    def _step_overview(name: str, payload: Dict[str, Any], script_item: Dict[str, Any]) -> tuple[str, str]:
+        if name == "dataset_prepare" and not dataset_prepare_required:
+            return "SKIP", "not_required"
+        if name in regression_step_order and name not in selected_steps:
+            return "SKIP", "not_selected"
+        if name in not_run_step_names:
+            return "NOT_RUN", _blocked_reason(name)
+        issue_text = _payload_issue_text(payload)
+        if issue_text:
+            payload_detail = _payload_detail_text(payload)
+            detail_text = ", ".join(part for part in [issue_text, payload_detail] if part)
+            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), detail_text
+        if script_item:
+            return script_item.get("status", "PASS"), ""
+        reported_status = str(payload.get("status", "") or "").strip()
+        if reported_status:
+            return reported_status, ""
+        return "FAIL", "missing_summary_file"
+
+    print("\n" + "=" * 78)
+    print(" Test Suite 結果整理")
+    print("=" * 78)
+    print(f"整體狀態 : {result.get('overall_status', 'FAIL')} | 失敗步驟 : {result.get('failures', 0)}")
+    if selected_steps:
+        selected_preview = ", ".join(step_labels.get(name, name) for name in regression_step_order if name in selected_steps)
+        print(f"執行步驟 : {selected_preview}")
+
+    manifest_payload = step_payloads.get("manifest", {})
+    manifest_status = str(manifest_payload.get("status", "") or "").strip() or "PASS"
+    if manifest_status == "PASS":
+        print(f"manifest    : PASS | {manifest_payload.get('duration_sec', 0.0):.2f}s")
+    else:
+        print(
+            f"manifest    : FAIL | {_safe_display_text(manifest_payload.get('error_type'), default='(unknown_error)')}: "
+            f"{_safe_display_text(manifest_payload.get('error_message'))}"
+        )
+
+    preflight = step_payloads.get("preflight", {})
+    preflight_status, preflight_detail = _step_overview("preflight", preflight, {})
+    if preflight_status == "PASS":
+        failed_text = ",".join(preflight.get("failed_packages", [])) or "(none)"
+        print(
+            f"preflight   : {preflight_status} | "
+            f"{preflight.get('duration_sec', 0.0):.2f}s | failed_packages={failed_text}"
+        )
+    else:
+        print(f"preflight   : {preflight_status} | {preflight_detail}")
+
+    dataset_prepare = step_payloads.get("dataset_prepare", {})
+    dataset_status, dataset_detail = _step_overview("dataset_prepare", dataset_prepare, {})
+    if dataset_status == "PASS":
+        print(
+            f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
+            f"csv_count={dataset_prepare.get('csv_count', 0)} | "
+            f"source={_safe_display_text(dataset_prepare.get('source'))}"
+        )
+    else:
+        print(f"dataset prep: {dataset_status} | {dataset_detail}")
+    retention = result.get("retention", {})
+    print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
+    print(f"歷史 bundle : {_safe_display_text(result.get('archived_bundle'))}")
+    print(f"根目錄 bundle : {_safe_display_text(result.get('root_bundle_copy'))}")
+    print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
+    print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
+
+    script_map = {item["name"]: item for item in master.get("scripts", [])}
+    print("\n[步驟摘要]")
+    for key in regression_step_order:
+        item = script_map.get(key, {})
+        status, detail = _step_overview(key, step_payloads.get(key, {}), item)
+        if item:
+            detail_suffix = f" | {detail}" if detail and status != "PASS" else ""
+            print(f"- {step_labels.get(key, key):<13} {status:<8} {item.get('duration_sec', 0.0):>6.2f}s{detail_suffix}")
+        else:
+            print(f"- {step_labels.get(key, key):<13} {status:<8} {detail}")
+
+    print("\n[重點結果]")
+    quick_script = script_map.get("quick_gate", {})
+    quick_status, quick_detail = _step_overview("quick_gate", quick, quick_script)
+    if quick_status == "PASS":
+        print(f"- quick gate : step_count={quick.get('step_count', 0)} | failed_count={quick.get('failed_count', 0)}")
+    else:
+        fallback = ", ".join(quick_script.get("failure_reasons", []))
+        print(f"- quick gate : {quick_status} | {quick_detail or fallback}")
+
+    consistency_script = script_map.get("consistency", {})
+    consistency_status, consistency_detail = _step_overview("consistency", consistency, consistency_script)
+    if consistency_status == "PASS":
+        print(
+            "- consistency: "
+            f"total_checks={consistency.get('total_checks', 0)} | "
+            f"fail_count={consistency.get('fail_count', 0)} | "
+            f"skip_count={consistency.get('skip_count', 0)} | "
+            f"real_tickers={consistency.get('real_ticker_count', 0)}"
+        )
+    else:
+        fallback = ", ".join(consistency_script.get("failure_reasons", []))
+        print(f"- consistency: {consistency_status} | {consistency_detail or fallback}")
+
+    chain_script = script_map.get("chain_checks", {})
+    chain_status, chain_detail = _step_overview("chain_checks", chain, chain_script)
+    if chain_status == "PASS":
+        portfolio_snapshot = chain.get("portfolio_snapshot", {})
+        highlights = chain.get("highlights", {})
+        print(
+            "- chain checks: "
+            f"ticker_count={chain.get('ticker_count', 0)} | "
+            f"traded_ticker_count={highlights.get('traded_ticker_count', 0)} | "
+            f"missed_buy_ticker_count={highlights.get('missed_buy_ticker_count', 0)} | "
+            f"trade_rows={portfolio_snapshot.get('trade_rows', 0)} | "
+            f"reserved_buy_fill_rate={portfolio_snapshot.get('reserved_buy_fill_rate', 0.0)}"
+        )
+        blocked_by_counts = highlights.get("blocked_by_counts", {})
+        if blocked_by_counts:
+            blocked_preview = ", ".join(f"{key}:{value}" for key, value in list(blocked_by_counts.items())[:6])
+            print(f"  blocked_by : {blocked_preview}")
+    else:
+        fallback = ", ".join(chain_script.get("failure_reasons", []))
+        print(f"- chain checks: {chain_status} | {chain_detail or fallback}")
+
+    ml_script = script_map.get("ml_smoke", {})
+    ml_status, ml_detail = _step_overview("ml_smoke", ml, ml_script)
+    if ml_status == "PASS":
+        print(
+            "- ml smoke   : "
+            f"db_trial_count={ml.get('db_trial_count', 0)} | "
+            f"status={ml.get('status', 'N/A')}"
+        )
+    else:
+        fallback = ", ".join(ml_script.get("failure_reasons", []))
+        print(f"- ml smoke   : {ml_status} | {ml_detail or fallback}")
+
+    meta_script = script_map.get("meta_quality", {})
+    meta_status, meta_detail = _step_overview("meta_quality", meta, meta_script)
+    if meta_status == "PASS":
+        coverage = meta.get("coverage", {})
+        checklist = meta.get("checklist", {})
+        totals = coverage.get("totals", {})
+        line_percent = float(coverage.get("line_percent_covered", _coverage_percent(totals.get("covered_lines", 0), totals.get("num_statements", 0))))
+        branch_percent = float(coverage.get("branch_percent_covered", _coverage_percent(totals.get("covered_branches", 0), totals.get("num_branches", 0))))
+        line_min_percent = coverage.get("line_min_percent")
+        branch_min_percent = coverage.get("branch_min_percent")
+        checklist_status = _derive_checklist_status(checklist)
+        performance = meta.get("performance", {})
+        missing_cov = _preview_id_list(coverage.get("missing_targets", []))
+        zero_cov = _preview_id_list(coverage.get("zero_covered_targets", []))
+        peak_mem_steps = performance.get("step_peak_traced_memory_mb", {})
+        peak_mem_preview = _safe_display_text(
+            ", ".join(f"{name}:{value}" for name, value in list(peak_mem_steps.items())[:4]) if peak_mem_steps else "(none)"
+        )
+        print(
+            "- meta quality: "
+            f"fail_count={meta.get('fail_count', 0)} | "
+            f"coverage_line={line_percent:.2f} | "
+            f"coverage_branch={branch_percent:.2f} | "
+            f"checklist_status={checklist_status}"
+        )
+        print(
+            "  coverage    : "
+            f"line_min={_safe_display_text(line_min_percent)} | "
+            f"branch_min={_safe_display_text(branch_min_percent)} | "
+            f"missing_cov={missing_cov} | "
+            f"zero_cov={zero_cov}"
+        )
+        print(
+            "  performance : "
+            f"peak_mem_max_mb={_safe_display_text(performance.get('max_step_peak_traced_memory_mb'))} | "
+            f"peak_mem_steps={peak_mem_preview}"
+        )
+        print(
+            "  checklist   : "
+            f"partial={_preview_id_list(checklist.get('partial_ids', []))} | "
+            f"todo={_preview_id_list(checklist.get('todo_ids', []))} | "
+            f"done={_preview_id_list(checklist.get('done_ids', []))}"
+        )
+    else:
+        fallback = ", ".join(meta_script.get("failure_reasons", []))
+        print(f"- meta quality: {meta_status} | {meta_detail or fallback}")
+
+    if result.get("overall_status", "FAIL") != "PASS":
+        failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
+        if not failed_names:
+            failed_names = [str(name) for name in result.get("failed_step_names", []) if str(name).strip()]
+        if failed_names:
+            print(f"\n失敗步驟 : {_format_step_names(failed_names, step_labels)}")
+        blocked_names = [name for name in regression_step_order if name in not_run_step_names]
+        if dataset_prepare_required and "dataset_prepare" in not_run_step_names:
+            blocked_names = ["dataset_prepare", *blocked_names]
+        if blocked_names:
+            print(f"未執行步驟 : {_format_step_names(blocked_names, step_labels)}")
+        rerun_command = result.get("suggested_rerun_command", "")
+        if rerun_command:
+            print(f"建議重跑 : {rerun_command}")
+    print("=" * 78)
+
+
+__all__ = ["TEST_SUITE_STEP_LABELS", "print_test_suite_human_summary"]

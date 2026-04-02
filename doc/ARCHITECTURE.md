@@ -42,7 +42,8 @@ project/
 │  ├─ portfolio_stats.py          # 投組曲線/年度/年化統計與分數計算單一口徑
 │  ├─ position_step.py            # 單股持倉 K 棒步進與出場事件處理
 │  ├─ backtest_finalize.py        # 單股回測期末結算與統計彙整
-│  └─ runtime_utils.py            # 執行期共用工具：ProcessPool 啟動方法、Asia/Taipei 時間工具
+│  ├─ runtime_utils.py            # 執行期共用工具：ProcessPool 啟動方法、Asia/Taipei 時間工具
+│  └─ test_suite_reporting.py     # test suite 結果摘要格式與共用顯示 helper
 ├─ doc/
 │  ├─ ARCHITECTURE.md                 # 本檔；檔案樹、用途與依賴原則說明
 │  ├─ CMD.md                          # 常用指令與操作說明
@@ -215,6 +216,7 @@ tools/validate/
 ### 測試入口收斂
 - `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口，且必須串接所有已實作測試；正式步驟順序由 `tools/local_regression/formal_pipeline.py` 提供；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
 - `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
+- `core/test_suite_reporting.py` 集中 `apps/test_suite.py` 結果摘要格式與 step label 單一口徑，供 formal entry、meta quality coverage probe 與 synthetic reporting contract 共用，避免 `tools/` 反向依賴 `apps/`。
 - 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。
 
 

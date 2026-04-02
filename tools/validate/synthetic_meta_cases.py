@@ -15,6 +15,7 @@ from .meta_contracts import (
     extract_markdown_table_rows,
     load_defined_validate_names_from_synthetic_case_modules,
     load_imported_validate_names_from_synthetic_main_entry,
+    summarize_no_reverse_app_import_contract,
     summarize_single_formal_test_entry_contract,
 )
 
@@ -154,6 +155,23 @@ def validate_cmd_document_contract_case(_base_params):
     summary["command_count"] = len(unique_commands)
     summary["project_command_count"] = project_command_count
     return results, summary
+
+def validate_no_reverse_app_layer_dependencies_case(_base_params):
+    case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_no_reverse_app_import_contract(PROJECT_ROOT)
+    violations = [
+        f"{item['path']}:{item['lineno']} -> {item['module']}"
+        for item in contract["violations"]
+    ]
+    add_check(results, "meta_entry_contract", case_id, "core_and_tools_do_not_import_apps", [], violations)
+
+    summary["violation_count"] = len(violations)
+    summary["violations"] = violations
+    return results, summary
+
 
 def validate_single_formal_test_entry_contract_case(_base_params):
     case_id = "META_SINGLE_FORMAL_TEST_ENTRY"

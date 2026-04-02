@@ -59,6 +59,43 @@ def _read_python_ast(path: Path) -> ast.AST:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
+def _load_named_string_dict_keys(module_path: Path, constant_name: str) -> List[str]:
+    tree = _read_python_ast(module_path)
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        target_names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+        if constant_name not in target_names or not isinstance(node.value, ast.Dict):
+            continue
+        parsed_keys: List[str] = []
+        for key_node in node.value.keys:
+            if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                parsed_keys.append(key_node.value)
+        return parsed_keys
+    return []
+
+
+def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, Any]:
+    violations: List[Dict[str, Any]] = []
+    for rel_dir in ("core", "tools"):
+        for path in sorted((project_root / rel_dir).rglob("*.py")):
+            tree = _read_python_ast(path)
+            for node in ast.walk(tree):
+                modules: List[str] = []
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    modules = [node.module]
+                elif isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                for module_name in modules:
+                    if module_name == "apps" or module_name.startswith("apps."):
+                        violations.append({
+                            "path": str(path.relative_to(project_root)).replace("\\", "/"),
+                            "lineno": getattr(node, "lineno", 0),
+                            "module": module_name,
+                        })
+    return {"violations": violations}
+
+
 def load_imported_validate_names_from_synthetic_main_entry(project_root: Path) -> Set[str]:
     source_path = project_root / "tools" / "validate" / "synthetic_cases.py"
     tree = _read_python_ast(source_path)
@@ -90,6 +127,13 @@ def summarize_test_suite_registry_contract(project_root: Path, formal_step_order
     source_path = project_root / "apps" / "test_suite.py"
     tree = _read_python_ast(source_path)
 
+    imported_name_sources: Dict[str, tuple[str, str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        for alias in node.names:
+            imported_name_sources[alias.asname or alias.name] = (node.module, alias.name)
+
     regression_step_order_aliases_registry = False
     step_labels_keys: List[str] = []
     for node in tree.body:
@@ -100,12 +144,18 @@ def summarize_test_suite_registry_contract(project_root: Path, formal_step_order
             regression_step_order_aliases_registry = (
                 isinstance(node.value, ast.Name) and node.value.id == "FORMAL_STEP_ORDER"
             )
-        if "STEP_LABELS" in target_names and isinstance(node.value, ast.Dict):
-            parsed_keys: List[str] = []
-            for key_node in node.value.keys:
-                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                    parsed_keys.append(key_node.value)
-            step_labels_keys = parsed_keys
+        if "STEP_LABELS" in target_names:
+            if isinstance(node.value, ast.Dict):
+                for key_node in node.value.keys:
+                    if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                        step_labels_keys.append(key_node.value)
+            elif isinstance(node.value, ast.Name):
+                imported_source = imported_name_sources.get(node.value.id)
+                if imported_source == ("core.test_suite_reporting", "TEST_SUITE_STEP_LABELS"):
+                    step_labels_keys = _load_named_string_dict_keys(
+                        project_root / "core" / "test_suite_reporting.py",
+                        "TEST_SUITE_STEP_LABELS",
+                    )
 
     formal_step_order_list = list(formal_step_order)
     missing_step_labels = [step for step in formal_step_order_list if step not in step_labels_keys]

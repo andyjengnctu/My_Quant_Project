@@ -38,6 +38,7 @@ from .synthetic_unit_cases import (
 from .synthetic_meta_cases import (
     validate_cmd_document_contract_case,
     validate_known_bad_fault_injection_case,
+    validate_no_reverse_app_layer_dependencies_case,
     validate_registry_checklist_entry_consistency_case,
     validate_single_formal_test_entry_contract_case,
 )
@@ -136,6 +137,7 @@ def get_synthetic_validators():
         validate_registry_checklist_entry_consistency_case,
         validate_known_bad_fault_injection_case,
         validate_cmd_document_contract_case,
+        validate_no_reverse_app_layer_dependencies_case,
         validate_single_formal_test_entry_contract_case,
         validate_display_reporting_sanity_case,
         validate_validate_console_summary_reporting_case,

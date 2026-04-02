@@ -488,7 +488,7 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
 
 
 def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
-    from apps import test_suite as test_suite_module
+    from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
     from core.scanner_display import print_scanner_header
     from core.strategy_dashboard import print_strategy_dashboard
     from tools.local_regression import run_all as run_all_module
@@ -651,7 +651,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "reused_existing": True,
     })
 
-    _silent_call(lambda: test_suite_module._print_human_summary({
+    _silent_call(lambda: print_test_suite_human_summary({
         "overall_status": "PASS",
         "failures": 0,
         "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],

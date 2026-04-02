@@ -142,7 +142,7 @@ python tools/validate/preflight_env.py
 
 - `preflight_env.py` 只做檢查，不自動安裝依賴。
 - `python tools/validate/preflight_env.py --steps quick_gate,consistency` 可只檢查指定步驟所需套件；但 `quick_gate` 內含 optimizer export-only 錯誤路徑，所以仍需要 `optuna` 與 `SQLAlchemy`。
-- `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。兩者都會串接所有已實作測試，包含 `meta_quality`。`run_chain_checks.py` 目前也會把 scanner reduced snapshot 納入雙跑 digest；`run_ml_smoke.py` 會以固定 seed 做雙跑；`synthetic_regression_cases.py` 另外補齊 `scan_runner` 入口重跑一致性、optimizer raw cache rerun / mutation isolation 與 `run_all.py` 同 run dir rerun summary / bundle repeatability。`meta_quality` 會讀取同輪 step summary 與 optimizer profile summary，檢查 reduced performance baseline，並校驗 `tools/local_regression/formal_pipeline.py` / `run_all.py` / `preflight_env.py` / `apps/test_suite.py` 的正式步驟一致性；`PROJECT_SETTINGS.md` 只保留上層原則與單一入口規範。
+- `python apps/test_suite.py` 與 `python tools/local_regression/run_all.py` 都會先執行這個 preflight；若缺件會先 fail-fast，不進入後續 reduced 測試。兩者都會串接所有已實作測試，包含 `meta_quality`。`run_chain_checks.py` 目前也會把 scanner reduced snapshot 納入雙跑 digest；`run_ml_smoke.py` 會以固定 seed 做雙跑；`synthetic_regression_cases.py` 另外補齊 `scan_runner` 入口重跑一致性、optimizer raw cache rerun / mutation isolation 與 `run_all.py` 同 run dir rerun summary / bundle repeatability。`meta_quality` 會讀取同輪 step summary 與 optimizer profile summary，檢查 reduced performance baseline，並校驗 `tools/local_regression/formal_pipeline.py` / `run_all.py` / `preflight_env.py` / `apps/test_suite.py` 的正式步驟一致性；`apps/test_suite.py` 結果摘要格式則統一收斂於 `core/test_suite_reporting.py`，避免 `tools/` 反向依賴 `apps/`；`PROJECT_SETTINGS.md` 只保留上層原則與單一入口規範。
 - 日常流程先跑完整入口；只有完整入口已找出 FAIL 步驟時，才使用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。`meta_quality` 也已納入完整入口。
 
 ### 輸出位置
@@ -207,4 +207,4 @@ local regression 與 validate 的 reduced 測試資料來源固定為：
 - `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。
 
 
-- `tools/validate/synthetic_reporting_cases.py`：檢查 validate console summary、issue Excel report、portfolio yearly/export report、`apps/test_suite.py` 結果摘要的 reporting schema / 格式相容性。
+- `tools/validate/synthetic_reporting_cases.py`：檢查 validate console summary、issue Excel report、portfolio yearly/export report、`core/test_suite_reporting.py` / `apps/test_suite.py` 結果摘要的 reporting schema / 格式相容性。

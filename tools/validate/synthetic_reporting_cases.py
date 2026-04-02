@@ -9,8 +9,9 @@ from unittest.mock import patch
 import pandas as pd
 from openpyxl import load_workbook
 
-from apps import test_suite as test_suite_module
 from core.display_common import _strip_ansi
+from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
+from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_STEP_ORDER
 from tools.portfolio_sim import reporting as portfolio_reporting
 from tools.validate.reporting import print_console_summary
 
@@ -22,6 +23,17 @@ def _capture_output(callable_obj):
     with redirect_stdout(buffer):
         callable_obj()
     return _strip_ansi(buffer.getvalue())
+
+
+def _capture_test_suite_summary(result_payload):
+    return _capture_output(
+        lambda: print_test_suite_human_summary(
+            result_payload,
+            regression_step_order=FORMAL_STEP_ORDER,
+            dataset_required_steps=DATASET_REQUIRED_STEPS,
+            step_labels=TEST_SUITE_STEP_LABELS,
+        )
+    )
 
 
 def validate_validate_console_summary_reporting_case(_base_params):
@@ -167,7 +179,7 @@ def validate_test_suite_summary_reporting_case(_base_params):
 
     result_payload = _base_test_suite_result_payload()
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_title_and_bundle", True, "Test Suite 結果整理" in summary_text and "bundle 模式 : minimum_set" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_step_table", True, "[步驟摘要]" in summary_text and "quick gate" in summary_text and "meta quality" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_highlights", True, "step_count=88" in summary_text and "total_checks=2752" in summary_text and "db_trial_count=1" in summary_text)
@@ -328,7 +340,7 @@ def validate_test_suite_summary_failure_reporting_case(_base_params):
         "suggested_rerun_command": "python tools/local_regression/run_all.py --only chain_checks",
     })
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_failure_line", True, "失敗步驟 : chain checks(chain_checks)" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_step_reason", True, "chain checks" in summary_text and "reported_status=FAIL" in summary_text and "failed_steps=scanner_snapshot" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_rerun_command", True, "建議重跑 : python tools/local_regression/run_all.py --only chain_checks" in summary_text)
@@ -360,7 +372,7 @@ def validate_test_suite_summary_manifest_failure_reporting_case(_base_params):
         "retention": {"removed_count": 0, "removed_bytes": 0},
     }
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_has_manifest_error", True, "manifest    : FAIL | LocalRegressionError: manifest 欄位 bundle_name 不可空白" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_marks_blocked_steps", True, "preflight   : NOT_RUN | blocked_by_manifest" in summary_text and "dataset prep: NOT_RUN | blocked_by_manifest" in summary_text and "quick gate    NOT_RUN" in summary_text and "blocked_by_manifest" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_lists_not_run_steps", True, "未執行步驟 : dataset prepare(dataset_prepare), quick gate(quick_gate), consistency, chain checks(chain_checks), ml smoke(ml_smoke), meta quality(meta_quality)" in summary_text)
@@ -408,7 +420,7 @@ def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
         "retention": {"removed_count": 0, "removed_bytes": 0},
     }
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_selected_step", True, "執行步驟 : meta quality" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_dataset_not_required", True, "dataset prep: SKIP | not_required" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_unselected_steps", True, "quick gate    SKIP" in summary_text and "consistency   SKIP" in summary_text and "ml smoke      SKIP" in summary_text and "not_selected" in summary_text)
@@ -429,7 +441,7 @@ def validate_test_suite_summary_checklist_status_sync_case(_base_params):
         "done_ids": ["B21"],
     }
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_checklist_status_sync_uses_checklist_vocabulary", True, "checklist_status=PARTIAL" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_checklist_status_sync_lists_partial_and_done_ids", True, "partial=B01, B19" in summary_text and "done=B21" in summary_text)
 
@@ -460,7 +472,7 @@ def validate_test_suite_summary_meta_quality_guardrail_reporting_case(_base_para
         "checklist": {"status": "TODO", "partial_ids": ["B22"], "todo_ids": ["B26"], "done_ids": ["B21"]},
     }
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_thresholds", True, "line_min=50" in summary_text and "branch_min=45" in summary_text and "missing_cov=tools/local_regression/run_all.py" in summary_text and "zero_cov=apps/test_suite.py" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_checklist_status", True, "checklist_status=TODO" in summary_text and "partial=B22" in summary_text and "todo=B26" in summary_text)
 
@@ -489,7 +501,7 @@ def validate_test_suite_summary_preflight_failure_reporting_case(_base_params):
         "retention": {"removed_count": 0, "removed_bytes": 0},
     }
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_has_failure_detail", True, "preflight   : FAIL | reported_status=FAIL" in summary_text and "failed_packages=numpy,pandas" in summary_text and "error_message=missing packages" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_marks_blocked_steps", True, "dataset prep: NOT_RUN | blocked_by_preflight" in summary_text and "quick gate    NOT_RUN" in summary_text and "blocked_by_preflight" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_formats_named_steps_and_empty_bundle", True, "未執行步驟 : dataset prepare(dataset_prepare), quick gate(quick_gate)" in summary_text and "歷史 bundle : (none)" in summary_text and "根目錄 bundle : (none)" in summary_text)
@@ -523,7 +535,7 @@ def validate_test_suite_summary_dataset_prepare_failure_reporting_case(_base_par
         "suggested_rerun_command": "",
     })
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_dataset_failure_has_detail", True, "dataset prep: FAIL | reported_status=FAIL" in summary_text and "error_message=reduced dataset missing" in summary_text and "summary_write_error=disk full" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_dataset_failure_marks_regression_blocked", True, "quick gate    NOT_RUN" in summary_text and "blocked_by_dataset_prepare" in summary_text and "未執行步驟 : quick gate(quick_gate), consistency, chain checks(chain_checks), ml smoke(ml_smoke), meta quality(meta_quality)" in summary_text)
 
@@ -560,7 +572,7 @@ def validate_test_suite_summary_unreadable_payload_reporting_case(_base_params):
         "suggested_rerun_command": "python tools/local_regression/run_all.py --only chain_checks",
     })
 
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_unreadable_payload_surfaces_reason", True, "summary_unreadable" in summary_text and "error_type=JSONDecodeError" in summary_text and "Expecting value: line 1 column 1 (char 0)" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_unreadable_payload_formats_failed_step_labels", True, "失敗步驟 : chain checks(chain_checks)" in summary_text and "建議重跑 : python tools/local_regression/run_all.py --only chain_checks" in summary_text)
 
@@ -601,7 +613,7 @@ def validate_test_suite_summary_meta_quality_memory_reporting_case(_base_params)
             "not_run_step_names": [],
             "retention": {"removed_count": 0, "removed_bytes": 0},
         }
-    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    summary_text = _capture_test_suite_summary(result_payload)
 
     add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_memory_reports_peak_max", True, "peak_mem_max_mb=64.0" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_memory_reports_step_preview", True, "peak_mem_steps=quick_gate:12.5, consistency:32.5, chain_checks:64.0" in summary_text)
