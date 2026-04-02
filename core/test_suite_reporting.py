@@ -187,11 +187,28 @@ def print_test_suite_human_summary(
             return "SKIP", "not_selected"
         if name in not_run_step_names:
             return "NOT_RUN", _blocked_reason(name)
+
+        detail_tokens = []
+        seen_tokens = set()
+
+        def _append_detail_tokens(*chunks: str) -> None:
+            for chunk in chunks:
+                for token in str(chunk or "").split(","):
+                    normalized = token.strip()
+                    if normalized and normalized not in seen_tokens:
+                        seen_tokens.add(normalized)
+                        detail_tokens.append(normalized)
+
         issue_text = _payload_issue_text(payload)
-        if issue_text:
-            payload_detail = _payload_detail_text(payload)
-            detail_text = ", ".join(part for part in [issue_text, payload_detail] if part)
-            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), detail_text
+        payload_detail = _payload_detail_text(payload)
+        script_failure_detail = ", ".join(
+            str(item).strip()
+            for item in script_item.get("failure_reasons", [])
+            if str(item).strip()
+        )
+        _append_detail_tokens(issue_text, payload_detail, script_failure_detail)
+        if detail_tokens:
+            return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), ", ".join(detail_tokens)
         if script_item:
             return script_item.get("status", "PASS"), ""
         reported_status = str(payload.get("status", "") or "").strip()
