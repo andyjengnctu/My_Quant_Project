@@ -191,13 +191,18 @@ def print_test_suite_human_summary(
         detail_tokens = []
         seen_tokens = set()
 
-        def _append_detail_tokens(*chunks: str) -> None:
-            for chunk in chunks:
-                for token in str(chunk or "").split(","):
-                    normalized = token.strip()
-                    if normalized and normalized not in seen_tokens:
-                        seen_tokens.add(normalized)
-                        detail_tokens.append(normalized)
+        def _append_split_tokens(chunk: str) -> None:
+            for token in str(chunk or "").split(","):
+                normalized = token.strip()
+                if normalized and normalized not in seen_tokens:
+                    seen_tokens.add(normalized)
+                    detail_tokens.append(normalized)
+
+        def _append_whole_token(chunk: str) -> None:
+            normalized = str(chunk or "").strip()
+            if normalized and normalized not in seen_tokens:
+                seen_tokens.add(normalized)
+                detail_tokens.append(normalized)
 
         issue_text = _payload_issue_text(payload)
         payload_detail = _payload_detail_text(payload)
@@ -206,7 +211,9 @@ def print_test_suite_human_summary(
             for item in script_item.get("failure_reasons", [])
             if str(item).strip()
         )
-        _append_detail_tokens(issue_text, payload_detail, script_failure_detail)
+        _append_split_tokens(issue_text)
+        _append_whole_token(payload_detail)
+        _append_split_tokens(script_failure_detail)
         if detail_tokens:
             return script_item.get("status", payload.get("status", "FAIL") or "FAIL"), ", ".join(detail_tokens)
         if script_item:
