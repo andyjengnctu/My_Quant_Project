@@ -651,21 +651,26 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "reused_existing": True,
     })
 
-    _silent_call(lambda: print_test_suite_human_summary({
-        "overall_status": "PASS",
-        "failures": 0,
-        "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
-        "failed_step_names": [],
-        "not_run_step_names": [],
-        "scripts": [{"name": "quick_gate", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "consistency", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "chain_checks", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "ml_smoke", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "meta_quality", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}],
-        "step_payloads": {"quick_gate": {"status": "PASS", "step_count": 1}, "consistency": {"status": "PASS", "total_checks": 1, "fail_count": 0, "skip_count": 0, "real_ticker_count": 1}, "chain_checks": {"status": "PASS", "ticker_count": 1, "highlights": {"blocked_by_counts": {}}, "portfolio_snapshot": {"trade_rows": 1, "reserved_buy_fill_rate": 100.0}}, "ml_smoke": {"status": "PASS", "db_trial_count": 1}, "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 1.0}}, "checklist": {"todo_ids": []}}},
-        "preflight": {"status": "PASS", "failed_packages": []},
-        "bundle_mode": "minimum_set",
-        "archived_bundle": "outputs/local_regression/probe.zip",
-        "root_bundle_copy": "probe.zip",
-        "bundle_entries": ["master_summary.json"],
-        "retention": {"removed_count": 0, "removed_bytes": 0},
-    }))
+    _silent_call(lambda: print_test_suite_human_summary(
+        {
+            "overall_status": "PASS",
+            "failures": 0,
+            "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            "failed_step_names": [],
+            "not_run_step_names": [],
+            "scripts": [{"name": "quick_gate", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "consistency", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "chain_checks", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "ml_smoke", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}, {"name": "meta_quality", "status": "PASS", "duration_sec": 1.0, "failure_reasons": []}],
+            "step_payloads": {"quick_gate": {"status": "PASS", "step_count": 1}, "consistency": {"status": "PASS", "total_checks": 1, "fail_count": 0, "skip_count": 0, "real_ticker_count": 1}, "chain_checks": {"status": "PASS", "ticker_count": 1, "highlights": {"blocked_by_counts": {}}, "portfolio_snapshot": {"trade_rows": 1, "reserved_buy_fill_rate": 100.0}}, "ml_smoke": {"status": "PASS", "db_trial_count": 1}, "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 1.0}}, "checklist": {"todo_ids": []}}},
+            "preflight": {"status": "PASS", "failed_packages": []},
+            "bundle_mode": "minimum_set",
+            "archived_bundle": "outputs/local_regression/probe.zip",
+            "root_bundle_copy": "probe.zip",
+            "bundle_entries": ["master_summary.json"],
+            "retention": {"removed_count": 0, "removed_bytes": 0},
+        },
+        regression_step_order=FORMAL_STEP_ORDER,
+        dataset_required_steps=FORMAL_DATASET_REQUIRED_STEPS,
+        step_labels=TEST_SUITE_STEP_LABELS,
+    ))
 
     return {
         "ml_params_keys": sorted(params_info["payload"].keys()),
