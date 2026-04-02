@@ -14,7 +14,7 @@ from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from .runtime_common import is_insufficient_data_error
 
 
-def _build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
+def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
     if not stats or not stats['is_candidate']:
         return None
 
@@ -94,7 +94,7 @@ def process_prepared_stock(df, ticker, params, sanitize_stats=None):
             df['buy_limit'].to_numpy(copy=False),
         )
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
-    return _build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)
+    return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)
 
 
 def process_single_stock(file_path, ticker, params):
@@ -108,3 +108,8 @@ def process_single_stock(file_path, ticker, params):
         if is_insufficient_data_error(e):
             return ('skip_insufficient', None, None, None, None, ticker, None)
         raise RuntimeError(f"{ticker} 處理失敗 | {type(e).__name__}: {e}") from e
+
+
+# # (AI註: 相容舊名稱，避免外部直接引用時中斷)
+def _build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
+    return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)

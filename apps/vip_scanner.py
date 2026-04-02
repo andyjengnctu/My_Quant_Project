@@ -13,6 +13,8 @@ LAZY_EXPORTS = {
     "is_insufficient_data_error",
     "load_strict_params",
     "process_single_stock",
+    "process_prepared_stock",
+    "build_scanner_response_from_stats",
     "resolve_scanner_max_workers",
     "run_daily_scanner",
 }
@@ -49,6 +51,8 @@ __all__ = [
     "is_insufficient_data_error",
     "load_strict_params",
     "process_single_stock",
+    "process_prepared_stock",
+    "build_scanner_response_from_stats",
     "resolve_scanner_max_workers",
     "run_daily_scanner",
     "main",

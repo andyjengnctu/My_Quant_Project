@@ -161,10 +161,12 @@
 | D19 | rerun / cache pollution checks | 已完成；已補 raw cache rerun / mutation isolation、`run_all.py` 同 run dir rerun summary / bundle repeatability 與 chain snapshot 雙跑 digest |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | 已補 scanner reduced snapshot 雙跑 digest，確認 scanner 候選 / 狀態 / issue line 在同資料同參數下穩定一致 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline、key target presence/hit 與 manifest 化 minimum threshold gate，並已同步到 `apps/test_suite.py` 摘要顯示 |
-| D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time，並新增 traced peak memory regression gate；各 step summary 的 `duration_sec` 已補齊，budget 依實測 reduced baseline 校正；chain checks 同輪 prepared context / scanner snapshot / cached single-backtest stats 已去重，replay counts 併入第一次 timeline 主流程；`portfolio_sim` 驗證改吃 prepared context，不再經 temp CSV 二次載入 |
+| D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time，並新增 traced peak memory regression gate；各 step summary 的 `duration_sec` 已補齊，budget 依實測 reduced baseline 校正；chain checks 同輪 prepared context / scanner snapshot / cached single-backtest stats 已去重，replay counts 併入第一次 timeline 主流程；`portfolio_sim` 驗證改吃 prepared context，不再經 temp CSV 二次載入；`scanner` / `debug_trade_log` 驗證也已補 prepared-context 等價契約 |
 | D63 | `validate_meta_quality_performance_memory_contract_case` | 已補 meta quality performance memory contract，直接釘死 step peak memory / max peak memory / meta quality peak memory 欄位與 budget gate |
 | D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | 已補 `apps/test_suite.py` meta quality traced peak memory 摘要顯示契約 |
 | D65 | `validate_portfolio_sim_prepared_tool_contract_case` | 已補 `portfolio_sim` 單檔工具驗證 prepared-context 路徑與既有 temp-dir 路徑等價契約，避免加速後統計口徑漂移 |
+| D66 | `validate_scanner_prepared_tool_contract_case` | 已補 `vip_scanner` prepared-context / precomputed-stats 路徑與既有 file-path 路徑等價契約，避免加速後候選狀態與排序口徑漂移 |
+| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | 已補 `debug_trade_log` prepared-context 路徑與既有 raw-df 路徑等價契約，避免加速後明細列內容與逐筆損益 sequence 漂移 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；確認 `DONE` 項目皆已映射到實際 test function 與 synthetic 主入口 |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
 | D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
@@ -403,3 +405,7 @@
 | 2026-04-02 | B19 / D21 | 去除 chain checks / consistency 內部重工以縮短 reduced suite 牆鐘時間 | DONE -> DONE | `run_chain_checks.py` 共用 prepared market context、改吃 prepared scanner snapshot 與 cached single-backtest stats；`prep_stock_data_and_trades()` 新增 optional stats 回傳，`real_case_runners.py` 改共用同一份 prepared backtest 結果 |
 | 2026-04-02 | D65 | 新增 portfolio_sim prepared tool contract case 並驗證 | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
 | 2026-04-02 | B19 / D21 | 將 chain replay counts 併入第一次 timeline，並移除 portfolio_sim 驗證 temp CSV 二次載入 | DONE -> DONE | `core/portfolio_engine.py`, `tools/local_regression/run_chain_checks.py`, `tools/portfolio_sim/simulation_runner.py`, `tools/validate/portfolio_tool_checks.py` |
+
+| 2026-04-02 | D66 | 新增 scanner prepared tool contract case 並驗證 | NEW -> DONE | `validate_scanner_prepared_tool_contract_case` |
+| 2026-04-02 | D67 | 新增 debug trade log prepared tool contract case 並驗證 | NEW -> DONE | `validate_debug_trade_log_prepared_tool_contract_case` |
+| 2026-04-02 | B19 / D21 | 將 scanner / debug_trade_log 驗證改為共用 prepared context 與 precomputed stats | DONE -> DONE | `tools/validate/real_case_runners.py`, `tools/validate/external_tool_checks.py`, `apps/vip_scanner.py`, `tools/debug/trade_log.py` |

@@ -48,7 +48,7 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), 
 
 
 
-def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
+def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True, precomputed_signals=None):
     from tools.debug.backtest import run_debug_backtest as _run_debug_backtest
 
     return _run_debug_backtest(
@@ -59,6 +59,18 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True):
         colors=COLOR_MAP,
         export_excel=export_excel,
         verbose=verbose,
+        precomputed_signals=precomputed_signals,
+    )
+
+
+def run_debug_prepared_backtest(prepared_df, ticker, params, export_excel=True, verbose=True):
+    return run_debug_backtest(
+        prepared_df,
+        ticker,
+        params,
+        export_excel=export_excel,
+        verbose=verbose,
+        precomputed_signals=None,
     )
 
 

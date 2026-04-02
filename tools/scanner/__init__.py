@@ -20,6 +20,12 @@ def __getattr__(name):
         value = getattr(worker_module, name)
         globals()[name] = value
         return value
+    if name in {"process_prepared_stock", "build_scanner_response_from_stats"}:
+        from . import stock_processor as stock_processor_module
+
+        value = getattr(stock_processor_module, name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -28,6 +34,8 @@ __all__ = [
     "is_insufficient_data_error",
     "load_strict_params",
     "process_single_stock",
+    "process_prepared_stock",
+    "build_scanner_response_from_stats",
     "resolve_scanner_max_workers",
     "run_daily_scanner",
     "main",

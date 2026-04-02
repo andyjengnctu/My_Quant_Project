@@ -12,6 +12,7 @@ import pandas as pd
 from openpyxl import load_workbook
 
 from core.output_retention import RetentionRule, apply_retention_rules
+from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
 from tools.local_regression import run_meta_quality as run_meta_quality_module
@@ -19,11 +20,17 @@ from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
 from tools.local_regression.common import write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report
+from core.portfolio_fast_data import prep_stock_data_and_trades
 
 from .checks import add_check, make_synthetic_validation_params
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
 from .synthetic_frame_utils import write_synthetic_csv_bundle
-from .tool_adapters import run_portfolio_sim_tool_check, run_portfolio_sim_tool_check_for_dir
+from .tool_adapters import (
+    run_debug_trade_log_check,
+    run_portfolio_sim_tool_check,
+    run_portfolio_sim_tool_check_for_dir,
+    run_scanner_tool_check,
+)
 
 
 REQUIRED_VALIDATE_SUMMARY_KEYS = {
@@ -100,6 +107,19 @@ CHAIN_SUMMARY_CSV_FIELDS = [
     "blocked_by",
     "sanitize_dropped",
 ]
+
+def _normalize_nan_records(df):
+    if df is None:
+        return None
+
+    def _normalize_value(value):
+        return None if pd.isna(value) else value
+
+    records = []
+    for row in df.to_dict("records"):
+        records.append({key: _normalize_value(value) for key, value in row.items()})
+    return records
+
 
 REQUIRED_ML_SMOKE_SUMMARY_KEYS = {
     "status",
@@ -708,4 +728,58 @@ def validate_portfolio_sim_prepared_tool_contract_case(base_params):
         add_check(results, "output_contract", case_id, f"portfolio_sim_prepared_{metric}", legacy_stats[metric], prepared_stats[metric])
 
     add_check(results, "output_contract", case_id, "portfolio_sim_prepared_module_path", legacy_stats["module_path"], prepared_stats["module_path"])
+    return results, summary
+
+
+
+def validate_scanner_prepared_tool_contract_case(base_params):
+    case_id = "SCANNER_PREPARED_TOOL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+
+    with tempfile.TemporaryDirectory(prefix="scanner_prepared_tool_") as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, {ticker: frame})
+        file_path = str(Path(temp_dir) / f"{ticker}.csv")
+        legacy_result, legacy_module_path = run_scanner_tool_check(ticker, file_path, case["params"])
+        min_rows_needed = get_required_min_rows(case["params"])
+        clean_df, sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+        prepared_df, _standalone_logs, prepared_stats = prep_stock_data_and_trades(clean_df.copy(), case["params"], return_stats=True)
+        prepared_result, prepared_module_path = run_scanner_tool_check(
+            ticker,
+            file_path,
+            case["params"],
+            prepared_df=prepared_df,
+            sanitize_stats=sanitize_stats,
+            precomputed_stats=prepared_stats,
+        )
+
+    add_check(results, "output_contract", case_id, "scanner_prepared_module_path", legacy_module_path, prepared_module_path)
+    add_check(results, "output_contract", case_id, "scanner_prepared_payload", legacy_result, prepared_result)
+    return results, summary
+
+
+def validate_debug_trade_log_prepared_tool_contract_case(base_params):
+    case_id = "DEBUG_TRADE_LOG_PREPARED_TOOL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+    min_rows_needed = get_required_min_rows(case["params"])
+    clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+    prepared_df, _standalone_logs, _prepared_stats = prep_stock_data_and_trades(clean_df.copy(), case["params"], return_stats=True)
+
+    legacy_df, legacy_module_path = run_debug_trade_log_check(ticker, clean_df, case["params"])
+    prepared_result_df, prepared_module_path = run_debug_trade_log_check(ticker, clean_df, case["params"], prepared_df=prepared_df)
+
+    legacy_records = _normalize_nan_records(legacy_df)
+    prepared_records = _normalize_nan_records(prepared_result_df)
+
+    add_check(results, "output_contract", case_id, "debug_prepared_module_path", legacy_module_path, prepared_module_path)
+    add_check(results, "output_contract", case_id, "debug_prepared_payload", legacy_records, prepared_records)
     return results, summary

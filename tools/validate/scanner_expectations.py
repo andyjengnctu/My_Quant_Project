@@ -60,11 +60,11 @@ def normalize_scanner_result(raw_result):
     }
 
 
-def run_scanner_reference_check(ticker, file_path, params):
+def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
     try:
-        raw_df = pd.read_csv(file_path)
+        source_df = pd.read_csv(file_path) if raw_df is None else raw_df
         min_rows_needed = get_required_min_rows(params)
-        df, _sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
+        df, _sanitize_stats = sanitize_ohlcv_dataframe(source_df, ticker, min_rows=min_rows_needed)
         return run_v16_backtest(df.copy(), params)
     except ValueError as e:
         if is_insufficient_data_error(e):

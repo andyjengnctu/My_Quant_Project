@@ -13,7 +13,14 @@ def run_debug_backtest(*args, **kwargs):
     return _run_debug_backtest(*args, **kwargs)
 
 
+def run_debug_prepared_backtest(*args, **kwargs):
+    from .trade_log import run_debug_prepared_backtest as _run_debug_prepared_backtest
+
+    return _run_debug_prepared_backtest(*args, **kwargs)
+
+
 __all__ = [
     "run_debug_backtest",
+    "run_debug_prepared_backtest",
     "main",
 ]

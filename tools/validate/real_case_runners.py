@@ -138,17 +138,24 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     }
 
     single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
-    scanner_ref_stats = run_scanner_reference_check(ticker, file_path, scanner_params)
+    scanner_ref_stats, _scanner_logs, scanner_prep_df = run_single_backtest_check(df, scanner_params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
-    scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
+    scanner_result, scanner_module_path = run_scanner_tool_check(
+        ticker,
+        file_path,
+        scanner_params,
+        prepared_df=scanner_prep_df,
+        sanitize_stats=sanitize_stats,
+        precomputed_stats=scanner_ref_stats,
+    )
     downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = None, None, None, None
     downloader_error = None
     try:
         downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
     except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
         downloader_error = f"{type(e).__name__}: {e}"
-    debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params)
+    debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params, prepared_df=prep_df)
 
     summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
     summary["scanner_module_path"] = scanner_module_path

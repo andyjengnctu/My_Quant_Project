@@ -6,7 +6,19 @@ from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_po
 from tools.debug.reporting import finalize_debug_trade_logs
 
 
-def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True, verbose=True):
+def _extract_precomputed_signals(df):
+    required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
+    if not required_columns.issubset(df.columns):
+        return None
+    return (
+        df['ATR'].to_numpy(copy=False),
+        df['is_setup'].to_numpy(copy=False),
+        df['ind_sell_signal'].to_numpy(copy=False),
+        df['buy_limit'].to_numpy(copy=False),
+    )
+
+
+def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True, verbose=True, precomputed_signals=None):
     """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
     h = df['High'].to_numpy(dtype=np.float64, copy=False)
     l = df['Low'].to_numpy(dtype=np.float64, copy=False)
@@ -15,7 +27,11 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
     v = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     dates = df.index
 
-    atr_main, buy_condition, sell_condition, buy_limits = generate_signals(df, params)
+    if precomputed_signals is None:
+        precomputed_signals = _extract_precomputed_signals(df)
+    if precomputed_signals is None:
+        precomputed_signals = generate_signals(df, params)
+    atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals
 
     position = {'qty': 0}
     active_extended_signal = None
