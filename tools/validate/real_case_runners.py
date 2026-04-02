@@ -10,7 +10,7 @@ from tools.validate.checks import (
     build_scanner_validation_params,
     extract_yearly_profile_fields,
     make_consistency_params,
-    run_scanner_reference_check,
+    run_scanner_reference_check_on_clean_df,
 )
 from tools.validate.real_case_assertions import append_real_case_checks
 from tools.validate.real_case_io import load_clean_df
@@ -28,23 +28,36 @@ def run_single_backtest_check(df, params):
     return stats, standalone_logs, prep_df
 
 
-def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params):
-    execution_params = build_execution_only_params(params)
 
+
+def build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs):
     fast_data = pack_prepared_stock_data(prep_df)
-    all_dfs_fast = {ticker: fast_data}
-    all_standalone_logs = {ticker: standalone_logs}
-
     sorted_dates = sorted(get_fast_dates(fast_data))
     if not sorted_dates:
         raise ValueError(f"{ticker}: pack_prepared_stock_data 後沒有任何有效日期")
 
     start_year = int(pd.Timestamp(sorted_dates[0]).year)
+    return {
+        "fast_data": fast_data,
+        "sorted_dates": sorted_dates,
+        "start_year": start_year,
+        "all_dfs_fast": {ticker: fast_data},
+        "all_standalone_logs": {ticker: standalone_logs},
+    }
+
+
+def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, *, portfolio_context=None):
+    execution_params = build_execution_only_params(params)
+
+    context = portfolio_context or build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
+    fast_data = context["fast_data"]
+    sorted_dates = context["sorted_dates"]
+    start_year = context["start_year"]
     profile_stats = {}
 
     result = run_portfolio_timeline(
-        all_dfs_fast=all_dfs_fast,
-        all_standalone_logs=all_standalone_logs,
+        all_dfs_fast=context["all_dfs_fast"],
+        all_standalone_logs=context["all_standalone_logs"],
         sorted_dates=sorted_dates,
         start_year=start_year,
         params=execution_params,
@@ -138,20 +151,23 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     }
 
     single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
-    scanner_ref_stats, _scanner_logs, scanner_prep_df = run_single_backtest_check(df, scanner_params)
-    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params)
+    scanner_ref_stats = run_scanner_reference_check_on_clean_df(ticker, df, scanner_params)
+    portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
+    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
         ticker,
         file_path,
         params,
         prepared_df=prep_df,
         standalone_logs=standalone_logs,
+        packed_fast_data=portfolio_context["fast_data"],
+        sorted_dates=portfolio_context["sorted_dates"],
+        start_year=portfolio_context["start_year"],
     )
     scanner_result, scanner_module_path = run_scanner_tool_check(
         ticker,
         file_path,
         scanner_params,
-        prepared_df=scanner_prep_df,
         sanitize_stats=sanitize_stats,
         precomputed_stats=scanner_ref_stats,
     )

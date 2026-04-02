@@ -24,6 +24,7 @@ from .scanner_expectations import (
     make_synthetic_validation_params,
     normalize_scanner_result,
     run_scanner_reference_check,
+    run_scanner_reference_check_on_clean_df,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "make_synthetic_validation_params",
     "normalize_scanner_result",
     "run_scanner_reference_check",
+    "run_scanner_reference_check_on_clean_df",
 ]

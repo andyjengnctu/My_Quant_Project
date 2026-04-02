@@ -90,7 +90,7 @@ def run_portfolio_sim_tool_check_for_dir(data_dir, params, *, max_positions, ena
     return _build_portfolio_stats_from_result(result, module_path)
 
 
-def run_portfolio_sim_tool_check(ticker, file_path, params, *, prepared_df=None, standalone_logs=None):
+def run_portfolio_sim_tool_check(ticker, file_path, params, *, prepared_df=None, standalone_logs=None, packed_fast_data=None, sorted_dates=None, start_year=None):
     module, module_path = load_module_from_candidates(
         "portfolio_sim_module",
         ["apps/portfolio_sim.py"],
@@ -111,13 +111,16 @@ def run_portfolio_sim_tool_check(ticker, file_path, params, *, prepared_df=None,
     else:
         if prepared_df.empty:
             raise ValueError(f"{ticker}: prepared_df 不可為空")
-        min_year = int(pd.Timestamp(prepared_df.index.min()).year)
+        min_year = int(pd.Timestamp(prepared_df.index.min()).year) if start_year is None else int(start_year)
+
+    fast_data = packed_fast_data if packed_fast_data is not None else pack_prepared_stock_data(prepared_df)
+    effective_sorted_dates = sorted_dates if sorted_dates is not None else sorted(prepared_df.index)
 
     result = suppress_tool_output(
         module.run_portfolio_simulation_prepared,
-        all_dfs_fast={ticker: pack_prepared_stock_data(prepared_df)},
+        all_dfs_fast={ticker: fast_data},
         all_trade_logs={ticker: standalone_logs},
-        sorted_dates=sorted(prepared_df.index),
+        sorted_dates=effective_sorted_dates,
         params=copy.deepcopy(params),
         max_positions=1,
         enable_rotation=False,

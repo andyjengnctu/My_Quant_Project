@@ -72,6 +72,12 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
         raise
 
 
+def run_scanner_reference_check_on_clean_df(ticker, clean_df, params):
+    if clean_df is None or clean_df.empty:
+        raise ValueError(f"{ticker}: clean_df 不可為空")
+    return run_v16_backtest(clean_df, params)
+
+
 def derive_expected_scanner_status(scanner_ref_stats, params):
     if scanner_ref_stats.get("scanner_expected_status") == "skip_insufficient":
         return "skip_insufficient"

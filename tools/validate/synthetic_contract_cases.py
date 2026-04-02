@@ -22,7 +22,7 @@ from tools.local_regression.common import write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report
 from core.portfolio_fast_data import prep_stock_data_and_trades
 
-from .checks import add_check, make_synthetic_validation_params
+from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
 from .synthetic_frame_utils import write_synthetic_csv_bundle
 from .tool_adapters import (
@@ -759,6 +759,42 @@ def validate_scanner_prepared_tool_contract_case(base_params):
 
     add_check(results, "output_contract", case_id, "scanner_prepared_module_path", legacy_module_path, prepared_module_path)
     add_check(results, "output_contract", case_id, "scanner_prepared_payload", legacy_result, prepared_result)
+    return results, summary
+
+
+def validate_scanner_reference_clean_df_contract_case(base_params):
+    case_id = "SCANNER_REFERENCE_CLEAN_DF_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+
+    with tempfile.TemporaryDirectory(prefix="scanner_reference_clean_df_") as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, {ticker: frame})
+        file_path = str(Path(temp_dir) / f"{ticker}.csv")
+        legacy_stats = run_scanner_reference_check(ticker, file_path, case["params"])
+        min_rows_needed = get_required_min_rows(case["params"])
+        clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+        clean_df_stats = run_scanner_reference_check_on_clean_df(ticker, clean_df, case["params"])
+
+    metric_names = [
+        "trade_count",
+        "win_rate",
+        "expected_value",
+        "asset_growth",
+        "max_drawdown",
+        "missed_buys",
+        "missed_sells",
+        "is_candidate",
+        "is_setup_today",
+        "current_position",
+    ]
+    for metric in metric_names:
+        add_check(results, "output_contract", case_id, f"scanner_reference_clean_df_{metric}", legacy_stats[metric], clean_df_stats[metric])
+
+    add_check(results, "output_contract", case_id, "scanner_reference_clean_df_extended_candidate", legacy_stats.get("extended_candidate_today"), clean_df_stats.get("extended_candidate_today"))
     return results, summary
 
 

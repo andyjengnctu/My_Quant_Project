@@ -66,6 +66,7 @@ from .synthetic_contract_cases import (
     validate_portfolio_sim_prepared_tool_contract_case,
     validate_run_all_preflight_early_failure_dataset_contract_case,
     validate_scanner_prepared_tool_contract_case,
+    validate_scanner_reference_clean_df_contract_case,
 )
 from .synthetic_error_cases import (
     validate_downloader_main_error_path_case,
@@ -151,6 +152,7 @@ def get_synthetic_validators():
         validate_output_contract_case,
         validate_portfolio_sim_prepared_tool_contract_case,
         validate_scanner_prepared_tool_contract_case,
+    validate_scanner_reference_clean_df_contract_case,
         validate_debug_trade_log_prepared_tool_contract_case,
         validate_local_regression_summary_contract_case,
         validate_meta_quality_performance_memory_contract_case,
