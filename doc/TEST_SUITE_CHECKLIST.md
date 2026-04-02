@@ -24,9 +24,7 @@
 3. 若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 4. 優先補 synthetic / unit / contract test；避免讓 GPT 端重跑本地完整動態流程。
 5. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
-6. 在 test suite 完全收斂前，`TODO` 與 `PARTIAL` 項目仍由 GPT 端補驗；`DONE` 項目原則上不重複完整執行，但若本輪改動直接影響其模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍需做定向複核。
-7. GPT 端補驗應採差異化驗證：只補缺口與高風險影響面，不重跑已穩定覆蓋且與本輪改動無關的完整動態流程。
-8. 每輪開始時，GPT 也必須檢查本清單是否仍足夠支撐本輪完整性判斷；檢查範圍不只包含正式邏輯與跨工具契約，也包含 test suite 本身的註冊完整性、自我驗證、coverage 與收斂缺口。若不足，須先把缺口回寫到本清單，再執行後續驗證或修改。
+6. GPT 端完整檢查流程、sufficiency review、`TODO` / `PARTIAL` / `DONE` 的處理原則，以及正式步驟執行條件，一律以 `doc/PROJECT_SETTINGS.md` 的「## B. 標準測試流程」為單一真理來源；本清單不再重複改寫同一套規則，以避免不同步。
 
 ## A. 分層原則
 
@@ -91,7 +89,7 @@
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report，以及 `apps/test_suite.py` 在 PASS / FAIL / manifest-blocked / partial-selected-steps / preflight-failed / dataset-prepare-failed / summary-unreadable 下的人類可讀摘要契約；另補 checklist status vocabulary sync 與 meta quality coverage line/branch/min-threshold/missing-zero-target guard 摘要顯示，並以 `run_all.py` contract 釘死 preflight 早退時 dataset_prepare 仍需標記為 `NOT_RUN`，避免 real path 誤落成 `missing_summary_file` | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `tools/validate/synthetic_contract_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py`, `tools/local_regression/run_all.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | DONE | 已將 `run_meta_quality.py` 的 synthetic coverage suite、formal helper probe、key target presence/hit 與 manifest 化 line / branch minimum threshold gate 收斂為正式路徑，並同步回寫 `meta_quality_summary.json` / `apps/test_suite.py` 摘要顯示 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |
-| B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case 與正式 registry 完整一致 formal guard；formal-entry 與 registry 自我驗證已收斂 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py` |
+| B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
 | B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏與 convergence 紀錄失同步；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
@@ -238,7 +236,7 @@
 | 文件 | B20 | `doc/CMD.md` 指令與實作一致 | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` | 2026-04-02 |
 | Meta | B22 | line / branch coverage 報表 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` | 2026-04-02 |
-| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py` | 2026-04-02 |
+| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` | 2026-04-03 |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` | 2026-04-02 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
@@ -337,6 +335,7 @@
 | 2026-04-02 | D49 | 新增 local regression summary contract case 並驗證 | TODO -> DONE | `validate_local_regression_summary_contract_case` |
 | 2026-04-02 | D49 | 擴充 quick gate readonly compile 與 runtime failure summary contract | DONE -> DONE | `validate_local_regression_summary_contract_case` 補 cfile staging 與 runtime FAIL summary / console artifact 檢查 |
 | 2026-04-02 | B11 | 跨工具 schema / 欄位語意補齊，主表收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-03 | B23 | 將正式步驟單一真理來源收斂到 `tools/local_regression/formal_pipeline.py` | DONE -> DONE | `run_meta_quality.py` 改驗證 code registry / run_all / preflight / test_suite 一致性；`PROJECT_SETTINGS.md` 改回僅保留上層原則 |
 | 2026-04-01 | D12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
 | 2026-04-01 | D13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
 | 2026-04-01 | D22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |

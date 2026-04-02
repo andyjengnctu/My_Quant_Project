@@ -14,7 +14,12 @@
 3. 若發現 test suite 有未列入 checklist 的缺口，或 checklist 自身有缺口、遺漏回寫、狀態過舊、摘要失同步，須先明確指出，並先更新 `doc/TEST_SUITE_CHECKLIST.md`，再進入後續驗證或修改。
 4. 在 test suite 完全收斂前，GPT 端的首要任務是補齊 test suite 與 checklist，使本地端正式驗證可獨立完成；GPT 端僅可在收斂過程中做必要的定向補驗，用於辨識未覆蓋缺口、驗證收斂修補方向，不得把 GPT 補驗當成常態驗證機制。
 5. 已標記為 `DONE` 的項目，原則上以 test suite 為主，GPT 端不重複完整執行；只有在本輪改動直接影響相關模組、測試入口、輸出契約、架構責任，或 sufficiency review 發現可疑缺口 / 症狀時，才做定向複核。
-6. 只有在前述判定確實需要執行正式步驟時，才套用以下執行規則：若本輪基準為 ZIP，先做環境 bootstrap 與 preflight；測試資料使用 `data/tw_stock_data_vip_reduced`；`apps/test_suite.py` 為所有已實作測試的單一正式入口；GPT 端可依本輪影響面拆開執行正式組成步驟，但不得讓拆開執行的正式步驟集合與 `apps/test_suite.py` 失同步。
+6. 只有在前述判定確實需要執行正式步驟時，才套用以下執行規則：
+   - 若本輪基準為 ZIP，先做環境 bootstrap 與 preflight。
+   - 測試資料使用 `data/tw_stock_data_vip_reduced`。
+   - `apps/test_suite.py` 為所有已實作測試的單一正式入口。
+   - reduced local regression 的正式組成步驟定義，以 `tools/local_regression/formal_pipeline.py` 為單一真理來源。
+   - GPT 端可依本輪影響面拆開執行正式組成步驟，但不得與 `tools/local_regression/formal_pipeline.py` 與單一正式入口定義失同步。
 
 ## C. 回覆、交付與輸出
 

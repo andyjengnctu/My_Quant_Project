@@ -10,9 +10,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, validate_cli_args
+from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_STEP_ORDER
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality")
+REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 
 STEP_LABELS = {
     "quick_gate": "quick gate",
@@ -119,10 +120,6 @@ class ConsoleProgress:
 def _is_dataset_prepare_required(selected_steps: set[str]) -> bool:
     if not selected_steps:
         return True
-    try:
-        from tools.local_regression.run_all import DATASET_REQUIRED_STEPS
-    except Exception:
-        return any(name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"} for name in selected_steps)
     return any(name in DATASET_REQUIRED_STEPS for name in selected_steps)
 
 

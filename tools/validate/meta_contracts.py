@@ -4,7 +4,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List
 
-PROJECT_SETTINGS_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 必須作為所有已實作測試的單一正式入口"
+PROJECT_SETTINGS_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 為所有已實作測試的單一正式入口"
+PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT = "`tools/local_regression/formal_pipeline.py` 為單一真理來源"
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/test_suite.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
@@ -31,6 +32,7 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
         "suspicious_app_entries": suspicious_app_entries,
         "legacy_entry_paths": legacy_entry_paths,
         "project_settings_declares_single_entry": PROJECT_SETTINGS_SINGLE_ENTRY_TEXT in project_settings_text,
+        "project_settings_declares_registry_source": PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT in project_settings_text,
         "cmd_declares_single_entry": CMD_SINGLE_ENTRY_TEXT in cmd_text,
         "architecture_declares_single_entry": ARCHITECTURE_SINGLE_ENTRY_TEXT in architecture_text,
     }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 import threading
@@ -15,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
 from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
+from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_COMMAND_ORDER, FORMAL_STEP_ORDER
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
 from tools.local_regression.common import (
     archive_bundle_history,
@@ -36,16 +38,9 @@ from tools.local_regression.common import (
     write_text,
 )
 
-SCRIPT_ORDER = [
-    ("quick_gate", "tools/local_regression/run_quick_gate.py", "quick_gate_summary.json"),
-    ("consistency", "tools/validate/cli.py", "validate_consistency_summary.json"),
-    ("chain_checks", "tools/local_regression/run_chain_checks.py", "chain_summary.json"),
-    ("ml_smoke", "tools/local_regression/run_ml_smoke.py", "ml_smoke_summary.json"),
-    ("meta_quality", "tools/local_regression/run_meta_quality.py", "meta_quality_summary.json"),
-]
+SCRIPT_ORDER = list(FORMAL_COMMAND_ORDER)
 SCRIPT_TIMEOUT_GRACE_SEC = 30
-STEP_NAMES = [name for name, *_ in SCRIPT_ORDER]
-DATASET_REQUIRED_STEPS = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
+STEP_NAMES = list(FORMAL_STEP_ORDER)
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -651,7 +646,7 @@ def _run_script(
         try:
             try:
                 process = subprocess.Popen(
-                    [sys.executable, relative_script],
+                    [sys.executable, *shlex.split(relative_script, posix=True)],
                     cwd=str(PROJECT_ROOT),
                     env=env,
                     stdout=log_file,

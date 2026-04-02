@@ -200,8 +200,9 @@ tools/validate/
 - `run_chain_checks.py`：對 reduced 內實際 discover 到的全部 ticker 執行單股 → PIT → 候選 → 可掛單 → 成交 / miss buy 全鏈路對帳，並額外做 chain payload 與 scanner reduced snapshot 的雙跑 digest 對比，檢查重跑一致性；輸出全量 chain summary / chain details。
 - `run_ml_smoke.py`：reduced + 少量 trial 的 optimizer smoke，並以固定 seed 做雙跑一致性檢查，確認 optimizer 結果可重現。
 - `synthetic_regression_cases.py`：補齊 scanner worker / `tools/scanner/scan_runner.py` 入口重跑一致性、optimizer raw cache rerun / mutation isolation，以及 `run_all.py` 同 run dir rerun summary / bundle repeatability。
-- `run_meta_quality.py`：meta quality 工具；對 synthetic coverage suite 產出 line / branch coverage baseline，正式檢查 checklist 主表、未完成摘要、已完成摘要的一致性，並校驗 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致性；同時讀取同輪 local regression step summary 與 optimizer profile summary 做 reduced performance baseline gating；已納入 `apps/test_suite.py` / `run_all.py` 單一入口。
-- `run_all.py`：先執行 `tools/validate/preflight_env.py` 等價檢查；通過後才一鍵串接 quick gate / consistency / chain checks / ml smoke / meta quality，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；另支援 `--only ...`，讓完整入口失敗後只重跑指定步驟；對外提供 apps 使用的 progress callback。
+- `run_meta_quality.py`：meta quality 工具；對 synthetic coverage suite 產出 line / branch coverage baseline，正式檢查 checklist 主表、未完成摘要、已完成摘要的一致性，並校驗 `tools/local_regression/formal_pipeline.py` / `run_all.py` / `preflight_env.py` / `apps/test_suite.py` 的正式步驟一致性，以及文件是否正確宣告單一入口與 registry 原則；同時讀取同輪 local regression step summary 與 optimizer profile summary 做 reduced performance baseline gating；已納入 `apps/test_suite.py` / `run_all.py` 單一入口。
+- `formal_pipeline.py`：local regression 正式組成步驟的單一真理來源；定義 step name、command、summary file 與 dataset requirement，供 `run_all.py` / `apps/test_suite.py` / `preflight_env.py` / `run_meta_quality.py` 共用。
+- `run_all.py`：先執行 `tools/validate/preflight_env.py` 等價檢查；通過後才依 `formal_pipeline.py` 一鍵串接 quick gate / consistency / chain checks / ml smoke / meta quality，並輸出 `master_summary.json`、`artifacts_manifest.json`、`to_chatgpt_bundle.zip`；另支援 `--only ...`，讓完整入口失敗後只重跑指定步驟；對外提供 apps 使用的 progress callback。
 - `common.py`：manifest、輸出目錄、JSON/CSV、reduced dataset 存在性檢查、bundle 打包。
 - `preflight_env.py`：根據 `requirements/requirements.txt` 檢查目前 Python 環境是否已具備必要套件；若由 local regression 指定步驟呼叫，則只檢查該步驟實際需要的套件；`quick_gate` 因含 optimizer export-only 錯誤路徑，仍需 `optuna` 與 `SQLAlchemy`；只檢查、不自動安裝。
 
@@ -212,7 +213,7 @@ tools/validate/
 
 
 ### 測試入口收斂
-- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口，且必須串接所有已實作測試；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
+- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口，且必須串接所有已實作測試；正式步驟順序由 `tools/local_regression/formal_pipeline.py` 提供；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
 - `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
 - 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。
 

@@ -24,6 +24,13 @@ from tools.local_regression.common import (
     write_text,
 )
 
+from tools.local_regression.formal_pipeline import (
+    DATASET_REQUIRED_STEPS as FORMAL_DATASET_REQUIRED_STEPS,
+    FORMAL_COMMAND_ORDER,
+    FORMAL_SINGLE_ENTRY,
+    FORMAL_STEP_ORDER,
+)
+
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 PROJECT_SETTINGS_PATH = PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
@@ -332,54 +339,96 @@ def _extract_backticked_paths(text: str) -> List[str]:
 from tools.validate.meta_contracts import summarize_single_formal_test_entry_contract
 
 
-def _extract_project_settings_formal_steps() -> List[str]:
+def _project_settings_declares_formal_pipeline_principles() -> Dict[str, Any]:
     text = PROJECT_SETTINGS_PATH.read_text(encoding="utf-8")
-    pattern = r"apps/test_suite\.py` 必須作為所有已實作測試的單一正式入口；其正式組成步驟目前為：\n((?:\s+`[^`]+`、?\n?)+)"
-    match = re.search(pattern, text)
-    if not match:
-        raise ValueError("找不到 PROJECT_SETTINGS.md 中的正式組成步驟")
-    return _extract_backticked_paths(match.group(1))
+    results: List[Dict[str, Any]] = []
+
+    has_single_entry = "`apps/test_suite.py` 為所有已實作測試的單一正式入口" in text
+    results.append(
+        summarize_result(
+            "formal_entry_project_settings_declares_single_entry",
+            has_single_entry,
+            detail="expect=`apps/test_suite.py` 為所有已實作測試的單一正式入口",
+        )
+    )
+
+    has_registry_source = "`tools/local_regression/formal_pipeline.py` 為單一真理來源" in text
+    results.append(
+        summarize_result(
+            "formal_entry_project_settings_declares_registry_source",
+            has_registry_source,
+            detail="expect=`tools/local_regression/formal_pipeline.py` 為單一真理來源",
+        )
+    )
+
+    return {
+        "ok": all(item["status"] == "PASS" for item in results),
+        "results": results,
+    }
 
 
 def _summarize_formal_entry_consistency() -> Dict[str, Any]:
-    from apps.test_suite import STEP_LABELS
-    from tools.local_regression.run_all import SCRIPT_ORDER, STEP_NAMES
+    from apps.test_suite import REGRESSION_STEP_ORDER, STEP_LABELS
+    from tools.local_regression.run_all import DATASET_REQUIRED_STEPS, SCRIPT_ORDER, STEP_NAMES
     from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
 
     results: List[Dict[str, Any]] = []
-    project_settings_steps = _extract_project_settings_formal_steps()
-    run_all_scripts = [script for _name, script, _summary in SCRIPT_ORDER]
-    expected_project_settings_steps = [
-        "tools/validate/preflight_env.py",
-        "tools/local_regression/run_quick_gate.py",
-        "tools/validate/cli.py --dataset reduced",
-        "tools/local_regression/run_chain_checks.py",
-        "tools/local_regression/run_ml_smoke.py",
-        "tools/local_regression/run_meta_quality.py",
-    ]
+
+    registry_commands = list(FORMAL_COMMAND_ORDER)
+    run_all_commands = list(SCRIPT_ORDER)
 
     results.append(
         summarize_result(
-            "formal_entry_project_settings_steps_match_run_all",
-            project_settings_steps == expected_project_settings_steps,
-            detail=f"project_settings={project_settings_steps} | expected={expected_project_settings_steps}",
-            extra={"project_settings_steps": project_settings_steps, "expected_steps": expected_project_settings_steps},
+            "formal_entry_run_all_commands_match_registry",
+            run_all_commands == registry_commands,
+            detail=f"run_all={run_all_commands} | registry={registry_commands}",
+            extra={"run_all_commands": run_all_commands, "registry_commands": registry_commands},
         )
     )
 
     results.append(
         summarize_result(
-            "formal_entry_run_all_steps_match_preflight_order",
-            list(STEP_NAMES) == list(_LOCAL_REGRESSION_STEP_ORDER),
-            detail=f"run_all={list(STEP_NAMES)} | preflight={list(_LOCAL_REGRESSION_STEP_ORDER)}",
-            extra={"run_all_steps": list(STEP_NAMES), "preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER)},
+            "formal_entry_run_all_steps_match_registry",
+            list(STEP_NAMES) == list(FORMAL_STEP_ORDER),
+            detail=f"run_all={list(STEP_NAMES)} | registry={list(FORMAL_STEP_ORDER)}",
+            extra={"run_all_steps": list(STEP_NAMES), "registry_steps": list(FORMAL_STEP_ORDER)},
         )
     )
 
-    missing_step_labels = [step for step in STEP_NAMES if step not in STEP_LABELS]
     results.append(
         summarize_result(
-            "formal_entry_test_suite_labels_cover_run_all_steps",
+            "formal_entry_preflight_steps_match_registry",
+            list(_LOCAL_REGRESSION_STEP_ORDER) == list(FORMAL_STEP_ORDER),
+            detail=f"preflight={list(_LOCAL_REGRESSION_STEP_ORDER)} | registry={list(FORMAL_STEP_ORDER)}",
+            extra={"preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER), "registry_steps": list(FORMAL_STEP_ORDER)},
+        )
+    )
+
+    results.append(
+        summarize_result(
+            "formal_entry_test_suite_steps_match_registry",
+            list(REGRESSION_STEP_ORDER) == list(FORMAL_STEP_ORDER),
+            detail=f"test_suite={list(REGRESSION_STEP_ORDER)} | registry={list(FORMAL_STEP_ORDER)}",
+            extra={"test_suite_steps": list(REGRESSION_STEP_ORDER), "registry_steps": list(FORMAL_STEP_ORDER)},
+        )
+    )
+
+    results.append(
+        summarize_result(
+            "formal_entry_dataset_required_steps_match_registry",
+            sorted(DATASET_REQUIRED_STEPS) == sorted(FORMAL_DATASET_REQUIRED_STEPS),
+            detail=f"run_all={sorted(DATASET_REQUIRED_STEPS)} | registry={sorted(FORMAL_DATASET_REQUIRED_STEPS)}",
+            extra={
+                "run_all_dataset_required_steps": sorted(DATASET_REQUIRED_STEPS),
+                "registry_dataset_required_steps": sorted(FORMAL_DATASET_REQUIRED_STEPS),
+            },
+        )
+    )
+
+    missing_step_labels = [step for step in FORMAL_STEP_ORDER if step not in STEP_LABELS]
+    results.append(
+        summarize_result(
+            "formal_entry_test_suite_labels_cover_registry_steps",
             not missing_step_labels,
             detail=f"missing={missing_step_labels}",
             extra={"missing_step_labels": missing_step_labels},
@@ -398,33 +447,29 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
     )
 
     missing_script_files = []
-    for script in expected_project_settings_steps:
-        script_path = script.split()[0].strip()
-        if not (PROJECT_ROOT / script_path).exists():
-            missing_script_files.append(script)
+    for _name, command, _summary in FORMAL_COMMAND_ORDER:
+        script_path = PROJECT_ROOT / command.split()[0]
+        if not script_path.exists():
+            missing_script_files.append(command)
     results.append(
         summarize_result(
-            "formal_entry_all_declared_scripts_exist",
+            "formal_entry_registry_commands_exist",
             not missing_script_files,
             detail=f"missing={missing_script_files}",
             extra={"missing_script_files": missing_script_files},
         )
     )
 
+    principle_contract = _project_settings_declares_formal_pipeline_principles()
+    results.extend(principle_contract["results"])
+
     single_entry_contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
     results.append(
         summarize_result(
             "formal_entry_test_suite_file_exists",
             single_entry_contract["test_suite_exists"],
-            detail=f"apps={single_entry_contract['app_py_files']}",
+            detail=f"single_entry={FORMAL_SINGLE_ENTRY} | apps={single_entry_contract['app_py_files']}",
             extra={"app_py_files": single_entry_contract["app_py_files"]},
-        )
-    )
-    results.append(
-        summarize_result(
-            "formal_entry_project_settings_declares_single_entry",
-            single_entry_contract["project_settings_declares_single_entry"],
-            detail=f"declared={single_entry_contract['project_settings_declares_single_entry']}",
         )
     )
     results.append(
@@ -462,9 +507,11 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
     return {
         "ok": ok,
         "results": results,
-        "project_settings_steps": project_settings_steps,
+        "registry_steps": list(FORMAL_STEP_ORDER),
+        "registry_commands": registry_commands,
         "run_all_steps": list(STEP_NAMES),
         "preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER),
+        "test_suite_steps": list(REGRESSION_STEP_ORDER),
     }
 
 
@@ -1085,9 +1132,11 @@ def main(argv=None) -> int:
         },
         "formal_entry": {
             "ok": formal_entry_summary["ok"],
-            "project_settings_steps": formal_entry_summary["project_settings_steps"],
+            "registry_steps": formal_entry_summary["registry_steps"],
+            "registry_commands": formal_entry_summary["registry_commands"],
             "run_all_steps": formal_entry_summary["run_all_steps"],
             "preflight_steps": formal_entry_summary["preflight_steps"],
+            "test_suite_steps": formal_entry_summary["test_suite_steps"],
         },
         "performance": {
             "ok": performance_summary["ok"],

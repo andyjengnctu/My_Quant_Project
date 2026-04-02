@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
+from tools.local_regression.formal_pipeline import FORMAL_STEP_ORDER
 
 REQUIREMENTS_PATH = PROJECT_ROOT / "requirements" / "requirements.txt"
 _IMPORT_NAME_OVERRIDES = {
@@ -20,7 +21,7 @@ _IMPORT_NAME_OVERRIDES = {
     "scikit-learn": "sklearn",
     "sqlalchemy": "sqlalchemy",
 }
-_LOCAL_REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality")
+_LOCAL_REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 _LOCAL_REGRESSION_STEP_REQUIREMENTS = {
     "quick_gate": {"numpy", "pandas", "openpyxl", "optuna", "SQLAlchemy"},
     "consistency": {"numpy", "pandas", "openpyxl"},
