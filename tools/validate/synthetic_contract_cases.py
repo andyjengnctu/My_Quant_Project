@@ -20,7 +20,10 @@ from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regres
 from tools.local_regression.common import write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report
 
-from .checks import add_check
+from .checks import add_check, make_synthetic_validation_params
+from .synthetic_case_builders import build_synthetic_competing_candidates_case
+from .synthetic_frame_utils import write_synthetic_csv_bundle
+from .tool_adapters import run_portfolio_sim_tool_check, run_portfolio_sim_tool_check_for_dir
 
 
 REQUIRED_VALIDATE_SUMMARY_KEYS = {
@@ -664,4 +667,45 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_traced_memory_mb"))
 
     summary["step_peak_memory_count"] = 4
+    return results, summary
+
+
+def validate_portfolio_sim_prepared_tool_contract_case(base_params):
+    case_id = "PORTFOLIO_SIM_PREPARED_TOOL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+
+    with tempfile.TemporaryDirectory(prefix="portfolio_sim_prepared_tool_") as temp_dir:
+        write_synthetic_csv_bundle(temp_dir, {ticker: frame})
+        file_path = str(Path(temp_dir) / f"{ticker}.csv")
+        legacy_stats = run_portfolio_sim_tool_check_for_dir(
+            temp_dir,
+            case["params"],
+            max_positions=1,
+            enable_rotation=False,
+            start_year=case["start_year"],
+            benchmark_ticker=ticker,
+        )
+        prepared_stats = run_portfolio_sim_tool_check(ticker, file_path, case["params"])
+
+    metric_names = [
+        "trade_count",
+        "win_rate",
+        "pf_ev",
+        "pf_payoff",
+        "final_eq",
+        "annual_return_pct",
+        "reserved_buy_fill_rate",
+        "portfolio_buy_rows",
+        "portfolio_missed_buy_rows",
+        "portfolio_half_take_profit_rows",
+    ]
+    for metric in metric_names:
+        add_check(results, "output_contract", case_id, f"portfolio_sim_prepared_{metric}", legacy_stats[metric], prepared_stats[metric])
+
+    add_check(results, "output_contract", case_id, "portfolio_sim_prepared_module_path", legacy_stats["module_path"], prepared_stats["module_path"])
     return results, summary

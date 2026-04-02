@@ -16,6 +16,10 @@ LAZY_EXPORTS = {
     "load_strict_params",
     "print_yearly_return_report",
     "run_portfolio_simulation",
+    "load_portfolio_market_context",
+    "run_portfolio_simulation_prepared",
+    "load_portfolio_market_context",
+    "run_portfolio_simulation_prepared",
 }
 
 

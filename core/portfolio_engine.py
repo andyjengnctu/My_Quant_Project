@@ -28,7 +28,7 @@ from core.portfolio_ops import (
     try_rotate_weakest_position,
 )
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True):
+def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None):
     t_portfolio_start = time.perf_counter() if profile_stats is not None else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
@@ -79,6 +79,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     yesterday_bm_px, bm_max_drawdown, bm_ret_pct = current_bm_px, 0.0, 0.0
 
+    if replay_counts is not None:
+        for ticker, bucket in replay_counts.items():
+            if not isinstance(bucket, dict):
+                replay_counts[ticker] = {}
+                bucket = replay_counts[ticker]
+            bucket.setdefault("candidate_dates", [])
+            bucket.setdefault("orderable_dates", [])
+            bucket.setdefault("trade_rows", [])
+
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_stats is not None else None
         sim_days += 1
@@ -111,6 +120,21 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         )
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0
+
+        if replay_counts is not None:
+            for candidate in candidates_today:
+                ticker = str(candidate.get("ticker", ""))
+                bucket = replay_counts.get(ticker)
+                if bucket is not None:
+                    bucket["candidate_dates"].append(today)
+            for candidate in orderable_candidates_today:
+                ticker = str(candidate.get("ticker", ""))
+                bucket = replay_counts.get(ticker)
+                if bucket is not None:
+                    bucket["orderable_dates"].append(today)
+            before_trade_rows = len(trade_history)
+        else:
+            before_trade_rows = -1
 
         t0 = time.perf_counter() if profile_stats is not None else None
         cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
@@ -228,6 +252,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         drawdown = (peak_equity - today_equity) / peak_equity * 100
         if drawdown > max_drawdown:
             max_drawdown = drawdown
+
+        if replay_counts is not None and before_trade_rows >= 0:
+            for row in trade_history[before_trade_rows:]:
+                ticker = str(row.get("Ticker", "")).strip()
+                bucket = replay_counts.get(ticker)
+                if bucket is not None:
+                    bucket["trade_rows"].append(row)
 
         if profile_stats is not None:
             day_loop_sec += time.perf_counter() - t_day_start

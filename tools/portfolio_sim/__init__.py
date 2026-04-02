@@ -14,7 +14,7 @@ def __getattr__(name):
         value = getattr(reporting_module, name)
         globals()[name] = value
         return value
-    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "run_portfolio_simulation"}:
+    if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "run_portfolio_simulation", "load_portfolio_market_context", "run_portfolio_simulation_prepared"}:
         from . import runtime as runtime_module
 
         value = getattr(runtime_module, name)
@@ -28,6 +28,8 @@ __all__ = [
     "is_insufficient_data_error",
     "load_strict_params",
     "run_portfolio_simulation",
+    "load_portfolio_market_context",
+    "run_portfolio_simulation_prepared",
     "print_yearly_return_report",
     "export_portfolio_reports",
     "main",

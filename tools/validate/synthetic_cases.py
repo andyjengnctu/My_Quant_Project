@@ -62,6 +62,7 @@ from .synthetic_contract_cases import (
     validate_local_regression_summary_contract_case,
     validate_meta_quality_performance_memory_contract_case,
     validate_output_contract_case,
+    validate_portfolio_sim_prepared_tool_contract_case,
     validate_run_all_preflight_early_failure_dataset_contract_case,
 )
 from .synthetic_error_cases import (
@@ -146,6 +147,7 @@ def get_synthetic_validators():
         validate_issue_excel_report_schema_case,
         validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,
+        validate_portfolio_sim_prepared_tool_contract_case,
         validate_local_regression_summary_contract_case,
         validate_meta_quality_performance_memory_contract_case,
         validate_run_all_preflight_early_failure_dataset_contract_case,

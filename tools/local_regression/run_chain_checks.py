@@ -6,7 +6,7 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -16,11 +16,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
 from core.params_io import load_params_from_json
-from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, calc_mark_to_market_equity, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
-from core.portfolio_ops import cleanup_extended_signals_for_day, execute_reserved_entries_for_day, settle_portfolio_positions, try_rotate_weakest_position
-from core.portfolio_stats import find_sim_start_idx
+from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
 from tools.debug.trade_log import run_debug_backtest
 from tools.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
@@ -139,102 +136,6 @@ def load_market_context(params) -> Dict[str, Any]:
     }
 
 
-def build_target_replay_counts(*, tickers: List[str], all_dfs_fast, all_trade_logs, sorted_dates, params, start_year: int, max_positions: int, enable_rotation: bool):
-    pit_stats_index = {ticker: build_trade_stats_index(logs) for ticker, logs in all_trade_logs.items()}
-    normal_setup_index = build_normal_setup_index(all_dfs_fast)
-    start_idx = find_sim_start_idx(sorted_dates, start_year)
-
-    initial_capital = params.initial_capital
-    cash = initial_capital
-    current_equity = initial_capital
-    portfolio = {}
-    active_extended_signals = {}
-    trade_history = []
-    closed_trades_stats = []
-    normal_trade_count = 0
-    extended_trade_count = 0
-    total_missed_buys = 0
-    total_missed_sells = 0
-
-    counts = {ticker: {"candidate_dates": [], "orderable_dates": [], "trade_rows": []} for ticker in tickers}
-    for today in sorted_dates[start_idx:]:
-        available_cash = cash
-        sizing_equity = current_equity if getattr(params, "use_compounding", True) else initial_capital
-        sold_today = set()
-
-        candidates_today, orderable_candidates_today, _ = build_daily_candidates(
-            normal_setup_index=normal_setup_index,
-            active_extended_signals=active_extended_signals,
-            portfolio=portfolio,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            pit_stats_index=pit_stats_index,
-            today=today,
-            sizing_equity=sizing_equity,
-            params=params,
-        )
-        for ticker in tickers:
-            if any(row["ticker"] == ticker for row in candidates_today):
-                counts[ticker]["candidate_dates"].append(today)
-            if any(row["ticker"] == ticker for row in orderable_candidates_today):
-                counts[ticker]["orderable_dates"].append(today)
-
-        before_trade_rows = len(trade_history)
-        cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
-            portfolio=portfolio,
-            orderable_candidates_today=orderable_candidates_today,
-            max_positions=max_positions,
-            enable_rotation=enable_rotation,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            pit_stats_index=pit_stats_index,
-            params=params,
-            cash=cash,
-            closed_trades_stats=closed_trades_stats,
-            trade_history=trade_history,
-            is_training=False,
-            normal_trade_count=normal_trade_count,
-            extended_trade_count=extended_trade_count,
-        )
-        cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
-            portfolio=portfolio,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            params=params,
-            cash=cash,
-            closed_trades_stats=closed_trades_stats,
-            trade_history=trade_history,
-            is_training=False,
-            total_missed_sells=total_missed_sells,
-            normal_trade_count=normal_trade_count,
-            extended_trade_count=extended_trade_count,
-        )
-        cash, total_missed_buys = execute_reserved_entries_for_day(
-            portfolio=portfolio,
-            active_extended_signals=active_extended_signals,
-            orderable_candidates_today=orderable_candidates_today,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            params=params,
-            cash=cash,
-            available_cash=available_cash,
-            max_positions=max_positions,
-            trade_history=trade_history,
-            is_training=False,
-            total_missed_buys=total_missed_buys,
-        )
-        cleanup_extended_signals_for_day(active_extended_signals=active_extended_signals, portfolio=portfolio, all_dfs_fast=all_dfs_fast, today=today)
-        current_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
-
-        new_rows = trade_history[before_trade_rows:]
-        for row in new_rows:
-            ticker = str(row.get("Ticker", "")).strip()
-            if ticker in counts:
-                counts[ticker]["trade_rows"].append(row)
-    return counts
 
 
 def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, single_stats, standalone_logs, sanitize_stats, replay_counts, debug_row_count: int | None = None) -> Dict[str, Any]:
@@ -350,6 +251,7 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
 def _compute_chain_summary(*, manifest, dataset_info, context, params, start_year, max_positions, enable_rotation, benchmark_ticker, write_outputs=False, run_dir=None, debug_row_count_cache=None):
     all_tickers = context["discovered_tickers"]
     portfolio_profile: Dict[str, Any] = {}
+    replay_counts = {ticker: {"candidate_dates": [], "orderable_dates": [], "trade_rows": []} for ticker in all_tickers}
     portfolio_result = run_portfolio_timeline(
         context["all_dfs_fast"],
         context["all_trade_logs"],
@@ -363,20 +265,10 @@ def _compute_chain_summary(*, manifest, dataset_info, context, params, start_yea
         is_training=False,
         profile_stats=portfolio_profile,
         verbose=False,
+        replay_counts=replay_counts,
     )
     df_equity, df_trades = portfolio_result[0], portfolio_result[1]
     scanner_snapshot = _build_scanner_snapshot_from_context(context, params)
-
-    replay_counts = build_target_replay_counts(
-        tickers=all_tickers,
-        all_dfs_fast=context["all_dfs_fast"],
-        all_trade_logs=context["all_trade_logs"],
-        sorted_dates=context["sorted_dates"],
-        params=params,
-        start_year=start_year,
-        max_positions=max_positions,
-        enable_rotation=enable_rotation,
-    )
 
     detail_rows = []
     for ticker in all_tickers:
