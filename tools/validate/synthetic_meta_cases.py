@@ -11,49 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 
-from .meta_contracts import summarize_single_formal_test_entry_contract
-
-
-def _extract_table_rows(text: str, heading: str):
-    lines = text.splitlines()
-    heading_candidates = (f"### {heading}", f"## {heading}")
-    heading_index = None
-    for idx, raw_line in enumerate(lines):
-        if raw_line.strip() in heading_candidates:
-            heading_index = idx
-            break
-    if heading_index is None:
-        raise AssertionError(f"找不到表格段落: {heading}")
-
-    data_lines = []
-    seen_table = False
-    cursor = heading_index + 1
-    while cursor < len(lines):
-        stripped = lines[cursor].strip()
-        if stripped.startswith(("## ", "### ")):
-            break
-        if not stripped.startswith("|"):
-            cursor += 1
-            continue
-
-        block_lines = []
-        while cursor < len(lines) and lines[cursor].strip().startswith("|"):
-            block_lines.append(lines[cursor].strip())
-            cursor += 1
-        if block_lines:
-            seen_table = True
-            has_header = (
-                len(block_lines) >= 2
-                and set(block_lines[1].replace("|", "").replace(" ", "")) <= {"-"}
-            )
-            content_lines = block_lines[2:] if has_header else block_lines
-            for line in content_lines:
-                cols = [part.strip() for part in line.strip("|").split("|")]
-                data_lines.append(cols)
-
-    if not seen_table:
-        raise AssertionError(f"找不到表格內容: {heading}")
-    return data_lines
+from .meta_contracts import (
+    extract_markdown_table_rows,
+    load_defined_validate_names_from_synthetic_case_modules,
+    load_imported_validate_names_from_synthetic_main_entry,
+    summarize_single_formal_test_entry_contract,
+)
 
 
 def _load_main_table_statuses():
@@ -64,7 +27,7 @@ def _load_main_table_statuses():
         ("B2. 未明列於專案設定，但正式 test suite 應納入", 4),
     ]
     for heading, status_idx in headings:
-        rows = _extract_table_rows(text, heading)
+        rows = extract_markdown_table_rows(text, heading)
         for cols in rows:
             if len(cols) > status_idx:
                 statuses[cols[0]] = cols[status_idx]
@@ -73,7 +36,7 @@ def _load_main_table_statuses():
 
 def _load_done_d_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = _extract_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要")
+    rows = extract_markdown_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要")
     parsed = []
     for cols in rows:
         if len(cols) < 4:
@@ -91,7 +54,7 @@ def _load_done_d_rows():
 
 def _load_done_b_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = _extract_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要")
+    rows = extract_markdown_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要")
     parsed = []
     for cols in rows:
         if len(cols) < 5:
@@ -110,7 +73,7 @@ def _load_done_b_rows():
 
 def _load_convergence_latest_statuses():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = _extract_table_rows(text, "G. 逐項收斂紀錄")
+    rows = extract_markdown_table_rows(text, "G. 逐項收斂紀錄")
     statuses = {}
     for cols in rows:
         if len(cols) < 4:
@@ -121,30 +84,6 @@ def _load_convergence_latest_statuses():
             continue
         statuses[item_id] = transition.split("->")[-1].strip()
     return statuses
-
-
-def _load_imported_validate_names_from_main_entry():
-    synthetic_cases_module = importlib.import_module("tools.validate.synthetic_cases")
-    imported_names = set()
-    for name, obj in synthetic_cases_module.__dict__.items():
-        if name.startswith("validate_") and callable(obj):
-            imported_names.add(name)
-    return imported_names
-
-
-def _load_defined_validate_names_from_synthetic_case_modules():
-    validate_dir = PROJECT_ROOT / "tools" / "validate"
-    module_names = sorted(path.stem for path in validate_dir.glob("synthetic*_cases.py"))
-    defined_names = set()
-    for module_name in module_names:
-        module = importlib.import_module(f"tools.validate.{module_name}")
-        for name, obj in module.__dict__.items():
-            if not name.startswith("validate_") or not callable(obj):
-                continue
-            if getattr(obj, "__module__", "") != module.__name__:
-                continue
-            defined_names.add(name)
-    return defined_names
 
 
 def _extract_cmd_python_commands():
@@ -245,8 +184,8 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     validators = get_synthetic_validators()
     validator_names = [validator.__name__ for validator in validators]
     validator_name_set = set(validator_names)
-    imported_validate_names = _load_imported_validate_names_from_main_entry()
-    defined_validate_names = _load_defined_validate_names_from_synthetic_case_modules()
+    imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
+    defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
     convergence_statuses = _load_convergence_latest_statuses()
     done_d_rows = _load_done_d_rows()
     done_b_rows = _load_done_b_rows()

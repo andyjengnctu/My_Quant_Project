@@ -93,58 +93,17 @@ def _ratio_percent(numerator: Any, denominator: Any) -> float:
     return (numerator_value / denominator_value) * 100.0
 
 
-def _extract_table_rows(text: str, heading: str) -> List[List[str]]:
-    lines = text.splitlines()
-    heading_candidates = (f"### {heading}", f"## {heading}")
-    heading_index = None
-    for idx, raw_line in enumerate(lines):
-        if raw_line.strip() in heading_candidates:
-            heading_index = idx
-            break
-    if heading_index is None:
-        raise ValueError(f"找不到表格段落: {heading}")
-
-    rows: List[List[str]] = []
-    seen_table = False
-    cursor = heading_index + 1
-    while cursor < len(lines):
-        stripped = lines[cursor].strip()
-        if stripped.startswith(("## ", "### ")):
-            break
-        if not stripped.startswith("|"):
-            cursor += 1
-            continue
-
-        block_lines: List[str] = []
-        while cursor < len(lines) and lines[cursor].strip().startswith("|"):
-            block_lines.append(lines[cursor].strip())
-            cursor += 1
-        if block_lines:
-            seen_table = True
-            has_header = (
-                len(block_lines) >= 2
-                and set(block_lines[1].replace("|", "").replace(" ", "")) <= {"-"}
-            )
-            content_lines = block_lines[2:] if has_header else block_lines
-            for line in content_lines:
-                rows.append([part.strip() for part in line.strip("|").split("|")])
-
-    if not seen_table:
-        raise ValueError(f"找不到表格內容: {heading}")
-    return rows
-
-
 def _load_checklist_tables() -> Dict[str, List[List[str]]]:
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     return {
-        "B1": _extract_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"),
-        "B2": _extract_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
-        "E1": _extract_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
-        "E2": _extract_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
-        "E3": _extract_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
-        "F1": _extract_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要"),
-        "F2": _extract_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要"),
-        "G": _extract_table_rows(text, "G. 逐項收斂紀錄"),
+        "B1": extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"),
+        "B2": extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
+        "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
+        "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
+        "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
+        "F1": extract_markdown_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要"),
+        "F2": extract_markdown_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要"),
+        "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
 
@@ -337,7 +296,11 @@ def _extract_backticked_paths(text: str) -> List[str]:
     return [match.strip() for match in re.findall(r"`([^`]+)`", text) if "/" in match or match.endswith('.py')]
 
 
-from tools.validate.meta_contracts import summarize_single_formal_test_entry_contract
+from tools.validate.meta_contracts import (
+    extract_markdown_table_rows,
+    summarize_single_formal_test_entry_contract,
+    summarize_test_suite_registry_contract,
+)
 
 
 def _project_settings_declares_formal_pipeline_principles() -> Dict[str, Any]:
@@ -369,7 +332,6 @@ def _project_settings_declares_formal_pipeline_principles() -> Dict[str, Any]:
 
 
 def _summarize_formal_entry_consistency() -> Dict[str, Any]:
-    from apps.test_suite import REGRESSION_STEP_ORDER, STEP_LABELS
     from tools.local_regression.run_all import DATASET_REQUIRED_STEPS, SCRIPT_ORDER, STEP_NAMES
     from tools.validate.preflight_env import _LOCAL_REGRESSION_STEP_ORDER
 
@@ -377,6 +339,7 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
 
     registry_commands = list(FORMAL_COMMAND_ORDER)
     run_all_commands = list(SCRIPT_ORDER)
+    test_suite_contract = summarize_test_suite_registry_contract(PROJECT_ROOT, FORMAL_STEP_ORDER)
 
     results.append(
         summarize_result(
@@ -408,9 +371,12 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
     results.append(
         summarize_result(
             "formal_entry_test_suite_steps_match_registry",
-            list(REGRESSION_STEP_ORDER) == list(FORMAL_STEP_ORDER),
-            detail=f"test_suite={list(REGRESSION_STEP_ORDER)} | registry={list(FORMAL_STEP_ORDER)}",
-            extra={"test_suite_steps": list(REGRESSION_STEP_ORDER), "registry_steps": list(FORMAL_STEP_ORDER)},
+            test_suite_contract["regression_step_order_aliases_registry"],
+            detail=f"aliases_registry={test_suite_contract['regression_step_order_aliases_registry']}",
+            extra={
+                "test_suite_step_order_aliases_registry": test_suite_contract["regression_step_order_aliases_registry"],
+                "registry_steps": list(FORMAL_STEP_ORDER),
+            },
         )
     )
 
@@ -426,24 +392,29 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
         )
     )
 
-    missing_step_labels = [step for step in FORMAL_STEP_ORDER if step not in STEP_LABELS]
+    missing_step_labels = test_suite_contract["missing_step_labels"]
     results.append(
         summarize_result(
             "formal_entry_test_suite_labels_cover_registry_steps",
             not missing_step_labels,
             detail=f"missing={missing_step_labels}",
-            extra={"missing_step_labels": missing_step_labels},
+            extra={
+                "missing_step_labels": missing_step_labels,
+                "test_suite_step_labels": test_suite_contract["step_labels_keys"],
+            },
         )
     )
 
-    required_extra_labels = ["preflight", "dataset_prepare", "manifest"]
-    missing_extra_labels = [label for label in required_extra_labels if label not in STEP_LABELS]
+    missing_extra_labels = test_suite_contract["missing_extra_labels"]
     results.append(
         summarize_result(
             "formal_entry_test_suite_labels_cover_non_script_stages",
             not missing_extra_labels,
             detail=f"missing={missing_extra_labels}",
-            extra={"missing_extra_labels": missing_extra_labels},
+            extra={
+                "missing_extra_labels": missing_extra_labels,
+                "test_suite_step_labels": test_suite_contract["step_labels_keys"],
+            },
         )
     )
 
@@ -512,7 +483,7 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
         "registry_commands": registry_commands,
         "run_all_steps": list(STEP_NAMES),
         "preflight_steps": list(_LOCAL_REGRESSION_STEP_ORDER),
-        "test_suite_steps": list(REGRESSION_STEP_ORDER),
+        "test_suite_steps": list(FORMAL_STEP_ORDER),
     }
 
 
