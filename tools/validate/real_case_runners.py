@@ -1,6 +1,5 @@
 import pandas as pd
 
-from core.backtest_core import run_v16_backtest
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
 
@@ -25,13 +24,12 @@ from tools.validate.tool_adapters import (
 
 
 def run_single_backtest_check(df, params):
-    stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True)
-    return stats, standalone_logs
+    prep_df, standalone_logs, stats = prep_stock_data_and_trades(df.copy(), params, return_stats=True)
+    return stats, standalone_logs, prep_df
 
 
-def run_single_ticker_portfolio_check(ticker, df, params):
+def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params):
     execution_params = build_execution_only_params(params)
-    prep_df, standalone_logs = prep_stock_data_and_trades(df.copy(), execution_params)
 
     fast_data = pack_prepared_stock_data(prep_df)
     all_dfs_fast = {ticker: fast_data}
@@ -139,9 +137,9 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         "sanitize_duplicate": sanitize_stats["duplicate_date_count"],
     }
 
-    single_stats, standalone_logs = run_single_backtest_check(df, params)
+    single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
     scanner_ref_stats = run_scanner_reference_check(ticker, file_path, scanner_params)
-    portfolio_stats = run_single_ticker_portfolio_check(ticker, df, params)
+    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params)
     portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
     scanner_result, scanner_module_path = run_scanner_tool_check(ticker, file_path, scanner_params)
     downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = None, None, None, None
@@ -183,6 +181,8 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     )
 
     return results, summary
+
+
 
 
 def run_real_ticker_scan(

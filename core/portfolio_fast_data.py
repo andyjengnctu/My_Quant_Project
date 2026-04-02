@@ -124,7 +124,7 @@ def build_normal_setup_index(all_dfs_fast):
     return setup_index
 
 
-def prep_stock_data_and_trades(df, params, profile_stats=None):
+def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False):
     t_total_start = time.perf_counter() if profile_stats is not None else None
 
     t0 = time.perf_counter() if profile_stats is not None else None
@@ -147,11 +147,13 @@ def prep_stock_data_and_trades(df, params, profile_stats=None):
         profile_stats['assign_columns_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    _, standalone_logs = run_v16_backtest(df, params, return_logs=True, precomputed_signals=precomputed_signals)
+    stats_dict, standalone_logs = run_v16_backtest(df, params, return_logs=True, precomputed_signals=precomputed_signals)
     if profile_stats is not None:
         profile_stats['run_backtest_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start
 
+    if return_stats:
+        return df, standalone_logs, stats_dict
     return df, standalone_logs
 
 

@@ -14,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.backtest_core import run_v16_backtest
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
 from core.params_io import load_params_from_json
 from core.portfolio_candidates import build_daily_candidates
@@ -23,6 +22,7 @@ from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats
 from core.portfolio_ops import cleanup_extended_signals_for_day, execute_reserved_entries_for_day, settle_portfolio_positions, try_rotate_weakest_position
 from core.portfolio_stats import find_sim_start_idx
 from tools.debug.trade_log import run_debug_backtest
+from tools.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 
@@ -38,22 +38,19 @@ def _normalize_scanner_candidate_row(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_scanner_snapshot(params) -> Dict[str, Any]:
-    from apps import vip_scanner as vip_scanner_app
-
-    data_dir = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
-    csv_inputs, duplicate_issues = discover_unique_csv_inputs(str(data_dir))
-    csv_inputs = sorted(csv_inputs, key=lambda item: item[0])
-
+def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dict[str, Any]:
     candidate_rows = []
+    duplicate_issues = list(context.get("duplicate_issues", []))
     scanner_issue_lines = list(duplicate_issues)
     status_rows = []
     count_history_qualified = 0
     count_skipped_insufficient = 0
     count_sanitized_candidates = 0
 
-    for ticker, file_path in csv_inputs:
-        result = vip_scanner_app.process_single_stock(file_path=file_path, ticker=ticker, params=params)
+    for ticker in context["discovered_tickers"]:
+        prep_df = context["prepared_frames"][ticker]
+        sanitize_stats = context["sanitize_stats_map"][ticker]
+        result = process_prepared_stock(prep_df, ticker, params, sanitize_stats=sanitize_stats)
         if result is None:
             status_rows.append({"ticker": str(ticker), "status": "not_candidate", "has_sanitize_issue": False})
             continue
@@ -87,7 +84,7 @@ def _build_scanner_snapshot(params) -> Dict[str, Any]:
     candidate_rows.sort(key=lambda item: (item["sort_value"], item["ticker"]), reverse=True)
     return {
         "entry_script": "apps/vip_scanner.py",
-        "count_scanned": len(csv_inputs),
+        "count_scanned": len(context["discovered_tickers"]),
         "history_qualified_count": count_history_qualified,
         "skipped_insufficient_count": count_skipped_insufficient,
         "sanitized_candidate_count": count_sanitized_candidates,
@@ -108,6 +105,7 @@ def load_market_context(params) -> Dict[str, Any]:
     all_trade_logs: Dict[str, Any] = {}
     prepared_frames: Dict[str, pd.DataFrame] = {}
     sanitize_stats_map: Dict[str, Dict[str, int]] = {}
+    standalone_stats_map: Dict[str, Dict[str, Any]] = {}
     master_dates = set()
     skipped = []
 
@@ -117,11 +115,12 @@ def load_market_context(params) -> Dict[str, Any]:
             skipped.append({"ticker": ticker, "reason": f"原始資料列數不足 {len(raw_df)}"})
             continue
         df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows)
-        prep_df, logs = prep_stock_data_and_trades(df, params)
+        prep_df, logs, single_stats = prep_stock_data_and_trades(df, params, return_stats=True)
         all_dfs_fast[ticker] = pack_prepared_stock_data(prep_df)
         all_trade_logs[ticker] = logs
         prepared_frames[ticker] = prep_df
         sanitize_stats_map[ticker] = sanitize_stats
+        standalone_stats_map[ticker] = single_stats
         master_dates.update(prep_df.index)
 
     discovered_tickers = sorted(prepared_frames.keys())
@@ -135,6 +134,7 @@ def load_market_context(params) -> Dict[str, Any]:
         "all_trade_logs": all_trade_logs,
         "prepared_frames": prepared_frames,
         "sanitize_stats_map": sanitize_stats_map,
+        "standalone_stats_map": standalone_stats_map,
         "sorted_dates": sorted(master_dates),
     }
 
@@ -237,9 +237,12 @@ def build_target_replay_counts(*, tickers: List[str], all_dfs_fast, all_trade_lo
     return counts
 
 
-def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, standalone_logs, sanitize_stats, replay_counts) -> Dict[str, Any]:
-    single_stats, _ = run_v16_backtest(df.copy(), params, return_logs=True)
-    debug_df = run_debug_backtest(df.copy(), ticker, params, export_excel=False, verbose=False)
+def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, single_stats, standalone_logs, sanitize_stats, replay_counts, debug_row_count: int | None = None) -> Dict[str, Any]:
+    if debug_row_count is None:
+        debug_df = run_debug_backtest(df.copy(), ticker, params, export_excel=False, verbose=False)
+        resolved_debug_row_count = 0 if debug_df is None else len(debug_df)
+    else:
+        resolved_debug_row_count = int(debug_row_count)
     pit_index = build_trade_stats_index(standalone_logs)
 
     setup_rows = []
@@ -285,7 +288,7 @@ def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, 
         "portfolio_trade_rows": len(trade_rows),
         "filled_count": filled_count,
         "portfolio_missed_buy_count": missed_buy_count,
-        "debug_row_count": 0 if debug_df is None else len(debug_df),
+        "debug_row_count": resolved_debug_row_count,
         "blocked_by": blocked_by,
         "sanitize_dropped": int(sanitize_stats.get("dropped_row_count", 0)),
         "latest_setup_examples": setup_rows[-3:],
@@ -344,8 +347,7 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
     }
 
 
-def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_positions, enable_rotation, benchmark_ticker, write_outputs=False, run_dir=None):
-    context = load_market_context(params)
+def _compute_chain_summary(*, manifest, dataset_info, context, params, start_year, max_positions, enable_rotation, benchmark_ticker, write_outputs=False, run_dir=None, debug_row_count_cache=None):
     all_tickers = context["discovered_tickers"]
     portfolio_profile: Dict[str, Any] = {}
     portfolio_result = run_portfolio_timeline(
@@ -363,7 +365,7 @@ def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_po
         verbose=False,
     )
     df_equity, df_trades = portfolio_result[0], portfolio_result[1]
-    scanner_snapshot = _build_scanner_snapshot(params)
+    scanner_snapshot = _build_scanner_snapshot_from_context(context, params)
 
     replay_counts = build_target_replay_counts(
         tickers=all_tickers,
@@ -383,9 +385,11 @@ def _compute_chain_summary(*, manifest, dataset_info, params, start_year, max_po
             params=params,
             start_year=start_year,
             df=context["prepared_frames"][ticker],
+            single_stats=context["standalone_stats_map"][ticker],
             standalone_logs=context["all_trade_logs"][ticker],
             sanitize_stats=context["sanitize_stats_map"][ticker],
             replay_counts=replay_counts[ticker],
+            debug_row_count=None if debug_row_count_cache is None else debug_row_count_cache.get(ticker),
         )
         detail_rows.append(row)
 
@@ -468,10 +472,12 @@ def main(argv=None) -> int:
         max_positions = int(manifest["portfolio_max_positions"])
         enable_rotation = bool(manifest["portfolio_enable_rotation"])
         benchmark_ticker = str(manifest["benchmark_ticker"])
+        context = load_market_context(params)
 
         primary_summary = _compute_chain_summary(
             manifest=manifest,
             dataset_info=dataset_info,
+            context=context,
             params=params,
             start_year=start_year,
             max_positions=max_positions,
@@ -480,6 +486,7 @@ def main(argv=None) -> int:
             write_outputs=True,
             run_dir=run_dir,
         )
+        debug_row_count_cache = {row["ticker"]: int(row.get("debug_row_count", 0)) for row in primary_summary.get("rows", [])}
 
         rerun_summaries = []
         rerun_digests = []
@@ -487,12 +494,14 @@ def main(argv=None) -> int:
             rerun_summary = _compute_chain_summary(
                 manifest=manifest,
                 dataset_info=dataset_info,
+                context=context,
                 params=params,
                 start_year=start_year,
                 max_positions=max_positions,
                 enable_rotation=enable_rotation,
                 benchmark_ticker=benchmark_ticker,
                 write_outputs=False,
+                debug_row_count_cache=debug_row_count_cache,
             )
             rerun_payload = _canonical_chain_payload(rerun_summary)
             rerun_summaries.append({
