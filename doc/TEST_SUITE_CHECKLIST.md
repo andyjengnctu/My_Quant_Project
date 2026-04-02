@@ -94,7 +94,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已新增 meta registry case 與 `run_meta_quality.py` formal-entry 檢查；同時校驗 `DONE` 摘要、對應 test function、synthetic 主入口、`run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | PARTIAL | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已將 `run_meta_quality.py` 的 formal check 擴充到主表 / E/F 摘要一致性、`apps/test_suite.py` 單一正式入口、`doc/CMD.md` / `doc/ARCHITECTURE.md` 單一入口宣告、legacy app test entry 缺失與可疑替代測試入口檔名檢查；test suite 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -179,7 +179,8 @@
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
-| D25 | checklist sufficiency review | 已補 `run_meta_quality.py` formal check；每輪仍須結合本輪改動與剩餘缺口做人工判斷 |
+| D25 | checklist sufficiency review | 已補 `run_meta_quality.py` formal check，並擴充到 `apps/test_suite.py` 單一正式入口、CMD / ARCHITECTURE 宣告與 legacy / 可疑替代入口檢查 |
+| D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
 
 ## E. 未完成缺口摘要
 
@@ -190,7 +191,6 @@
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
 | 規則 | B01 | 杜絕未來函數 | 已新增 prev-day-only PIT case 補強盤前只能讀前一日資料，但仍不足以證明全域無 lookahead | `tools/validate/synthetic_history_cases.py` |
-| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | 已新增 `run_meta_quality.py` 做可執行 formal check，校驗主表狀態與 E/F 摘要一致，並已納入 `apps/test_suite.py` / `run_all.py` 單一入口；但每輪是否足夠仍需結合本輪改動與剩餘缺口做人工判斷 | checklist review + `tools/local_regression/run_meta_quality.py` |
 | 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑，並新增 downloader market-date fallback / sync aggregation / main summary fail-fast；其他外部 API 與更多 module error path 仍未全面補齊 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py` |
 | 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 
@@ -205,7 +205,6 @@
 |---|---|---|---|
 | D18 | contract tests for CSV / XLSX / JSON outputs | DONE | B11 / B17 |
 | D21 | performance baseline checks | PARTIAL | B19 |
-| D25 | checklist sufficiency review | PARTIAL | B26 |
 
 ## F. 已完成覆蓋摘要
 
@@ -237,6 +236,7 @@
 | Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` | 2026-04-02 |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
+| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` | 2026-04-02 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -261,6 +261,8 @@
 | D49 | `validate_local_regression_summary_contract_case` | B11 | 2026-04-02 |
 | D28 | `validate_artifact_lifecycle_contract_case` | B17 | 2026-04-02 |
 | D26 | `validate_cmd_document_contract_case` | B20 | 2026-04-01 |
+| D25 | run_meta_quality.py checklist sufficiency review | B26 | 2026-04-02 |
+| D59 | `validate_single_formal_test_entry_contract_case` | B26 | 2026-04-02 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
 | D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 | 2026-04-02 |
@@ -319,7 +321,10 @@
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
 | 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py` |
 | 2026-04-02 | D20 | 補 manifest 化 line / branch threshold gate 與 summary sync | PARTIAL -> DONE | `run_meta_quality.py` + `apps/test_suite.py` |
-| 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py`；每輪是否足夠仍需人工判斷 |
+| 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py` |
+| 2026-04-02 | D25 | 擴充 checklist sufficiency formal check 到單一正式入口與 legacy entry 檢查後收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/meta_contracts.py` |
+| 2026-04-02 | D59 | 新增單一正式測試入口契約案例並驗證 | NEW -> DONE | `validate_single_formal_test_entry_contract_case` |
+| 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/synthetic_meta_cases.py` + `tools/validate/meta_contracts.py` |
 | 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
 | 2026-04-02 | D27 | 擴充 scanner summary / banner 與 display re-export 後收斂完成 | PARTIAL -> DONE | validate_display_reporting_sanity_case |

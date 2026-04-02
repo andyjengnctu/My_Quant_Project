@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 
+from .meta_contracts import summarize_single_formal_test_entry_contract
+
 
 def _extract_table_rows(text: str, heading: str):
     pattern = rf"^### {re.escape(heading)}\n\n((?:\|.*\n)+)"
@@ -148,6 +150,25 @@ def validate_cmd_document_contract_case(_base_params):
     summary["command_count"] = len(unique_commands)
     summary["project_command_count"] = project_command_count
     return results, summary
+
+def validate_single_formal_test_entry_contract_case(_base_params):
+    case_id = "META_SINGLE_FORMAL_TEST_ENTRY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_entry_file_exists", True, contract["test_suite_exists"])
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_single_entry", True, contract["project_settings_declares_single_entry"])
+    add_check(results, "meta_entry_contract", case_id, "cmd_declares_single_entry", True, contract["cmd_declares_single_entry"])
+    add_check(results, "meta_entry_contract", case_id, "architecture_declares_single_entry", True, contract["architecture_declares_single_entry"])
+    add_check(results, "meta_entry_contract", case_id, "no_legacy_app_test_entries", [], contract["legacy_entry_paths"])
+    add_check(results, "meta_entry_contract", case_id, "no_suspicious_alternate_app_test_entries", [], contract["suspicious_app_entries"])
+
+    summary["app_py_files"] = contract["app_py_files"]
+    summary["legacy_entry_paths"] = contract["legacy_entry_paths"]
+    summary["suspicious_app_entries"] = contract["suspicious_app_entries"]
+    return results, summary
+
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
     from tools.validate.synthetic_cases import get_synthetic_validators

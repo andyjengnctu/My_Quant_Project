@@ -26,6 +26,8 @@ from tools.local_regression.common import (
 
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 PROJECT_SETTINGS_PATH = PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md"
+CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
+ARCHITECTURE_PATH = PROJECT_ROOT / "doc" / "ARCHITECTURE.md"
 STATUS_VALUES = {"DONE", "PARTIAL", "TODO", "N/A"}
 COVERAGE_TARGETS = [
     "tools/validate/synthetic_cases.py",
@@ -224,6 +226,9 @@ def _extract_backticked_paths(text: str) -> List[str]:
     return [match.strip() for match in re.findall(r"`([^`]+)`", text) if "/" in match or match.endswith('.py')]
 
 
+from tools.validate.meta_contracts import summarize_single_formal_test_entry_contract
+
+
 def _extract_project_settings_formal_steps() -> List[str]:
     text = PROJECT_SETTINGS_PATH.read_text(encoding="utf-8")
     pattern = r"apps/test_suite\.py` 必須作為所有已實作測試的單一正式入口；其正式組成步驟目前為：\n((?:\s+`[^`]+`、?\n?)+)"
@@ -300,6 +305,53 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
             not missing_script_files,
             detail=f"missing={missing_script_files}",
             extra={"missing_script_files": missing_script_files},
+        )
+    )
+
+    single_entry_contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
+    results.append(
+        summarize_result(
+            "formal_entry_test_suite_file_exists",
+            single_entry_contract["test_suite_exists"],
+            detail=f"apps={single_entry_contract['app_py_files']}",
+            extra={"app_py_files": single_entry_contract["app_py_files"]},
+        )
+    )
+    results.append(
+        summarize_result(
+            "formal_entry_project_settings_declares_single_entry",
+            single_entry_contract["project_settings_declares_single_entry"],
+            detail=f"declared={single_entry_contract['project_settings_declares_single_entry']}",
+        )
+    )
+    results.append(
+        summarize_result(
+            "formal_entry_cmd_declares_single_entry",
+            single_entry_contract["cmd_declares_single_entry"],
+            detail=f"declared={single_entry_contract['cmd_declares_single_entry']}",
+        )
+    )
+    results.append(
+        summarize_result(
+            "formal_entry_architecture_declares_single_entry",
+            single_entry_contract["architecture_declares_single_entry"],
+            detail=f"declared={single_entry_contract['architecture_declares_single_entry']}",
+        )
+    )
+    results.append(
+        summarize_result(
+            "formal_entry_no_legacy_app_test_entries",
+            not single_entry_contract["legacy_entry_paths"],
+            detail=f"legacy={single_entry_contract['legacy_entry_paths']}",
+            extra={"legacy_entry_paths": single_entry_contract["legacy_entry_paths"]},
+        )
+    )
+    results.append(
+        summarize_result(
+            "formal_entry_no_suspicious_alternate_app_test_entries",
+            not single_entry_contract["suspicious_app_entries"],
+            detail=f"suspicious={single_entry_contract['suspicious_app_entries']}",
+            extra={"suspicious_app_entries": single_entry_contract["suspicious_app_entries"]},
         )
     )
 
