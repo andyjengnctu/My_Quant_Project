@@ -3,8 +3,7 @@ import os
 
 import pandas as pd
 
-
-LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
 
 
 def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp, *, output_dir, normalize_ticker):

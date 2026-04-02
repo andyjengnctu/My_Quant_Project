@@ -21,6 +21,7 @@ LOCAL_REGRESSION_DIR = PROJECT_ROOT / "tools" / "local_regression"
 DEFAULT_MANIFEST_PATH = LOCAL_REGRESSION_DIR / "manifest.json"
 OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "local_regression"
 REDUCED_DATASET_DIR = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
+LOCAL_REGRESSION_RUN_DIR_ENV = "V16_LOCAL_REGRESSION_RUN_DIR"
 MANIFEST_DEFAULTS: Dict[str, Any] = {
     "benchmark_ticker": "0050",
     "bundle_name": "to_chatgpt_bundle.zip",
@@ -129,24 +130,24 @@ def _normalize_bundle_name(bundle_name: Any) -> str:
 def _resolve_local_regression_run_dir_from_env(raw_value: str) -> Path:
     normalized = os.fspath(raw_value).strip()
     if normalized == "":
-        raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可空白")
+        raise LocalRegressionError(f"{LOCAL_REGRESSION_RUN_DIR_ENV} 不可空白")
 
     normalized_value, normalized_parts = _split_cross_platform_parts(normalized)
     path_obj = Path(normalized)
     if path_obj.is_absolute():
         resolved = path_obj.resolve()
     elif _is_windows_absolute_path(normalized):
-        raise LocalRegressionError(f"V16_LOCAL_REGRESSION_RUN_DIR 必須落在 {(OUTPUT_ROOT / '_staging').resolve()}")
+        raise LocalRegressionError(f"{LOCAL_REGRESSION_RUN_DIR_ENV} 必須落在 {(OUTPUT_ROOT / '_staging').resolve()}")
     else:
         if any(part in {"", ".", ".."} for part in normalized_parts):
-            raise LocalRegressionError("V16_LOCAL_REGRESSION_RUN_DIR 不可包含 . 或 ..")
+            raise LocalRegressionError(f"{LOCAL_REGRESSION_RUN_DIR_ENV} 不可包含 . 或 ..")
         resolved = (PROJECT_ROOT / normalized_value).resolve()
 
     allowed_root = (OUTPUT_ROOT / "_staging").resolve()
     try:
         resolved.relative_to(allowed_root)
     except ValueError as exc:
-        raise LocalRegressionError(f"V16_LOCAL_REGRESSION_RUN_DIR 必須落在 {allowed_root}") from exc
+        raise LocalRegressionError(f"{LOCAL_REGRESSION_RUN_DIR_ENV} 必須落在 {allowed_root}") from exc
 
     ensure_dir(resolved)
     return resolved
@@ -321,7 +322,7 @@ def summarize_result(name: str, ok: bool, *, detail: str, extra: Optional[Dict[s
 
 
 def resolve_run_dir(script_name: str) -> Path:
-    env_run_dir = os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip()
+    env_run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     if env_run_dir:
         return _resolve_local_regression_run_dir_from_env(env_run_dir)
     run_dir = OUTPUT_ROOT / "_staging" / f"{timestamp_text()}_{script_name}_{uuid.uuid4().hex[:8]}"

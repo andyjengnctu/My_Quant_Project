@@ -17,6 +17,7 @@ from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cl
 from tools.local_regression.common import (
     ensure_reduced_dataset,
     load_manifest,
+    LOCAL_REGRESSION_RUN_DIR_ENV,
     resolve_run_dir,
     run_command,
     summarize_result,
@@ -909,7 +910,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
 
 
 def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_traced_memory_mb: float) -> Dict[str, Any]:
-    has_shared_run_dir = bool(os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip())
+    has_shared_run_dir = bool(os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip())
     available_step_files = {
         name: next((run_dir / file_name for file_name in file_names if (run_dir / file_name).exists()), run_dir / file_names[0])
         for name, file_names in PERFORMANCE_STEP_FILES.items()

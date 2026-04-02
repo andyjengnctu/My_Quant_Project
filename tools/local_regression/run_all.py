@@ -21,6 +21,7 @@ from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_sum
 from tools.local_regression.common import (
     archive_bundle_history,
     build_artifacts_manifest,
+    LOCAL_REGRESSION_RUN_DIR_ENV,
     build_bundle_zip,
     build_python_env,
     cleanup_staging_dir,
@@ -731,7 +732,7 @@ def execute_all(
             manifest_error=exc,
             progress_callback=progress_callback,
         )
-    shared_env = build_python_env({"V16_LOCAL_REGRESSION_RUN_DIR": str(run_dir)})
+    shared_env = build_python_env({LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)})
     major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
 
     try:

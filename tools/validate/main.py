@@ -183,7 +183,8 @@ def main(argv=None, environ=None):
         is_insufficient_data_error,
     )
     from tools.validate.real_cases import run_real_ticker_scan
-    from tools.validate.reporting import LOCAL_REGRESSION_RUN_DIR_ENV, print_console_summary, write_issue_excel_report, write_local_regression_summary
+    from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
+    from tools.validate.reporting import print_console_summary, write_issue_excel_report, write_local_regression_summary
     from tools.validate.synthetic_cases import run_synthetic_consistency_suite
     from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 

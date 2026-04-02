@@ -20,7 +20,7 @@ from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path, resolve_log_dir
-from tools.local_regression.common import MANIFEST_DEFAULTS, build_bundle_zip, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, MANIFEST_DEFAULTS, build_bundle_zip, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
@@ -343,7 +343,7 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
     finally:
         shutil.rmtree(bundle_run_dir, ignore_errors=True)
 
-    env_var = "V16_LOCAL_REGRESSION_RUN_DIR"
+    env_var = LOCAL_REGRESSION_RUN_DIR_ENV
     original_env = os.environ.get(env_var)
     env_cases = [
         ("local_regression_contract::run_dir_env_outside_project_rejected", "/tmp/outside_local_regression", "必須落在"),
@@ -356,7 +356,7 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
             try:
                 resolve_run_dir("quick_gate")
                 ok = False
-                detail = "應拒絕不合法 V16_LOCAL_REGRESSION_RUN_DIR，但函式未拋出例外"
+                detail = f"應拒絕不合法 {LOCAL_REGRESSION_RUN_DIR_ENV}，但函式未拋出例外"
             except Exception as exc:
                 ok = expected_text in str(exc)
                 detail = f"{type(exc).__name__}: {exc}"
