@@ -8,7 +8,7 @@ import sys
 import time
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -77,6 +77,14 @@ def iter_python_files() -> List[Path]:
     return sorted(files)
 
 
+def _compile_to_temp_pyc(source_path: Path, *, pyc_root: Path) -> Path:
+    relative_path = source_path.relative_to(PROJECT_ROOT)
+    pyc_path = pyc_root / relative_path.parent / f"{relative_path.name}c"
+    pyc_path.parent.mkdir(parents=True, exist_ok=True)
+    py_compile.compile(str(source_path), cfile=str(pyc_path), doraise=True)
+    return pyc_path
+
+
 def run_static_checks() -> List[Dict[str, Any]]:
     py_files = iter_python_files()
     results: List[Dict[str, Any]] = []
@@ -90,11 +98,15 @@ def run_static_checks() -> List[Dict[str, Any]]:
     results.append(summarize_result("py_compile", not py_compile_errors, detail=f"檢查 {len(py_files)} 個 Python 檔案", extra={"errors": py_compile_errors}))
 
     pyc_compile_errors = []
-    for path in py_files:
-        try:
-            py_compile.compile(str(path), doraise=True)
-        except py_compile.PyCompileError as exc:
-            pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {exc.msg}")
+    with tempfile.TemporaryDirectory(prefix="quick_gate_compileall_") as temp_dir:
+        pyc_root = Path(temp_dir)
+        for path in py_files:
+            try:
+                _compile_to_temp_pyc(path, pyc_root=pyc_root)
+            except py_compile.PyCompileError as exc:
+                pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {exc.msg}")
+            except Exception as exc:
+                pyc_compile_errors.append(f"{path.relative_to(PROJECT_ROOT)}: {type(exc).__name__}: {exc}")
     results.append(summarize_result("compileall", not pyc_compile_errors, detail=f"compileall 等價檢查 {len(py_files)} 個 Python 檔案", extra={"errors": pyc_compile_errors}))
 
     bare_except_hits = []
@@ -553,6 +565,37 @@ def check_dataset_runtime_error_paths() -> List[Dict[str, Any]]:
     return results
 
 
+def _build_runtime_failure_summary(*, manifest: Optional[Dict[str, Any]], dataset_info: Any, steps: List[Dict[str, Any]], exc: Exception, duration_sec: float, peak_traced_memory_mb: float) -> Dict[str, Any]:
+    failed_step_names = [step["name"] for step in steps if step.get("status") != "PASS"]
+    failed_steps = [*failed_step_names, "__runtime__"]
+    runtime_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "status": "FAIL",
+        "dataset": (manifest or {}).get("dataset", "unknown"),
+        "dataset_info": dataset_info,
+        "step_count": len(steps),
+        "failed_count": len(failed_steps),
+        "failed_steps": failed_steps,
+        "steps": steps,
+        "duration_sec": duration_sec,
+        "peak_traced_memory_mb": peak_traced_memory_mb,
+        "runtime_error": runtime_error,
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+
+
+def _write_quick_gate_outputs(run_dir: Path, summary: Dict[str, Any]) -> None:
+    write_json(run_dir / "quick_gate_summary.json", summary)
+    console_payload = {
+        "status": summary.get("status", "FAIL"),
+        "failed_steps": summary.get("failed_steps", []),
+        "runtime_error": summary.get("runtime_error", ""),
+    }
+    write_text(run_dir / "quick_gate_console.log", str(console_payload))
+    print(console_payload)
+
+
 def main(argv=None) -> int:
     parsed = parse_no_arg_cli(argv, "tools/local_regression/run_quick_gate.py", description="執行 reduced quick gate 靜態與錯誤路徑檢查；不接受額外參數。")
     if parsed["help"]:
@@ -561,41 +604,61 @@ def main(argv=None) -> int:
     tracker = PeakTracedMemoryTracker()
     tracker.__enter__()
     started = time.perf_counter()
-    manifest = load_manifest()
-    run_dir = resolve_run_dir("quick_gate")
-    timeout = int(manifest["subprocess_timeout_sec"])
-    dataset_info = ensure_reduced_dataset()
-
+    manifest: Optional[Dict[str, Any]] = None
+    dataset_info: Any = None
+    run_dir: Optional[Path] = None
     steps: List[Dict[str, Any]] = []
-    steps.extend(run_static_checks())
-    steps.extend(check_output_path_contract())
-    steps.extend(check_outputs_root_layout())
-    steps.extend(check_dataset_profile_contract())
-    steps.extend(check_log_path_contract())
-    steps.extend(check_local_regression_contract())
-    steps.extend(check_help(timeout))
-    steps.extend(check_dataset_cli_errors(timeout))
-    steps.extend(check_generic_cli_errors(timeout))
-    steps.extend(check_error_paths(timeout))
-    steps.extend(check_dataset_runtime_error_paths())
+    summary: Optional[Dict[str, Any]] = None
+    exit_code = 1
 
-    failed = [step for step in steps if step["status"] != "PASS"]
-    summary = {
-        "status": "PASS" if not failed else "FAIL",
-        "dataset": manifest["dataset"],
-        "dataset_info": dataset_info,
-        "step_count": len(steps),
-        "failed_count": len(failed),
-        "failed_steps": [step["name"] for step in failed],
-        "steps": steps,
-        "duration_sec": round(time.perf_counter() - started, 3),
-        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
-    }
-    write_json(run_dir / "quick_gate_summary.json", summary)
-    write_text(run_dir / "quick_gate_console.log", str({"status": summary["status"], "failed_steps": summary["failed_steps"]}))
-    print({"status": summary["status"], "failed_steps": summary["failed_steps"]})
-    tracker.__exit__(None, None, None)
-    return 0 if not failed else 1
+    try:
+        run_dir = resolve_run_dir("quick_gate")
+        manifest = load_manifest()
+        timeout = int(manifest["subprocess_timeout_sec"])
+        dataset_info = ensure_reduced_dataset()
+
+        steps.extend(run_static_checks())
+        steps.extend(check_output_path_contract())
+        steps.extend(check_outputs_root_layout())
+        steps.extend(check_dataset_profile_contract())
+        steps.extend(check_log_path_contract())
+        steps.extend(check_local_regression_contract())
+        steps.extend(check_help(timeout))
+        steps.extend(check_dataset_cli_errors(timeout))
+        steps.extend(check_generic_cli_errors(timeout))
+        steps.extend(check_error_paths(timeout))
+        steps.extend(check_dataset_runtime_error_paths())
+
+        failed = [step for step in steps if step["status"] != "PASS"]
+        summary = {
+            "status": "PASS" if not failed else "FAIL",
+            "dataset": manifest["dataset"],
+            "dataset_info": dataset_info,
+            "step_count": len(steps),
+            "failed_count": len(failed),
+            "failed_steps": [step["name"] for step in failed],
+            "steps": steps,
+        }
+        exit_code = 0 if not failed else 1
+    except Exception as exc:
+        summary = _build_runtime_failure_summary(
+            manifest=manifest,
+            dataset_info=dataset_info,
+            steps=steps,
+            exc=exc,
+            duration_sec=round(time.perf_counter() - started, 3),
+            peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+        )
+        exit_code = 1
+    finally:
+        if summary is not None:
+            summary["duration_sec"] = round(time.perf_counter() - started, 3)
+            summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
+        tracker.__exit__(None, None, None)
+
+    if run_dir is not None and summary is not None:
+        _write_quick_gate_outputs(run_dir, summary)
+    return exit_code
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
 from tools.local_regression import run_meta_quality as run_meta_quality_module
+from tools.local_regression import run_quick_gate as run_quick_gate_module
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
 from tools.local_regression.common import write_json, write_csv, write_text
@@ -137,6 +138,18 @@ REQUIRED_ML_SMOKE_SUMMARY_KEYS = {
     "optimizer_profile_avg_objective_wall_sec",
     "optimizer_repro",
     "failures",
+    "peak_traced_memory_mb",
+}
+
+REQUIRED_QUICK_GATE_SUMMARY_KEYS = {
+    "status",
+    "dataset",
+    "dataset_info",
+    "step_count",
+    "failed_count",
+    "failed_steps",
+    "steps",
+    "duration_sec",
     "peak_traced_memory_mb",
 }
 
@@ -442,6 +455,59 @@ def validate_local_regression_summary_contract_case(_base_params):
             "failed_step_names": failed_steps,
             "suggested_rerun_command": "python tools/local_regression/run_all.py --only ml_smoke",
         }
+        quick_gate_payload = {
+            "status": "PASS",
+            "dataset": "reduced",
+            "dataset_info": {"csv_count": 24},
+            "step_count": 3,
+            "failed_count": 0,
+            "failed_steps": [],
+            "steps": [
+                {"name": "py_compile", "status": "PASS"},
+                {"name": "compileall", "status": "PASS"},
+                {"name": "bare_except_scan", "status": "PASS"},
+            ],
+            "duration_sec": 1.23,
+            "peak_traced_memory_mb": 12.34,
+        }
+        write_json(run_dir / "quick_gate_summary.json", quick_gate_payload)
+        quick_gate_json = json.loads((run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "quick_gate_summary_required_keys", [], sorted(REQUIRED_QUICK_GATE_SUMMARY_KEYS - set(quick_gate_json.keys())))
+
+        compile_probe_calls = []
+
+        def _fake_compile(source, cfile=None, doraise=False, *args, **kwargs):
+            compile_probe_calls.append({"source": source, "cfile": cfile, "doraise": doraise})
+            return cfile or source
+
+        with patch.object(run_quick_gate_module, "iter_python_files", return_value=[run_quick_gate_module.PROJECT_ROOT / "apps" / "test_suite.py"]), \
+             patch.object(run_quick_gate_module.py_compile, "compile", side_effect=_fake_compile):
+            static_results = run_quick_gate_module.run_static_checks()
+
+        compileall_result = next(item for item in static_results if item.get("name") == "compileall")
+        compile_probe_path = Path(str(compile_probe_calls[0]["cfile"])) if compile_probe_calls else None
+        compile_probe_resolved = str(compile_probe_path.resolve()) if compile_probe_path is not None else ""
+        project_root_resolved = str(run_quick_gate_module.PROJECT_ROOT.resolve())
+        add_check(results, "output_contract", case_id, "quick_gate_compileall_temp_cfile_present", True, bool(compile_probe_calls and compile_probe_calls[0].get("cfile")))
+        add_check(results, "output_contract", case_id, "quick_gate_compileall_temp_cfile_outside_project_root", True, bool(compile_probe_resolved) and not compile_probe_resolved.startswith(project_root_resolved))
+        add_check(results, "output_contract", case_id, "quick_gate_compileall_result_stays_pass_with_temp_cfile", "PASS", compileall_result.get("status"))
+
+        runtime_run_dir = temp_path / "quick_gate_runtime_failure"
+        runtime_run_dir.mkdir(parents=True, exist_ok=True)
+        with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=runtime_run_dir), \
+             patch.object(run_quick_gate_module, "load_manifest", return_value={**local_common.MANIFEST_DEFAULTS, "dataset": "reduced"}), \
+             patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}), \
+             patch.object(run_quick_gate_module, "run_static_checks", side_effect=RuntimeError("synthetic quick gate crash")):
+            runtime_rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
+
+        runtime_json = json.loads((runtime_run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
+        runtime_console = (runtime_run_dir / "quick_gate_console.log").read_text(encoding="utf-8")
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_return_code", 1, runtime_rc)
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_status", "FAIL", runtime_json.get("status"))
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_marks_runtime_step", ["__runtime__"], runtime_json.get("failed_steps"))
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_includes_error_fields", True, runtime_json.get("error_type") == "RuntimeError" and "synthetic quick gate crash" in runtime_json.get("runtime_error", ""))
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_console_has_runtime_error", True, "synthetic quick gate crash" in runtime_console)
+
         write_json(run_dir / "preflight_summary.json", preflight_payload)
         write_json(run_dir / "master_summary.json", master_payload)
         master_json = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
