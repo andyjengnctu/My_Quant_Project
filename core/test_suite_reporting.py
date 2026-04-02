@@ -217,7 +217,9 @@ def print_test_suite_human_summary(
             f"{_safe_display_text(manifest_payload.get('error_message'))}"
         )
 
-    preflight = step_payloads.get("preflight", {})
+    preflight = step_payloads.get("preflight")
+    if not isinstance(preflight, dict) or not preflight:
+        preflight = result.get("preflight", {})
     preflight_status, preflight_detail = _step_overview("preflight", preflight, {})
     if preflight_status == "PASS":
         failed_text = ",".join(preflight.get("failed_packages", [])) or "(none)"
