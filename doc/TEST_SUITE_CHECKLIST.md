@@ -150,6 +150,10 @@
 | D46 | `validate_downloader_market_date_fallback_case` | 已補 FinMind / YFinance 皆失敗時的 market-date fallback、issue log 與 weekday 回退口徑 |
 | D47 | `validate_downloader_sync_error_path_case` | 已補 downloader sync 對空資料 / RequestException 的錯誤聚合、ticker 可定位與 issue log path 回傳 |
 | D48 | `validate_downloader_main_error_path_case` | 已補 downloader main 在全失敗時的 RuntimeError 摘要、計數與 issue log path 輸出 |
+| D49 | `validate_local_regression_summary_contract_case` | 已補 local regression summaries（含 quick gate readonly compile、runtime FAIL summary 與 console artifact）的 schema / summary contract |
+| D60 | `validate_synthetic_setup_index_prev_day_only_case` | 已補 setup index prev-day-only synthetic case，釘死 setup index 不得偷看當日資料 |
+| D61 | `validate_downloader_universe_fetch_error_path_case` | 已補 universe fetch 全失敗 fatal error path、錯誤摘要與 issue log 可定位性 |
+| D62 | `validate_downloader_universe_screening_init_error_path_case` | 已補 universe screening 初始化失敗 fatal error path 與錯誤訊息定位 |
 | D33 | `validate_sanitize_ohlcv_expected_behavior_case` | 已補髒資料清洗 expected behavior：負成交量修正、零量保留、重複日期去重、亂序排序與 OHLC/NaN 壞列清除 |
 | D34 | `validate_sanitize_ohlcv_failfast_case` | 已補缺少日期欄、缺必要欄位、全列無效、清洗後列數不足的 fail-fast |
 | D35 | `validate_load_clean_df_data_quality_case` | 已補 `real_case_io.load_clean_df()` 與資料清洗整合案例，確認 sanitize stats 與清洗後排序/列數一致 |
@@ -167,6 +171,9 @@
 | D67 | `validate_debug_trade_log_prepared_tool_contract_case` | 已補 `debug_trade_log` prepared-context 路徑與既有 raw-df 路徑等價契約，避免加速後明細列內容與逐筆損益 sequence 漂移 |
 | D68 | `validate_scanner_reference_clean_df_contract_case` | 已補 real-case `scanner_ref_stats` clean-df fast path 與既有 file-path 路徑等價契約，避免加速後 scanner 參考 stats 口徑漂移 |
 | D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | 已補 `run_meta_quality.py` 重用同輪 `validate_consistency` coverage artifacts 契約，避免同一輪再重跑一次 synthetic coverage suite |
+| D70 | `validate_registry_checklist_entry_consistency_case` imported / defined validator completeness guard | 已補 imported / defined `validate_*` cases 與 synthetic registry 完整一致 formal guard |
+| D71 | `run_meta_quality.py` checklist main / `F2` / `G` sync guard | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard |
+| D72 | `run_meta_quality.py` checklist `DONE` summary omission blocker | 已補 checklist `DONE` 摘要缺漏自動偵測與阻擋 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case 與 synthetic 正式註冊清單完整一致的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
 | D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
@@ -303,6 +310,7 @@
 | D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
+| D17 | `reporting schema compatibility checks` | B21 | 2026-04-02 |
 | D42 | `validate_issue_excel_report_schema_case` | B21 | 2026-04-02 |
 | D43 | `validate_portfolio_export_report_artifacts_case` | B21 | 2026-04-02 |
 | D50 | `validate_test_suite_summary_failure_reporting_case` | B21 | 2026-04-02 |
@@ -389,7 +397,7 @@
 | 2026-04-02 | D20 | 擴充 `run_meta_quality.py` coverage probe 到 formal helper path | PARTIAL -> PARTIAL | 已補 chain checks / ml smoke / display / test_suite summary path，仍未形成更完整的正式路徑 coverage gate |
 | 2026-04-02 | D20 | 再擴充 `run_meta_quality.py` coverage probe 到 `run_all.py` helper path | PARTIAL -> PARTIAL | 已補 `_safe_format_preflight_summary` / `_write_dataset_prepare_summary` / `_compute_not_run_step_names` / `_build_bundle_entries` |
 
-- 2026-04-02：`D17` 收斂為已完成；新增 `D42`（issue Excel report schema）與 `D43`（portfolio export report artifacts），將 `B21` 的 reporting schema compatibility 從 console/yearly/test-suite summary 補到輸出檔 schema。
+| 2026-04-02 | D17 | reporting schema compatibility checks 收斂完成，並新增輸出檔 schema 補強 | TODO -> DONE | `validate_issue_excel_report_schema_case` + `validate_portfolio_export_report_artifacts_case`；將 `B21` 的 reporting schema compatibility 從 console/yearly/test-suite summary 補到輸出檔 schema |
 - 2026-04-02：補入 `D50`、`D51`、`D52`，將 `apps/test_suite.py` 摘要契約從 PASS 顯示補到腳本失敗、manifest blocked 與 partial selected-steps 路徑。
 - 2026-04-02：再補 `D53`、`D54`、`D55`，把 `apps/test_suite.py` 摘要契約延伸到 preflight fail、dataset prepare fail 與 summary unreadable 路徑，並補步驟名稱與空 bundle path 的顯示穩定性。
 - 2026-04-02：補 `D56`，把 `run_all.py` real preflight early-failure 路徑納入 contract，要求 dataset step 雖未產生 payload，仍必須在 `not_run_step_names` 中標示為 `dataset_prepare`。
@@ -443,15 +451,6 @@
 6. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
 7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；此判斷也包含 checklist 自身是否仍有缺口、摘要失同步、狀態過舊或未回寫項目；若不足，須先更新 checklist 再進行後續驗證或修改。
 8. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
-| 2026-04-02 | B19 / D21 | 去除 chain checks / consistency 內部重工以縮短 reduced suite 牆鐘時間 | DONE -> DONE | `run_chain_checks.py` 共用 prepared market context、改吃 prepared scanner snapshot 與 cached single-backtest stats；`prep_stock_data_and_trades()` 新增 optional stats 回傳，`real_case_runners.py` 改共用同一份 prepared backtest 結果 |
-| 2026-04-02 | D65 | 新增 portfolio_sim prepared tool contract case 並驗證 | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
-| 2026-04-02 | B19 / D21 | 將 chain replay counts 併入第一次 timeline，並移除 portfolio_sim 驗證 temp CSV 二次載入 | DONE -> DONE | `core/portfolio_engine.py`, `tools/local_regression/run_chain_checks.py`, `tools/portfolio_sim/simulation_runner.py`, `tools/validate/portfolio_tool_checks.py` |
-
-| 2026-04-02 | D66 | 新增 scanner prepared tool contract case 並驗證 | NEW -> DONE | `validate_scanner_prepared_tool_contract_case` |
-| 2026-04-02 | D67 | 新增 debug trade log prepared tool contract case 並驗證 | NEW -> DONE | `validate_debug_trade_log_prepared_tool_contract_case` |
-| 2026-04-02 | B19 / D21 | 將 scanner / debug_trade_log 驗證改為共用 prepared context 與 precomputed stats | DONE -> DONE | `tools/validate/real_case_runners.py`, `tools/validate/external_tool_checks.py`, `apps/vip_scanner.py`, `tools/debug/trade_log.py` |
-
-| 2026-04-02 | B19 / D21 | 記錄 reduced suite 最近兩輪實測基線並確認後續效能優化需先有 profiling 證據 | DONE -> DONE | 近兩輪實測約 `107.62s` 與 `104.82s`；`meta quality` 因 coverage artifact reuse 已降至約 `1.41s`，剩餘主要成本集中在 `consistency` 與 `chain checks`，後續若要再動正式流程需先以 profiling 證明存在明確固定重工或高 fanout 熱點 |
 
 ## I. 收斂結案註記
 
@@ -462,5 +461,8 @@
 - `ml smoke` 約 `3.81s ~ 4.01s`
 - `meta quality` 約 `1.41s ~ 9.82s`，其中同輪 coverage artifact reuse 生效後已降至約 `1.41s`
 - `total` 約 `104.82s ~ 107.62s`
+
+- 2026-04-02：`B19 / D21` 補記效能優化脈絡：去除 chain checks / consistency 內部重工、將 replay counts 併入第一次 timeline、移除 portfolio_sim 驗證 temp CSV 二次載入，並將 scanner / debug trade log 驗證改為共用 prepared context 與 precomputed stats。
+- 2026-04-02：補記 reduced suite 最近兩輪實測基線約 `107.62s` 與 `104.82s`；`meta quality` 因 coverage artifact reuse 已降至約 `1.41s`。後續若要再動正式流程，需先以 profiling 證明存在明確固定重工或高 fanout 熱點。
 
 目前正式 test suite 的 checklist / registry / formal-entry 自我驗證缺口已補齊：synthetic 主入口已補回遺漏註冊案例，`run_meta_quality.py` 與 meta registry case 也已正式阻擋主表 / `F2` / `G` 失同步與 `DONE` 摘要缺漏。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
