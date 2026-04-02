@@ -136,7 +136,7 @@
 | D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
 | D15 | deterministic regression for optimizer/scanner | 已完成；已補 optimizer fixed-seed 雙跑、scanner worker repeatability 與 `scan_runner` 入口重跑一致性 |
 | D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
-| D17 | reporting schema compatibility checks | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
+| D17 | `tools/validate/synthetic_reporting_cases.py` | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
 
 ### D4. 品質補強
 
@@ -310,7 +310,7 @@
 | D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
-| D17 | `reporting schema compatibility checks` | B21 | 2026-04-02 |
+| D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
 | D42 | `validate_issue_excel_report_schema_case` | B21 | 2026-04-02 |
 | D43 | `validate_portfolio_export_report_artifacts_case` | B21 | 2026-04-02 |
 | D50 | `validate_test_suite_summary_failure_reporting_case` | B21 | 2026-04-02 |
