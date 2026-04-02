@@ -11,7 +11,7 @@ from core.backtest_core import (
     run_v16_backtest,
 )
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
-from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index
+from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check
 
@@ -379,4 +379,47 @@ def validate_synthetic_lookahead_prev_day_only_case(base_params):
 
     summary["same_day_trade_count"] = int(same_day_trade_count)
     summary["next_day_trade_count"] = int(next_day_trade_count)
+    return results, summary
+
+
+def validate_synthetic_setup_index_prev_day_only_case(base_params):
+    _params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+
+    case_id = "SYNTH_SETUP_INDEX_PREV_DAY_ONLY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    index = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    packed_df = pd.DataFrame(
+        {
+            "Open": [10.0, 10.5, 11.0],
+            "High": [10.2, 10.7, 11.3],
+            "Low": [9.8, 10.1, 10.7],
+            "Close": [10.0, 10.6, 11.1],
+            "Volume": [1000.0, 1000.0, 1000.0],
+            "ATR": [1.0, 1.0, 1.0],
+            "buy_limit": [10.0, 10.5, 11.0],
+            "is_setup": [False, True, False],
+            "ind_sell_signal": [False, False, False],
+        },
+        index=index,
+    )
+    packed_index = build_normal_setup_index({"2330": pack_prepared_stock_data(packed_df)})
+
+    dict_index = build_normal_setup_index({
+        "2330": {
+            index[0]: {"is_setup": False},
+            index[1]: {"is_setup": True},
+            index[2]: {"is_setup": False},
+        }
+    })
+
+    day_two_entries = packed_index.get(index[1], [])
+    day_three_entries = packed_index.get(index[2], [])
+
+    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "same_day_setup_not_exposed_to_same_day_schedule", [], day_two_entries)
+    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "next_day_schedule_contains_previous_day_setup_only", [("2330", 1, 2)], day_three_entries)
+    add_check(results, "synthetic_setup_index_prev_day_only", case_id, "packed_and_dict_paths_match", dict_index, packed_index)
+
+    summary["scheduled_dates"] = [dt.strftime("%Y-%m-%d") for dt in packed_index.keys()]
     return results, summary

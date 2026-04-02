@@ -1,6 +1,7 @@
 import inspect
 import os
 import sys
+import tracemalloc
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from multiprocessing import get_context
@@ -233,3 +234,35 @@ def should_auto_open_browser(environ=None):
         return True
 
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
+
+
+# # (AI註: reduced test suite 記憶體回歸統一用 tracemalloc peak；跨平台可用，避免各工具各自量測)
+class PeakTracedMemoryTracker:
+    def __init__(self):
+        self._was_tracing = False
+        self._peak_bytes = 0
+
+    def __enter__(self):
+        self._was_tracing = tracemalloc.is_tracing()
+        if not self._was_tracing:
+            tracemalloc.start()
+        tracemalloc.reset_peak()
+        return self
+
+    def snapshot_peak_mb(self):
+        if not tracemalloc.is_tracing():
+            return round(self._peak_bytes / (1024 * 1024), 3)
+        _current, peak = tracemalloc.get_traced_memory()
+        return round(peak / (1024 * 1024), 3)
+
+    @property
+    def peak_mb(self):
+        return round(self._peak_bytes / (1024 * 1024), 3)
+
+    def __exit__(self, exc_type, exc, tb):
+        if tracemalloc.is_tracing():
+            _current, peak = tracemalloc.get_traced_memory()
+            self._peak_bytes = int(peak)
+        if (not self._was_tracing) and tracemalloc.is_tracing():
+            tracemalloc.stop()
+        return False

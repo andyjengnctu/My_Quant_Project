@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.model_paths import MODELS_DIR_ENV_VAR
-from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from core.config import V16StrategyParams
 from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASET_PROFILE, normalize_dataset_profile_key
 from core.output_paths import build_output_dir
@@ -557,6 +557,8 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
     manifest = load_manifest()
     run_dir = resolve_run_dir("quick_gate")
     timeout = int(manifest["subprocess_timeout_sec"])
@@ -584,10 +586,12 @@ def main(argv=None) -> int:
         "failed_count": len(failed),
         "failed_steps": [step["name"] for step in failed],
         "steps": steps,
+        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(run_dir / "quick_gate_summary.json", summary)
     write_text(run_dir / "quick_gate_console.log", str({"status": summary["status"], "failed_steps": summary["failed_steps"]}))
     print({"status": summary["status"], "failed_steps": summary["failed_steps"]})
+    tracker.__exit__(None, None, None)
     return 0 if not failed else 1
 
 

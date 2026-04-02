@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import (
     ensure_reduced_dataset,
     load_manifest,
@@ -69,6 +69,7 @@ PERFORMANCE_MANIFEST_KEYS = {
     "chain_checks": "performance_chain_checks_max_sec",
     "ml_smoke": "performance_ml_smoke_max_sec",
 }
+PERFORMANCE_MEMORY_MANIFEST_KEY = "performance_peak_traced_memory_mb"
 
 
 def _ratio_percent(numerator: Any, denominator: Any) -> float:
@@ -709,7 +710,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     }
 
 
-def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float) -> Dict[str, Any]:
+def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_traced_memory_mb: float) -> Dict[str, Any]:
     has_shared_run_dir = bool(os.environ.get("V16_LOCAL_REGRESSION_RUN_DIR", "").strip())
     available_step_files = {name: run_dir / file_name for name, file_name in PERFORMANCE_STEP_FILES.items()}
     if not has_shared_run_dir and not any(path.exists() for path in available_step_files.values()):
@@ -725,20 +726,30 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
             "skipped": True,
             "results": results,
             "step_durations": {},
+            "step_peak_traced_memory_mb": {},
             "optimizer_trial_avg_objective_wall_sec": None,
             "optimizer_profile_trial_count": 0,
             "total_duration_sec": current_meta_quality_duration_sec,
+            "max_step_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
+            "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
         }
 
     results: List[Dict[str, Any]] = []
     step_durations: Dict[str, float] = {}
+    step_peak_traced_memory_mb: Dict[str, float] = {}
     missing_step_files: List[str] = []
+    missing_memory_steps: List[str] = []
     for step_name, path in available_step_files.items():
         if not path.exists():
             missing_step_files.append(step_name)
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
-        step_durations[step_name] = round(float(payload.get("duration_sec", 0.0) or 0.0), 3)
+        step_durations[step_name] = round(float(payload.get("duration_sec", payload.get("elapsed_time_sec", 0.0)) or 0.0), 3)
+        peak_memory_mb = payload.get("peak_traced_memory_mb")
+        if peak_memory_mb in (None, ""):
+            missing_memory_steps.append(step_name)
+        else:
+            step_peak_traced_memory_mb[step_name] = round(float(peak_memory_mb), 3)
 
     results.append(
         summarize_result(
@@ -746,6 +757,14 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
             not missing_step_files,
             detail=f"missing={missing_step_files}",
             extra={"missing_step_files": missing_step_files},
+        )
+    )
+    results.append(
+        summarize_result(
+            "performance_required_step_peak_memory_present",
+            not missing_memory_steps,
+            detail=f"missing={missing_memory_steps}",
+            extra={"missing_memory_steps": missing_memory_steps},
         )
     )
 
@@ -761,6 +780,17 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
             )
         )
 
+    peak_memory_budget_mb = float(manifest[PERFORMANCE_MEMORY_MANIFEST_KEY])
+    for step_name, peak_memory_mb in step_peak_traced_memory_mb.items():
+        results.append(
+            summarize_result(
+                f"performance_{step_name}_peak_memory_within_budget",
+                peak_memory_mb <= peak_memory_budget_mb,
+                detail=f"peak_memory={peak_memory_mb:.3f}MB | budget={peak_memory_budget_mb:.3f}MB",
+                extra={"peak_traced_memory_mb": peak_memory_mb, "budget_mb": peak_memory_budget_mb},
+            )
+        )
+
     meta_quality_budget_sec = float(manifest["performance_meta_quality_max_sec"])
     results.append(
         summarize_result(
@@ -768,6 +798,14 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
             current_meta_quality_duration_sec <= meta_quality_budget_sec,
             detail=f"duration={current_meta_quality_duration_sec:.3f}s | budget={meta_quality_budget_sec:.3f}s",
             extra={"duration_sec": current_meta_quality_duration_sec, "budget_sec": meta_quality_budget_sec},
+        )
+    )
+    results.append(
+        summarize_result(
+            "performance_meta_quality_peak_memory_within_budget",
+            current_meta_quality_peak_traced_memory_mb <= peak_memory_budget_mb,
+            detail=f"peak_memory={current_meta_quality_peak_traced_memory_mb:.3f}MB | budget={peak_memory_budget_mb:.3f}MB",
+            extra={"peak_traced_memory_mb": current_meta_quality_peak_traced_memory_mb, "budget_mb": peak_memory_budget_mb},
         )
     )
 
@@ -818,15 +856,19 @@ def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, curre
     else:
         optimizer_trial_avg_value = None
 
+    max_step_peak_memory_mb = round(max([float(current_meta_quality_peak_traced_memory_mb), *step_peak_traced_memory_mb.values()]) if step_peak_traced_memory_mb else float(current_meta_quality_peak_traced_memory_mb), 3)
     ok = all(item["status"] == "PASS" for item in results)
     return {
         "ok": ok,
         "skipped": False,
         "results": results,
         "step_durations": step_durations,
+        "step_peak_traced_memory_mb": step_peak_traced_memory_mb,
         "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_value,
         "optimizer_profile_trial_count": optimizer_profile_trial_count,
         "total_duration_sec": total_duration_sec,
+        "max_step_peak_traced_memory_mb": max_step_peak_memory_mb,
+        "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
     }
 
 
@@ -835,6 +877,8 @@ def main(argv=None) -> int:
     if cli["help"]:
         return 0
 
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
     manifest = load_manifest()
     ensure_reduced_dataset()
     run_dir = resolve_run_dir("meta_quality")
@@ -844,7 +888,13 @@ def main(argv=None) -> int:
     checklist_summary = _summarize_checklist_consistency()
     formal_entry_summary = _summarize_formal_entry_consistency()
     current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
-    performance_summary = _build_performance_summary(run_dir, manifest, current_meta_quality_duration_sec=current_meta_quality_duration_sec)
+    current_meta_quality_peak_traced_memory_mb = tracker.snapshot_peak_mb()
+    performance_summary = _build_performance_summary(
+        run_dir,
+        manifest,
+        current_meta_quality_duration_sec=current_meta_quality_duration_sec,
+        current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
+    )
 
     all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
     failures = [item["name"] for item in all_results if item["status"] != "PASS"]
@@ -887,6 +937,9 @@ def main(argv=None) -> int:
             "optimizer_profile_trial_count": performance_summary["optimizer_profile_trial_count"],
             "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
             "total_duration_sec": performance_summary["total_duration_sec"],
+            "step_peak_traced_memory_mb": performance_summary["step_peak_traced_memory_mb"],
+            "max_step_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
+            "meta_quality_peak_traced_memory_mb": performance_summary["meta_quality_peak_traced_memory_mb"],
         },
         "results": all_results,
     }
@@ -912,6 +965,7 @@ def main(argv=None) -> int:
         f"done_ids      : {', '.join(checklist_summary['done_ids']) if checklist_summary['done_ids'] else '(none)'}",
         f"performance_ok: {performance_summary['ok']}",
         f"perf_total    : {performance_summary['total_duration_sec']:.3f}s",
+        f"perf_peak_mem : {performance_summary['max_step_peak_traced_memory_mb']:.3f}MB",
         (
             f"perf_opt_trial: {performance_summary['optimizer_trial_avg_objective_wall_sec']:.3f}s"
             if performance_summary['optimizer_trial_avg_objective_wall_sec'] is not None
@@ -928,8 +982,10 @@ def main(argv=None) -> int:
         "checklist_partial_ids": checklist_summary["partial_ids"],
         "checklist_todo_ids": checklist_summary["todo_ids"],
         "performance_total_duration_sec": performance_summary["total_duration_sec"],
+        "performance_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
         "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
     }, ensure_ascii=False))
+    tracker.__exit__(None, None, None)
     return 0 if overall_status == "PASS" else 1
 
 

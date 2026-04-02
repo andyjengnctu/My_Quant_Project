@@ -283,3 +283,71 @@ def validate_downloader_main_error_path_case(base_params):
     add_check(results, "synthetic_error_paths", case_id, "downloader_main_reports_issue_log_path", True, "outputs/smart_downloader/downloader_issues_20260402.log" in err)
     summary["downloader_main_error_cases"] = 1
     return results, summary
+
+
+def validate_downloader_universe_fetch_error_path_case(base_params):
+    from tools.downloader import universe
+
+    case_id = "DOWNLOADER_UNIVERSE_FETCH_ERROR_PATHS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    issue_sections = []
+    with tempfile.TemporaryDirectory(prefix="v16_downloader_universe_fetch_") as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "SAVE_DIR", str(tmp_root)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe.requests, "get", side_effect=requests.RequestException("twse down")), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))):
+            try:
+                universe.get_or_update_universe()
+                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_rejected", True, False)
+            except RuntimeError as exc:
+                message = str(exc)
+                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_reports_runtimeerror", True, "無法取得任何台股股票名單" in message)
+                add_check(results, "synthetic_error_paths", case_id, "universe_fetch_failure_logs_issues", True, any(section == "名單來源失敗" and "twse down" in "\n".join(lines) for section, lines in issue_sections))
+
+    summary["issue_section_count"] = len(issue_sections)
+    return results, summary
+
+
+def validate_downloader_universe_screening_init_error_path_case(base_params):
+    from tools.downloader import universe
+
+    case_id = "DOWNLOADER_UNIVERSE_SCREENING_INIT_ERROR_PATHS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    issue_sections = []
+
+    table = pd.DataFrame({
+        "有價證券代號及名稱": ["有價證券代號及名稱", "skip", "2330 台積電"],
+        "CFICode": ["CFICode", "skip", "ESVUFR"],
+    })
+
+    class _Response:
+        text = "<html></html>"
+        def raise_for_status(self):
+            return None
+
+    with tempfile.TemporaryDirectory(prefix="v16_downloader_universe_screening_") as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        with patch.object(universe.rt, "ensure_runtime_dirs", return_value=None), \
+             patch.object(universe.rt, "SAVE_DIR", str(tmp_root)), \
+             patch.object(universe.rt.os.path, "exists", return_value=False), \
+             patch.object(universe.requests, "get", return_value=_Response()), \
+             patch.object(universe.pd, "read_html", return_value=[table]), \
+             patch.object(universe.rt, "get_yfinance_module", side_effect=ModuleNotFoundError("no module named yfinance")), \
+             patch.object(universe.rt, "append_downloader_issues", side_effect=lambda section, lines: issue_sections.append((section, list(lines)))), \
+             patch.object(universe.rt.time, "sleep", return_value=None):
+            try:
+                universe.get_or_update_universe()
+                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_rejected", True, False)
+            except RuntimeError as exc:
+                message = str(exc)
+                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_reports_runtimeerror", True, "快篩初始化失敗" in message and "ModuleNotFoundError" in message)
+                add_check(results, "synthetic_error_paths", case_id, "screening_init_failure_logs_issues", True, any(section == "快篩失敗" and "__INIT__ (yfinance) -> ModuleNotFoundError: no module named yfinance" in "\n".join(lines) for section, lines in issue_sections))
+
+    summary["issue_section_count"] = len(issue_sections)
+    return results, summary

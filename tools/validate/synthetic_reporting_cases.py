@@ -566,3 +566,45 @@ def validate_test_suite_summary_unreadable_payload_reporting_case(_base_params):
 
     summary["unreadable_payload_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
     return results, summary
+
+
+def validate_test_suite_summary_meta_quality_memory_reporting_case(_base_params):
+    case_id = "TEST_SUITE_META_QUALITY_MEMORY_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    meta_payload = {
+        "status": "PASS",
+        "fail_count": 0,
+        "coverage": {
+            "line_percent_covered": 55.0,
+            "branch_percent_covered": 45.0,
+            "line_min_percent": 50.0,
+            "branch_min_percent": 45.0,
+            "missing_targets": [],
+            "zero_covered_targets": [],
+            "totals": {},
+        },
+        "checklist": {"status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B19"]},
+        "performance": {
+            "max_step_peak_traced_memory_mb": 64.0,
+            "step_peak_traced_memory_mb": {"quick_gate": 12.5, "consistency": 32.5, "chain_checks": 64.0},
+        },
+    }
+    result_payload = {
+            "overall_status": "PASS",
+            "bundle_mode": "history_bundle_only",
+            "bundle_entries": ["master_summary.json", "meta_quality_summary.json"],
+            "scripts": [{"name": "meta_quality", "status": "PASS", "failure_reasons": []}],
+            "step_payloads": {"meta_quality": meta_payload},
+            "failed_step_names": [],
+            "not_run_step_names": [],
+            "retention": {"removed_count": 0, "removed_bytes": 0},
+        }
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+
+    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_memory_reports_peak_max", True, "peak_mem_max_mb=64.0" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_memory_reports_step_preview", True, "peak_mem_steps=quick_gate:12.5, consistency:32.5, chain_checks:64.0" in summary_text)
+
+    summary["memory_reporting_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary

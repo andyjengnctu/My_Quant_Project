@@ -22,7 +22,7 @@ from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats
 from core.portfolio_ops import cleanup_extended_signals_for_day, execute_reserved_entries_for_day, settle_portfolio_positions, try_rotate_weakest_position
 from core.portfolio_stats import find_sim_start_idx
 from tools.debug.trade_log import run_debug_backtest
-from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
 
 
@@ -454,6 +454,8 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
     manifest = load_manifest()
     run_dir = resolve_run_dir("chain_checks")
     dataset_info = ensure_reduced_dataset()
@@ -543,6 +545,7 @@ def main(argv=None) -> int:
             },
         }
 
+    summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
     write_json(run_dir / "chain_summary.json", summary)
     write_json(run_dir / "chain_checks_summary.json", summary)
     write_text(
@@ -565,6 +568,7 @@ def main(argv=None) -> int:
         ),
     )
     print(json.dumps({"status": summary["status"], "ticker_count": summary.get("ticker_count", 0), "failures": summary.get("failures", []), "runtime_error": summary.get("runtime_error", "")}, ensure_ascii=False))
+    tracker.__exit__(None, None, None)
     return 0 if summary["status"] == "PASS" else 1
 
 

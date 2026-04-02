@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
 
 from core.model_paths import BEST_PARAMS_PATH_ENV_VAR, MODELS_DIR_ENV_VAR
-from core.runtime_utils import parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
 from tools.local_regression.common import ensure_dir, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
 
@@ -226,6 +226,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
         "optimizer_profile_read_error": profile_metrics["optimizer_profile_read_error"],
         "failures": failures,
+        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(label_dir / "ml_smoke_summary.json", result)
     return result
@@ -278,6 +279,8 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
     manifest = load_manifest()
     run_dir = resolve_run_dir("ml_smoke")
     dataset_info = ensure_reduced_dataset()
@@ -313,9 +316,11 @@ def main(argv=None) -> int:
         "runtime_error": "",
         "optimizer_repro": repro_summary,
         "failures": failures,
+        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
     }
     write_json(run_dir / "ml_smoke_summary.json", summary)
     print(json.dumps({"status": summary["status"], "db_trial_count": summary["db_trial_count"], "optimizer_repro_all_match": repro_summary["all_match"]}, ensure_ascii=False))
+    tracker.__exit__(None, None, None)
     return 0 if not failures else 1
 
 

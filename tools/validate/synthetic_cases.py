@@ -2,24 +2,27 @@ from .synthetic_param_cases import (
     validate_synthetic_history_ev_threshold_case,
     validate_synthetic_lookahead_prev_day_only_case,
     validate_synthetic_param_guardrail_case,
-    validate_synthetic_pit_same_day_exit_excluded_case,
     validate_synthetic_pit_multiple_same_day_exits_case,
+    validate_synthetic_pit_same_day_exit_excluded_case,
     validate_synthetic_portfolio_history_filter_only_case,
     validate_synthetic_proj_cost_cash_capped_case,
     validate_synthetic_single_backtest_not_gated_by_own_history_case,
 )
+from .synthetic_history_cases import (
+    validate_synthetic_setup_index_prev_day_only_case,
+)
 from .synthetic_portfolio_cases import (
-    validate_synthetic_competing_candidates_case,
     validate_synthetic_candidate_order_fill_layer_separation_case,
+    validate_synthetic_competing_candidates_case,
     validate_synthetic_exit_orders_only_for_held_positions_case,
     validate_synthetic_extended_miss_buy_case,
     validate_synthetic_fee_tax_net_equity_case,
-    validate_synthetic_missed_sell_accounting_case,
     validate_synthetic_half_tp_full_year_case,
-    validate_synthetic_round_trip_pnl_only_on_tail_exit_case,
     validate_synthetic_intraday_reprice_forbidden_case,
+    validate_synthetic_missed_sell_accounting_case,
     validate_synthetic_no_intraday_switch_after_failed_fill_case,
     validate_synthetic_rotation_t_plus_one_case,
+    validate_synthetic_round_trip_pnl_only_on_tail_exit_case,
     validate_synthetic_same_bar_stop_priority_case,
     validate_synthetic_same_day_buy_sell_forbidden_case,
     validate_synthetic_same_day_sell_block_case,
@@ -33,13 +36,11 @@ from .synthetic_unit_cases import (
 )
 from .synthetic_meta_cases import (
     validate_cmd_document_contract_case,
-    validate_single_formal_test_entry_contract_case,
     validate_known_bad_fault_injection_case,
     validate_registry_checklist_entry_consistency_case,
+    validate_single_formal_test_entry_contract_case,
 )
-from .synthetic_display_cases import (
-    validate_display_reporting_sanity_case,
-)
+from .synthetic_display_cases import validate_display_reporting_sanity_case
 from .synthetic_reporting_cases import (
     validate_issue_excel_report_schema_case,
     validate_portfolio_export_report_artifacts_case,
@@ -49,6 +50,7 @@ from .synthetic_reporting_cases import (
     validate_test_suite_summary_failure_reporting_case,
     validate_test_suite_summary_manifest_failure_reporting_case,
     validate_test_suite_summary_meta_quality_guardrail_reporting_case,
+    validate_test_suite_summary_meta_quality_memory_reporting_case,
     validate_test_suite_summary_optional_dataset_skip_case,
     validate_test_suite_summary_preflight_failure_reporting_case,
     validate_test_suite_summary_reporting_case,
@@ -58,6 +60,7 @@ from .synthetic_reporting_cases import (
 from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
     validate_local_regression_summary_contract_case,
+    validate_meta_quality_performance_memory_contract_case,
     validate_output_contract_case,
     validate_run_all_preflight_early_failure_dataset_contract_case,
 )
@@ -65,6 +68,8 @@ from .synthetic_error_cases import (
     validate_downloader_main_error_path_case,
     validate_downloader_market_date_fallback_case,
     validate_downloader_sync_error_path_case,
+    validate_downloader_universe_fetch_error_path_case,
+    validate_downloader_universe_screening_init_error_path_case,
     validate_module_loader_error_path_case,
     validate_params_io_error_path_case,
     validate_preflight_error_path_case,
@@ -79,7 +84,6 @@ from .synthetic_cli_cases import (
     validate_extended_tool_cli_contract_case,
     validate_local_regression_cli_contract_case,
 )
-
 from .synthetic_strategy_cases import (
     validate_model_io_schema_case,
     validate_ranking_scoring_sanity_case,
@@ -113,8 +117,9 @@ def get_synthetic_validators():
         validate_synthetic_history_ev_threshold_case,
         validate_synthetic_portfolio_history_filter_only_case,
         validate_synthetic_lookahead_prev_day_only_case,
+        validate_synthetic_setup_index_prev_day_only_case,
         validate_synthetic_pit_same_day_exit_excluded_case,
-    validate_synthetic_pit_multiple_same_day_exits_case,
+        validate_synthetic_pit_multiple_same_day_exits_case,
         validate_synthetic_single_backtest_not_gated_by_own_history_case,
         validate_synthetic_param_guardrail_case,
         validate_price_utils_unit_case,
@@ -134,6 +139,7 @@ def get_synthetic_validators():
         validate_test_suite_summary_optional_dataset_skip_case,
         validate_test_suite_summary_checklist_status_sync_case,
         validate_test_suite_summary_meta_quality_guardrail_reporting_case,
+        validate_test_suite_summary_meta_quality_memory_reporting_case,
         validate_test_suite_summary_preflight_failure_reporting_case,
         validate_test_suite_summary_dataset_prepare_failure_reporting_case,
         validate_test_suite_summary_unreadable_payload_reporting_case,
@@ -141,12 +147,15 @@ def get_synthetic_validators():
         validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,
         validate_local_regression_summary_contract_case,
+        validate_meta_quality_performance_memory_contract_case,
         validate_run_all_preflight_early_failure_dataset_contract_case,
         validate_artifact_lifecycle_contract_case,
         validate_params_io_error_path_case,
         validate_module_loader_error_path_case,
         validate_preflight_error_path_case,
         validate_downloader_market_date_fallback_case,
+        validate_downloader_universe_fetch_error_path_case,
+        validate_downloader_universe_screening_init_error_path_case,
         validate_downloader_sync_error_path_case,
         validate_downloader_main_error_path_case,
         validate_sanitize_ohlcv_expected_behavior_case,

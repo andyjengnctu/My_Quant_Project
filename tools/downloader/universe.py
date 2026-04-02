@@ -97,6 +97,8 @@ def get_or_update_universe():
                 print(f"\n⚠️ 名單來源抓取失敗: {url} | {type(e).__name__}: {e}")
 
     if not tickers_info:
+        if universe_fetch_errors:
+            rt.append_downloader_issues("名單來源失敗", universe_fetch_errors)
         raise RuntimeError(
             "無法取得任何台股股票名單；請檢查網路、TWSE 來源格式或 requests/pandas 解析是否異常。"
         )

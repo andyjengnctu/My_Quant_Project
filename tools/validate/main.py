@@ -19,7 +19,7 @@ from core.dataset_profiles import (
 )
 from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
+from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
@@ -94,7 +94,7 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
 
 
 
-def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok):
+def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_dir, csv_path, xlsx_path, elapsed_time, selected_tickers, df_results, df_failed, output_dir, real_data_coverage_ok, peak_traced_memory_mb):
     run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
     if not run_dir:
         return
@@ -118,6 +118,7 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
         "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
         "fail_count": fail_count,
+        "peak_traced_memory_mb": round(float(peak_traced_memory_mb or 0.0), 3),
     }
     os.makedirs(run_dir, exist_ok=True)
     summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
@@ -136,6 +137,9 @@ def main(argv=None, environ=None):
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
+
+    tracker = PeakTracedMemoryTracker()
+    tracker.__enter__()
 
     import pandas as pd
     from tools.validate.checks import (
@@ -330,8 +334,10 @@ def main(argv=None, environ=None):
         df_failed=df_failed,
         output_dir=output_dir,
         real_data_coverage_ok=real_data_coverage_ok,
+        peak_traced_memory_mb=tracker.snapshot_peak_mb(),
     )
 
+    tracker.__exit__(None, None, None)
     return 1 if ((not df_failed.empty) or (not real_data_coverage_ok)) else 0
 
 

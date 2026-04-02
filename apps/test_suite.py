@@ -193,16 +193,25 @@ def _coverage_percent(numerator: Any, denominator: Any) -> float:
 
 
 def _print_human_summary(result: Dict[str, Any]) -> None:
+    master_scripts = result.get("scripts", [])
     master = {
-        "scripts": result.get("scripts", []),
+        "scripts": master_scripts,
         "failures": result.get("failures", 0),
         "overall_status": result.get("overall_status", "FAIL"),
     }
     selected_steps = set(result.get("selected_steps", []))
     failed_step_names = set(result.get("failed_step_names", []))
     not_run_step_names = set(result.get("not_run_step_names", []))
-    dataset_prepare_required = _is_dataset_prepare_required(selected_steps)
     step_payloads = result.get("step_payloads", {})
+    if not selected_steps:
+        selected_steps = {
+            str(item.get("name", "")).strip()
+            for item in master_scripts
+            if str(item.get("name", "")).strip() in REGRESSION_STEP_ORDER
+        }
+        if not selected_steps:
+            selected_steps = {name for name in REGRESSION_STEP_ORDER if step_payloads.get(name)}
+    dataset_prepare_required = _is_dataset_prepare_required(selected_steps)
     quick = step_payloads.get("quick_gate", {})
     consistency = step_payloads.get("consistency", {})
     chain = step_payloads.get("chain_checks", {})
@@ -408,8 +417,13 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         line_min_percent = coverage.get("line_min_percent")
         branch_min_percent = coverage.get("branch_min_percent")
         checklist_status = _derive_checklist_status(checklist)
+        performance = meta.get("performance", {})
         missing_cov = _preview_id_list(coverage.get("missing_targets", []))
         zero_cov = _preview_id_list(coverage.get("zero_covered_targets", []))
+        peak_mem_steps = performance.get("step_peak_traced_memory_mb", {})
+        peak_mem_preview = _safe_display_text(
+            ", ".join(f"{name}:{value}" for name, value in list(peak_mem_steps.items())[:4]) if peak_mem_steps else "(none)"
+        )
         print(
             "- meta quality: "
             f"fail_count={meta.get('fail_count', 0)} | "
@@ -423,6 +437,11 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             f"branch_min={_safe_display_text(branch_min_percent)} | "
             f"missing_cov={missing_cov} | "
             f"zero_cov={zero_cov}"
+        )
+        print(
+            "  performance : "
+            f"peak_mem_max_mb={_safe_display_text(performance.get('max_step_peak_traced_memory_mb'))} | "
+            f"peak_mem_steps={peak_mem_preview}"
         )
         print(
             "  checklist   : "

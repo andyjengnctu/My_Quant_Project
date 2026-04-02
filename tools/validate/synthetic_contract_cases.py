@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from core.output_retention import RetentionRule, apply_retention_rules
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
+from tools.local_regression import run_meta_quality as run_meta_quality_module
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
 from tools.local_regression.common import write_json, write_csv, write_text
@@ -37,6 +38,7 @@ REQUIRED_VALIDATE_SUMMARY_KEYS = {
     "pass_count",
     "skip_count",
     "fail_count",
+    "peak_traced_memory_mb",
 }
 
 REQUIRED_PROFILE_SUMMARY_AVG_KEYS = {
@@ -77,6 +79,7 @@ REQUIRED_CHAIN_SUMMARY_KEYS = {
     "scanner_snapshot",
     "rerun_consistency",
     "failures",
+    "peak_traced_memory_mb",
 }
 
 CHAIN_SUMMARY_CSV_FIELDS = [
@@ -111,6 +114,7 @@ REQUIRED_ML_SMOKE_SUMMARY_KEYS = {
     "optimizer_profile_avg_objective_wall_sec",
     "optimizer_repro",
     "failures",
+    "peak_traced_memory_mb",
 }
 
 REQUIRED_META_QUALITY_SUMMARY_KEYS = {
@@ -626,4 +630,35 @@ def validate_artifact_lifecycle_contract_case(_base_params):
     summary["root_copy_overwrite_checked"] = True
     summary["pass_fail_bundle_selection_checked"] = True
     summary["artifacts_manifest_checked"] = True
+    return results, summary
+
+
+def validate_meta_quality_performance_memory_contract_case(_base_params):
+    case_id = "META_QUALITY_PERFORMANCE_MEMORY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="meta_quality_performance_memory_contract_") as temp_dir:
+        run_dir = Path(temp_dir) / "run_dir"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        write_json(run_dir / "quick_gate_summary.json", {"status": "PASS", "duration_sec": 1.0, "peak_traced_memory_mb": 12.5})
+        write_json(run_dir / "validate_consistency_summary.json", {"status": "PASS", "elapsed_time_sec": 2.0, "peak_traced_memory_mb": 32.5})
+        write_json(run_dir / "chain_summary.json", {"status": "PASS", "duration_sec": 3.0, "peak_traced_memory_mb": 64.0})
+        write_json(run_dir / "ml_smoke_summary.json", {"status": "PASS", "duration_sec": 4.0, "peak_traced_memory_mb": 48.0, "optimizer_profile_trial_count": 1, "optimizer_profile_avg_objective_wall_sec": 1.5})
+
+        manifest = dict(local_common.MANIFEST_DEFAULTS)
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            perf = run_meta_quality_module._build_performance_summary(
+                run_dir,
+                manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_traced_memory_mb=40.0,
+            )
+
+        add_check(results, "output_contract", case_id, "performance_memory_contract_ok", True, perf.get("ok"))
+        add_check(results, "output_contract", case_id, "performance_step_peak_memory_keys", ["chain_checks", "consistency", "ml_smoke", "quick_gate"], sorted(perf.get("step_peak_traced_memory_mb", {}).keys()))
+        add_check(results, "output_contract", case_id, "performance_max_peak_memory_value", 64.0, perf.get("max_step_peak_traced_memory_mb"))
+        add_check(results, "output_contract", case_id, "performance_meta_quality_peak_memory_value", 40.0, perf.get("meta_quality_peak_traced_memory_mb"))
+
+    summary["step_peak_memory_count"] = 4
     return results, summary
