@@ -12,8 +12,10 @@ from openpyxl import load_workbook
 
 from core.output_retention import RetentionRule, apply_retention_rules
 from tools.local_regression import common as local_common
+from tools.local_regression import run_all as run_all_module
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.validate.main import LOCAL_REGRESSION_RUN_DIR_ENV, write_local_regression_summary
+from tools.local_regression.common import write_json, write_csv
 from tools.validate.reporting import write_issue_excel_report
 
 from .checks import add_check
@@ -41,6 +43,103 @@ REQUIRED_PROFILE_SUMMARY_AVG_KEYS = {
     "prep_wall_sec",
     "portfolio_wall_sec",
     "score_calc_sec",
+}
+
+REQUIRED_PREFLIGHT_SUMMARY_KEYS = {
+    "status",
+    "python_executable",
+    "duration_sec",
+    "failed_packages",
+}
+
+REQUIRED_DATASET_PREP_SUMMARY_KEYS = {
+    "status",
+    "duration_sec",
+    "dataset_dir",
+    "source",
+    "csv_count",
+    "reused_existing",
+}
+
+REQUIRED_CHAIN_SUMMARY_KEYS = {
+    "status",
+    "dataset",
+    "dataset_info",
+    "ticker_count",
+    "csv_count",
+    "duplicate_issue_count",
+    "skipped_ticker_count",
+    "detail_count",
+    "rows",
+    "highlights",
+    "portfolio_snapshot",
+    "scanner_snapshot",
+    "rerun_consistency",
+    "failures",
+}
+
+CHAIN_SUMMARY_CSV_FIELDS = [
+    "ticker",
+    "single_trade_count",
+    "single_missed_buys",
+    "setup_days",
+    "pit_pass_days",
+    "candidate_days",
+    "orderable_days",
+    "portfolio_trade_rows",
+    "filled_count",
+    "portfolio_missed_buy_count",
+    "debug_row_count",
+    "blocked_by",
+    "sanitize_dropped",
+]
+
+REQUIRED_ML_SMOKE_SUMMARY_KEYS = {
+    "status",
+    "dataset",
+    "dataset_info",
+    "db_path",
+    "db_trial_count",
+    "qualified_trial_count",
+    "best_trial_value",
+    "best_params_path",
+    "best_params_required",
+    "best_params_keys",
+    "optimizer_profile_summary_path",
+    "optimizer_profile_trial_count",
+    "optimizer_profile_avg_objective_wall_sec",
+    "optimizer_repro",
+    "failures",
+}
+
+REQUIRED_META_QUALITY_SUMMARY_KEYS = {
+    "status",
+    "failures",
+    "fail_count",
+    "coverage",
+    "checklist",
+    "formal_entry",
+    "performance",
+    "results",
+}
+
+REQUIRED_MASTER_SUMMARY_KEYS = {
+    "overall_status",
+    "dataset",
+    "dataset_info",
+    "timestamp",
+    "git_commit",
+    "scripts",
+    "selected_steps",
+    "failures",
+    "preflight",
+    "dataset_prepare",
+    "payload_failures",
+    "not_run_step_names",
+    "bundle_mode",
+    "bundle_entries",
+    "failed_step_names",
+    "suggested_rerun_command",
 }
 
 
@@ -168,6 +267,147 @@ def validate_output_contract_case(_base_params):
 
     summary["json_contract_keys"] = sorted(REQUIRED_VALIDATE_SUMMARY_KEYS)
     summary["profile_fields"] = len(PROFILE_FIELDS)
+    return results, summary
+
+
+def validate_local_regression_summary_contract_case(_base_params):
+    case_id = "LOCAL_REGRESSION_SUMMARY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="local_regression_summary_contract_") as temp_dir:
+        temp_path = Path(temp_dir)
+        run_dir = temp_path / "run_dir"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        preflight_payload = {
+            "status": "FAIL",
+            "python_executable": "python",
+            "duration_sec": 0.321,
+            "failed_packages": ["coverage", "optuna"],
+            "runtime_error": "",
+        }
+        preflight_text = run_all_module._safe_format_preflight_summary(preflight_payload)
+        add_check(results, "output_contract", case_id, "preflight_summary_contract_lines", True, "status" in preflight_text and "failed_packages : coverage, optuna" in preflight_text)
+
+        dataset_pass = run_all_module._write_dataset_prepare_summary(run_dir, {
+            "status": "PASS",
+            "duration_sec": 1.234,
+            "dataset_dir": "data/tw_stock_data_vip_reduced",
+            "source": "existing",
+            "csv_count": 24,
+            "reused_existing": True,
+            "extracted_files": 0,
+        })
+        dataset_pass_json = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
+        dataset_pass_text = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
+        add_check(results, "output_contract", case_id, "dataset_prepare_pass_required_keys", [], sorted(REQUIRED_DATASET_PREP_SUMMARY_KEYS - set(dataset_pass_json.keys())))
+        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and "csv_count   : 24" in dataset_pass_text)
+
+        dataset_fail = run_all_module._write_dataset_prepare_summary(run_dir, {
+            "status": "FAIL",
+            "duration_sec": 0.456,
+            "error_type": "RuntimeError",
+            "error_message": "zip missing",
+        })
+        dataset_fail_text = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
+        add_check(results, "output_contract", case_id, "dataset_prepare_fail_status", "FAIL", dataset_fail.get("status"))
+        add_check(results, "output_contract", case_id, "dataset_prepare_fail_text_contract", True, "error_type  : RuntimeError" in dataset_fail_text and "error_msg   : zip missing" in dataset_fail_text)
+
+        chain_payload = {
+            "status": "PASS",
+            "dataset": "reduced",
+            "dataset_info": {"csv_count": 24},
+            "ticker_count": 24,
+            "csv_count": 24,
+            "duplicate_issue_count": 0,
+            "skipped_ticker_count": 1,
+            "detail_count": 2,
+            "rows": [{"ticker": "2330"}],
+            "highlights": {"blocked_by_counts": {"cash": 1}},
+            "portfolio_snapshot": {"trade_rows": 2},
+            "scanner_snapshot": {"candidate_count": 3},
+            "rerun_consistency": {"enabled": True, "run_count": 2, "all_match": True, "runs": []},
+            "failures": [],
+        }
+        write_json(run_dir / "chain_summary.json", chain_payload)
+        write_csv(run_dir / "chain_summary.csv", [{field: "" for field in CHAIN_SUMMARY_CSV_FIELDS}], fieldnames=CHAIN_SUMMARY_CSV_FIELDS)
+        chain_json = json.loads((run_dir / "chain_summary.json").read_text(encoding="utf-8"))
+        chain_csv_fields, _ = _read_csv_rows(run_dir / "chain_summary.csv")
+        add_check(results, "output_contract", case_id, "chain_summary_required_keys", [], sorted(REQUIRED_CHAIN_SUMMARY_KEYS - set(chain_json.keys())))
+        add_check(results, "output_contract", case_id, "chain_summary_csv_header", CHAIN_SUMMARY_CSV_FIELDS, chain_csv_fields)
+
+        ml_smoke_payload = {
+            "status": "PASS",
+            "dataset": "reduced",
+            "dataset_info": {"csv_count": 24},
+            "db_path": "outputs/ml_optimizer/demo.db",
+            "db_trial_count": 1,
+            "qualified_trial_count": 1,
+            "best_trial_value": 1.23,
+            "best_params_path": "models/best_params.json",
+            "best_params_required": True,
+            "best_params_keys": ["high_len", "atr_len"],
+            "optimizer_profile_summary_path": "outputs/ml_optimizer/profile.json",
+            "optimizer_profile_trial_count": 1,
+            "optimizer_profile_avg_objective_wall_sec": 4.5,
+            "optimizer_repro": {"enabled": True, "all_match": True},
+            "failures": [],
+        }
+        write_json(run_dir / "ml_smoke_summary.json", ml_smoke_payload)
+        ml_smoke_json = json.loads((run_dir / "ml_smoke_summary.json").read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "ml_smoke_summary_required_keys", [], sorted(REQUIRED_ML_SMOKE_SUMMARY_KEYS - set(ml_smoke_json.keys())))
+
+        meta_payload = {
+            "status": "PASS",
+            "failures": [],
+            "fail_count": 0,
+            "coverage": {"ok": True, "totals": {"percent_covered": 50.0}},
+            "checklist": {"ok": True, "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_d_ids": []},
+            "formal_entry": {"ok": True, "project_settings_steps": [], "run_all_steps": [], "preflight_steps": []},
+            "performance": {"ok": True, "skipped": False, "step_durations": {}},
+            "results": [],
+        }
+        write_json(run_dir / "meta_quality_summary.json", meta_payload)
+        meta_json = json.loads((run_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "meta_quality_summary_required_keys", [], sorted(REQUIRED_META_QUALITY_SUMMARY_KEYS - set(meta_json.keys())))
+
+        selected_steps = ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
+        completed_steps = ["quick_gate", "consistency"]
+        failed_steps = ["ml_smoke"]
+        not_run = run_all_module._compute_not_run_step_names(
+            selected_step_names=selected_steps,
+            failed_step_names=failed_steps,
+            completed_script_names=completed_steps,
+            include_dataset=True,
+        )
+        master_payload = {
+            "overall_status": "FAIL",
+            "dataset": "reduced",
+            "dataset_info": {"csv_count": 24},
+            "timestamp": "2026-04-02T00:00:00+08:00",
+            "git_commit": "abc123",
+            "scripts": [{"name": "quick_gate", "status": "PASS"}],
+            "selected_steps": selected_steps,
+            "failures": 1,
+            "preflight": preflight_payload,
+            "dataset_prepare": dataset_pass_json,
+            "payload_failures": [],
+            "not_run_step_names": not_run,
+            "bundle_mode": "debug_bundle",
+            "bundle_entries": run_all_module._build_bundle_entries(run_dir, [run_dir / "master_summary.json", run_dir / "preflight_summary.json"]),
+            "failed_step_names": failed_steps,
+            "suggested_rerun_command": "python tools/local_regression/run_all.py --only ml_smoke",
+        }
+        write_json(run_dir / "preflight_summary.json", preflight_payload)
+        write_json(run_dir / "master_summary.json", master_payload)
+        master_json = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "master_summary_required_keys", [], sorted(REQUIRED_MASTER_SUMMARY_KEYS - set(master_json.keys())))
+        add_check(results, "output_contract", case_id, "master_summary_not_run_steps_contract", ["chain_checks", "ml_smoke", "meta_quality"], master_json.get("not_run_step_names"))
+        add_check(results, "output_contract", case_id, "master_summary_bundle_entries_posix", True, all("\\" not in item for item in master_json.get("bundle_entries", [])))
+
+    summary["dataset_prepare_pass_status"] = dataset_pass_json.get("status")
+    summary["master_selected_step_count"] = len(selected_steps)
     return results, summary
 
 

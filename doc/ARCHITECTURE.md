@@ -188,7 +188,7 @@ tools/local_regression/
 ├── run_all.bat
 ├── run_chain_checks.py
 ├── run_ml_smoke.py
-├── run_meta_quality.py
+├── run_meta_quality.py（含 `run_all.py` helper path coverage probe）
 └── run_quick_gate.py
 
 tools/validate/
@@ -246,4 +246,4 @@ tools/validate/
 - 由 `tools/local_regression/run_all.py` 在 `apps/test_suite.py` 結束後自動觸發，不新增獨立 cleanup app。
 
 
-- `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。
+- `tools/validate/synthetic_contract_cases.py（含 local regression summary contract）` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。

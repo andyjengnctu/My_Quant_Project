@@ -44,6 +44,7 @@ COVERAGE_TARGETS = [
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
     "apps/test_suite.py",
+    "tools/local_regression/run_all.py",
     "tools/validate/reporting.py",
     "tools/portfolio_sim/reporting.py",
     "core/scanner_display.py",
@@ -305,6 +306,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     from apps import test_suite as test_suite_module
     from core.scanner_display import print_scanner_header
     from core.strategy_dashboard import print_strategy_dashboard
+    from tools.local_regression import run_all as run_all_module
     from tools.local_regression import run_chain_checks as chain_checks_module
     from tools.local_regression import run_ml_smoke as ml_smoke_module
     from tools.portfolio_sim import reporting as portfolio_reporting
@@ -441,6 +443,29 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         max_console_fail_preview=3,
     ))
     _silent_call(lambda: portfolio_reporting.print_yearly_return_report([{"year": 2024, "year_return_pct": 1.23, "is_full_year": True, "start_date": "2024-01-02", "end_date": "2024-12-31"}]))
+    preflight_probe = run_all_module._safe_format_preflight_summary({
+        "status": "FAIL",
+        "python_executable": sys.executable,
+        "duration_sec": 0.123,
+        "failed_packages": ["coverage"],
+        "runtime_error": "",
+    })
+    run_all_module._compute_not_run_step_names(
+        selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        failed_step_names=["ml_smoke"],
+        completed_script_names=["quick_gate", "consistency"],
+        include_dataset=True,
+    )
+    run_all_module._build_bundle_entries(probe_dir, [params_path, profile_path])
+    dataset_probe = run_all_module._write_dataset_prepare_summary(probe_dir, {
+        "status": "PASS",
+        "duration_sec": 0.456,
+        "dataset_dir": "data/tw_stock_data_vip_reduced",
+        "source": "existing",
+        "csv_count": 24,
+        "reused_existing": True,
+    })
+
     _silent_call(lambda: test_suite_module._print_human_summary({
         "overall_status": "PASS",
         "failures": 0,
@@ -461,6 +486,8 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "ml_params_keys": sorted(params_info["payload"].keys()),
         "profile_trial_count": profile_info["optimizer_profile_trial_count"],
         "normalized_ticker": normalized_row["ticker"],
+        "run_all_preflight_lines": len([line for line in preflight_probe.splitlines() if line.strip()]),
+        "dataset_probe_status": dataset_probe.get("status"),
     }
 
 
