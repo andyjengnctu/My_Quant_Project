@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -127,6 +128,74 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
 
+
+def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_runner, recoverable_exceptions):
+    if not run_dir:
+        return validator_runner(base_params)
+
+    try:
+        import coverage
+    except ImportError:
+        return validator_runner(base_params)
+
+    coverage_dir = os.path.join(run_dir, "coverage_artifacts")
+    os.makedirs(coverage_dir, exist_ok=True)
+    data_file = os.path.join(coverage_dir, ".coverage.synthetic")
+    json_file = os.path.join(coverage_dir, "coverage_synthetic.json")
+    run_info_file = os.path.join(coverage_dir, "coverage_run_info.json")
+
+    cov = coverage.Coverage(data_file=data_file, branch=True)
+    results = []
+    summaries = []
+    synthetic_fail_count = 0
+    raised_exc = None
+    run_info = {
+        "source": "validate_consistency",
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "",
+        "timed_out": False,
+        "synthetic_fail_count": 0,
+        "synthetic_case_count": 0,
+        "json_generated": False,
+    }
+
+    try:
+        cov.start()
+        results, summaries = validator_runner(base_params)
+        synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
+        run_info["returncode"] = 0 if synthetic_fail_count == 0 else 1
+        run_info["synthetic_fail_count"] = int(synthetic_fail_count)
+        run_info["synthetic_case_count"] = int(len(summaries))
+        run_info["stdout"] = json.dumps(
+            {
+                "synthetic_case_count": len(summaries),
+                "synthetic_fail_count": synthetic_fail_count,
+            },
+            ensure_ascii=False,
+        )
+    except recoverable_exceptions as exc:
+        raised_exc = exc
+        run_info["stderr"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        cov.stop()
+        cov.save()
+        if os.path.exists(data_file):
+            try:
+                cov.json_report(outfile=json_file, pretty_print=True)
+                run_info["json_generated"] = True
+            except BaseException as exc:  # pragma: no cover - defensive artifact reporting
+                run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
+
+        with open(run_info_file, "w", encoding="utf-8") as f:
+            json.dump(run_info, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.write("\n")
+
+    if raised_exc is not None:
+        raise raised_exc
+    return results, summaries
+
+
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
@@ -217,7 +286,12 @@ def main(argv=None, environ=None):
 
     print("開始執行 synthetic coverage suite...")
     try:
-        synthetic_results, synthetic_summaries = run_synthetic_consistency_suite(base_params)
+        synthetic_results, synthetic_summaries = _run_synthetic_suite_with_optional_coverage(
+            suite_run_dir,
+            base_params,
+            run_synthetic_consistency_suite,
+            VALIDATION_RECOVERABLE_EXCEPTIONS,
+        )
         all_results.extend(synthetic_results)
         summaries.extend(synthetic_summaries)
     except VALIDATION_RECOVERABLE_EXCEPTIONS as e:

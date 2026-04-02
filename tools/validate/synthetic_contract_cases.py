@@ -819,3 +819,59 @@ def validate_debug_trade_log_prepared_tool_contract_case(base_params):
     add_check(results, "output_contract", case_id, "debug_prepared_module_path", legacy_module_path, prepared_module_path)
     add_check(results, "output_contract", case_id, "debug_prepared_payload", legacy_records, prepared_records)
     return results, summary
+
+
+
+def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
+    case_id = "META_QUALITY_REUSE_COVERAGE_ARTIFACTS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="meta_quality_reuse_cov_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        coverage_payload = {
+            "totals": {
+                "covered_lines": 120,
+                "num_statements": 200,
+                "covered_branches": 48,
+                "num_branches": 80,
+                "percent_covered": 60.0,
+            },
+            "files": {
+                rel_path: {
+                    "summary": {
+                        "covered_lines": 1,
+                        "num_statements": 1,
+                        "percent_covered": 100.0,
+                        "covered_branches": 0,
+                        "num_branches": 0,
+                    }
+                }
+                for rel_path in run_meta_quality_module.COVERAGE_TARGETS
+            },
+        }
+        write_text(coverage_dir / "coverage_synthetic.json", json.dumps(coverage_payload, ensure_ascii=False, indent=2))
+        write_json(coverage_dir / "coverage_run_info.json", {
+            "source": "validate_consistency",
+            "returncode": 0,
+            "stdout": "cached",
+            "stderr": "",
+            "timed_out": False,
+            "synthetic_fail_count": 0,
+            "synthetic_case_count": 99,
+            "json_generated": True,
+        })
+
+        manifest = {
+            "coverage_line_min_percent": 50.0,
+            "coverage_branch_min_percent": 45.0,
+        }
+        with patch("tools.validate.synthetic_cases.run_synthetic_consistency_suite", side_effect=AssertionError("should reuse existing coverage artifacts")):
+            coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
+
+    add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_ok", True, coverage_summary.get("ok"))
+    add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_flag", True, coverage_summary.get("reused_existing"))
+    add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_returncode", 0, coverage_summary.get("run_result", {}).get("returncode"))
+    return results, summary

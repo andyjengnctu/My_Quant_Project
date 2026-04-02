@@ -555,8 +555,35 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _load_reusable_coverage_artifacts(coverage_dir: Path) -> Dict[str, Any] | None:
+    json_file = coverage_dir / "coverage_synthetic.json"
+    run_info_file = coverage_dir / "coverage_run_info.json"
+    if not json_file.exists() or not run_info_file.exists():
+        return None
+    try:
+        payload = json.loads(json_file.read_text(encoding="utf-8"))
+        run_info = json.loads(run_info_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(run_info, dict):
+        return None
+    if run_info.get("source") != "validate_consistency":
+        return None
+    return {
+        "payload": payload,
+        "run_result": {
+            "returncode": int(run_info.get("returncode", 1)),
+            "stdout": str(run_info.get("stdout", "") or ""),
+            "stderr": str(run_info.get("stderr", "") or ""),
+            "timed_out": bool(run_info.get("timed_out", False)),
+        },
+        "synthetic_fail_count": int(run_info.get("synthetic_fail_count", 0) or 0),
+        "synthetic_case_count": int(run_info.get("synthetic_case_count", 0) or 0),
+        "json_file": str(json_file),
+    }
+
+
 def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
-    import coverage
     from core.params_io import load_params_from_json
     from tools.validate.synthetic_cases import run_synthetic_consistency_suite
 
@@ -568,31 +595,52 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     run_result = {"returncode": 1, "stdout": "", "stderr": "", "timed_out": False}
     payload: Dict[str, Any] = {}
     synthetic_fail_count = 0
-
-    cov = coverage.Coverage(data_file=str(data_file), branch=True)
-    try:
-        base_params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
-        cov.start()
-        results, summaries = run_synthetic_consistency_suite(base_params)
-        formal_helper_probe = _exercise_coverage_formal_helpers(coverage_dir)
-        synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
-        run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
-        run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count, "formal_helper_probe": formal_helper_probe}, ensure_ascii=False)
-    except BaseException as exc:
-        run_result["returncode"] = 1
-        run_result["stderr"] = f"{type(exc).__name__}: {exc}"
-    finally:
-        cov.stop()
-        cov.save()
-
+    reused_existing = False
     json_ok = False
-    if data_file.exists():
+
+    reusable = _load_reusable_coverage_artifacts(coverage_dir)
+    formal_helper_probe = _exercise_coverage_formal_helpers(coverage_dir)
+    if reusable is not None:
+        payload = reusable["payload"]
+        run_result = dict(reusable["run_result"])
+        synthetic_fail_count = int(reusable["synthetic_fail_count"])
+        if formal_helper_probe and not run_result.get("stderr"):
+            run_result["stdout"] = json.dumps(
+                {
+                    "synthetic_case_count": reusable.get("synthetic_case_count", 0),
+                    "synthetic_fail_count": synthetic_fail_count,
+                    "formal_helper_probe": formal_helper_probe,
+                    "reused_existing": True,
+                },
+                ensure_ascii=False,
+            )
+        reused_existing = True
+        json_ok = True
+    else:
+        import coverage
+
+        cov = coverage.Coverage(data_file=str(data_file), branch=True)
         try:
-            cov.json_report(outfile=str(json_file), pretty_print=True)
-            payload = json.loads(json_file.read_text(encoding="utf-8"))
-            json_ok = True
+            base_params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
+            cov.start()
+            results, summaries = run_synthetic_consistency_suite(base_params)
+            synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
+            run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
+            run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count, "formal_helper_probe": formal_helper_probe}, ensure_ascii=False)
         except BaseException as exc:
-            run_result["stderr"] = (run_result["stderr"] + "\n" if run_result["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
+            run_result["returncode"] = 1
+            run_result["stderr"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            cov.stop()
+            cov.save()
+
+        if data_file.exists():
+            try:
+                cov.json_report(outfile=str(json_file), pretty_print=True)
+                payload = json.loads(json_file.read_text(encoding="utf-8"))
+                json_ok = True
+            except BaseException as exc:
+                run_result["stderr"] = (run_result["stderr"] + "\n" if run_result["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
 
     totals = payload.get("totals", {}) if isinstance(payload, dict) else {}
     files_payload = payload.get("files", {}) if isinstance(payload, dict) else {}
@@ -692,6 +740,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
         "results": results,
         "run_result": run_result,
         "json_file": str(json_file),
+        "reused_existing": reused_existing,
         "totals": {
             "covered_lines": int(totals.get("covered_lines", 0) or 0),
             "num_statements": int(totals.get("num_statements", 0) or 0),
