@@ -89,7 +89,7 @@
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | DONE | 已補 `run_chain_checks.py` 雙跑 digest、`run_ml_smoke.py` fixed-seed 雙跑、`validate_optimizer_raw_cache_rerun_consistency_case` 與 `validate_run_all_repeatability_case`，正式入口與 cache 汙染隔離已收斂 | `tools/local_regression/`, `tools/optimizer/raw_cache.py`, `tools/validate/synthetic_regression_cases.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | PARTIAL | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration 與 optimizer 平均 trial wall time 納入 `run_meta_quality.py` 正式 gating；記憶體回歸仍未納入 | `tools/local_regression/` |
 | B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
-| B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report、`apps/test_suite.py` 人類可讀摘要與 `core/display.py` re-export 契約，主要 reporting/display 路徑已完成相容性覆蓋 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` |
+| B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report，以及 `apps/test_suite.py` 在 PASS / FAIL / manifest-blocked / partial-selected-steps 下的人類可讀摘要契約；主要 reporting/display 路徑已完成相容性覆蓋 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` |
 | B22 | P2 | 覆蓋率 | line / branch coverage 報表 | PARTIAL | 已新增 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch coverage baseline 與 key target coverage，並已補 formal helper probe 覆蓋 chain checks / ml smoke / display / test_suite summary 與 `run_all.py` helper path；但仍未形成更完整的正式路徑 coverage gate | `tools/local_regression/run_meta_quality.py` |
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已新增 meta registry case 與 `run_meta_quality.py` formal-entry 檢查；同時校驗 `DONE` 摘要、對應 test function、synthetic 主入口、`run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
@@ -138,7 +138,7 @@
 | D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
 | D15 | deterministic regression for optimizer/scanner | 已完成；已補 optimizer fixed-seed 雙跑、scanner worker repeatability 與 `scan_runner` 入口重跑一致性 |
 | D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
-| D17 | reporting schema compatibility checks | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性 |
+| D17 | reporting schema compatibility checks | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
 
 ### D4. 品質補強
 
@@ -168,6 +168,9 @@
 | D27 | `validate_display_reporting_sanity_case` | 已補 scanner header / start banner / summary、strategy dashboard 與 `core/display.py` re-export 顯示契約 |
 | D42 | `validate_issue_excel_report_schema_case` | 已補 validate issue Excel 輸出檔的 sheet / header / ticker text format schema |
 | D43 | `validate_portfolio_export_report_artifacts_case` | 已補 portfolio report Excel / HTML 輸出檔 schema 與 artifact 路徑契約 |
+| D50 | `validate_test_suite_summary_failure_reporting_case` | 已補 `apps/test_suite.py` 腳本失敗時的 failure reason 與 rerun command 摘要契約 |
+| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | 已補 manifest failed 時 preflight / dataset / regression steps blocked 摘要契約 |
+| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | 已補 partial selected-steps 結果下 dataset prepare not_required 與 not_selected 摘要契約 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
 | D25 | checklist sufficiency review | 已補 `run_meta_quality.py` formal check；每輪仍須結合本輪改動與剩餘缺口做人工判斷 |
@@ -307,6 +310,9 @@
 | 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
 | 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
 | 2026-04-02 | D27 | 擴充 scanner summary / banner 與 display re-export 後收斂完成 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
+| 2026-04-02 | D50 | 新增腳本失敗摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_failure_reporting_case` |
+| 2026-04-02 | D51 | 新增 manifest blocked 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_manifest_failure_reporting_case` |
+| 2026-04-02 | D52 | 新增 partial selected-steps 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_optional_dataset_skip_case` |
 | 2026-04-02 | D28 | 擴充 artifact lifecycle contract 並驗證 | PARTIAL -> DONE | validate_artifact_lifecycle_contract_case |
 | 2026-04-02 | D29 | 新增 formal-entry consistency checks 並驗證 | TODO -> DONE | `run_meta_quality.py` formal-entry consistency checks |
 | 2026-04-02 | D30 | 新增 params_io 錯誤路徑案例並驗證 | TODO -> DONE | `validate_params_io_error_path_case` |
@@ -330,6 +336,7 @@
 | 2026-04-02 | D20 | 再擴充 `run_meta_quality.py` coverage probe 到 `run_all.py` helper path | PARTIAL -> PARTIAL | 已補 `_safe_format_preflight_summary` / `_write_dataset_prepare_summary` / `_compute_not_run_step_names` / `_build_bundle_entries` |
 
 - 2026-04-02：`D17` 收斂為已完成；新增 `D42`（issue Excel report schema）與 `D43`（portfolio export report artifacts），將 `B21` 的 reporting schema compatibility 從 console/yearly/test-suite summary 補到輸出檔 schema。
+- 2026-04-02：補入 `D50`、`D51`、`D52`，將 `apps/test_suite.py` 摘要契約從 PASS 顯示補到腳本失敗、manifest blocked 與 partial selected-steps 路徑。
 
 | 2026-04-02 | D15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` + `validate_scan_runner_repeatability_case` + `run_ml_smoke.py` fixed-seed dual-run |
 | 2026-04-02 | D19 | 補 `run_all.py` 同 run dir rerun summary / bundle repeatability 後收斂完成 | PARTIAL -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` + `validate_run_all_repeatability_case` |

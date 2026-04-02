@@ -12,6 +12,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, validate_cli_args
 
 SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+REGRESSION_STEP_ORDER = ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality")
+
 STEP_LABELS = {
     "quick_gate": "quick gate",
     "consistency": "consistency",
@@ -114,6 +116,16 @@ class ConsoleProgress:
                     )
                 )
 
+def _is_dataset_prepare_required(selected_steps: set[str]) -> bool:
+    if not selected_steps:
+        return True
+    try:
+        from tools.local_regression.run_all import DATASET_REQUIRED_STEPS
+    except Exception:
+        return any(name in {"quick_gate", "consistency", "chain_checks", "ml_smoke"} for name in selected_steps)
+    return any(name in DATASET_REQUIRED_STEPS for name in selected_steps)
+
+
 def _print_human_summary(result: Dict[str, Any]) -> None:
     master = {
         "scripts": result.get("scripts", []),
@@ -123,6 +135,7 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     selected_steps = set(result.get("selected_steps", []))
     failed_step_names = set(result.get("failed_step_names", []))
     not_run_step_names = set(result.get("not_run_step_names", []))
+    dataset_prepare_required = _is_dataset_prepare_required(selected_steps)
     step_payloads = result.get("step_payloads", {})
     quick = step_payloads.get("quick_gate", {})
     consistency = step_payloads.get("consistency", {})
@@ -190,7 +203,9 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         return "blocked_before_step"
 
     def _step_overview(name: str, payload: Dict[str, Any], script_item: Dict[str, Any]) -> tuple[str, str]:
-        if name in {"quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"} and name not in selected_steps:
+        if name == "dataset_prepare" and not dataset_prepare_required:
+            return "SKIP", "not_required"
+        if name in REGRESSION_STEP_ORDER and name not in selected_steps:
             return "SKIP", "not_selected"
         if name in not_run_step_names:
             return "NOT_RUN", _blocked_reason(name)
@@ -210,6 +225,9 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print(" Test Suite 結果整理")
     print("=" * 78)
     print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
+    if selected_steps:
+        selected_preview = ", ".join(STEP_LABELS.get(name, name) for name in REGRESSION_STEP_ORDER if name in selected_steps)
+        print(f"執行步驟 : {selected_preview}")
     manifest_payload = step_payloads.get("manifest", {})
     if manifest_payload:
         print(
@@ -242,13 +260,13 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
     print(f"歷史 bundle : {result.get('archived_bundle', '')}")
-    print(f"根目錄 bundle : {result['root_bundle_copy']}")
+    print(f"根目錄 bundle : {result.get('root_bundle_copy', '')}")
     print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
     print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
     script_map = {item["name"]: item for item in master.get("scripts", [])}
     print("\n[步驟摘要]")
-    for key in ("quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"):
+    for key in REGRESSION_STEP_ORDER:
         item = script_map.get(key, {})
         status, detail = _step_overview(key, step_payloads.get(key, {}), item)
         if item:
@@ -335,6 +353,11 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
             failed_names = [str(name) for name in result.get("failed_step_names", []) if str(name).strip()]
         if failed_names:
             print(f"\n失敗步驟 : {', '.join(failed_names)}")
+        blocked_names = [name for name in REGRESSION_STEP_ORDER if name in not_run_step_names]
+        if dataset_prepare_required and "dataset_prepare" in not_run_step_names:
+            blocked_names = ["dataset_prepare", *blocked_names]
+        if blocked_names:
+            print(f"未執行步驟 : {', '.join(blocked_names)}")
         rerun_command = result.get("suggested_rerun_command", "")
         if rerun_command:
             print(f"建議重跑 : {rerun_command}")

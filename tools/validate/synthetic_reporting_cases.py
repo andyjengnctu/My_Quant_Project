@@ -109,12 +109,8 @@ def validate_portfolio_yearly_report_schema_case(_base_params):
     return results, summary
 
 
-def validate_test_suite_summary_reporting_case(_base_params):
-    case_id = "TEST_SUITE_SUMMARY_REPORTING"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    result_payload = {
+def _base_test_suite_result_payload():
+    return {
         "overall_status": "PASS",
         "failures": 0,
         "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
@@ -141,6 +137,14 @@ def validate_test_suite_summary_reporting_case(_base_params):
         "bundle_entries": ["master_summary.json", "preflight_summary.json", "quick_gate_summary.json"],
         "retention": {"removed_count": 2, "removed_bytes": 4096},
     }
+
+
+def validate_test_suite_summary_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
 
     summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_title_and_bundle", True, "Test Suite 結果整理" in summary_text and "bundle 模式 : minimum_set" in summary_text)
@@ -270,4 +274,109 @@ def validate_portfolio_export_report_artifacts_case(_base_params):
         add_check(results, "reporting_schema", case_id, "portfolio_export_console_paths", True, str(xlsx_path) in export_text and str(html_path) in export_text)
 
     summary["portfolio_export_rows"] = int(len(df_eq))
+    return results, summary
+
+
+def validate_test_suite_summary_failure_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_FAILURE_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
+    result_payload.update({
+        "overall_status": "FAIL",
+        "failures": 1,
+        "failed_step_names": ["chain_checks"],
+        "scripts": [
+            {"name": "quick_gate", "status": "PASS", "duration_sec": 8.42, "failure_reasons": []},
+            {"name": "consistency", "status": "PASS", "duration_sec": 10.23, "failure_reasons": []},
+            {"name": "chain_checks", "status": "FAIL", "duration_sec": 11.22, "failure_reasons": ["returncode=1", "failed_steps=scanner_snapshot", "summary_error=snapshot mismatch"]},
+            {"name": "ml_smoke", "status": "PASS", "duration_sec": 4.01, "failure_reasons": []},
+            {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
+        ],
+        "step_payloads": {
+            **result_payload["step_payloads"],
+            "chain_checks": {
+                "status": "FAIL",
+                "error_message": "snapshot mismatch",
+                "failed_steps": ["scanner_snapshot"],
+                "ticker_count": 24,
+            },
+        },
+        "bundle_mode": "debug_bundle",
+        "suggested_rerun_command": "python tools/local_regression/run_all.py --only chain_checks",
+    })
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_failure_line", True, "失敗步驟 : chain_checks" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_step_reason", True, "chain checks" in summary_text and "reported_status=FAIL" in summary_text and "failed_steps=scanner_snapshot" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_rerun_command", True, "建議重跑 : python tools/local_regression/run_all.py --only chain_checks" in summary_text)
+
+    summary["failure_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_manifest_failure_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_MANIFEST_FAILURE_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = {
+        "overall_status": "FAIL",
+        "failures": 1,
+        "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "failed_step_names": ["manifest"],
+        "not_run_step_names": ["preflight", "dataset_prepare", "quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "scripts": [],
+        "step_payloads": {
+            "manifest": {"status": "FAIL", "error_type": "LocalRegressionError", "error_message": "manifest 欄位 bundle_name 不可空白"},
+        },
+        "preflight": {},
+        "bundle_mode": "manifest_failed",
+        "archived_bundle": "outputs/local_regression/to_chatgpt_bundle_20260402_123456_abcd1234.zip",
+        "root_bundle_copy": "to_chatgpt_bundle_20260402_123456_abcd1234.zip",
+        "bundle_entries": ["master_summary.json", "manifest_summary.json"],
+        "retention": {"removed_count": 0, "removed_bytes": 0},
+    }
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_has_manifest_error", True, "manifest    : FAIL | LocalRegressionError: manifest 欄位 bundle_name 不可空白" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_marks_blocked_steps", True, "preflight   : NOT_RUN | blocked_by_manifest" in summary_text and "dataset prep: NOT_RUN | blocked_by_manifest" in summary_text and "quick gate    NOT_RUN" in summary_text and "blocked_by_manifest" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_lists_not_run_steps", True, "未執行步驟 : dataset_prepare, quick_gate, consistency, chain_checks, ml_smoke, meta_quality" in summary_text)
+
+    summary["manifest_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_OPTIONAL_DATASET_SKIP"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = {
+        "overall_status": "PASS",
+        "failures": 0,
+        "selected_steps": ["meta_quality"],
+        "failed_step_names": [],
+        "not_run_step_names": [],
+        "scripts": [
+            {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
+        ],
+        "step_payloads": {
+            "meta_quality": {"status": "PASS", "fail_count": 0, "coverage": {"totals": {"percent_covered": 51.23}}, "checklist": {"todo_ids": ["B15", "B19"]}},
+        },
+        "preflight": {"status": "PASS", "duration_sec": 0.18, "failed_packages": []},
+        "bundle_mode": "minimum_set",
+        "archived_bundle": "outputs/local_regression/to_chatgpt_bundle_20260402_123456_abcd1234.zip",
+        "root_bundle_copy": "to_chatgpt_bundle_20260402_123456_abcd1234.zip",
+        "bundle_entries": ["master_summary.json", "meta_quality_summary.json"],
+        "retention": {"removed_count": 0, "removed_bytes": 0},
+    }
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_selected_step", True, "執行步驟 : meta quality" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_dataset_not_required", True, "dataset prep: SKIP | not_required" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_unselected_steps", True, "quick gate    SKIP" in summary_text and "consistency   SKIP" in summary_text and "ml smoke      SKIP" in summary_text and "not_selected" in summary_text)
+
+    summary["partial_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
     return results, summary
