@@ -411,3 +411,17 @@
 | 2026-04-02 | D66 | 新增 scanner prepared tool contract case 並驗證 | NEW -> DONE | `validate_scanner_prepared_tool_contract_case` |
 | 2026-04-02 | D67 | 新增 debug trade log prepared tool contract case 並驗證 | NEW -> DONE | `validate_debug_trade_log_prepared_tool_contract_case` |
 | 2026-04-02 | B19 / D21 | 將 scanner / debug_trade_log 驗證改為共用 prepared context 與 precomputed stats | DONE -> DONE | `tools/validate/real_case_runners.py`, `tools/validate/external_tool_checks.py`, `apps/vip_scanner.py`, `tools/debug/trade_log.py` |
+
+| 2026-04-02 | B19 / D21 | 記錄 reduced suite 最近兩輪實測基線並確認後續效能優化需先有 profiling 證據 | DONE -> DONE | 近兩輪實測約 `107.62s` 與 `104.82s`；`meta quality` 因 coverage artifact reuse 已降至約 `1.41s`，剩餘主要成本集中在 `consistency` 與 `chain checks`，後續若要再動正式流程需先以 profiling 證明存在明確固定重工或高 fanout 熱點 |
+
+## I. 收斂結案註記
+
+截至 2026-04-02 最近兩輪 reduced suite 實測：
+- `quick gate` 約 `10.22s`
+- `consistency` 約 `53.91s ~ 59.52s`
+- `chain checks` 約 `29.66s ~ 29.86s`
+- `ml smoke` 約 `3.81s ~ 4.01s`
+- `meta quality` 約 `1.41s ~ 9.82s`，其中同輪 coverage artifact reuse 生效後已降至約 `1.41s`
+- `total` 約 `104.82s ~ 107.62s`
+
+目前 checklist 主表與 D 項皆為 `DONE`。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
