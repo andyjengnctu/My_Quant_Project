@@ -67,9 +67,10 @@ from .synthetic_contract_cases import (
     validate_meta_quality_performance_memory_contract_case,
     validate_output_contract_case,
     validate_portfolio_sim_prepared_tool_contract_case,
+    validate_run_all_manifest_failure_master_summary_contract_case,
     validate_run_all_preflight_early_failure_dataset_contract_case,
     validate_scanner_prepared_tool_contract_case,
-        validate_scanner_reference_clean_df_contract_case,
+    validate_scanner_reference_clean_df_contract_case,
 )
 from .synthetic_error_cases import (
     validate_downloader_main_error_path_case,
@@ -163,6 +164,7 @@ def get_synthetic_validators():
         validate_meta_quality_performance_memory_contract_case,
         validate_meta_quality_reuses_existing_coverage_artifacts_case,
         validate_run_all_preflight_early_failure_dataset_contract_case,
+        validate_run_all_manifest_failure_master_summary_contract_case,
         validate_artifact_lifecycle_contract_case,
         validate_params_io_error_path_case,
         validate_module_loader_error_path_case,

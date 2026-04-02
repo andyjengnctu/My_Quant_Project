@@ -187,7 +187,8 @@
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | 已補 preflight fail 時 blocked steps、bundle 空值與步驟名稱顯示摘要契約 |
 | D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | 已補 dataset prepare fail 時 blocked regression steps 與錯誤細節摘要契約 |
 | D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | 已補 step summary unreadable 時 `summary_unreadable` / `error_type` 顯示摘要契約 |
-| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | 已補 `run_all.py` preflight 早退且 dataset step 應存在時，`dataset_prepare` 必須列入 `not_run_step_names`，避免 `apps/test_suite.py` 將其誤顯示成 `missing_summary_file` |
+| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | 已補 `run_all.py` preflight 早退且 dataset step 應存在時，`dataset_prepare` 必須列入 `not_run_step_names`，且 early-failure `master_summary.json` 必須維持正式 schema，避免早退 bundle 結構分叉 |
+| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | 已補 `run_all.py` manifest failed 時 `master_summary.json` 仍須維持正式 schema，並以 blocked placeholder 補齊 preflight / dataset_prepare / payload_failures 契約 |
 | D57 | `validate_test_suite_summary_checklist_status_sync_case` | 已補 `apps/test_suite.py` meta quality 摘要需直接使用 checklist 的 `DONE / PARTIAL / TODO / N/A` 狀態語彙，並顯示 partial / todo / done ID 預覽 |
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
@@ -283,7 +284,8 @@
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
 | D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 | 2026-04-02 |
 | D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 | 2026-04-02 |
-| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B21 | 2026-04-02 |
+| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B17 / B21 | 2026-04-03 |
+| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 | 2026-04-03 |
 | D57 | `validate_test_suite_summary_checklist_status_sync_case` | B21 | 2026-04-02 |
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 | 2026-04-02 |
 | D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 | 2026-04-02 |
@@ -376,6 +378,8 @@
 | 2026-04-02 | D54 | 新增 dataset prepare fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` |
 | 2026-04-02 | D55 | 新增 summary unreadable 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_unreadable_payload_reporting_case` |
 | 2026-04-02 | D56 | 補 `run_all.py` preflight 早退 dataset not-run contract 並驗證 | TODO -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
+| 2026-04-03 | D56 | 擴充 preflight 早退 master summary schema contract 並驗證 | DONE -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
+| 2026-04-03 | D74 | 新增 manifest failure master summary schema contract 並驗證 | NEW -> DONE | `validate_run_all_manifest_failure_master_summary_contract_case` |
 | 2026-04-02 | D57 | 補 checklist status vocabulary sync 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_checklist_status_sync_case` |
 | 2026-04-02 | D58 | 補 meta quality coverage guardrail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
 | 2026-04-02 | B22 | 將 coverage report baseline 收斂為正式 gate，主表升為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |
@@ -405,6 +409,7 @@
 - 2026-04-02：補入 `D50`、`D51`、`D52`，將 `apps/test_suite.py` 摘要契約從 PASS 顯示補到腳本失敗、manifest blocked 與 partial selected-steps 路徑。
 - 2026-04-02：再補 `D53`、`D54`、`D55`，把 `apps/test_suite.py` 摘要契約延伸到 preflight fail、dataset prepare fail 與 summary unreadable 路徑，並補步驟名稱與空 bundle path 的顯示穩定性。
 - 2026-04-02：補 `D56`，把 `run_all.py` real preflight early-failure 路徑納入 contract，要求 dataset step 雖未產生 payload，仍必須在 `not_run_step_names` 中標示為 `dataset_prepare`。
+- 2026-04-03：擴充 `D56` 並新增 `D74`，補齊 `run_all.py` 在 preflight / manifest 早退路徑下 `master_summary.json` 必須維持正式 schema 的 contract，避免 bundle 結構與正常路徑分叉。
 - 2026-04-02：補 `D57`、`D58`，把 `apps/test_suite.py` meta quality 摘要延伸到 checklist status vocabulary sync 與 coverage guardrail 顯示；同時將 `D20` / `B22` 從 `PARTIAL` 收斂為 `DONE`。
 
 | 2026-04-02 | D15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` + `validate_scan_runner_repeatability_case` + `run_ml_smoke.py` fixed-seed dual-run |

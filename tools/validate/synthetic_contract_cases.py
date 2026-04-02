@@ -559,6 +559,10 @@ def _add_preflight_early_failure_dataset_contract_checks(results, case_id, *, wo
     expected_not_run = ["dataset_prepare", "quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
     add_check(results, "output_contract", case_id, "preflight_failed_early_summary_marks_dataset_prepare_not_run", expected_not_run, early_master.get("not_run_step_names"))
     add_check(results, "output_contract", case_id, "preflight_failed_early_result_marks_dataset_prepare_not_run", expected_not_run, early_result.get("not_run_step_names"))
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_required_keys", [], sorted(REQUIRED_MASTER_SUMMARY_KEYS - set(early_master.keys())))
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_dataset_prepare_status", "NOT_RUN", early_master.get("dataset_prepare", {}).get("status"))
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_dataset_prepare_blocked_by", "preflight", early_master.get("dataset_prepare", {}).get("blocked_by"))
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_payload_failures_empty", [], early_master.get("payload_failures"))
 
 
 def validate_run_all_preflight_early_failure_dataset_contract_case(_base_params):
@@ -571,6 +575,36 @@ def validate_run_all_preflight_early_failure_dataset_contract_case(_base_params)
         _add_preflight_early_failure_dataset_contract_checks(results, case_id, work_dir=work_dir)
 
     summary["checked_contract"] = "preflight_failed_dataset_prepare_not_run"
+    return results, summary
+
+
+def validate_run_all_manifest_failure_master_summary_contract_case(_base_params):
+    case_id = "RUN_ALL_MANIFEST_FAILURE_MASTER_SUMMARY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="run_all_manifest_fail_contract_") as temp_dir:
+        run_dir = Path(temp_dir) / "manifest_failure"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        with patch.object(run_all_module, "build_bundle_zip", return_value=run_dir / "manifest_failed_bundle.zip"),              patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path),              patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path),              patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}),              patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"):
+            run_all_module._write_manifest_failure_bundle(
+                run_dir=run_dir,
+                selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+                include_dataset=True,
+                manifest_error=ValueError("synthetic manifest failure"),
+            )
+
+        master_json = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
+        expected_not_run = ["preflight", "dataset_prepare", "quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_required_keys", [], sorted(REQUIRED_MASTER_SUMMARY_KEYS - set(master_json.keys())))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_not_run_steps", expected_not_run, master_json.get("not_run_step_names"))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_preflight_status", "NOT_RUN", master_json.get("preflight", {}).get("status"))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_preflight_blocked_by", "manifest", master_json.get("preflight", {}).get("blocked_by"))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_dataset_prepare_status", "NOT_RUN", master_json.get("dataset_prepare", {}).get("status"))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_dataset_prepare_blocked_by", "manifest", master_json.get("dataset_prepare", {}).get("blocked_by"))
+        add_check(results, "output_contract", case_id, "manifest_failed_master_summary_payload_failures_empty", [], master_json.get("payload_failures"))
+
+    summary["checked_contract"] = "manifest_failed_master_summary_schema"
     return results, summary
 
 def validate_artifact_lifecycle_contract_case(_base_params):

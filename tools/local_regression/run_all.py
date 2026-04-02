@@ -252,6 +252,12 @@ def _build_bundle_entries(run_dir: Path, bundle_paths: List[Path]) -> List[str]:
     return [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths if path.exists()]
 
 
+def _build_dataset_prepare_placeholder(*, include_dataset: bool, blocked_by: str) -> Dict[str, Any]:
+    if not include_dataset:
+        return {"status": "SKIP", "reason": "not_required"}
+    return {"status": "NOT_RUN", "blocked_by": blocked_by}
+
+
 def _write_stable_artifacts_manifest(run_dir: Path, *, max_rounds: int = 6) -> Path:
     manifest_path = run_dir / "artifacts_manifest.json"
     if not manifest_path.exists():
@@ -303,6 +309,13 @@ def _finalize_early_failure(
         include_dataset=include_dataset,
     )
 
+    dataset_prepare_summary = dataset_prepare_payload
+    if dataset_prepare_summary is None:
+        dataset_prepare_summary = _build_dataset_prepare_placeholder(
+            include_dataset=include_dataset,
+            blocked_by="preflight",
+        )
+
     master_summary = {
         "overall_status": "FAIL",
         "dataset": manifest["dataset"],
@@ -313,13 +326,13 @@ def _finalize_early_failure(
         "selected_steps": selected_step_names,
         "failures": len(failed_step_names),
         "preflight": preflight_payload,
+        "dataset_prepare": dataset_prepare_summary,
+        "payload_failures": [],
         "bundle_mode": bundle_mode,
         "failed_step_names": failed_step_names,
         "not_run_step_names": not_run_step_names,
         "suggested_rerun_command": "",
     }
-    if dataset_prepare_payload is not None:
-        master_summary["dataset_prepare"] = dataset_prepare_payload
 
     write_json(run_dir / "master_summary.json", master_summary)
     artifacts_manifest_path = _write_stable_artifacts_manifest(run_dir)
@@ -541,6 +554,12 @@ def _write_manifest_failure_bundle(
         "scripts": [],
         "selected_steps": selected_step_names,
         "failures": 1,
+        "preflight": {"status": "NOT_RUN", "blocked_by": "manifest"},
+        "dataset_prepare": _build_dataset_prepare_placeholder(
+            include_dataset=include_dataset,
+            blocked_by="manifest",
+        ),
+        "payload_failures": [],
         "bundle_mode": "manifest_failed",
         "failed_step_names": ["manifest"],
         "not_run_step_names": not_run_step_names,
