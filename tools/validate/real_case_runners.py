@@ -140,7 +140,13 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
     scanner_ref_stats, _scanner_logs, scanner_prep_df = run_single_backtest_check(df, scanner_params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params)
-    portfolio_sim_stats = run_portfolio_sim_tool_check(ticker, file_path, params)
+    portfolio_sim_stats = run_portfolio_sim_tool_check(
+        ticker,
+        file_path,
+        params,
+        prepared_df=prep_df,
+        standalone_logs=standalone_logs,
+    )
     scanner_result, scanner_module_path = run_scanner_tool_check(
         ticker,
         file_path,
