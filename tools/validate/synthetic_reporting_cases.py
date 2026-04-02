@@ -124,6 +124,7 @@ def _base_test_suite_result_payload():
             {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
         ],
         "step_payloads": {
+            "dataset_prepare": {"status": "PASS", "duration_sec": 0.62, "csv_count": 617, "source": "data/tw_stock_data_vip_reduced"},
             "quick_gate": {"status": "PASS", "step_count": 88, "failed_count": 0},
             "consistency": {"status": "PASS", "total_checks": 2752, "fail_count": 0, "skip_count": 0, "real_ticker_count": 24},
             "chain_checks": {"status": "PASS", "ticker_count": 24, "highlights": {"traded_ticker_count": 7, "missed_buy_ticker_count": 2, "blocked_by_counts": {"cash": 3, "slots": 1}}, "portfolio_snapshot": {"trade_rows": 14, "reserved_buy_fill_rate": 83.33}},
@@ -308,7 +309,7 @@ def validate_test_suite_summary_failure_reporting_case(_base_params):
     })
 
     summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
-    add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_failure_line", True, "失敗步驟 : chain_checks" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_failure_line", True, "失敗步驟 : chain checks(chain_checks)" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_step_reason", True, "chain checks" in summary_text and "reported_status=FAIL" in summary_text and "failed_steps=scanner_snapshot" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_failure_summary_has_rerun_command", True, "建議重跑 : python tools/local_regression/run_all.py --only chain_checks" in summary_text)
 
@@ -342,7 +343,7 @@ def validate_test_suite_summary_manifest_failure_reporting_case(_base_params):
     summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
     add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_has_manifest_error", True, "manifest    : FAIL | LocalRegressionError: manifest 欄位 bundle_name 不可空白" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_marks_blocked_steps", True, "preflight   : NOT_RUN | blocked_by_manifest" in summary_text and "dataset prep: NOT_RUN | blocked_by_manifest" in summary_text and "quick gate    NOT_RUN" in summary_text and "blocked_by_manifest" in summary_text)
-    add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_lists_not_run_steps", True, "未執行步驟 : dataset_prepare, quick_gate, consistency, chain_checks, ml_smoke, meta_quality" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_manifest_summary_lists_not_run_steps", True, "未執行步驟 : dataset prepare(dataset_prepare), quick gate(quick_gate), consistency, chain checks(chain_checks), ml smoke(ml_smoke), meta quality(meta_quality)" in summary_text)
 
     summary["manifest_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
     return results, summary
@@ -379,4 +380,104 @@ def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
     add_check(results, "reporting_schema", case_id, "test_suite_partial_summary_marks_unselected_steps", True, "quick gate    SKIP" in summary_text and "consistency   SKIP" in summary_text and "ml smoke      SKIP" in summary_text and "not_selected" in summary_text)
 
     summary["partial_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_preflight_failure_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_PREFLIGHT_FAILURE_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = {
+        "overall_status": "FAIL",
+        "failures": 1,
+        "selected_steps": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "failed_step_names": ["preflight"],
+        "not_run_step_names": ["dataset_prepare", "quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "scripts": [],
+        "step_payloads": {},
+        "preflight": {"status": "FAIL", "duration_sec": 0.31, "failed_packages": ["numpy", "pandas"], "error_message": "missing packages"},
+        "bundle_mode": "debug_bundle",
+        "archived_bundle": None,
+        "root_bundle_copy": None,
+        "bundle_entries": ["master_summary.json", "preflight_summary.json"],
+        "retention": {"removed_count": 0, "removed_bytes": 0},
+    }
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_has_failure_detail", True, "preflight   : FAIL | reported_status=FAIL" in summary_text and "failed_packages=numpy,pandas" in summary_text and "error_message=missing packages" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_marks_blocked_steps", True, "dataset prep: NOT_RUN | blocked_by_preflight" in summary_text and "quick gate    NOT_RUN" in summary_text and "blocked_by_preflight" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_preflight_failure_formats_named_steps_and_empty_bundle", True, "未執行步驟 : dataset prepare(dataset_prepare), quick gate(quick_gate)" in summary_text and "歷史 bundle : (none)" in summary_text and "根目錄 bundle : (none)" in summary_text)
+
+    summary["preflight_failure_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_dataset_prepare_failure_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_DATASET_PREPARE_FAILURE_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
+    result_payload.update({
+        "overall_status": "FAIL",
+        "failures": 1,
+        "failed_step_names": ["dataset_prepare"],
+        "not_run_step_names": ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+        "scripts": [],
+        "step_payloads": {
+            "dataset_prepare": {
+                "status": "FAIL",
+                "duration_sec": 0.77,
+                "error_message": "reduced dataset missing",
+                "summary_write_error": "disk full",
+            },
+        },
+        "preflight": {"status": "PASS", "duration_sec": 0.18, "failed_packages": []},
+        "bundle_mode": "debug_bundle",
+        "suggested_rerun_command": "",
+    })
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_dataset_failure_has_detail", True, "dataset prep: FAIL | reported_status=FAIL" in summary_text and "error_message=reduced dataset missing" in summary_text and "summary_write_error=disk full" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_dataset_failure_marks_regression_blocked", True, "quick gate    NOT_RUN" in summary_text and "blocked_by_dataset_prepare" in summary_text and "未執行步驟 : quick gate(quick_gate), consistency, chain checks(chain_checks), ml smoke(ml_smoke), meta quality(meta_quality)" in summary_text)
+
+    summary["dataset_failure_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
+    return results, summary
+
+
+def validate_test_suite_summary_unreadable_payload_reporting_case(_base_params):
+    case_id = "TEST_SUITE_SUMMARY_UNREADABLE_PAYLOAD_REPORTING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    result_payload = _base_test_suite_result_payload()
+    result_payload.update({
+        "overall_status": "FAIL",
+        "failures": 1,
+        "failed_step_names": ["chain_checks"],
+        "scripts": [
+            {"name": "quick_gate", "status": "PASS", "duration_sec": 8.42, "failure_reasons": []},
+            {"name": "consistency", "status": "PASS", "duration_sec": 10.23, "failure_reasons": []},
+            {"name": "chain_checks", "status": "FAIL", "duration_sec": 11.22, "failure_reasons": ["summary_unreadable", "error_type=JSONDecodeError"]},
+            {"name": "ml_smoke", "status": "PASS", "duration_sec": 4.01, "failure_reasons": []},
+            {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
+        ],
+        "step_payloads": {
+            **result_payload["step_payloads"],
+            "chain_checks": {
+                "status": "FAIL",
+                "error_type": "JSONDecodeError",
+                "error_message": "Expecting value: line 1 column 1 (char 0)",
+            },
+        },
+        "bundle_mode": "debug_bundle",
+        "suggested_rerun_command": "python tools/local_regression/run_all.py --only chain_checks",
+    })
+
+    summary_text = _capture_output(lambda: test_suite_module._print_human_summary(result_payload))
+    add_check(results, "reporting_schema", case_id, "test_suite_unreadable_payload_surfaces_reason", True, "summary_unreadable" in summary_text and "error_type=JSONDecodeError" in summary_text and "Expecting value: line 1 column 1 (char 0)" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_unreadable_payload_formats_failed_step_labels", True, "失敗步驟 : chain checks(chain_checks)" in summary_text and "建議重跑 : python tools/local_regression/run_all.py --only chain_checks" in summary_text)
+
+    summary["unreadable_payload_summary_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
     return results, summary

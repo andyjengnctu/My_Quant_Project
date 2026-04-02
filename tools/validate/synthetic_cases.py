@@ -43,10 +43,13 @@ from .synthetic_reporting_cases import (
     validate_issue_excel_report_schema_case,
     validate_portfolio_export_report_artifacts_case,
     validate_portfolio_yearly_report_schema_case,
+    validate_test_suite_summary_dataset_prepare_failure_reporting_case,
     validate_test_suite_summary_failure_reporting_case,
     validate_test_suite_summary_manifest_failure_reporting_case,
     validate_test_suite_summary_optional_dataset_skip_case,
+    validate_test_suite_summary_preflight_failure_reporting_case,
     validate_test_suite_summary_reporting_case,
+    validate_test_suite_summary_unreadable_payload_reporting_case,
     validate_validate_console_summary_reporting_case,
 )
 from .synthetic_contract_cases import (
@@ -124,6 +127,9 @@ def get_synthetic_validators():
         validate_test_suite_summary_failure_reporting_case,
         validate_test_suite_summary_manifest_failure_reporting_case,
         validate_test_suite_summary_optional_dataset_skip_case,
+        validate_test_suite_summary_preflight_failure_reporting_case,
+        validate_test_suite_summary_dataset_prepare_failure_reporting_case,
+        validate_test_suite_summary_unreadable_payload_reporting_case,
         validate_issue_excel_report_schema_case,
         validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,

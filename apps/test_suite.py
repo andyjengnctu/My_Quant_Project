@@ -126,6 +126,24 @@ def _is_dataset_prepare_required(selected_steps: set[str]) -> bool:
     return any(name in DATASET_REQUIRED_STEPS for name in selected_steps)
 
 
+def _safe_display_text(value: Any, *, default: str = "(none)") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text or default
+
+
+def _format_step_names(step_names: list[str]) -> str:
+    formatted = []
+    for raw_name in step_names:
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        label = STEP_LABELS.get(name, name)
+        formatted.append(f"{label}({name})" if label != name else name)
+    return ", ".join(formatted) if formatted else "(none)"
+
+
 def _print_human_summary(result: Dict[str, Any]) -> None:
     master = {
         "scripts": result.get("scripts", []),
@@ -224,15 +242,15 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
     print("\n" + "=" * 78)
     print(" Test Suite 結果整理")
     print("=" * 78)
-    print(f"整體狀態 : {result['overall_status']} | 失敗步驟 : {result['failures']}")
+    print(f"整體狀態 : {result.get('overall_status', 'FAIL')} | 失敗步驟 : {result.get('failures', 0)}")
     if selected_steps:
         selected_preview = ", ".join(STEP_LABELS.get(name, name) for name in REGRESSION_STEP_ORDER if name in selected_steps)
         print(f"執行步驟 : {selected_preview}")
     manifest_payload = step_payloads.get("manifest", {})
     if manifest_payload:
         print(
-            f"manifest    : FAIL | {manifest_payload.get('error_type', '')}: "
-            f"{manifest_payload.get('error_message', '')}"
+            f"manifest    : FAIL | {_safe_display_text(manifest_payload.get('error_type'), default='(unknown_error)')}: "
+            f"{_safe_display_text(manifest_payload.get('error_message'))}"
         )
 
     preflight = result.get("preflight", {})
@@ -253,14 +271,14 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         print(
             f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
             f"csv_count={dataset_prepare.get('csv_count', 0)} | "
-            f"source={dataset_prepare.get('source', '')}"
+            f"source={_safe_display_text(dataset_prepare.get('source'))}"
         )
     else:
         print(f"dataset prep: {dataset_status} | {dataset_detail}")
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
-    print(f"歷史 bundle : {result.get('archived_bundle', '')}")
-    print(f"根目錄 bundle : {result.get('root_bundle_copy', '')}")
+    print(f"歷史 bundle : {_safe_display_text(result.get('archived_bundle'))}")
+    print(f"根目錄 bundle : {_safe_display_text(result.get('root_bundle_copy'))}")
     print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
     print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
@@ -347,17 +365,17 @@ def _print_human_summary(result: Dict[str, Any]) -> None:
         fallback = ", ".join(meta_script.get("failure_reasons", []))
         print(f"- meta quality: {meta_status} | {meta_detail or fallback}")
 
-    if result["overall_status"] != "PASS":
+    if result.get("overall_status", "FAIL") != "PASS":
         failed_names = [item["name"] for item in master.get("scripts", []) if item.get("status") != "PASS"]
         if not failed_names:
             failed_names = [str(name) for name in result.get("failed_step_names", []) if str(name).strip()]
         if failed_names:
-            print(f"\n失敗步驟 : {', '.join(failed_names)}")
+            print(f"\n失敗步驟 : {_format_step_names(failed_names)}")
         blocked_names = [name for name in REGRESSION_STEP_ORDER if name in not_run_step_names]
         if dataset_prepare_required and "dataset_prepare" in not_run_step_names:
             blocked_names = ["dataset_prepare", *blocked_names]
         if blocked_names:
-            print(f"未執行步驟 : {', '.join(blocked_names)}")
+            print(f"未執行步驟 : {_format_step_names(blocked_names)}")
         rerun_command = result.get("suggested_rerun_command", "")
         if rerun_command:
             print(f"建議重跑 : {rerun_command}")
