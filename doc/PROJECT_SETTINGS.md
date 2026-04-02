@@ -9,20 +9,12 @@
 
 ## B. 標準測試流程
 
-1. 使用者要求「完整檢查」且本輪基準為 ZIP 時，先做環境 bootstrap 與 preflight；缺少套件時先補齊，再開始測試。
-2. 測試資料放在 `data/tw_stock_data_vip_reduced`. 
-3. `apps/test_suite.py` 必須作為所有已實作測試的單一正式入口；其正式組成步驟目前為：
-    `tools/validate/preflight_env.py`、
-    `tools/local_regression/run_quick_gate.py`、
-    `tools/validate/cli.py --dataset reduced`、
-    `tools/local_regression/run_chain_checks.py`、
-    `tools/local_regression/run_ml_smoke.py`、
-    `tools/local_regression/run_meta_quality.py`。
-4. GPT 端為節省驗證時間，可依本輪影響面拆開執行上述正式組成步驟；但不得讓拆開執行的正式步驟集合與 `apps/test_suite.py` 失同步。
-5. 在 test suite 完全收斂前，`doc/TEST_SUITE_CHECKLIST.md` 中標記為 `TODO` 與 `PARTIAL` 的項目，仍須由 GPT 端補驗，以維持整體完整性。
-6. 已標記為 `DONE` 的項目，原則上以 test suite 為主，GPT 端不重複完整執行；但若本輪改動直接影響相關模組、測試入口、輸出契約、架構責任，或出現可疑症狀，GPT 端仍須做定向複核。
-7. GPT 端補驗應以差異化驗證為原則：優先補 `TODO`、`PARTIAL` 與本輪改動直接影響的高風險 invariant，避免重跑已穩定覆蓋項目。
-8. 每輪開始時，GPT 除了讀取 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`，也必須主動檢查目前 checklist 是否已足夠支撐本輪完整性判斷；檢查範圍不只包含正式邏輯與跨工具契約，也包含 test suite 本身的註冊完整性、自我驗證、coverage 與收斂缺口，並確認 checklist 自身是否仍有缺口、遺漏回寫、狀態過舊或摘要失同步。若不足，須明確指出缺口並先回寫或更新 checklist。
+1. 使用者要求「完整檢查」時，GPT 端必須先做 test suite / checklist sufficiency review；不得只檢查 checklist 是否有非 `DONE` 項目，還必須主動檢查 test suite 是否仍有缺口但尚未列入 `doc/TEST_SUITE_CHECKLIST.md`。
+2. sufficiency review 的檢查範圍，至少包含正式入口、步驟註冊、自我驗證、coverage guard、artifact / summary contract、文件同步、收斂紀錄同步，以及 checklist 自身是否有缺口、遺漏回寫、狀態過舊或摘要失同步。
+3. 若發現 test suite 有未列入 checklist 的缺口，或 checklist 自身有缺口、遺漏回寫、狀態過舊、摘要失同步，須先明確指出，並先更新 `doc/TEST_SUITE_CHECKLIST.md`，再進入後續驗證或修改。
+4. 在 test suite 完全收斂前，GPT 端的首要任務是補齊 test suite 與 checklist，使本地端正式驗證可獨立完成；GPT 端僅可在收斂過程中做必要的定向補驗，用於辨識未覆蓋缺口、驗證收斂修補方向，不得把 GPT 補驗當成常態驗證機制。
+5. 已標記為 `DONE` 的項目，原則上以 test suite 為主，GPT 端不重複完整執行；只有在本輪改動直接影響相關模組、測試入口、輸出契約、架構責任，或 sufficiency review 發現可疑缺口 / 症狀時，才做定向複核。
+6. 只有在前述判定確實需要執行正式步驟時，才套用以下執行規則：若本輪基準為 ZIP，先做環境 bootstrap 與 preflight；測試資料使用 `data/tw_stock_data_vip_reduced`；`apps/test_suite.py` 為所有已實作測試的單一正式入口；GPT 端可依本輪影響面拆開執行正式組成步驟，但不得讓拆開執行的正式步驟集合與 `apps/test_suite.py` 失同步。
 
 ## C. 回覆、交付與輸出
 
