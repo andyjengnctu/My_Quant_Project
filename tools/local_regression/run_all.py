@@ -164,6 +164,7 @@ def _safe_read_json_with_error(path: Path) -> Dict[str, Any]:
             "error_type": type(exc).__name__,
             "error_message": str(exc),
             "summary_file": path.name,
+            "summary_unreadable": True,
         }
 
 
@@ -172,7 +173,7 @@ def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
         return ["missing_summary_file"]
 
     reasons: List[str] = []
-    if payload.get("error_type"):
+    if payload.get("summary_unreadable"):
         reasons.append("summary_unreadable")
 
     reported_status = str(payload.get("status", "") or "").strip()
@@ -302,6 +303,12 @@ def _finalize_early_failure(
     if dataset_prepare_payload is not None:
         step_payloads["dataset_prepare"] = dataset_prepare_payload
 
+    payload_failures = []
+    for name, payload in step_payloads.items():
+        reasons = _payload_failure_reasons(payload)
+        if reasons:
+            payload_failures.append({"name": name, "failure_reasons": reasons})
+
     not_run_step_names = _compute_not_run_step_names(
         selected_step_names=selected_step_names,
         failed_step_names=failed_step_names,
@@ -327,7 +334,7 @@ def _finalize_early_failure(
         "failures": len(failed_step_names),
         "preflight": preflight_payload,
         "dataset_prepare": dataset_prepare_summary,
-        "payload_failures": [],
+        "payload_failures": payload_failures,
         "bundle_mode": bundle_mode,
         "failed_step_names": failed_step_names,
         "not_run_step_names": not_run_step_names,

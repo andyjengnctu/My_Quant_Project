@@ -125,7 +125,7 @@ def print_test_suite_human_summary(
         if not payload:
             return "missing_summary_file"
         reasons = []
-        if payload.get("error_type"):
+        if payload.get("summary_unreadable"):
             reasons.append("summary_unreadable")
         reported_status = str(payload.get("status", "") or "").strip()
         if reported_status and reported_status != "PASS":

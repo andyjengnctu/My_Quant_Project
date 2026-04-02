@@ -539,11 +539,7 @@ def _add_preflight_early_failure_dataset_contract_checks(results, case_id, *, wo
     }
     write_json(early_failure_dir / "preflight_summary.json", early_preflight_payload)
     write_text(early_failure_dir / "preflight_summary.txt", "status : FAIL\n")
-    with patch.object(run_all_module, "build_bundle_zip", return_value=early_failure_dir / "preflight_failed_bundle.zip"), \
-         patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path), \
-         patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path), \
-         patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}), \
-         patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"):
+    with patch.object(run_all_module, "build_bundle_zip", return_value=early_failure_dir / "preflight_failed_bundle.zip"),          patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path),          patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path),          patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}),          patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"):
         early_result = run_all_module._finalize_early_failure(
             run_dir=early_failure_dir,
             manifest=early_failure_manifest,
@@ -562,7 +558,55 @@ def _add_preflight_early_failure_dataset_contract_checks(results, case_id, *, wo
     add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_required_keys", [], sorted(REQUIRED_MASTER_SUMMARY_KEYS - set(early_master.keys())))
     add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_dataset_prepare_status", "NOT_RUN", early_master.get("dataset_prepare", {}).get("status"))
     add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_dataset_prepare_blocked_by", "preflight", early_master.get("dataset_prepare", {}).get("blocked_by"))
-    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_payload_failures_empty", [], early_master.get("payload_failures"))
+    preflight_payload_failures = early_master.get("payload_failures") or []
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_payload_failure_names", ["preflight"], [item.get("name") for item in preflight_payload_failures])
+    preflight_failure_reasons = preflight_payload_failures[0].get("failure_reasons", []) if preflight_payload_failures else []
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_payload_failure_has_status", True, "reported_status=FAIL" in preflight_failure_reasons)
+    add_check(results, "output_contract", case_id, "preflight_failed_early_master_summary_payload_failure_has_failed_packages", True, "failed_packages=coverage" in preflight_failure_reasons)
+
+    dataset_failure_dir = work_dir / "dataset_failure"
+    dataset_failure_dir.mkdir(parents=True, exist_ok=True)
+    passing_preflight_payload = {
+        "status": "PASS",
+        "python_executable": "python",
+        "python_version": "3.x",
+        "requirements_path": "requirements.txt",
+        "checked_packages": ["coverage"],
+        "failed_packages": [],
+        "checks": [],
+        "duration_sec": 0.05,
+    }
+    dataset_prepare_payload = {
+        "status": "FAIL",
+        "duration_sec": 0.23,
+        "error_type": "RuntimeError",
+        "error_message": "synthetic dataset prepare failure",
+    }
+    write_json(dataset_failure_dir / "preflight_summary.json", passing_preflight_payload)
+    write_text(dataset_failure_dir / "preflight_summary.txt", "status : PASS\n")
+    write_json(dataset_failure_dir / "dataset_prepare_summary.json", dataset_prepare_payload)
+    write_text(dataset_failure_dir / "dataset_prepare_summary.txt", "status : FAIL\n")
+    with patch.object(run_all_module, "build_bundle_zip", return_value=dataset_failure_dir / "dataset_prepare_failed_bundle.zip"),          patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path),          patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path),          patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}),          patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"):
+        dataset_result = run_all_module._finalize_early_failure(
+            run_dir=dataset_failure_dir,
+            manifest=early_failure_manifest,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            major_index=2,
+            major_total=6,
+            bundle_mode="dataset_prepare_failed",
+            failed_step_names=["dataset_prepare"],
+            preflight_payload=passing_preflight_payload,
+            include_dataset=True,
+            dataset_prepare_payload=dataset_prepare_payload,
+        )
+    dataset_master = json.loads((dataset_failure_dir / "master_summary.json").read_text(encoding="utf-8"))
+    add_check(results, "output_contract", case_id, "dataset_prepare_failed_early_result_marks_scripts_not_run", ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"], dataset_result.get("not_run_step_names"))
+    dataset_payload_failures = dataset_master.get("payload_failures") or []
+    add_check(results, "output_contract", case_id, "dataset_prepare_failed_early_master_summary_payload_failure_names", ["dataset_prepare"], [item.get("name") for item in dataset_payload_failures])
+    dataset_failure_reasons = dataset_payload_failures[0].get("failure_reasons", []) if dataset_payload_failures else []
+    add_check(results, "output_contract", case_id, "dataset_prepare_failed_early_master_summary_payload_failure_has_status", True, "reported_status=FAIL" in dataset_failure_reasons)
+    add_check(results, "output_contract", case_id, "dataset_prepare_failed_early_master_summary_payload_failure_has_error_message", True, "error_message=synthetic dataset prepare failure" in dataset_failure_reasons)
+    add_check(results, "output_contract", case_id, "dataset_prepare_failed_early_master_summary_payload_failure_not_marked_unreadable", False, "summary_unreadable" in dataset_failure_reasons)
 
 
 def validate_run_all_preflight_early_failure_dataset_contract_case(_base_params):
