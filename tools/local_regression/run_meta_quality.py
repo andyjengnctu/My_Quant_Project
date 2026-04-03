@@ -90,6 +90,8 @@ COVERAGE_TARGETS = [
 ]
 COVERAGE_LINE_MIN_FLOOR = 55.0
 COVERAGE_BRANCH_MIN_FLOOR = 50.0
+CRITICAL_COVERAGE_LINE_MIN_FLOOR = 30.0
+CRITICAL_COVERAGE_BRANCH_MIN_FLOOR = 25.0
 COVERAGE_MAX_LINE_BRANCH_GAP = 5.0
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = {
@@ -135,6 +137,22 @@ def _coverage_threshold_policy_ok(line_min_percent: float, branch_min_percent: f
     detail = (
         f"line_min={line_min_percent:.2f} | branch_min={branch_min_percent:.2f} | "
         f"line_floor={COVERAGE_LINE_MIN_FLOOR:.2f} | branch_floor={COVERAGE_BRANCH_MIN_FLOOR:.2f} | "
+        f"max_gap={COVERAGE_MAX_LINE_BRANCH_GAP:.2f}"
+    )
+    return ok, detail
+
+
+def _critical_coverage_threshold_policy_ok(line_min_percent: float, branch_min_percent: float) -> tuple[bool, str]:
+    branch_priority_gap_ok = (line_min_percent - branch_min_percent) <= COVERAGE_MAX_LINE_BRANCH_GAP
+    ok = (
+        line_min_percent >= CRITICAL_COVERAGE_LINE_MIN_FLOOR
+        and branch_min_percent >= CRITICAL_COVERAGE_BRANCH_MIN_FLOOR
+        and line_min_percent >= branch_min_percent
+        and branch_priority_gap_ok
+    )
+    detail = (
+        f"critical_line_min={line_min_percent:.2f} | critical_branch_min={branch_min_percent:.2f} | "
+        f"critical_line_floor={CRITICAL_COVERAGE_LINE_MIN_FLOOR:.2f} | critical_branch_floor={CRITICAL_COVERAGE_BRANCH_MIN_FLOOR:.2f} | "
         f"max_gap={COVERAGE_MAX_LINE_BRANCH_GAP:.2f}"
     )
     return ok, detail
@@ -945,6 +963,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     critical_line_min_percent = float(manifest["coverage_critical_line_min_percent"])
     critical_branch_min_percent = float(manifest["coverage_critical_branch_min_percent"])
     threshold_policy_ok, threshold_policy_detail = _coverage_threshold_policy_ok(line_min_percent, branch_min_percent)
+    critical_threshold_policy_ok, critical_threshold_policy_detail = _critical_coverage_threshold_policy_ok(critical_line_min_percent, critical_branch_min_percent)
 
     critical_under_line_targets: List[str] = []
     critical_under_branch_targets: List[str] = []
@@ -1035,6 +1054,18 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             not zero_covered_targets,
             detail=f"zero_covered={zero_covered_targets}",
             extra={"zero_covered_targets": zero_covered_targets},
+        ),
+        summarize_result(
+            "coverage_critical_thresholds_respect_formal_floor",
+            critical_threshold_policy_ok,
+            detail=critical_threshold_policy_detail,
+            extra={
+                "critical_line_min_percent": critical_line_min_percent,
+                "critical_branch_min_percent": critical_branch_min_percent,
+                "critical_line_floor": CRITICAL_COVERAGE_LINE_MIN_FLOOR,
+                "critical_branch_floor": CRITICAL_COVERAGE_BRANCH_MIN_FLOOR,
+                "max_gap": COVERAGE_MAX_LINE_BRANCH_GAP,
+            },
         ),
         summarize_result(
             "coverage_critical_files_line_percent_within_minimum",

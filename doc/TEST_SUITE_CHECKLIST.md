@@ -100,6 +100,7 @@
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B30 | P1 | 覆蓋率 | overall coverage minimum threshold 應逐步提高，branch 優先 | DONE | 已將正式 coverage 基線提高為 `line 55% / branch 50%`，並新增 threshold floor guard，阻擋門檻回退到舊的 `50 / 45`；branch 與 line 的 gap 也已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B31 | P1 | 覆蓋率 | entry path 關鍵模組應納入 critical file per-file coverage gate | DONE | 已將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並新增 entry-path completeness / importability guard，避免 only-exit / engine critical gate 漏掉實際高風險進場邏輯 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
+| B32 | P1 | 覆蓋率 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | DONE | 已將 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 正式基線提高為 `30% / 25%`，並新增 critical threshold floor guard，阻擋 critical per-file 門檻回退到舊的 `25 / 20`；critical branch 與 line 的 gap 亦已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -233,6 +234,7 @@
 | D98 | `validate_critical_file_coverage_minimum_gate_case` | 應對 `critical files` 建立 per-file line / branch minimum coverage guard，避免 only-overall gate 漏檢 |
 | D99 | `validate_coverage_threshold_floor_case` | 應阻擋 coverage minimum threshold 低於正式基線，並明確要求 branch floor 優先提高 |
 | D100 | `validate_entry_path_critical_coverage_gate_case` | 應將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並直接阻擋 entry path critical gate 漏列 |
+| D101 | `validate_critical_coverage_threshold_floor_case` | 應阻擋 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 低於 stage-2 正式基線，並明確要求 critical branch floor 優先提高 |
 
 ## E. 未完成缺口摘要
 
@@ -291,6 +293,7 @@
 | 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B31 | entry path 關鍵模組應納入 critical file per-file coverage gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-03 |
+| 覆蓋率 | B32 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -364,6 +367,7 @@
 | D98 | `validate_critical_file_coverage_minimum_gate_case` | B29 | 2026-04-03 |
 | D99 | `validate_coverage_threshold_floor_case` | B30 | 2026-04-03 |
 | D100 | `validate_entry_path_critical_coverage_gate_case` | B31 | 2026-04-03 |
+| D101 | `validate_critical_coverage_threshold_floor_case` | B32 | 2026-04-03 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -541,6 +545,8 @@
 | 2026-04-03 | B30 | 正式 coverage 基線已提高並補 floor guard，主表收斂為 DONE | PARTIAL -> DONE | `common.py` / `manifest.json` 已提升到 `line 55 / branch 50`，並由 `run_meta_quality.py` 阻擋回退 |
 | 2026-04-03 | D100 | 新增 entry path critical coverage gate 建議測試並驗證 | NEW -> DONE | `validate_entry_path_critical_coverage_gate_case` |
 | 2026-04-03 | B31 | 進場關鍵模組已納入 critical file coverage gate，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` 已阻擋 `core/portfolio_entries.py` / `core/entry_plans.py` 漏出 critical gate |
+| 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
+| 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | `common.py` / `manifest.json` 已提升到 `critical line 30 / critical branch 25`，並由 `run_meta_quality.py` 阻擋回退 |
 
 ## H. 完成判準
 
@@ -553,7 +559,7 @@
 6. 可隨策略升級調整之測試，至少要覆蓋 model/schema/seed/reporting 四類介面契約。
 7. 每輪開始時，需先判斷目前 checklist 是否仍足夠支撐本輪完整性判斷；此判斷也包含 checklist 自身是否仍有缺口、摘要失同步、狀態過舊或未回寫項目；若不足，須先更新 checklist 再進行後續驗證或修改。
 8. 新增測試後，不得造成規則分叉、模組責任混亂或明顯效能退化。
-9. `B28`、`B29`、`B30`、`B31` 至少達到 `PARTIAL`，以證明 coverage 治理已從 overall baseline 延伸到核心交易模組、critical file guard 與 entry path 關鍵進場邏輯。
+9. `B28`、`B29`、`B30`、`B31`、`B32` 至少達到 `PARTIAL`，以證明 coverage 治理已從 overall baseline 延伸到核心交易模組、critical file guard、entry path 關鍵進場邏輯與 critical per-file stage-2 threshold floor。
 
 ## I. 收斂結案註記
 

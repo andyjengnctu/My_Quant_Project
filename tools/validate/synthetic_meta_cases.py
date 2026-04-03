@@ -472,8 +472,8 @@ def validate_critical_file_coverage_minimum_gate_case(_base_params):
         manifest = {
             "coverage_line_min_percent": 55.0,
             "coverage_branch_min_percent": 50.0,
-            "coverage_critical_line_min_percent": 25.0,
-            "coverage_critical_branch_min_percent": 20.0,
+            "coverage_critical_line_min_percent": 30.0,
+            "coverage_critical_branch_min_percent": 25.0,
         }
         coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
 
@@ -525,14 +525,62 @@ def validate_coverage_threshold_floor_case(_base_params):
         failing_manifest = {
             "coverage_line_min_percent": 50.0,
             "coverage_branch_min_percent": 45.0,
-            "coverage_critical_line_min_percent": 25.0,
-            "coverage_critical_branch_min_percent": 20.0,
+            "coverage_critical_line_min_percent": 30.0,
+            "coverage_critical_branch_min_percent": 25.0,
         }
         coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, failing_manifest)
 
     threshold_policy_result = _summary_result_by_name(coverage_summary["results"], "coverage_thresholds_respect_formal_floor")
     add_check(results, "meta_coverage", case_id, "coverage_threshold_floor_blocks_regression", False, coverage_summary.get("ok"))
     add_check(results, "meta_coverage", case_id, "coverage_threshold_floor_detects_below_baseline_manifest", "FAIL", threshold_policy_result.get("status"))
+
+    summary["threshold_policy_status"] = threshold_policy_result.get("status")
+    return results, summary
+
+
+def validate_critical_coverage_threshold_floor_case(_base_params):
+    import tools.local_regression.common as common_module
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_CRITICAL_COVERAGE_THRESHOLD_FLOOR"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    loaded_manifest = common_module.load_manifest()
+    expected_line_floor = int(run_meta_quality_module.CRITICAL_COVERAGE_LINE_MIN_FLOOR)
+    expected_branch_floor = int(run_meta_quality_module.CRITICAL_COVERAGE_BRANCH_MIN_FLOOR)
+
+    add_check(results, "meta_coverage", case_id, "manifest_critical_line_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_critical_line_min_percent"]) >= expected_line_floor)
+    add_check(results, "meta_coverage", case_id, "manifest_critical_branch_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_critical_branch_min_percent"]) >= expected_branch_floor)
+    add_check(results, "meta_coverage", case_id, "manifest_critical_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_critical_line_min_percent"]) - float(loaded_manifest["coverage_critical_branch_min_percent"]) <= float(run_meta_quality_module.COVERAGE_MAX_LINE_BRANCH_GAP))
+
+    with tempfile.TemporaryDirectory(prefix="meta_critical_cov_floor_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        payload = _build_meta_quality_reuse_payload(line_percent=72.0, branch_percent=68.0, critical_line_percent=35.0, critical_branch_percent=30.0)
+        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
+            "source": "validate_consistency",
+            "returncode": 0,
+            "stdout": "cached",
+            "stderr": "",
+            "timed_out": False,
+            "synthetic_fail_count": 0,
+            "synthetic_case_count": 100,
+            "json_generated": True,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        failing_manifest = {
+            "coverage_line_min_percent": 55.0,
+            "coverage_branch_min_percent": 50.0,
+            "coverage_critical_line_min_percent": 25.0,
+            "coverage_critical_branch_min_percent": 20.0,
+        }
+        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, failing_manifest)
+
+    threshold_policy_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_thresholds_respect_formal_floor")
+    add_check(results, "meta_coverage", case_id, "critical_coverage_threshold_floor_blocks_regression", False, coverage_summary.get("ok"))
+    add_check(results, "meta_coverage", case_id, "critical_coverage_threshold_floor_detects_below_baseline_manifest", "FAIL", threshold_policy_result.get("status"))
 
     summary["threshold_policy_status"] = threshold_policy_result.get("status")
     return results, summary
