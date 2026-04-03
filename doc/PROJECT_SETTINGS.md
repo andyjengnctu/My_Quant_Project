@@ -11,11 +11,12 @@
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口；`tools/local_regression/formal_pipeline.py` 為單一真理來源。
 2. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但必須被`apps/test_suite.py`涵蓋的缺口。
-3. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
-4. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
-5. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
-6. 檢查到問題就直接在本輪提供修改。
-7. 違反本節任一前置順序、禁止事項或邊界限制，均視為違規。
+3. 缺口包含已定義在專案設定中規則、也包含未定義在專案設定中但應考慮的規則。
+4. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
+5. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
+6. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
+7. 檢查到問題就直接在本輪提供修改。
+8. 違反本節任一前置順序、禁止事項或邊界限制，均視為違規。
 
 ## C. 回覆、交付與輸出
 
