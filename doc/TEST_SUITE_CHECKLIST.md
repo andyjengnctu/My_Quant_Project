@@ -94,7 +94,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard，以及 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 紀錄失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口，以及 `G` transition 缺少合法狀態轉移格式；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 紀錄失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -160,7 +160,7 @@
 
 | ID | 建議項目 | 目標 |
 |---|---|---|
-| D18 | contract tests for CSV / XLSX / JSON outputs | 已補 validate summary / optimizer profile / issue report 的 schema contract；更多工具輸出仍可補 |
+| D18 | contract tests for CSV / XLSX / JSON outputs | 已補 validate summary / optimizer profile / issue report 與正式入口關鍵輸出的 schema contract；本輪正式收斂範圍已完成 |
 | D28 | `validate_artifact_lifecycle_contract_case` | 已補 bundle/archive/root-copy/retention lifecycle、PASS/FAIL bundle selection、artifacts manifest 與 rerun 覆寫內容契約 |
 | D102 | `validate_dataset_fingerprint_contract_case` | 已補 reduced dataset member/content fingerprint 與 dataset prepare summary contract |
 | D103 | `validate_atomic_write_contract_case` | 已補 atomic write replace-failure recovery contract，要求舊內容保留且 temp 檔清除 |
@@ -206,6 +206,7 @@
 | D111 | `validate_checklist_g_single_note_entry_delimiter_case` | 已補 `G` 備註欄 delimiter-agnostic single-entry guard，直接阻擋 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口 |
 | D112 | `validate_checklist_f2_single_entry_delimiter_case` | 已補 `F2` 測試入口 delimiter-agnostic single-entry guard，直接阻擋 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口 |
 | D113 | `validate_checklist_g_transition_format_case` | 已補 `G` transition format guard，直接阻擋缺少 `->`、非法狀態值或非實際狀態轉移格式 |
+| D114 | `validate_checklist_done_d_detail_resolved_case` | 已補 DONE 的 D 區細項 resolved-detail guard，直接阻擋已收斂項目仍保留未完成語彙 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | 已補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，避免 formal helper / synthetic reporting 再度耦合 app 入口 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case、synthetic 正式註冊清單完整一致，以及 registry 反向對照 `F2` DONE validator 摘要完整性的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
@@ -225,7 +226,7 @@
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
-| D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 狀態失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口，以及 `G` transition 缺少合法狀態轉移格式 |
+| D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 狀態失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述 |
 | D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | 已補同 K 棒停利/停損取最壞停損 synthetic case，直接釘死同棒雙觸發時必須以停損結算 |
 | D76 | `validate_synthetic_half_tp_full_year_case` | 已補半倉停利與 full-year yearly return synthetic case，確認半倉列與年度報酬列同步存在 |
@@ -249,11 +250,11 @@
 
 | ID | 建議項目 | 目標 |
 |---|---|---|
-| D97 | `validate_core_trading_modules_in_coverage_targets_case` | 應直接阻擋核心交易模組未被納入 `COVERAGE_TARGETS` 的 coverage 治理缺口 |
-| D98 | `validate_critical_file_coverage_minimum_gate_case` | 應對 `critical files` 建立 per-file line / branch minimum coverage guard，避免 only-overall gate 漏檢 |
-| D99 | `validate_coverage_threshold_floor_case` | 應阻擋 coverage minimum threshold 低於正式基線，並明確要求 branch floor 優先提高 |
-| D100 | `validate_entry_path_critical_coverage_gate_case` | 應將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並直接阻擋 entry path critical gate 漏列 |
-| D101 | `validate_critical_coverage_threshold_floor_case` | 應阻擋 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 低於 stage-2 正式基線，並明確要求 critical branch floor 優先提高 |
+| D97 | `validate_core_trading_modules_in_coverage_targets_case` | 已補核心交易模組 coverage target completeness guard，直接阻擋核心交易模組未被納入 `COVERAGE_TARGETS` |
+| D98 | `validate_critical_file_coverage_minimum_gate_case` | 已補 `critical files` 的 per-file line / branch minimum coverage guard，直接阻擋 only-overall gate 漏檢 |
+| D99 | `validate_coverage_threshold_floor_case` | 已補 overall coverage threshold floor guard，直接阻擋 coverage minimum threshold 低於正式基線，並要求 branch floor 不得回退 |
+| D100 | `validate_entry_path_critical_coverage_gate_case` | 已補 entry path critical coverage gate，將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並直接阻擋漏列 |
+| D101 | `validate_critical_coverage_threshold_floor_case` | 已補 critical per-file threshold stage-2 floor guard，直接阻擋 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 低於正式基線，並要求 critical branch floor 不得回退 |
 
 ## E. 未完成缺口摘要
 
@@ -354,6 +355,7 @@
 | D111 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 | 2026-04-03 |
 | D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 | 2026-04-03 |
 | D113 | `validate_checklist_g_transition_format_case` | B26 | 2026-04-03 |
+| D114 | `validate_checklist_done_d_detail_resolved_case` | B26 | 2026-04-03 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
@@ -597,6 +599,7 @@
 | 2026-04-03 | D111 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
 | 2026-04-03 | D112 | 新增 `F2` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
 | 2026-04-03 | D113 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
+| 2026-04-03 | D114 | 新增 DONE 的 D 區細項 resolved-detail guard 並驗證 | NEW -> DONE | `validate_checklist_done_d_detail_resolved_case` |
 | 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | 基線已提升，並由 `run_meta_quality.py` 阻擋回退。 |
 

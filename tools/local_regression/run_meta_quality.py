@@ -150,6 +150,50 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
     return sorted(test_entries)
 
 
+def _load_d_detail_rows() -> Dict[str, Dict[str, Any]]:
+    text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    rows: Dict[str, Dict[str, Any]] = {}
+    in_d_section = False
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        stripped = raw_line.strip()
+        if stripped.startswith("## "):
+            heading = stripped.lstrip("#").strip()
+            if heading == "D. 建議先補的測試項目":
+                in_d_section = True
+                continue
+            if in_d_section:
+                break
+        if not in_d_section or not stripped.startswith("|"):
+            continue
+        cols = [part.strip() for part in raw_line.split("|")[1:-1]]
+        if len(cols) < 3 or not re.fullmatch(r"D\d+", cols[0]):
+            continue
+        rows[cols[0]] = {
+            "line": line_no,
+            "entry": cols[1],
+            "detail": cols[2],
+        }
+    return rows
+
+
+def _done_d_detail_has_unresolved_wording(detail: str) -> bool:
+    normalized = str(detail or "").strip()
+    if not normalized:
+        return True
+    unresolved_patterns = (
+        r"^應",
+        r"^需補",
+        r"^待補",
+        r"^尚未",
+        r"^未補",
+        r"仍可補",
+        r"尚可補",
+        r"可再補",
+        r"待收斂",
+    )
+    return any(re.search(pattern, normalized) for pattern in unresolved_patterns)
+
+
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     tables = _load_checklist_tables()
     main_statuses = _load_main_statuses(tables)
@@ -314,6 +358,34 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_g_note_rows,
             detail=f"invalid={invalid_g_note_rows}",
             extra={"invalid_note_rows": invalid_g_note_rows},
+        )
+    )
+
+    d_detail_rows = _load_d_detail_rows()
+    missing_done_d_detail_rows = sorted(item_id for item_id in f2_ids if item_id not in d_detail_rows)
+    unresolved_done_d_detail_rows = [
+        {
+            "id": item_id,
+            "detail": d_detail_rows[item_id]["detail"],
+            "line": d_detail_rows[item_id]["line"],
+        }
+        for item_id in f2_ids
+        if item_id in d_detail_rows and _done_d_detail_has_unresolved_wording(d_detail_rows[item_id]["detail"])
+    ]
+    results.append(
+        summarize_result(
+            "checklist_done_d_detail_rows_exist",
+            not missing_done_d_detail_rows,
+            detail=f"missing={missing_done_d_detail_rows}",
+            extra={"missing_detail_rows": missing_done_d_detail_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_done_d_rows_use_resolved_detail_text",
+            not unresolved_done_d_detail_rows,
+            detail=f"unresolved={unresolved_done_d_detail_rows}",
+            extra={"unresolved_detail_rows": unresolved_done_d_detail_rows},
         )
     )
 
