@@ -227,6 +227,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     )
 
     no_op_convergence_rows = []
+    invalid_g_note_rows = []
     for row in tables["G"]:
         if len(row) < 4:
             continue
@@ -236,12 +237,35 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         from_status, to_status = [part.strip() for part in transition.split("->", 1)]
         if from_status == to_status:
             no_op_convergence_rows.append({"id": row[1].strip(), "transition": transition})
+        note = row[4].strip() if len(row) > 4 else ""
+        if not note or " + " not in note:
+            continue
+        note_entries = set(re.findall(r"`([^`]+)`", note))
+        note_entries.update(re.findall(r"\bvalidate_[A-Za-z0-9_]+\b", note))
+        note_entries.update(re.findall(r"\b(?:apps|core|doc|tools)/[A-Za-z0-9_./-]+\.py\b", note))
+        note_entries.update(re.findall(r"\brun_[A-Za-z0-9_]+\.py\b", note))
+        if len(note_entries) >= 2:
+            invalid_g_note_rows.append(
+                {
+                    "id": row[1].strip(),
+                    "note": note,
+                    "entries": sorted(note_entries),
+                }
+            )
     results.append(
         summarize_result(
             "checklist_g_rows_require_actual_status_change",
             not no_op_convergence_rows,
             detail=f"no_op={no_op_convergence_rows}",
             extra={"no_op_rows": no_op_convergence_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_g_rows_use_single_note_entry",
+            not invalid_g_note_rows,
+            detail=f"invalid={invalid_g_note_rows}",
+            extra={"invalid_note_rows": invalid_g_note_rows},
         )
     )
 
