@@ -105,6 +105,7 @@
 | B34 | P1 | I/O | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite | DONE | 已將 `write_json` / `write_text` / `write_csv` 收斂為同一 atomic replace helper，並補 replace-failure recovery 與 transient retry contract，要求舊內容不得被半寫覆蓋、temp 檔必須清乾淨，且 Windows 暫時性 share violation 不得直接把 step 誤判成 FAIL | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
 | B35 | P1 | 覆蓋率 | test suite orchestrator modules 應納入 coverage targets | DONE | 已將 `tools/local_regression/common.py`、`formal_pipeline.py`、`run_meta_quality.py`、`run_all.py`、`core/test_suite_reporting.py`、`apps/test_suite.py` 納入 `TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS`，並新增 completeness / importability guard，避免測試編排層退化卻仍以 coverage 過關 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B36 | P1 | I/O | artifacts manifest 應具備 sha256，不可只靠 size_bytes | DONE | 已為每個 artifact manifest entry 補上 `sha256`，並新增 contract 對照實際檔案 hash，避免同大小內容漂移被 size 假象掩蓋 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
+| B37 | P2 | Meta | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | DONE | 已將 synthetic registry 升級為 metadata registry，補上 layer / cost class / impacted modules，並新增 metadata contract；同時保留 `get_synthetic_validators()` 相容 façade，避免 formal 入口、coverage 與 checklist guard 斷裂 | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -115,6 +116,7 @@
 | C03 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | 驗排序值可用、方向一致、型別正確；不驗固定名次 | `core/buy_sort.py`, `tools/scanner/` |
 | C04 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | 驗 CLI 與輸出仍可用；不驗內部中間流程 | `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
 | C05 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | 驗欄位存在與語意；不驗具體績效數值 | `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
+| C06 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | 驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序與 export 成敗；不驗固定分數 | `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py` |
 
 ## D. 建議先補的測試項目
 
@@ -150,6 +152,7 @@
 | D92 | `validate_scanner_worker_repeatability_case` | 已補 scanner worker repeatability，確認同資料同參數下 worker 級輸出穩定一致 |
 | D93 | `validate_scan_runner_repeatability_case` | 已補 `scan_runner` 入口重跑一致性，確認 scanner 正式入口摘要穩定一致 |
 | D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
+| D109 | `validate_optimizer_objective_export_contract_case` | 已補 optimizer objective / export contract，釘死 `INVALID_TRIAL_VALUE`、`fail_reason`、`profile_row`、`tp_percent` 還原優先序與 `best_params` export 成敗 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
 
 ### D4. 品質補強
@@ -195,6 +198,7 @@
 | D68 | `validate_scanner_reference_clean_df_contract_case` | 已補 real-case `scanner_ref_stats` clean-df fast path 與既有 file-path 路徑等價契約，避免加速後 scanner 參考 stats 口徑漂移 |
 | D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | 已補 `run_meta_quality.py` 重用同輪 `validate_consistency` coverage artifacts 契約，避免同一輪再重跑一次 synthetic coverage suite |
 | D70 | `validate_registry_checklist_entry_consistency_case` imported / defined validator completeness guard | 已補 imported / defined `validate_*` cases 與 synthetic registry 完整一致 formal guard |
+| D108 | `validate_synthetic_registry_metadata_contract_case` | 已補 synthetic registry metadata contract，要求每個 validator 具備合法 `layer` / `cost_class` / `impacted_modules`，且 metadata 名稱需對齊 validator |
 | D71 | `run_meta_quality.py` checklist main / `F2` / `G` sync guard | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard |
 | D72 | `run_meta_quality.py` checklist `DONE` summary omission blocker | 已補 checklist `DONE` 摘要缺漏自動偵測與阻擋 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | 已補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，避免 formal helper / synthetic reporting 再度耦合 app 入口 |
@@ -308,6 +312,7 @@
 | I/O | B34 | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
 | 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
+| Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -331,6 +336,7 @@
 | D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
 | D29 | `tools/local_regression/formal_pipeline.py` | B23 | 2026-04-02 |
 | D70 | `tools/validate/synthetic_cases.py` | B23 | 2026-04-02 |
+| D108 | `validate_synthetic_registry_metadata_contract_case` | B37 | 2026-04-03 |
 | D18 | `validate_output_contract_case` | B11 / B17 | 2026-04-02 |
 | D49 | `validate_local_regression_summary_contract_case` | B11 | 2026-04-02 |
 | D28 | `validate_artifact_lifecycle_contract_case` | B17 | 2026-04-02 |
@@ -384,6 +390,7 @@
 | D101 | `validate_critical_coverage_threshold_floor_case` | B32 | 2026-04-03 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
+| D109 | `validate_optimizer_objective_export_contract_case` | C06 | 2026-04-03 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
 | D42 | `validate_issue_excel_report_schema_case` | B21 | 2026-04-02 |
 | D43 | `validate_portfolio_export_report_artifacts_case` | B21 | 2026-04-02 |
@@ -578,6 +585,11 @@
 | 2026-04-03 | B36 | 補上 artifacts manifest sha256 contract，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `synthetic_contract_cases.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | `common.py` / `manifest.json` 已提升到 `critical line 30 / critical branch 25`，並由 `run_meta_quality.py` 阻擋回退 |
 
+| 2026-04-03 | D108 | 新增 synthetic registry metadata contract case 並驗證 | NEW -> DONE | `validate_synthetic_registry_metadata_contract_case` |
+| 2026-04-03 | B37 | 補 synthetic registry metadata contract 後主表納入 DONE | NEW -> DONE | `tools/validate/synthetic_cases.py` + `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-03 | D109 | 新增 optimizer objective / export contract case 並驗證 | NEW -> DONE | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-03 | C06 | 補 optimizer objective / export contract 最低維護線 | NEW -> DONE | `tools/validate/synthetic_strategy_cases.py` + `tools/optimizer/objective_runner.py` + `tools/optimizer/runtime.py` + `tools/optimizer/study_utils.py` |
+
 ## H. 完成判準
 
 可視為 test suite 已明顯收斂的最低條件：
@@ -606,6 +618,7 @@
 
 目前正式 test suite 的 checklist / registry / formal-entry 自我驗證缺口已補齊：synthetic 主入口已補回遺漏註冊案例，`run_meta_quality.py` 與 meta registry case 也已正式阻擋主表 / `F2` / `G` 失同步與 `DONE` 摘要缺漏。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
 
+
 ### G1. 補充註記（不記狀態變更）
 
 - 2026-04-01：D25 先補 `run_meta_quality.py` formal check 的主表 / 未完成摘要 / 已完成摘要一致性校驗，後續於 2026-04-02 收斂為 `PARTIAL -> DONE`。
@@ -613,3 +626,4 @@
 - 2026-04-03：B23 補 `tools/local_regression/formal_pipeline.py` 單一真理來源對齊，以及 `core/` / `tools/` 不得反向 import `apps/` guard。
 - 2026-04-03：D56 補 `validate_run_all_preflight_early_failure_dataset_contract_case` 的 `payload_failures` 語意一致性與 `summary_unreadable` 誤判防呆。
 - 2026-04-03：D22 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist。
+

@@ -213,15 +213,76 @@ def validate_single_formal_test_entry_contract_case(_base_params):
     return results, summary
 
 
+def validate_synthetic_registry_metadata_contract_case(_base_params):
+    from tools.validate.synthetic_cases import get_synthetic_validator_entries, get_synthetic_validator_metadata
+
+    case_id = "META_SYNTHETIC_REGISTRY_METADATA"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    entries = get_synthetic_validator_entries()
+    metadata = get_synthetic_validator_metadata()
+    entry_names = [entry.name for entry in entries]
+    allowed_layers = {
+        "core_invariant",
+        "unit_boundary",
+        "meta_contract",
+        "output_contract",
+        "error_path",
+        "data_quality",
+        "cli_contract",
+        "strategy_contract",
+        "regression_contract",
+    }
+    allowed_cost_classes = {"fast", "medium", "heavy"}
+
+    invalid_layers = sorted(entry.name for entry in entries if entry.layer not in allowed_layers)
+    invalid_cost_classes = sorted(entry.name for entry in entries if entry.cost_class not in allowed_cost_classes)
+    missing_impacted_modules = sorted(entry.name for entry in entries if not entry.impacted_modules)
+    invalid_impacted_modules = sorted(
+        f"{entry.name}:{module_path}"
+        for entry in entries
+        for module_path in entry.impacted_modules
+        if (not module_path)
+        or (module_path.strip() != module_path)
+        or module_path.startswith("/")
+        or "\\" in module_path
+        or not module_path.endswith((".py", ".md", ".json"))
+    )
+    duplicated_impacted_modules = sorted(
+        entry.name for entry in entries if len(entry.impacted_modules) != len(set(entry.impacted_modules))
+    )
+    metadata_names = [row["name"] for row in metadata]
+
+    add_check(results, "meta_registry", case_id, "registry_metadata_not_empty", True, len(entries) > 0)
+    add_check(results, "meta_registry", case_id, "registry_metadata_size_matches_entries", len(entries), len(metadata))
+    add_check(results, "meta_registry", case_id, "registry_metadata_names_match_entries", entry_names, metadata_names)
+    add_check(results, "meta_registry", case_id, "registry_metadata_layers_valid", [], invalid_layers)
+    add_check(results, "meta_registry", case_id, "registry_metadata_cost_classes_valid", [], invalid_cost_classes)
+    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_present", [], missing_impacted_modules)
+    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_normalized", [], invalid_impacted_modules)
+    add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_unique_per_entry", [], duplicated_impacted_modules)
+
+    for entry in entries:
+        add_check(results, "meta_registry", case_id, f"{entry.name}_metadata_name_matches_validator", entry.name, entry.validator.__name__)
+
+    layer_counts = {}
+    for entry in entries:
+        layer_counts[entry.layer] = layer_counts.get(entry.layer, 0) + 1
+    summary["validator_count"] = len(entries)
+    summary["layer_counts"] = layer_counts
+    return results, summary
+
+
 def validate_registry_checklist_entry_consistency_case(_base_params):
-    from tools.validate.synthetic_cases import get_synthetic_validators
+    from tools.validate.synthetic_cases import get_synthetic_validator_entries
 
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    validators = get_synthetic_validators()
-    validator_names = [validator.__name__ for validator in validators]
+    validator_entries = get_synthetic_validator_entries()
+    validator_names = [entry.name for entry in validator_entries]
     validator_name_set = set(validator_names)
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
@@ -230,7 +291,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     done_b_rows = _load_done_b_rows()
     main_statuses = _load_main_table_statuses()
 
-    add_check(results, "meta_registry", case_id, "validator_registry_not_empty", True, len(validators) > 0)
+    add_check(results, "meta_registry", case_id, "validator_registry_not_empty", True, len(validator_entries) > 0)
     add_check(results, "meta_registry", case_id, "validator_registry_names_unique", len(validator_names), len(validator_name_set))
 
     missing_imported_names = sorted(imported_validate_names - validator_name_set)
@@ -346,7 +407,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
     summary["done_d_count"] = len(done_d_rows)
     summary["done_b_count"] = len(done_b_ids)
-    summary["validator_count"] = len(validators)
+    summary["validator_count"] = len(validator_entries)
     summary["missing_imported_names"] = missing_imported_names
     summary["missing_defined_names"] = missing_defined_names
     summary["missing_done_d_validator_names"] = missing_done_d_validator_names

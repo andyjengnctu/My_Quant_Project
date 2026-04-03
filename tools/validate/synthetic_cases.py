@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from typing import Callable
+
 from .synthetic_param_cases import (
     validate_synthetic_history_ev_threshold_case,
     validate_synthetic_lookahead_prev_day_only_case,
@@ -47,6 +50,7 @@ from .synthetic_meta_cases import (
     validate_no_top_level_import_cycles_case,
     validate_registry_checklist_entry_consistency_case,
     validate_single_formal_test_entry_contract_case,
+    validate_synthetic_registry_metadata_contract_case,
     validate_test_suite_orchestrator_coverage_targets_case,
 )
 from .synthetic_display_cases import validate_display_reporting_sanity_case
@@ -105,6 +109,7 @@ from .synthetic_cli_cases import (
 )
 from .synthetic_strategy_cases import (
     validate_model_io_schema_case,
+    validate_optimizer_objective_export_contract_case,
     validate_ranking_scoring_sanity_case,
 )
 from .synthetic_regression_cases import (
@@ -115,109 +120,148 @@ from .synthetic_regression_cases import (
 )
 
 
-def get_synthetic_validators():
+@dataclass(frozen=True)
+class SyntheticValidatorEntry:
+    validator: Callable
+    layer: str
+    cost_class: str
+    impacted_modules: tuple[str, ...]
+
+    @property
+    def name(self) -> str:
+        return self.validator.__name__
+
+
+def _entry(validator, *, layer, cost_class, impacted_modules):
+    return SyntheticValidatorEntry(
+        validator=validator,
+        layer=layer,
+        cost_class=cost_class,
+        impacted_modules=tuple(impacted_modules),
+    )
+
+
+def get_synthetic_validator_entries():
     return [
-        validate_synthetic_same_day_buy_sell_forbidden_case,
-        validate_synthetic_intraday_reprice_forbidden_case,
-        validate_synthetic_no_intraday_switch_after_failed_fill_case,
-        validate_synthetic_missed_buy_no_replacement_case,
-        validate_synthetic_exit_orders_only_for_held_positions_case,
-        validate_synthetic_fee_tax_net_equity_case,
-        validate_synthetic_missed_sell_accounting_case,
-        validate_synthetic_round_trip_pnl_only_on_tail_exit_case,
-        validate_synthetic_half_tp_full_year_case,
-        validate_synthetic_same_bar_stop_priority_case,
-        validate_synthetic_candidate_order_fill_layer_separation_case,
-        validate_synthetic_extended_miss_buy_case,
-        validate_synthetic_competing_candidates_case,
-        validate_synthetic_same_day_sell_block_case,
-        validate_synthetic_unexecutable_half_tp_case,
-        validate_synthetic_rotation_t_plus_one_case,
-        validate_synthetic_proj_cost_cash_capped_case,
-        validate_synthetic_history_ev_threshold_case,
-        validate_synthetic_portfolio_history_filter_only_case,
-        validate_synthetic_lookahead_prev_day_only_case,
-        validate_synthetic_setup_index_prev_day_only_case,
-        validate_synthetic_pit_same_day_exit_excluded_case,
-        validate_synthetic_pit_multiple_same_day_exits_case,
-        validate_synthetic_single_backtest_not_gated_by_own_history_case,
-        validate_synthetic_param_guardrail_case,
-        validate_price_utils_unit_case,
-        validate_history_filters_unit_case,
-        validate_portfolio_stats_unit_case,
-        validate_independent_oracle_golden_case,
-        validate_registry_checklist_entry_consistency_case,
-        validate_core_trading_modules_in_coverage_targets_case,
-        validate_test_suite_orchestrator_coverage_targets_case,
-        validate_critical_file_coverage_minimum_gate_case,
-        validate_coverage_threshold_floor_case,
-        validate_critical_coverage_threshold_floor_case,
-        validate_entry_path_critical_coverage_gate_case,
-        validate_known_bad_fault_injection_case,
-        validate_cmd_document_contract_case,
-        validate_no_reverse_app_layer_dependencies_case,
-        validate_no_top_level_import_cycles_case,
-        validate_single_formal_test_entry_contract_case,
-        validate_display_reporting_sanity_case,
-        validate_validate_console_summary_reporting_case,
-        validate_portfolio_yearly_report_schema_case,
-        validate_test_suite_summary_reporting_case,
-        validate_test_suite_summary_failure_reporting_case,
-        validate_test_suite_summary_manifest_failure_reporting_case,
-        validate_test_suite_summary_optional_dataset_skip_case,
-        validate_test_suite_summary_checklist_status_sync_case,
-        validate_test_suite_summary_meta_quality_guardrail_reporting_case,
-        validate_test_suite_summary_meta_quality_memory_reporting_case,
-        validate_test_suite_summary_preflight_failure_reporting_case,
-        validate_test_suite_summary_dataset_prepare_failure_reporting_case,
-        validate_test_suite_summary_unreadable_payload_reporting_case,
-        validate_issue_excel_report_schema_case,
-        validate_portfolio_export_report_artifacts_case,
-        validate_output_contract_case,
-        validate_dataset_fingerprint_contract_case,
-        validate_run_all_dataset_prepare_pass_main_contract_case,
-        validate_atomic_write_contract_case,
-        validate_atomic_write_retry_contract_case,
-        validate_portfolio_sim_prepared_tool_contract_case,
-        validate_scanner_prepared_tool_contract_case,
-        validate_scanner_reference_clean_df_contract_case,
-        validate_debug_trade_log_prepared_tool_contract_case,
-        validate_local_regression_summary_contract_case,
-        validate_meta_quality_performance_memory_contract_case,
-        validate_meta_quality_reuses_existing_coverage_artifacts_case,
-        validate_run_all_preflight_early_failure_dataset_contract_case,
-        validate_run_all_manifest_failure_master_summary_contract_case,
-        validate_artifact_lifecycle_contract_case,
-        validate_params_io_error_path_case,
-        validate_module_loader_error_path_case,
-        validate_preflight_error_path_case,
-        validate_downloader_market_date_fallback_case,
-        validate_downloader_universe_fetch_error_path_case,
-        validate_downloader_universe_screening_init_error_path_case,
-        validate_downloader_sync_error_path_case,
-        validate_downloader_main_error_path_case,
-        validate_sanitize_ohlcv_expected_behavior_case,
-        validate_sanitize_ohlcv_failfast_case,
-        validate_load_clean_df_data_quality_case,
-        validate_dataset_cli_contract_case,
-        validate_local_regression_cli_contract_case,
-        validate_extended_tool_cli_contract_case,
-        validate_model_io_schema_case,
-        validate_ranking_scoring_sanity_case,
-        validate_scanner_worker_repeatability_case,
-        validate_scan_runner_repeatability_case,
-        validate_optimizer_raw_cache_rerun_consistency_case,
-        validate_run_all_repeatability_case,
+        _entry(validate_synthetic_same_day_buy_sell_forbidden_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "core/portfolio_engine.py")),
+        _entry(validate_synthetic_intraday_reprice_forbidden_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_entries.py", "core/trade_plans.py")),
+        _entry(validate_synthetic_no_intraday_switch_after_failed_fill_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_engine.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_missed_buy_no_replacement_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_engine.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_exit_orders_only_for_held_positions_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_exits.py", "core/position_step.py")),
+        _entry(validate_synthetic_fee_tax_net_equity_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/price_utils.py", "core/portfolio_stats.py")),
+        _entry(validate_synthetic_missed_sell_accounting_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_exits.py", "tools/debug/trade_log.py")),
+        _entry(validate_synthetic_round_trip_pnl_only_on_tail_exit_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_stats.py", "tools/debug/trade_log.py")),
+        _entry(validate_synthetic_half_tp_full_year_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_stats.py", "tools/portfolio_sim/reporting.py")),
+        _entry(validate_synthetic_same_bar_stop_priority_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/position_step.py", "core/backtest_core.py")),
+        _entry(validate_synthetic_candidate_order_fill_layer_separation_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_entries.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_extended_miss_buy_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/extended_signals.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_competing_candidates_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_same_day_sell_block_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_exits.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_unexecutable_half_tp_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/position_step.py", "tools/debug/trade_log.py")),
+        _entry(validate_synthetic_rotation_t_plus_one_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_exits.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_proj_cost_cash_capped_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/buy_sort.py", "core/portfolio_entries.py")),
+        _entry(validate_synthetic_history_ev_threshold_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_portfolio_history_filter_only_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_lookahead_prev_day_only_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_fast_data.py", "core/portfolio_engine.py")),
+        _entry(validate_synthetic_setup_index_prev_day_only_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_fast_data.py", "core/extended_signals.py")),
+        _entry(validate_synthetic_pit_same_day_exit_excluded_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
+        _entry(validate_synthetic_pit_multiple_same_day_exits_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
+        _entry(validate_synthetic_single_backtest_not_gated_by_own_history_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "tools/optimizer/objective_profiles.py")),
+        _entry(validate_price_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py",)),
+        _entry(validate_history_filters_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/history_filters.py",)),
+        _entry(validate_portfolio_stats_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/portfolio_stats.py",)),
+        _entry(validate_independent_oracle_golden_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py", "core/history_filters.py", "core/portfolio_stats.py")),
+        _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/validate/synthetic_cases.py")),
+        _entry(validate_synthetic_registry_metadata_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_cases.py",)),
+        _entry(validate_core_trading_modules_in_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
+        _entry(validate_test_suite_orchestrator_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
+        _entry(validate_critical_file_coverage_minimum_gate_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
+        _entry(validate_coverage_threshold_floor_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/manifest.json", "tools/local_regression/common.py")),
+        _entry(validate_critical_coverage_threshold_floor_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/manifest.json", "tools/local_regression/common.py")),
+        _entry(validate_entry_path_critical_coverage_gate_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
+        _entry(validate_known_bad_fault_injection_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_meta_cases.py",)),
+        _entry(validate_cmd_document_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/CMD.md",)),
+        _entry(validate_no_reverse_app_layer_dependencies_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/ARCHITECTURE.md", "tools/validate/meta_contracts.py")),
+        _entry(validate_no_top_level_import_cycles_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/meta_contracts.py",)),
+        _entry(validate_single_formal_test_entry_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/formal_pipeline.py")),
+        _entry(validate_display_reporting_sanity_case, layer="output_contract", cost_class="fast", impacted_modules=("core/display.py", "tools/scanner/reporting.py")),
+        _entry(validate_validate_console_summary_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/validate/reporting.py",)),
+        _entry(validate_portfolio_yearly_report_schema_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/portfolio_sim/reporting.py",)),
+        _entry(validate_test_suite_summary_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py",)),
+        _entry(validate_test_suite_summary_failure_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py",)),
+        _entry(validate_test_suite_summary_manifest_failure_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/run_all.py")),
+        _entry(validate_test_suite_summary_optional_dataset_skip_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py",)),
+        _entry(validate_test_suite_summary_checklist_status_sync_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "doc/TEST_SUITE_CHECKLIST.md")),
+        _entry(validate_test_suite_summary_meta_quality_guardrail_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/run_meta_quality.py")),
+        _entry(validate_test_suite_summary_meta_quality_memory_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/run_meta_quality.py")),
+        _entry(validate_test_suite_summary_preflight_failure_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py",)),
+        _entry(validate_test_suite_summary_dataset_prepare_failure_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/run_all.py")),
+        _entry(validate_test_suite_summary_unreadable_payload_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("apps/test_suite.py",)),
+        _entry(validate_issue_excel_report_schema_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/validate/reporting.py",)),
+        _entry(validate_portfolio_export_report_artifacts_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/portfolio_sim/reporting.py",)),
+        _entry(validate_output_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/validate/reporting.py")),
+        _entry(validate_dataset_fingerprint_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/local_regression/run_all.py")),
+        _entry(validate_run_all_dataset_prepare_pass_main_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
+        _entry(validate_atomic_write_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
+        _entry(validate_atomic_write_retry_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
+        _entry(validate_portfolio_sim_prepared_tool_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/portfolio_sim/main.py",)),
+        _entry(validate_scanner_prepared_tool_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/scanner/scan_runner.py",)),
+        _entry(validate_scanner_reference_clean_df_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/validate/real_case_io.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_debug_trade_log_prepared_tool_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/debug/trade_log.py",)),
+        _entry(validate_local_regression_summary_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py", "tools/validate/reporting.py")),
+        _entry(validate_meta_quality_performance_memory_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
+        _entry(validate_meta_quality_reuses_existing_coverage_artifacts_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py", "tools/validate/main.py")),
+        _entry(validate_run_all_preflight_early_failure_dataset_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
+        _entry(validate_run_all_manifest_failure_master_summary_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
+        _entry(validate_artifact_lifecycle_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
+        _entry(validate_params_io_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("core/params_io.py",)),
+        _entry(validate_module_loader_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/validate/module_loader.py",)),
+        _entry(validate_preflight_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/validate/preflight_env.py",)),
+        _entry(validate_downloader_market_date_fallback_case, layer="error_path", cost_class="fast", impacted_modules=("tools/downloader/universe.py",)),
+        _entry(validate_downloader_universe_fetch_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/downloader/universe.py",)),
+        _entry(validate_downloader_universe_screening_init_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/downloader/universe.py",)),
+        _entry(validate_downloader_sync_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/downloader/sync.py",)),
+        _entry(validate_downloader_main_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/downloader/main.py",)),
+        _entry(validate_sanitize_ohlcv_expected_behavior_case, layer="data_quality", cost_class="fast", impacted_modules=("core/data_utils.py",)),
+        _entry(validate_sanitize_ohlcv_failfast_case, layer="data_quality", cost_class="fast", impacted_modules=("core/data_utils.py",)),
+        _entry(validate_load_clean_df_data_quality_case, layer="data_quality", cost_class="fast", impacted_modules=("tools/validate/real_case_io.py", "core/data_utils.py")),
+        _entry(validate_dataset_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/validate/cli.py",)),
+        _entry(validate_local_regression_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py", "tools/local_regression/run_quick_gate.py")),
+        _entry(validate_extended_tool_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/optimizer/main.py", "tools/scanner/scan_runner.py")),
+        _entry(validate_model_io_schema_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/study_utils.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py")),
+        _entry(validate_ranking_scoring_sanity_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/buy_sort.py", "core/portfolio_stats.py")),
+        _entry(validate_scanner_worker_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/stock_processor.py",)),
+        _entry(validate_scan_runner_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/scan_runner.py",)),
+        _entry(validate_optimizer_raw_cache_rerun_consistency_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/optimizer/raw_cache.py",)),
+        _entry(validate_run_all_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/local_regression/run_all.py",)),
     ]
+
+
+def get_synthetic_validator_metadata():
+    return [
+        {
+            "name": entry.name,
+            "layer": entry.layer,
+            "cost_class": entry.cost_class,
+            "impacted_modules": list(entry.impacted_modules),
+        }
+        for entry in get_synthetic_validator_entries()
+    ]
+
+
+def get_synthetic_validators():
+    return [entry.validator for entry in get_synthetic_validator_entries()]
 
 
 def run_synthetic_consistency_suite(base_params):
     all_results = []
     summaries = []
-    validators = get_synthetic_validators()
+    validator_entries = get_synthetic_validator_entries()
 
-    for validator in validators:
-        results, summary = validator(base_params)
+    for entry in validator_entries:
+        results, summary = entry.validator(base_params)
         all_results.extend(results)
         summaries.append(summary)
 
