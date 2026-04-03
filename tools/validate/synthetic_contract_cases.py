@@ -507,8 +507,9 @@ def validate_local_regression_summary_contract_case(_base_params):
             with patch.object(run_quick_gate_module, "load_manifest", return_value={**local_common.MANIFEST_DEFAULTS, "dataset": "reduced"}):
                 with patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}):
                     with patch.object(run_quick_gate_module, "run_static_checks", side_effect=RuntimeError("synthetic quick gate crash")):
-                        with redirect_stdout(runtime_stdout):
-                            runtime_rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
+                        with patch("builtins.print"):
+                            with redirect_stdout(runtime_stdout):
+                                runtime_rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
 
         runtime_json = json.loads((runtime_run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
         runtime_console = (runtime_run_dir / "quick_gate_console.log").read_text(encoding="utf-8")
