@@ -327,8 +327,10 @@
 | D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 | D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | B12 / B18 | 2026-04-02 |
-| D15 | `validate_scan_runner_repeatability_case`, `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
-| D19 | `validate_run_all_repeatability_case`, `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
+| D15 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
+| D15 | `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
+| D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
+| D19 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -436,8 +438,8 @@
 | 2026-04-02 | D14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
 | 2026-04-02 | D16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
 
-| 2026-04-02 | D20 | 擴充 `run_meta_quality.py` coverage probe 到 formal helper path | PARTIAL -> PARTIAL | 已補 chain checks / ml smoke / display / test_suite summary path，仍未形成更完整的正式路徑 coverage gate |
-| 2026-04-02 | D20 | 再擴充 `run_meta_quality.py` coverage probe 到 `run_all.py` helper path | PARTIAL -> PARTIAL | 已補 `_safe_format_preflight_summary` / `_write_dataset_prepare_summary` / `_compute_not_run_step_names` / `_build_bundle_entries` |
+- 2026-04-02：D20 擴充 `run_meta_quality.py` coverage probe 到 formal helper path；已補 chain checks / ml smoke / display / test_suite summary path，此補充已併入同日 `PARTIAL -> DONE` 收斂，不另新增狀態列。
+- 2026-04-02：D20 再擴充 `run_meta_quality.py` coverage probe 到 `run_all.py` helper path；已補 `_safe_format_preflight_summary` / `_write_dataset_prepare_summary` / `_compute_not_run_step_names` / `_build_bundle_entries`，此補充已併入同日 `PARTIAL -> DONE` 收斂，不另新增狀態列。
 
 | 2026-04-02 | D17 | reporting schema compatibility checks 收斂完成，並新增輸出檔 schema 補強 | TODO -> DONE | `validate_issue_excel_report_schema_case` + `validate_portfolio_export_report_artifacts_case`；將 `B21` 的 reporting schema compatibility 從 console/yearly/test-suite summary 補到輸出檔 schema |
 - 2026-04-02：補入 `D50`、`D51`、`D52`，將 `apps/test_suite.py` 摘要契約從 PASS 顯示補到腳本失敗、manifest blocked 與 partial selected-steps 路徑。
