@@ -34,6 +34,10 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "core/test_suite_reporting.py",
     "apps/test_suite.py",
 ]
+FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
+    "tools/local_regression/run_quick_gate.py",
+    "tools/validate/cli.py",
+]
 COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_cases.py",
     "tools/validate/synthetic_meta_cases.py",
@@ -52,6 +56,7 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_regression_cases.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
+    *FORMAL_STEP_ENTRY_COVERAGE_TARGETS,
     *TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
     "tools/validate/reporting.py",
     "tools/portfolio_sim/reporting.py",
@@ -74,6 +79,7 @@ __all__ = [
     "ENTRY_PATH_CRITICAL_COVERAGE_TARGETS",
     "CRITICAL_COVERAGE_TARGETS",
     "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS",
+    "FORMAL_STEP_ENTRY_COVERAGE_TARGETS",
     "COVERAGE_TARGETS",
     "COVERAGE_LINE_MIN_FLOOR",
     "COVERAGE_BRANCH_MIN_FLOOR",

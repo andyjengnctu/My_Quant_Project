@@ -106,6 +106,7 @@
 | B35 | P1 | 覆蓋率 | test suite orchestrator modules 應納入 coverage targets | DONE | 已將 `tools/local_regression/common.py`、`formal_pipeline.py`、`meta_quality_targets.py`、`meta_quality_coverage.py`、`run_meta_quality.py`、`run_all.py`、`core/test_suite_reporting.py`、`apps/test_suite.py` 納入 `TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS`，並新增 completeness / importability guard，避免測試編排層與 coverage 治理層退化卻仍以 coverage 過關 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B36 | P1 | I/O | artifacts manifest 應具備 sha256，不可只靠 size_bytes | DONE | 已為每個 artifact manifest entry 補上 `sha256`，並新增 contract 對照實際檔案 hash，避免同大小內容漂移被 size 假象掩蓋 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
 | B37 | P2 | Meta | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | DONE | 已將 synthetic registry 升級為 metadata registry，補上 layer / cost class / impacted modules，並新增 metadata contract；同時保留 `get_synthetic_validators()` 相容 façade，避免 formal 入口、coverage 與 checklist guard 斷裂 | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` |
+| B38 | P1 | 覆蓋率 | formal pipeline step entry wrappers 應納入 coverage targets | DONE | 已將 `tools/local_regression/run_quick_gate.py` 與 `tools/validate/cli.py` 納入 `COVERAGE_TARGETS`，並新增 formal-step completeness / importability guard，避免正式步驟 wrapper 退化卻 coverage baseline 未偵測 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -165,6 +166,7 @@
 | D103 | `validate_atomic_write_contract_case` | 已補 atomic write replace-failure recovery contract，要求舊內容保留且 temp 檔清除 |
 | D104 | `tools/local_regression/common.py` | 已補 artifacts manifest `sha256` 生成與對照實檔內容契約 |
 | D105 | `validate_test_suite_orchestrator_coverage_targets_case` | 已補 test suite orchestrator modules coverage target completeness / importability guard |
+| D110 | `validate_formal_step_entry_coverage_targets_case` | 已補 formal step entry wrappers coverage target completeness / importability guard，直接阻擋 `run_quick_gate.py` / `tools/validate/cli.py` 漏出 `COVERAGE_TARGETS` |
 | D106 | `validate_atomic_write_retry_contract_case` | 已補 atomic write transient retry contract，要求暫時性 `PermissionError` / share violation 重試後可成功寫入 |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | 已補 `run_all.main()` dataset prepare PASS 主路徑 contract，直接驗證正式入口可保留 dataset fingerprint 並完成 master summary |
 | D30 | `validate_params_io_error_path_case` | 已補壞 JSON、缺必要欄位、未知欄位、缺檔時的 fail-fast 與錯誤訊息定位 |
@@ -313,6 +315,7 @@
 | 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
 | Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -405,6 +408,7 @@
 | D103 | `validate_atomic_write_contract_case` | B34 | 2026-04-03 |
 | D104 | `tools/local_regression/common.py` | B36 | 2026-04-03 |
 | D105 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 | 2026-04-03 |
+| D110 | `validate_formal_step_entry_coverage_targets_case` | B38 | 2026-04-03 |
 | D106 | `validate_atomic_write_retry_contract_case` | B34 | 2026-04-03 |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 | 2026-04-03 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
@@ -583,6 +587,8 @@
 | 2026-04-03 | B34 | 補上 atomic write 與 replace-failure recovery contract，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `synthetic_contract_cases.py` |
 | 2026-04-03 | B35 | 將 test suite orchestrator modules 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` |
 | 2026-04-03 | B36 | 補上 artifacts manifest sha256 contract，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `synthetic_contract_cases.py` |
+| 2026-04-03 | D110 | 新增 formal step entry wrappers coverage target completeness 建議測試並驗證 | NEW -> DONE | `validate_formal_step_entry_coverage_targets_case` |
+| 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | `common.py` / `manifest.json` 已提升到 `critical line 30 / critical branch 25`，並由 `run_meta_quality.py` 阻擋回退 |
 
 | 2026-04-03 | D108 | 新增 synthetic registry metadata contract case 並驗證 | NEW -> DONE | `validate_synthetic_registry_metadata_contract_case` |

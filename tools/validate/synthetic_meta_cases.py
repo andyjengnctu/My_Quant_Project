@@ -33,6 +33,7 @@ from tools.local_regression.meta_quality_targets import (
     CRITICAL_COVERAGE_LINE_MIN_FLOOR,
     CRITICAL_COVERAGE_TARGETS,
     ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
+    FORMAL_STEP_ENTRY_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 
@@ -501,6 +502,50 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
 
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets
+    summary["reloaded_modules"] = reloaded_modules
+    return results, summary
+
+
+def validate_formal_step_entry_coverage_targets_case(_base_params):
+    case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_step_scripts = [spec.command.split()[0] for spec in FORMAL_STEP_SPECS]
+    declared_entry_targets = list(FORMAL_STEP_ENTRY_COVERAGE_TARGETS)
+    declared_targets = list(COVERAGE_TARGETS)
+    missing_declared_entry_targets = sorted(path for path in declared_entry_targets if path not in declared_targets)
+    missing_step_scripts = sorted(path for path in expected_step_scripts if path not in declared_targets)
+    missing_entry_files = sorted(path for path in declared_entry_targets if not (PROJECT_ROOT / path).is_file())
+
+    module_symbol_expectations = {
+        "tools.local_regression.run_quick_gate": {"HELP_TARGETS", "main", "run_static_checks"},
+        "tools.validate.cli": {"main"},
+    }
+    module_import_failures = []
+    module_symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in module_symbol_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
+        if missing_symbols:
+            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+
+    add_check(results, "meta_coverage", case_id, "formal_step_entry_coverage_targets_exist", [], missing_entry_files)
+    add_check(results, "meta_coverage", case_id, "formal_step_entry_coverage_targets_declared", [], missing_declared_entry_targets)
+    add_check(results, "meta_coverage", case_id, "formal_step_scripts_declared_in_overall_coverage_targets", [], missing_step_scripts)
+    add_check(results, "meta_coverage", case_id, "formal_step_entry_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "formal_step_entry_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    summary["expected_step_scripts"] = expected_step_scripts
+    summary["declared_entry_targets"] = declared_entry_targets
+    summary["missing_step_scripts"] = missing_step_scripts
     summary["reloaded_modules"] = reloaded_modules
     return results, summary
 
