@@ -26,6 +26,8 @@
 5. 如架構調整需刪檔，須提供可執行的 command，避免使用者手動刪錯。
 6. `outputs/` 根目錄只放工具分類資料夾；各工具輸出必須落到各自資料夾，禁止再把檔案散落到 `outputs/` 根目錄。
 7. 修改 `/doc/PROJECT_SETTINGS.md` 時，必須以 assistant 可明確遵守、使用者易讀易維護、兼顧後續泛用性為原則；應保持文字精簡、嚴禁重複條文。
+8. 維護 `doc/TEST_SUITE_CHECKLIST.md` 時，`F2` 每列只可記錄一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator、script 或完成摘要。
+9. 維護 `doc/TEST_SUITE_CHECKLIST.md` 時，`G` 只可記錄實際狀態變更；純補充說明必須改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## D. Coding 與架構原則
 

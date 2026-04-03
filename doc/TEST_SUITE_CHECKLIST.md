@@ -25,6 +25,8 @@
 4. 優先補 synthetic / unit / contract test；避免讓 GPT 端重跑本地完整動態流程。
 5. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 6. GPT 端完整檢查流程、sufficiency review、`TODO` / `PARTIAL` / `DONE` 的處理原則，以及正式步驟執行條件，一律以 `doc/PROJECT_SETTINGS.md` 的「## B. 標準測試流程」為單一真理來源；本清單不再重複改寫同一套規則，以避免不同步。
+7. `F2` 每列只記一個 `Dxx` 與一個測試入口；補充摘要改寫於 `D` 或表格外文字。
+8. `G` 僅記錄實際狀態變更；純補充說明改寫為表格外文字。
 
 ## A. 分層原則
 
@@ -286,16 +288,16 @@
 | D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
 | D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
 | D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
-| D29 | `run_meta_quality.py` formal-entry consistency checks | B23 | 2026-04-02 |
-| D70 | `validate_registry_checklist_entry_consistency_case` imported / defined validator completeness guard | B23 | 2026-04-02 |
+| D29 | `tools/local_regression/run_meta_quality.py` | B23 | 2026-04-02 |
+| D70 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-02 |
 | D18 | `validate_output_contract_case` | B11 / B17 | 2026-04-02 |
 | D49 | `validate_local_regression_summary_contract_case` | B11 | 2026-04-02 |
 | D28 | `validate_artifact_lifecycle_contract_case` | B17 | 2026-04-02 |
 | D26 | `validate_cmd_document_contract_case` | B20 | 2026-04-01 |
-| D25 | run_meta_quality.py checklist sufficiency review | B26 | 2026-04-02 |
+| D25 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
 | D59 | `validate_single_formal_test_entry_contract_case` | B26 | 2026-04-02 |
-| D71 | `run_meta_quality.py` checklist main / `F2` / `G` sync guard | B26 | 2026-04-02 |
-| D72 | `run_meta_quality.py` checklist `DONE` summary omission blocker | B26 | 2026-04-02 |
+| D71 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
+| D72 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
@@ -307,8 +309,8 @@
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 | 2026-04-02 |
 | D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 | 2026-04-02 |
 | D65 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 | 2026-04-02 |
-| D20 | `run_meta_quality.py` coverage report baseline | B22 | 2026-04-02 |
-| D21 | run_meta_quality.py performance baseline checks | B19 | 2026-04-02 |
+| D20 | `tools/local_regression/run_meta_quality.py` | B22 | 2026-04-02 |
+| D21 | `tools/local_regression/run_meta_quality.py` | B19 | 2026-04-02 |
 | D63 | `validate_meta_quality_performance_memory_contract_case` | B19 | 2026-04-02 |
 | D23 | `validate_known_bad_fault_injection_case` | B24 | 2026-04-01 |
 | D24 | `validate_independent_oracle_golden_case` | B25 | 2026-04-01 |
@@ -326,11 +328,9 @@
 | D36 | `validate_dataset_cli_contract_case` | B16 | 2026-04-02 |
 | D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 | D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
-| D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | B12 / B18 | 2026-04-02 |
-| D15 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
-| D15 | `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
-| D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
-| D19 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
+| D41 | `tools/local_regression/run_chain_checks.py` | B12 / B18 | 2026-04-02 |
+| D15 | `tools/validate/synthetic_regression_cases.py` | B12 | 2026-04-02 |
+| D19 | `tools/validate/synthetic_regression_cases.py` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -361,6 +361,7 @@
 | D90 | `validate_portfolio_yearly_report_schema_case` | B21 | 2026-04-02 |
 | D91 | `validate_test_suite_summary_reporting_case` | B21 | 2026-04-02 |
 
+
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。
@@ -381,11 +382,8 @@
 | 2026-04-01 | D18 | 新增 CSV / XLSX / JSON output contract case 並驗證 | TODO -> PARTIAL | validate_output_contract_case |
 | 2026-04-02 | D18 | 擴充 local regression summary contract 並收斂完成 | PARTIAL -> DONE | validate_output_contract_case + validate_local_regression_summary_contract_case |
 | 2026-04-02 | D49 | 新增 local regression summary contract case 並驗證 | TODO -> DONE | `validate_local_regression_summary_contract_case` |
-| 2026-04-02 | D49 | 擴充 quick gate readonly compile 與 runtime failure summary contract | DONE -> DONE | `validate_local_regression_summary_contract_case` 補 cfile staging 與 runtime FAIL summary / console artifact 檢查 |
 | 2026-04-02 | B11 | 跨工具 schema / 欄位語意補齊，主表收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-03 | B23 | 將正式步驟單一真理來源收斂到 `tools/local_regression/formal_pipeline.py` | DONE -> DONE | `run_meta_quality.py` 改驗證 code registry / run_all / preflight / test_suite 一致性；`PROJECT_SETTINGS.md` 改回僅保留上層原則 |
 | 2026-04-03 | D73 | 新增 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` + `tools/validate/meta_contracts.py` |
-| 2026-04-03 | B23 | 補 `core/` / `tools/` 不得反向 import `apps/` guard，維持正式入口分層收斂 | DONE -> DONE | `core/test_suite_reporting.py` + `apps/test_suite.py` + `tools/validate/synthetic_reporting_cases.py` + `tools/local_regression/run_meta_quality.py` |
 | 2026-04-01 | D12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
 | 2026-04-01 | D13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
 | 2026-04-01 | D22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |
@@ -395,7 +393,6 @@
 | 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | `run_chain_checks.py` / `run_ml_smoke.py` |
 | 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入 `apps/test_suite.py` / `run_all.py` |
 | 2026-04-02 | D20 | 補 manifest 化 line / branch threshold gate 與 summary sync | PARTIAL -> DONE | `run_meta_quality.py` + `apps/test_suite.py` |
-| 2026-04-01 | D25 | 新增 `run_meta_quality.py` formal check | PARTIAL -> PARTIAL | 已可執行校驗主表 / 未完成摘要 / 已完成摘要一致性，並納入 `apps/test_suite.py` / `run_all.py` |
 | 2026-04-02 | D25 | 擴充 checklist sufficiency formal check 到單一正式入口與 legacy entry 檢查後收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/meta_contracts.py` |
 | 2026-04-02 | D59 | 新增單一正式測試入口契約案例並驗證 | NEW -> DONE | `validate_single_formal_test_entry_contract_case` |
 | 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `tools/validate/synthetic_meta_cases.py` + `tools/validate/meta_contracts.py` |
@@ -414,7 +411,6 @@
 | 2026-04-02 | D54 | 新增 dataset prepare fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` |
 | 2026-04-02 | D55 | 新增 summary unreadable 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_unreadable_payload_reporting_case` |
 | 2026-04-02 | D56 | 補 `run_all.py` preflight 早退 dataset not-run contract 並驗證 | TODO -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
-| 2026-04-03 | D56 | 擴充 preflight / dataset_prepare 早退 contract，補 `payload_failures` 語意一致性與 `summary_unreadable` 誤判防呆並驗證 | DONE -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
 | 2026-04-03 | D74 | 新增 manifest failure master summary schema contract 並驗證 | NEW -> DONE | `validate_run_all_manifest_failure_master_summary_contract_case` |
 | 2026-04-02 | D57 | 補 checklist status vocabulary sync 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_checklist_status_sync_case` |
 | 2026-04-02 | D58 | 補 meta quality coverage guardrail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
@@ -475,7 +471,6 @@
 | 2026-04-02 | D72 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B23 | 補齊 synthetic 主入口遺漏註冊與 registry completeness guard 後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cases.py` + `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-02 | B26 | 補齊 checklist main / `F2` / `G` sync 與 `DONE` 摘要缺漏 blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `doc/TEST_SUITE_CHECKLIST.md` |
-| 2026-04-03 | D22 | 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist | DONE -> DONE | `tools/validate/synthetic_meta_cases.py` + `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-03 | D75 | 將既有同棒停損優先 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_bar_stop_priority_case` |
 | 2026-04-03 | D76 | 將既有半倉停利 full-year synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_half_tp_full_year_case` |
 | 2026-04-03 | D77 | 將既有 extended miss buy synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_extended_miss_buy_case` |
@@ -520,3 +515,11 @@
 - 2026-04-02：補記 reduced suite 最近兩輪實測基線約 `107.62s` 與 `104.82s`；`meta quality` 因 coverage artifact reuse 已降至約 `1.41s`。後續若要再動正式流程，需先以 profiling 證明存在明確固定重工或高 fanout 熱點。
 
 目前正式 test suite 的 checklist / registry / formal-entry 自我驗證缺口已補齊：synthetic 主入口已補回遺漏註冊案例，`run_meta_quality.py` 與 meta registry case 也已正式阻擋主表 / `F2` / `G` 失同步與 `DONE` 摘要缺漏。後續若仍要以「大幅縮短整體測試時間」為目標，不應再直接沿著小型 adapter 細修；需先用 profiling 明確拆出 `consistency` 與 `chain checks` 的熱點，再決定是否值得動正式流程。
+
+### G1. 補充註記（不記狀態變更）
+
+- 2026-04-01：D25 先補 `run_meta_quality.py` formal check 的主表 / 未完成摘要 / 已完成摘要一致性校驗，後續於 2026-04-02 收斂為 `PARTIAL -> DONE`。
+- 2026-04-02：D49 補 `validate_local_regression_summary_contract_case` 的 cfile staging 與 runtime FAIL summary / console artifact 檢查。
+- 2026-04-03：B23 補 `tools/local_regression/formal_pipeline.py` 單一真理來源對齊，以及 `core/` / `tools/` 不得反向 import `apps/` guard。
+- 2026-04-03：D56 補 `validate_run_all_preflight_early_failure_dataset_contract_case` 的 `payload_failures` 語意一致性與 `summary_unreadable` 誤判防呆。
+- 2026-04-03：D22 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist。

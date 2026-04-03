@@ -165,7 +165,8 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     e2_ids = sorted(_ids_from_table(tables["E2"]))
     e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     f1_ids = sorted(_ids_from_table(tables["F1"]))
-    f2_ids_raw = _ids_from_table(tables["F2"], idx=0)
+    f2_rows = tables["F2"]
+    f2_ids_raw = _ids_from_table(f2_rows, idx=0)
     f2_ids = _sorted_unique(f2_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
     g_done_d_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status == "DONE"])
@@ -223,6 +224,55 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             extra={"overlap": sorted(set(done_ids) & set(e1_ids))},
         )
     )
+    f2_duplicate_ids = sorted({item_id for item_id in f2_ids_raw if f2_ids_raw.count(item_id) > 1})
+    results.append(
+        summarize_result(
+            "checklist_f2_done_d_ids_unique",
+            not f2_duplicate_ids,
+            detail=f"duplicates={f2_duplicate_ids}",
+            extra={"duplicate_ids": f2_duplicate_ids},
+        )
+    )
+
+    invalid_f2_entries = []
+    for row in f2_rows:
+        if len(row) < 2:
+            continue
+        entry = row[1].replace("`", "").strip()
+        is_single_entry = (
+            entry.startswith("validate_")
+            or entry.endswith(".py")
+        ) and (" " not in entry)
+        if not is_single_entry:
+            invalid_f2_entries.append({"id": row[0] if row else "", "entry": entry})
+    results.append(
+        summarize_result(
+            "checklist_f2_rows_use_single_test_entry",
+            not invalid_f2_entries,
+            detail=f"invalid={invalid_f2_entries}",
+            extra={"invalid_entries": invalid_f2_entries},
+        )
+    )
+
+    no_op_convergence_rows = []
+    for row in tables["G"]:
+        if len(row) < 4:
+            continue
+        transition = row[3].strip()
+        if "->" not in transition:
+            continue
+        from_status, to_status = [part.strip() for part in transition.split("->", 1)]
+        if from_status == to_status:
+            no_op_convergence_rows.append({"id": row[1].strip(), "transition": transition})
+    results.append(
+        summarize_result(
+            "checklist_g_rows_require_actual_status_change",
+            not no_op_convergence_rows,
+            detail=f"no_op={no_op_convergence_rows}",
+            extra={"no_op_rows": no_op_convergence_rows},
+        )
+    )
+
     results.append(
         summarize_result(
             "checklist_done_d_summary_matches_convergence_done_records",
