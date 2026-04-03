@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 PROJECT_SETTINGS_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 為所有已實作測試的單一正式入口"
 PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT = "`tools/local_regression/formal_pipeline.py` 為單一真理來源"
@@ -94,6 +94,144 @@ def summarize_no_reverse_app_import_contract(project_root: Path) -> Dict[str, An
                             "module": module_name,
                         })
     return {"violations": violations}
+
+
+def _module_name_from_path(project_root: Path, path: Path) -> str:
+    rel_path = path.relative_to(project_root).with_suffix("")
+    parts = list(rel_path.parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _load_project_module_index(project_root: Path) -> Dict[str, Path]:
+    module_index: Dict[str, Path] = {}
+    for rel_dir in ("apps", "core", "tools"):
+        for path in sorted((project_root / rel_dir).rglob("*.py")):
+            module_name = _module_name_from_path(project_root, path)
+            if module_name:
+                module_index[module_name] = path
+    return module_index
+
+
+def _resolve_import_from_module(current_module: str, current_path: Path, module: str | None, level: int) -> str:
+    if current_path.name == "__init__.py":
+        package_parts = current_module.split(".") if current_module else []
+    else:
+        package_parts = current_module.split(".")[:-1] if current_module else []
+
+    if level > 0:
+        trim_count = max(level - 1, 0)
+        if trim_count:
+            package_parts = package_parts[:-trim_count] if trim_count <= len(package_parts) else []
+
+    module_parts = module.split(".") if module else []
+    resolved_parts = [part for part in [*package_parts, *module_parts] if part]
+    return ".".join(resolved_parts)
+
+
+def _iter_project_import_edges(
+    *,
+    current_module: str,
+    current_path: Path,
+    node: ast.AST,
+    project_module_names: Set[str],
+) -> List[str]:
+    targets: List[str] = []
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            module_name = alias.name
+            if module_name in project_module_names:
+                targets.append(module_name)
+    elif isinstance(node, ast.ImportFrom):
+        base_module = _resolve_import_from_module(current_module, current_path, node.module, node.level)
+        for alias in node.names:
+            if alias.name == "*":
+                if base_module in project_module_names:
+                    targets.append(base_module)
+                continue
+            full_module = f"{base_module}.{alias.name}" if base_module else alias.name
+            if full_module in project_module_names:
+                targets.append(full_module)
+            elif base_module in project_module_names:
+                targets.append(base_module)
+    return targets
+
+
+def _compute_strongly_connected_components(graph: Dict[str, Set[str]]) -> List[Set[str]]:
+    index = 0
+    indices: Dict[str, int] = {}
+    lowlinks: Dict[str, int] = {}
+    stack: List[str] = []
+    on_stack: Set[str] = set()
+    components: List[Set[str]] = []
+
+    def strongconnect(node: str) -> None:
+        nonlocal index
+        indices[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+
+        for neighbor in sorted(graph.get(node, set())):
+            if neighbor not in indices:
+                strongconnect(neighbor)
+                lowlinks[node] = min(lowlinks[node], lowlinks[neighbor])
+            elif neighbor in on_stack:
+                lowlinks[node] = min(lowlinks[node], indices[neighbor])
+
+        if lowlinks[node] == indices[node]:
+            component: Set[str] = set()
+            while stack:
+                member = stack.pop()
+                on_stack.remove(member)
+                component.add(member)
+                if member == node:
+                    break
+            components.append(component)
+
+    for node in sorted(graph):
+        if node not in indices:
+            strongconnect(node)
+    return components
+
+
+def summarize_no_top_level_import_cycles_contract(project_root: Path) -> Dict[str, Any]:
+    module_index = _load_project_module_index(project_root)
+    project_module_names = set(module_index)
+    graph: Dict[str, Set[str]] = {module_name: set() for module_name in module_index}
+
+    for module_name, path in module_index.items():
+        tree = _read_python_ast(path)
+        for node in tree.body:
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            for imported_module in _iter_project_import_edges(
+                current_module=module_name,
+                current_path=path,
+                node=node,
+                project_module_names=project_module_names,
+            ):
+                graph[module_name].add(imported_module)
+
+    violations: List[Dict[str, Any]] = []
+    for component in _compute_strongly_connected_components(graph):
+        if len(component) == 1:
+            only_module = next(iter(component))
+            if only_module not in graph.get(only_module, set()):
+                continue
+        cycle_modules = sorted(component)
+        violations.append({
+            "modules": cycle_modules,
+            "paths": [str(module_index[name].relative_to(project_root)).replace("\\", "/") for name in cycle_modules],
+            "size": len(cycle_modules),
+        })
+
+    return {
+        "module_count": len(module_index),
+        "violations": violations,
+    }
 
 
 def load_imported_validate_names_from_synthetic_main_entry(project_root: Path) -> Set[str]:

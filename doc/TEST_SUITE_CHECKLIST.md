@@ -95,6 +95,7 @@
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
 | B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏與 convergence 紀錄失同步；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 top-level project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -167,6 +168,7 @@
 | D19 | `tools/local_regression/run_chain_checks.py` | 已完成；已補 chain snapshot 雙跑 digest 與 rerun payload 穩定性 |
 | D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | 已補 raw cache rerun / mutation isolation，確認 rerun 不得污染既有快取結果 |
 | D95 | `validate_run_all_repeatability_case` | 已補 `run_all.py` 同 run dir rerun summary / bundle repeatability，確認正式入口重跑結果穩定一致 |
+| D96 | `validate_no_top_level_import_cycles_case` | 已補 top-level project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | 已補 scanner reduced snapshot 雙跑 digest，確認 scanner 候選 / 狀態 / issue line 在同資料同參數下穩定一致 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline、key target presence/hit 與 manifest 化 minimum threshold gate，並已同步到 `apps/test_suite.py` 摘要顯示 |
 | D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time，並新增 traced peak memory regression gate；各 step summary 的 `duration_sec` 已補齊，budget 依實測 reduced baseline 校正；chain checks 同輪 prepared context / scanner snapshot / cached single-backtest stats 已去重，replay counts 併入第一次 timeline 主流程；`portfolio_sim` 驗證改直接共用 `validate_one_ticker()` 已產生的 prepared df / standalone logs，不再重讀 CSV、重新 sanitize / prepare；單檔 portfolio context 也改共用 `fast_data / sorted_dates / start_year`；`scanner` / `debug_trade_log` 驗證也已補 prepared-context 等價契約；real-case `scanner_ref_stats` 改直接吃 `clean_df` fast path；同輪 `validate_consistency` 已同步寫出 synthetic coverage artifacts，`run_meta_quality.py` 可直接重用，避免再跑一次 synthetic suite |
@@ -271,6 +273,7 @@
 | Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` | 2026-04-03 |
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` | 2026-04-02 |
+| Meta | B27 | 禁止循環依賴（模組層級 import cycle） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -339,6 +342,7 @@
 | D19 | `tools/local_regression/run_chain_checks.py` | B18 | 2026-04-02 |
 | D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
 | D95 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
+| D96 | `validate_no_top_level_import_cycles_case` | B27 | 2026-04-03 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -420,6 +424,8 @@
 | 2026-04-02 | D55 | 新增 summary unreadable 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_unreadable_payload_reporting_case` |
 | 2026-04-02 | D56 | 補 `run_all.py` preflight 早退 dataset not-run contract 並驗證 | TODO -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
 | 2026-04-03 | D74 | 新增 manifest failure master summary schema contract 並驗證 | NEW -> DONE | `validate_run_all_manifest_failure_master_summary_contract_case` |
+| 2026-04-03 | D96 | 新增 top-level import cycle guard 並驗證 | NEW -> DONE | `validate_no_top_level_import_cycles_case` |
+| 2026-04-03 | B27 | 補 top-level import cycle formal guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` + `tools/validate/meta_contracts.py` |
 | 2026-04-02 | D57 | 補 checklist status vocabulary sync 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_checklist_status_sync_case` |
 | 2026-04-02 | D58 | 補 meta quality coverage guardrail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
 | 2026-04-02 | B22 | 將 coverage report baseline 收斂為正式 gate，主表升為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |

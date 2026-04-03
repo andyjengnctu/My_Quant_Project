@@ -16,6 +16,7 @@ from .meta_contracts import (
     load_defined_validate_names_from_synthetic_case_modules,
     load_imported_validate_names_from_synthetic_main_entry,
     summarize_no_reverse_app_import_contract,
+    summarize_no_top_level_import_cycles_contract,
     summarize_single_formal_test_entry_contract,
 )
 
@@ -170,6 +171,24 @@ def validate_no_reverse_app_layer_dependencies_case(_base_params):
 
     summary["violation_count"] = len(violations)
     summary["violations"] = violations
+    return results, summary
+
+
+def validate_no_top_level_import_cycles_case(_base_params):
+    case_id = "META_NO_TOP_LEVEL_IMPORT_CYCLES"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_no_top_level_import_cycles_contract(PROJECT_ROOT)
+    violations = [
+        " | ".join(item["modules"])
+        for item in contract["violations"]
+    ]
+    add_check(results, "meta_entry_contract", case_id, "project_has_no_top_level_import_cycles", [], violations)
+
+    summary["module_count"] = contract["module_count"]
+    summary["cycle_count"] = len(contract["violations"])
+    summary["cycles"] = violations
     return results, summary
 
 
