@@ -114,6 +114,22 @@ def _latest_statuses_from_convergence_rows(rows: List[List[str]]) -> Dict[str, s
     return statuses
 
 
+def _extract_checklist_note_entries(note: str) -> List[str]:
+    note_entries: Set[str] = set()
+    for raw_token in re.findall(r"`([^`]+)`", note):
+        token = raw_token.strip().replace("\\", "/")
+        if not token:
+            continue
+        if token.startswith("validate_") or re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:py|md|json)", token):
+            note_entries.add(token)
+
+    note_without_backticks = re.sub(r"`[^`]+`", " ", note)
+    note_entries.update(re.findall(r"\bvalidate_[A-Za-z0-9_]+\b", note_without_backticks))
+    note_entries.update(re.findall(r"\b(?:apps|core|doc|tools)/[A-Za-z0-9_./-]+\.(?:py|md|json)\b", note_without_backticks))
+    note_entries.update(re.findall(r"\b[A-Za-z0-9_.-]+\.(?:py|md|json)\b", note_without_backticks))
+    return sorted(note_entries)
+
+
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     tables = _load_checklist_tables()
     main_statuses = _load_main_statuses(tables)
@@ -238,18 +254,13 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         if from_status == to_status:
             no_op_convergence_rows.append({"id": row[1].strip(), "transition": transition})
         note = row[4].strip() if len(row) > 4 else ""
-        if not note or " + " not in note:
-            continue
-        note_entries = set(re.findall(r"`([^`]+)`", note))
-        note_entries.update(re.findall(r"\bvalidate_[A-Za-z0-9_]+\b", note))
-        note_entries.update(re.findall(r"\b(?:apps|core|doc|tools)/[A-Za-z0-9_./-]+\.py\b", note))
-        note_entries.update(re.findall(r"\brun_[A-Za-z0-9_]+\.py\b", note))
+        note_entries = _extract_checklist_note_entries(note)
         if len(note_entries) >= 2:
             invalid_g_note_rows.append(
                 {
                     "id": row[1].strip(),
                     "note": note,
-                    "entries": sorted(note_entries),
+                    "entries": note_entries,
                 }
             )
     results.append(

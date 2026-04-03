@@ -39,6 +39,7 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
 )
 from .synthetic_meta_cases import (
+    validate_checklist_g_single_note_entry_delimiter_case,
     validate_cmd_document_contract_case,
     validate_core_trading_modules_in_coverage_targets_case,
     validate_coverage_threshold_floor_case,

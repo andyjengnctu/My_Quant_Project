@@ -285,6 +285,38 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     return results, summary
 
 
+def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_SINGLE_NOTE_ENTRY_DELIMITER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    needle = "| 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |"
+    replacement = "| 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` / `meta_contracts.py` |"
+    if needle not in original_text:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_note_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(original_text.replace(needle, replacement, 1), encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
+    invalid_rows = g_note_result.get("extra", {}).get("invalid_note_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_single_entry_guard_fails", "FAIL", g_note_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_multiple_entries", True, any(row.get("id") == "B38" for row in invalid_rows))
+
+    summary["guard_status"] = g_note_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results = []
