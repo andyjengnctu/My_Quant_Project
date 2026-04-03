@@ -410,11 +410,34 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
     missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
 
+    module_export_expectations = {
+        "core.portfolio_ops": {"execute_reserved_entries_for_day", "settle_portfolio_positions", "closeout_open_positions"},
+        "core.trade_plans": {"build_normal_candidate_plan", "execute_pre_market_entry_plan", "evaluate_history_candidate_metrics"},
+    }
+    module_import_failures = []
+    module_export_failures = []
+    reloaded_modules = []
+    for module_name, expected_exports in module_export_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        exported_names = set(getattr(module, "__all__", []))
+        missing_exports = sorted(expected_exports - exported_names)
+        if missing_exports:
+            module_export_failures.append(f"{module_name}: {missing_exports}")
+        reloaded_modules.append(module_name)
+
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_exist", [], missing_files)
     add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_declared", [], missing_targets)
+    add_check(results, "meta_coverage", case_id, "core_wrapper_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "core_wrapper_modules_export_expected_symbols", [], module_export_failures)
 
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets
+    summary["reloaded_modules"] = reloaded_modules
     return results, summary
 
 
