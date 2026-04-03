@@ -136,7 +136,9 @@
 | ID | 建議項目 | 目標 |
 |---|---|---|
 | D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
-| D15 | deterministic regression for optimizer/scanner | 已完成；已補 optimizer fixed-seed 雙跑、scanner worker repeatability 與 `scan_runner` 入口重跑一致性 |
+| D15 | `tools/local_regression/run_ml_smoke.py` | 已完成；已補 optimizer fixed-seed 雙跑與 best-params digest 一致性 |
+| D92 | `validate_scanner_worker_repeatability_case` | 已補 scanner worker repeatability，確認同資料同參數下 worker 級輸出穩定一致 |
+| D93 | `validate_scan_runner_repeatability_case` | 已補 `scan_runner` 入口重跑一致性，確認 scanner 正式入口摘要穩定一致 |
 | D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
 
@@ -162,7 +164,9 @@
 | D36 | `validate_dataset_cli_contract_case` | 已補 dataset wrapper CLI 契約：help、預設 passthrough、`--dataset` 值傳遞、未知參數與位置參數拒絕 |
 | D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化、help 與未知參數 / 位置參數拒絕 |
 | D45 | `validate_extended_tool_cli_contract_case` | 已補剩餘直接入口 CLI：`tools/optimizer/main.py`、`tools/portfolio_sim/main.py`、`tools/scanner/scan_runner.py`、`tools/validate/main.py`、`tools/debug/trade_log.py`、`apps/test_suite.py` 的 help 與參數拒絕契約 |
-| D19 | rerun / cache pollution checks | 已完成；已補 raw cache rerun / mutation isolation、`run_all.py` 同 run dir rerun summary / bundle repeatability 與 chain snapshot 雙跑 digest |
+| D19 | `tools/local_regression/run_chain_checks.py` | 已完成；已補 chain snapshot 雙跑 digest 與 rerun payload 穩定性 |
+| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | 已補 raw cache rerun / mutation isolation，確認 rerun 不得污染既有快取結果 |
+| D95 | `validate_run_all_repeatability_case` | 已補 `run_all.py` 同 run dir rerun summary / bundle repeatability，確認正式入口重跑結果穩定一致 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | 已補 scanner reduced snapshot 雙跑 digest，確認 scanner 候選 / 狀態 / issue line 在同資料同參數下穩定一致 |
 | D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline、key target presence/hit 與 manifest 化 minimum threshold gate，並已同步到 `apps/test_suite.py` 摘要顯示 |
 | D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time，並新增 traced peak memory regression gate；各 step summary 的 `duration_sec` 已補齊，budget 依實測 reduced baseline 校正；chain checks 同輪 prepared context / scanner snapshot / cached single-backtest stats 已去重，replay counts 併入第一次 timeline 主流程；`portfolio_sim` 驗證改直接共用 `validate_one_ticker()` 已產生的 prepared df / standalone logs，不再重讀 CSV、重新 sanitize / prepare；單檔 portfolio context 也改共用 `fast_data / sorted_dates / start_year`；`scanner` / `debug_trade_log` 驗證也已補 prepared-context 等價契約；real-case `scanner_ref_stats` 改直接吃 `clean_df` fast path；同輪 `validate_consistency` 已同步寫出 synthetic coverage artifacts，`run_meta_quality.py` 可直接重用，避免再跑一次 synthetic suite |
@@ -288,16 +292,16 @@
 | D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
 | D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
 | D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
-| D29 | `tools/local_regression/run_meta_quality.py` | B23 | 2026-04-02 |
-| D70 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-02 |
+| D29 | `tools/local_regression/formal_pipeline.py` | B23 | 2026-04-02 |
+| D70 | `tools/validate/synthetic_cases.py` | B23 | 2026-04-02 |
 | D18 | `validate_output_contract_case` | B11 / B17 | 2026-04-02 |
 | D49 | `validate_local_regression_summary_contract_case` | B11 | 2026-04-02 |
 | D28 | `validate_artifact_lifecycle_contract_case` | B17 | 2026-04-02 |
 | D26 | `validate_cmd_document_contract_case` | B20 | 2026-04-01 |
-| D25 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
+| D25 | `tools/validate/meta_contracts.py` | B26 | 2026-04-02 |
 | D59 | `validate_single_formal_test_entry_contract_case` | B26 | 2026-04-02 |
-| D71 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
-| D72 | `tools/local_regression/run_meta_quality.py` | B26 | 2026-04-02 |
+| D71 | `tools/validate/synthetic_meta_cases.py` | B26 | 2026-04-02 |
+| D72 | `apps/test_suite.py` | B26 | 2026-04-02 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
@@ -310,7 +314,7 @@
 | D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 | 2026-04-02 |
 | D65 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 | 2026-04-02 |
 | D20 | `tools/local_regression/run_meta_quality.py` | B22 | 2026-04-02 |
-| D21 | `tools/local_regression/run_meta_quality.py` | B19 | 2026-04-02 |
+| D21 | `core/runtime_utils.py` | B19 | 2026-04-02 |
 | D63 | `validate_meta_quality_performance_memory_contract_case` | B19 | 2026-04-02 |
 | D23 | `validate_known_bad_fault_injection_case` | B24 | 2026-04-01 |
 | D24 | `validate_independent_oracle_golden_case` | B25 | 2026-04-01 |
@@ -328,9 +332,13 @@
 | D36 | `validate_dataset_cli_contract_case` | B16 | 2026-04-02 |
 | D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
 | D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
-| D41 | `tools/local_regression/run_chain_checks.py` | B12 / B18 | 2026-04-02 |
-| D15 | `tools/validate/synthetic_regression_cases.py` | B12 | 2026-04-02 |
-| D19 | `tools/validate/synthetic_regression_cases.py` | B18 | 2026-04-02 |
+| D41 | `tools/scanner/scan_runner.py` | B12 / B18 | 2026-04-02 |
+| D15 | `tools/local_regression/run_ml_smoke.py` | B12 | 2026-04-02 |
+| D92 | `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
+| D93 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
+| D19 | `tools/local_regression/run_chain_checks.py` | B18 | 2026-04-02 |
+| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
+| D95 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -488,6 +496,10 @@
 | 2026-04-03 | D89 | 將既有 validate console summary reporting contract 回寫 checklist | NEW -> DONE | `validate_validate_console_summary_reporting_case` |
 | 2026-04-03 | D90 | 將既有 portfolio yearly report schema contract 回寫 checklist | NEW -> DONE | `validate_portfolio_yearly_report_schema_case` |
 | 2026-04-03 | D91 | 將既有 test suite PASS summary reporting contract 回寫 checklist | NEW -> DONE | `validate_test_suite_summary_reporting_case` |
+| 2026-04-03 | D92 | 將既有 scanner worker repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scanner_worker_repeatability_case` |
+| 2026-04-03 | D93 | 將既有 scan runner repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scan_runner_repeatability_case` |
+| 2026-04-03 | D94 | 將既有 optimizer raw cache rerun consistency case 回寫 checklist | NEW -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` |
+| 2026-04-03 | D95 | 將既有 run_all repeatability case 回寫 checklist | NEW -> DONE | `validate_run_all_repeatability_case` |
 
 ## H. 完成判準
 
