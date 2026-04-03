@@ -47,11 +47,16 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/trade_plans.py",
     "core/entry_plans.py",
 ]
+ENTRY_PATH_CRITICAL_COVERAGE_TARGETS = [
+    "core/portfolio_entries.py",
+    "core/entry_plans.py",
+]
 CRITICAL_COVERAGE_TARGETS = [
     "core/backtest_core.py",
     "core/portfolio_engine.py",
     "core/position_step.py",
     "core/portfolio_exits.py",
+    *ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
 ]
 COVERAGE_TARGETS = [
     "tools/validate/synthetic_cases.py",

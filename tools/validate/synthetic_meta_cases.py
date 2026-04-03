@@ -538,6 +538,48 @@ def validate_coverage_threshold_floor_case(_base_params):
     return results, summary
 
 
+def validate_entry_path_critical_coverage_gate_case(_base_params):
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_ENTRY_PATH_CRITICAL_COVERAGE_GATE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_targets = list(run_meta_quality_module.ENTRY_PATH_CRITICAL_COVERAGE_TARGETS)
+    declared_targets = list(run_meta_quality_module.CRITICAL_COVERAGE_TARGETS)
+    missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
+    missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
+
+    module_expectations = {
+        "core.portfolio_entries": {"execute_reserved_entries_for_day", "cleanup_extended_signals_for_day"},
+        "core.entry_plans": {"build_cash_capped_entry_plan", "execute_pre_market_entry_plan", "should_count_miss_buy"},
+    }
+    module_import_failures = []
+    module_symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in module_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
+        if missing_symbols:
+            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+
+    add_check(results, "meta_coverage", case_id, "entry_path_critical_coverage_targets_exist", [], missing_files)
+    add_check(results, "meta_coverage", case_id, "entry_path_critical_coverage_targets_declared", [], missing_targets)
+    add_check(results, "meta_coverage", case_id, "entry_path_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "entry_path_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    summary["expected_target_count"] = len(expected_targets)
+    summary["missing_targets"] = missing_targets
+    summary["reloaded_modules"] = reloaded_modules
+    return results, summary
+
+
 def validate_known_bad_fault_injection_case(base_params):
     case_id = "META_KNOWN_BAD_FAULT_INJECTION"
     results = []
