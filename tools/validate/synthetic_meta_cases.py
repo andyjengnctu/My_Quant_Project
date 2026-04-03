@@ -801,6 +801,7 @@ def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
         "tools.local_regression.meta_quality_targets": {"COVERAGE_TARGETS", "CORE_TRADING_COVERAGE_TARGETS", "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"},
         "tools.local_regression.meta_quality_coverage": {"build_coverage_summary", "_coverage_threshold_policy_ok"},
         "tools.local_regression.run_meta_quality": {"COVERAGE_TARGETS", "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"},
+        "tools.validate.preflight_env": {"REQUIREMENTS_PATH", "format_preflight_summary", "run_preflight"},
         "core.test_suite_reporting": {"print_test_suite_human_summary", "TEST_SUITE_STEP_LABELS"},
     }
     module_import_failures = []

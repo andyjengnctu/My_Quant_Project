@@ -31,6 +31,7 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "tools/local_regression/meta_quality_coverage.py",
     "tools/local_regression/run_meta_quality.py",
     "tools/local_regression/run_all.py",
+    "tools/validate/preflight_env.py",
     "core/test_suite_reporting.py",
     "apps/test_suite.py",
 ]
