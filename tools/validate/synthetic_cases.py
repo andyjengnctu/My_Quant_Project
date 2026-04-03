@@ -188,6 +188,7 @@ def get_synthetic_validator_entries():
         _entry(validate_no_reverse_app_layer_dependencies_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/ARCHITECTURE.md", "tools/validate/meta_contracts.py")),
         _entry(validate_no_top_level_import_cycles_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/meta_contracts.py",)),
         _entry(validate_single_formal_test_entry_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/formal_pipeline.py")),
+        _entry(validate_checklist_g_single_note_entry_delimiter_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_display_reporting_sanity_case, layer="output_contract", cost_class="fast", impacted_modules=("core/display.py", "tools/scanner/reporting.py")),
         _entry(validate_validate_console_summary_reporting_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/validate/reporting.py",)),
         _entry(validate_portfolio_yearly_report_schema_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/portfolio_sim/reporting.py",)),
