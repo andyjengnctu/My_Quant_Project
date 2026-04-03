@@ -9,6 +9,9 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/portfolio_ops.py",
     "core/trade_plans.py",
     "core/entry_plans.py",
+    "core/portfolio_candidates.py",
+    "core/portfolio_fast_data.py",
+    "core/extended_signals.py",
 ]
 ENTRY_PATH_CRITICAL_COVERAGE_TARGETS = [
     "core/portfolio_entries.py",
@@ -24,6 +27,8 @@ CRITICAL_COVERAGE_TARGETS = [
 TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "tools/local_regression/common.py",
     "tools/local_regression/formal_pipeline.py",
+    "tools/local_regression/meta_quality_targets.py",
+    "tools/local_regression/meta_quality_coverage.py",
     "tools/local_regression/run_meta_quality.py",
     "tools/local_regression/run_all.py",
     "core/test_suite_reporting.py",
