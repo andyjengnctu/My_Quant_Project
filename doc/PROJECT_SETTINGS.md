@@ -10,7 +10,7 @@
 ## B. 標準測試流程
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口；`tools/local_regression/formal_pipeline.py` 為單一真理來源。
-2. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但應被`apps/test_suite.py`涵蓋的缺口。
+2. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但必須被`apps/test_suite.py`涵蓋的缺口。
 3. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
 4. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 5. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。

@@ -175,7 +175,7 @@
 | D71 | `run_meta_quality.py` checklist main / `F2` / `G` sync guard | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard |
 | D72 | `run_meta_quality.py` checklist `DONE` summary omission blocker | 已補 checklist `DONE` 摘要缺漏自動偵測與阻擋 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | 已補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，避免 formal helper / synthetic reporting 再度耦合 app 入口 |
-| D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case 與 synthetic 正式註冊清單完整一致的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
+| D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case、synthetic 正式註冊清單完整一致，以及 registry 反向對照 `F2` DONE validator 摘要完整性的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
 | D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
 | D27 | `validate_display_reporting_sanity_case` | 已補 scanner header / start banner / summary、strategy dashboard 與 `core/display.py` re-export 顯示契約 |
@@ -195,6 +195,23 @@
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
 | D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏與 convergence 狀態失同步 |
 | D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
+| D75 | `validate_synthetic_same_bar_stop_priority_case` | 已補同 K 棒停利/停損取最壞停損 synthetic case，直接釘死同棒雙觸發時必須以停損結算 |
+| D76 | `validate_synthetic_half_tp_full_year_case` | 已補半倉停利與 full-year yearly return synthetic case，確認半倉列與年度報酬列同步存在 |
+| D77 | `validate_synthetic_extended_miss_buy_case` | 已補 extended miss buy synthetic case，確認 extended candidate / missed buy / scanner status 一致 |
+| D78 | `validate_synthetic_competing_candidates_case` | 已補同日競爭候選排序 synthetic case，確認 tie-break 後只允許單一中選標的成交 |
+| D79 | `validate_synthetic_same_day_sell_block_case` | 已補當日賣出後不得同日再買 synthetic case，確認再投入必須延後到次日 |
+| D80 | `validate_synthetic_rotation_t_plus_one_case` | 已補 rotation T+1 synthetic case，確認汰弱賣出後僅能於次日再評估買進 |
+| D81 | `validate_synthetic_missed_buy_no_replacement_case` | 已補 missed buy 後不得盤中改掛替代標的 synthetic case |
+| D82 | `validate_synthetic_unexecutable_half_tp_case` | 已補不可執行半倉停利 synthetic case，確認 trade log / portfolio rows 均不得產生假半倉列 |
+| D83 | `validate_synthetic_history_ev_threshold_case` | 已補 history EV threshold equality synthetic case，確認 EV 等於門檻時仍依規格視為合格 |
+| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | 已補單股回測不得被自身 history filter 擋下的 direct synthetic case |
+| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | 已補 PIT same-day exit excluded synthetic case，確認 exit_date 當天不得偷看同日剛結束交易 |
+| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | 已補 PIT 多筆同日 exit synthetic case，確認同日所有已平倉交易皆不得納入當日 PIT 統計 |
+| D87 | `validate_synthetic_proj_cost_cash_capped_case` | 已補 projected-cost / cash-capped order synthetic case，確認排序估計成本不得繞過實際可用現金上限 |
+| D88 | `validate_synthetic_param_guardrail_case` | 已補 strategy param guardrail synthetic case，確認非法參數值 fail-fast，且 runtime worker 參數受界限約束 |
+| D89 | `validate_validate_console_summary_reporting_case` | 已補 validate console summary reporting contract，確認 counts / path / fail preview 顯示穩定 |
+| D90 | `validate_portfolio_yearly_report_schema_case` | 已補 portfolio yearly report schema contract，確認年度報酬表欄位與空資料 schema 穩定 |
+| D91 | `validate_test_suite_summary_reporting_case` | 已補 test suite PASS summary reporting contract，確認 bundle / 步驟摘要 / 重點結果 / retention 顯示穩定 |
 
 ## E. 未完成缺口摘要
 
@@ -324,6 +341,23 @@
 | D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 | 2026-04-02 |
 | D68 | `validate_scanner_reference_clean_df_contract_case` | B19 | 2026-04-02 |
 | D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 | 2026-04-02 |
+| D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
+| D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 | 2026-04-01 |
+| D77 | `validate_synthetic_extended_miss_buy_case` | B09 | 2026-04-01 |
+| D78 | `validate_synthetic_competing_candidates_case` | B09 | 2026-04-01 |
+| D79 | `validate_synthetic_same_day_sell_block_case` | B06 | 2026-04-01 |
+| D80 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 | 2026-04-01 |
+| D81 | `validate_synthetic_missed_buy_no_replacement_case` | B07 | 2026-04-01 |
+| D82 | `validate_synthetic_unexecutable_half_tp_case` | B04 | 2026-04-01 |
+| D83 | `validate_synthetic_history_ev_threshold_case` | B10 | 2026-04-01 |
+| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 | 2026-04-01 |
+| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 | 2026-04-01 |
+| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 | 2026-04-02 |
+| D87 | `validate_synthetic_proj_cost_cash_capped_case` | B09 | 2026-04-01 |
+| D88 | `validate_synthetic_param_guardrail_case` | B15 | 2026-04-02 |
+| D89 | `validate_validate_console_summary_reporting_case` | B21 | 2026-04-02 |
+| D90 | `validate_portfolio_yearly_report_schema_case` | B21 | 2026-04-02 |
+| D91 | `validate_test_suite_summary_reporting_case` | B21 | 2026-04-02 |
 
 ## G. 逐項收斂紀錄
 
@@ -448,6 +482,24 @@
 | 2026-04-02 | D72 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B23 | 補齊 synthetic 主入口遺漏註冊與 registry completeness guard 後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cases.py` + `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-02 | B26 | 補齊 checklist main / `F2` / `G` sync 與 `DONE` 摘要缺漏 blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` + `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-03 | D22 | 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist | DONE -> DONE | `tools/validate/synthetic_meta_cases.py` + `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-03 | D75 | 將既有同棒停損優先 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_bar_stop_priority_case` |
+| 2026-04-03 | D76 | 將既有半倉停利 full-year synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_half_tp_full_year_case` |
+| 2026-04-03 | D77 | 將既有 extended miss buy synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_extended_miss_buy_case` |
+| 2026-04-03 | D78 | 將既有 competing candidates synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_competing_candidates_case` |
+| 2026-04-03 | D79 | 將既有 same-day sell block synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_day_sell_block_case` |
+| 2026-04-03 | D80 | 將既有 rotation T+1 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_rotation_t_plus_one_case` |
+| 2026-04-03 | D81 | 將既有 missed buy no replacement synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_missed_buy_no_replacement_case` |
+| 2026-04-03 | D82 | 將既有 unexecutable half TP synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_unexecutable_half_tp_case` |
+| 2026-04-03 | D83 | 將既有 history EV threshold synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_history_ev_threshold_case` |
+| 2026-04-03 | D84 | 將既有 single-backtest own-history guard synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_single_backtest_not_gated_by_own_history_case` |
+| 2026-04-03 | D85 | 將既有 PIT same-day exit excluded synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_same_day_exit_excluded_case` |
+| 2026-04-03 | D86 | 將既有 PIT multiple same-day exits synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_multiple_same_day_exits_case` |
+| 2026-04-03 | D87 | 將既有 projected-cost cash-capped synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_proj_cost_cash_capped_case` |
+| 2026-04-03 | D88 | 將既有 param guardrail synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_param_guardrail_case` |
+| 2026-04-03 | D89 | 將既有 validate console summary reporting contract 回寫 checklist | NEW -> DONE | `validate_validate_console_summary_reporting_case` |
+| 2026-04-03 | D90 | 將既有 portfolio yearly report schema contract 回寫 checklist | NEW -> DONE | `validate_portfolio_yearly_report_schema_case` |
+| 2026-04-03 | D91 | 將既有 test suite PASS summary reporting contract 回寫 checklist | NEW -> DONE | `validate_test_suite_summary_reporting_case` |
 
 ## H. 完成判準
 

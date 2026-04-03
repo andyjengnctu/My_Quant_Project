@@ -226,6 +226,21 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     done_d_name_set = set(done_d_names)
     add_check(results, "meta_registry", case_id, "done_d_names_unique", len(done_d_names), len(done_d_name_set))
 
+    done_d_validate_name_set = {
+        row["name"].split()[0]
+        for row in done_d_rows
+        if row["name"].split() and row["name"].split()[0].startswith("validate_")
+    }
+    missing_done_d_validator_names = sorted(validator_name_set - done_d_validate_name_set)
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "all_registered_validate_cases_listed_in_done_f2_summary",
+        [],
+        missing_done_d_validator_names,
+    )
+
     for row in done_d_rows:
         test_name = row["name"]
         first_token = test_name.split()[0] if test_name.split() else test_name
@@ -313,6 +328,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     summary["validator_count"] = len(validators)
     summary["missing_imported_names"] = missing_imported_names
     summary["missing_defined_names"] = missing_defined_names
+    summary["missing_done_d_validator_names"] = missing_done_d_validator_names
     return results, summary
 
 
