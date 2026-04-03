@@ -21,6 +21,7 @@ from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_sum
 from tools.local_regression.common import (
     archive_bundle_history,
     build_artifacts_manifest,
+    DATASET_INFO_KEYS,
     LOCAL_REGRESSION_RUN_DIR_ENV,
     build_bundle_zip,
     build_python_env,

@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import os
+import sys
 import tempfile
 import zipfile
 from contextlib import redirect_stdout
@@ -846,6 +847,102 @@ def validate_dataset_fingerprint_contract_case(_base_params):
     summary["member_hash_prefix"] = str(dataset_info.get("csv_members_sha256", ""))[:12]
     return results, summary
 
+
+
+def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
+    case_id = "RUN_ALL_DATASET_PREPARE_PASS_MAIN_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    manifest = dict(local_common.MANIFEST_DEFAULTS)
+    manifest["bundle_name"] = "to_chatgpt_bundle.zip"
+    fixed_now = local_common.taipei_now()
+
+    with tempfile.TemporaryDirectory(prefix="run_all_dataset_prepare_pass_") as temp_dir:
+        run_dir = Path(temp_dir) / "run_dir"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        bundle_path = run_dir / manifest["bundle_name"]
+        bundle_path.write_bytes(b"synthetic-bundle")
+
+        dataset_info = {
+            "dataset_dir": str(local_common.REDUCED_DATASET_DIR),
+            "source": "repo_data_dir",
+            "csv_count": 24,
+            "reused_existing": True,
+            "csv_total_bytes": 4096,
+            "csv_members_sha256": "a" * 64,
+            "csv_content_sha256": "b" * 64,
+            "fingerprint_algorithm": "sha256",
+            "extracted_files": [],
+        }
+
+        def _fake_run_preflight(run_dir_arg, *, selected_step_names):
+            payload = {
+                "status": "PASS",
+                "python_executable": sys.executable,
+                "duration_sec": 0.01,
+                "failed_packages": [],
+            }
+            write_json(run_dir_arg / "preflight_summary.json", payload)
+            write_text(run_dir_arg / "preflight_summary.txt", "status : PASS\n")
+            return payload
+
+        summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
+
+        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total):
+            payload = {
+                "status": "PASS",
+                "failures": [],
+                "failed_steps": [],
+                "failed_count": 0,
+                "fail_count": 0,
+            }
+            summary_name = summary_name_by_script[relative_script]
+            write_json(run_dir / summary_name, payload)
+            log_path.write_text(f"{name}: PASS\n", encoding="utf-8")
+            return {
+                "returncode": 0,
+                "duration_sec": 0.02,
+                "timed_out": False,
+                "error_type": "",
+                "error_message": "",
+                "stdout": "",
+                "stderr": "",
+            }
+
+        with patch.object(run_all_module, "create_staging_run_dir", return_value=run_dir), \
+             patch.object(run_all_module, "load_manifest", return_value=manifest), \
+             patch.object(run_all_module, "_run_preflight", side_effect=_fake_run_preflight), \
+             patch.object(run_all_module, "ensure_reduced_dataset", return_value=dataset_info), \
+             patch.object(run_all_module, "_run_script", side_effect=_fake_run_script), \
+             patch.object(run_all_module, "build_bundle_zip", return_value=bundle_path), \
+             patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path), \
+             patch.object(run_all_module, "publish_root_bundle_copy", side_effect=lambda path: path), \
+             patch.object(run_all_module, "_apply_output_retention", return_value={"removed_count": 0, "removed_bytes": 0, "removed_entries": []}), \
+             patch.object(run_all_module, "cleanup_staging_dir", return_value=None), \
+             patch.object(run_all_module, "resolve_git_commit", return_value="deadbeef"), \
+             patch.object(run_all_module, "taipei_now", return_value=fixed_now), \
+             patch.object(run_all_module, "gather_recent_console_tail", return_value="tail text"):
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                rc = run_all_module.main(["run_all.py"])
+
+        master_summary = json.loads((run_dir / "master_summary.json").read_text(encoding="utf-8"))
+        dataset_prepare_summary = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
+
+    add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_pass_return_code", 0, rc)
+    add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_pass_overall_status", "PASS", master_summary.get("overall_status"))
+    add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_payload_status", "PASS", master_summary.get("dataset_prepare", {}).get("status"))
+    add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_not_run_steps_empty", [], master_summary.get("not_run_step_names", []))
+    add_check(results, "output_contract", case_id, "run_all_main_dataset_prepare_selected_steps", list(run_all_module.STEP_NAMES), master_summary.get("selected_steps"))
+    for key in local_common.DATASET_INFO_KEYS:
+        if key in dataset_info:
+            add_check(results, "output_contract", case_id, f"run_all_main_dataset_prepare_preserves_{key}", dataset_info[key], dataset_prepare_summary.get(key))
+            add_check(results, "output_contract", case_id, f"run_all_main_master_summary_dataset_info_preserves_{key}", dataset_info[key], master_summary.get("dataset_info", {}).get(key))
+
+    summary["dataset_keys_checked"] = len([key for key in local_common.DATASET_INFO_KEYS if key in dataset_info])
+    summary["selected_step_count"] = len(master_summary.get("selected_steps", []))
+    return results, summary
 
 
 def validate_atomic_write_contract_case(_base_params):
