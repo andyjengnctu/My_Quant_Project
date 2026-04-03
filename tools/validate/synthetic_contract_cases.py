@@ -978,18 +978,18 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
             "totals": {
                 "covered_lines": 120,
                 "num_statements": 200,
-                "covered_branches": 48,
-                "num_branches": 80,
+                "covered_branches": 120,
+                "num_branches": 200,
                 "percent_covered": 60.0,
             },
             "files": {
                 rel_path: {
                     "summary": {
-                        "covered_lines": 1,
-                        "num_statements": 1,
-                        "percent_covered": 100.0,
-                        "covered_branches": 0,
-                        "num_branches": 0,
+                        "covered_lines": 30 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "num_statements": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "percent_covered": 30.0 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 100.0,
+                        "covered_branches": 25 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "num_branches": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
                     }
                 }
                 for rel_path in run_meta_quality_module.COVERAGE_TARGETS
@@ -1008,8 +1008,10 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
         })
 
         manifest = {
-            "coverage_line_min_percent": 50.0,
-            "coverage_branch_min_percent": 45.0,
+            "coverage_line_min_percent": 55.0,
+            "coverage_branch_min_percent": 50.0,
+            "coverage_critical_line_min_percent": 25.0,
+            "coverage_critical_branch_min_percent": 20.0,
         }
         with patch("tools.validate.synthetic_cases.run_synthetic_consistency_suite", side_effect=AssertionError("should reuse existing coverage artifacts")):
             coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)

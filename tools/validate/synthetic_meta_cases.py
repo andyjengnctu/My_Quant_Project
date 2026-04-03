@@ -1,7 +1,9 @@
 from pathlib import Path
 import importlib
+import json
 import re
 import shlex
+import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
@@ -354,6 +356,163 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
 def _count_failures(results):
     return sum(1 for row in results if row.get("status") == "FAIL")
+
+def _summary_result_by_name(results, name):
+    for row in results:
+        if row.get("name") == name:
+            return row
+    raise AssertionError(f"result not found: {name}")
+
+
+def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0, critical_line_percent=35.0, critical_branch_percent=30.0):
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    files = {}
+    for rel_path in run_meta_quality_module.COVERAGE_TARGETS:
+        summary = {
+            "covered_lines": 8,
+            "num_statements": 10,
+            "percent_covered": 80.0,
+            "covered_branches": 4,
+            "num_branches": 5,
+        }
+        if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS:
+            summary = {
+                "covered_lines": int(critical_line_percent),
+                "num_statements": 100,
+                "percent_covered": float(critical_line_percent),
+                "covered_branches": int(critical_branch_percent),
+                "num_branches": 100,
+            }
+        files[rel_path] = {"summary": summary}
+    return {
+        "totals": {
+            "covered_lines": int(line_percent),
+            "num_statements": 100,
+            "covered_branches": int(branch_percent),
+            "num_branches": 100,
+            "percent_covered": float((line_percent + branch_percent) / 2.0),
+        },
+        "files": files,
+    }
+
+
+
+def validate_core_trading_modules_in_coverage_targets_case(_base_params):
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_targets = list(run_meta_quality_module.CORE_TRADING_COVERAGE_TARGETS)
+    declared_targets = list(run_meta_quality_module.COVERAGE_TARGETS)
+    missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
+    missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
+
+    add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_exist", [], missing_files)
+    add_check(results, "meta_coverage", case_id, "core_trading_coverage_targets_declared", [], missing_targets)
+
+    summary["expected_target_count"] = len(expected_targets)
+    summary["missing_targets"] = missing_targets
+    return results, summary
+
+
+def validate_critical_file_coverage_minimum_gate_case(_base_params):
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_CRITICAL_FILE_COVERAGE_MINIMUM_GATE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="meta_critical_cov_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        payload = _build_meta_quality_reuse_payload(line_percent=72.0, branch_percent=68.0, critical_line_percent=35.0, critical_branch_percent=30.0)
+        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0]]["summary"]["covered_lines"] = 10
+        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0]]["summary"]["percent_covered"] = 10.0
+        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1]]["summary"]["covered_branches"] = 5
+        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1]]["summary"]["num_branches"] = 100
+        write_path = coverage_dir / "coverage_synthetic.json"
+        write_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
+            "source": "validate_consistency",
+            "returncode": 0,
+            "stdout": "cached",
+            "stderr": "",
+            "timed_out": False,
+            "synthetic_fail_count": 0,
+            "synthetic_case_count": 99,
+            "json_generated": True,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest = {
+            "coverage_line_min_percent": 55.0,
+            "coverage_branch_min_percent": 50.0,
+            "coverage_critical_line_min_percent": 25.0,
+            "coverage_critical_branch_min_percent": 20.0,
+        }
+        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
+
+    line_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_files_line_percent_within_minimum")
+    branch_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_files_branch_percent_within_minimum")
+    line_fail_targets = coverage_summary.get("critical_under_line_targets", [])
+    branch_fail_targets = coverage_summary.get("critical_under_branch_targets", [])
+    add_check(results, "meta_coverage", case_id, "critical_file_line_gate_detects_undercovered_file", True, run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0] in line_fail_targets and line_gate_result.get("status") == "FAIL")
+    add_check(results, "meta_coverage", case_id, "critical_file_branch_gate_detects_undercovered_file", True, run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1] in branch_fail_targets and branch_gate_result.get("status") == "FAIL")
+    add_check(results, "meta_coverage", case_id, "critical_file_gate_blocks_overall_pass", False, coverage_summary.get("ok"))
+
+    summary["line_fail_targets"] = line_fail_targets
+    summary["branch_fail_targets"] = branch_fail_targets
+    return results, summary
+
+
+def validate_coverage_threshold_floor_case(_base_params):
+    import tools.local_regression.common as common_module
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_COVERAGE_THRESHOLD_FLOOR"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    loaded_manifest = common_module.load_manifest()
+    expected_line_floor = int(run_meta_quality_module.COVERAGE_LINE_MIN_FLOOR)
+    expected_branch_floor = int(run_meta_quality_module.COVERAGE_BRANCH_MIN_FLOOR)
+
+    add_check(results, "meta_coverage", case_id, "manifest_line_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_line_min_percent"]) >= expected_line_floor)
+    add_check(results, "meta_coverage", case_id, "manifest_branch_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_branch_min_percent"]) >= expected_branch_floor)
+    add_check(results, "meta_coverage", case_id, "manifest_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_line_min_percent"]) - float(loaded_manifest["coverage_branch_min_percent"]) <= float(run_meta_quality_module.COVERAGE_MAX_LINE_BRANCH_GAP))
+
+    with tempfile.TemporaryDirectory(prefix="meta_cov_floor_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        payload = _build_meta_quality_reuse_payload()
+        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
+            "source": "validate_consistency",
+            "returncode": 0,
+            "stdout": "cached",
+            "stderr": "",
+            "timed_out": False,
+            "synthetic_fail_count": 0,
+            "synthetic_case_count": 99,
+            "json_generated": True,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        failing_manifest = {
+            "coverage_line_min_percent": 50.0,
+            "coverage_branch_min_percent": 45.0,
+            "coverage_critical_line_min_percent": 25.0,
+            "coverage_critical_branch_min_percent": 20.0,
+        }
+        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, failing_manifest)
+
+    threshold_policy_result = _summary_result_by_name(coverage_summary["results"], "coverage_thresholds_respect_formal_floor")
+    add_check(results, "meta_coverage", case_id, "coverage_threshold_floor_blocks_regression", False, coverage_summary.get("ok"))
+    add_check(results, "meta_coverage", case_id, "coverage_threshold_floor_detects_below_baseline_manifest", "FAIL", threshold_policy_result.get("status"))
+
+    summary["threshold_policy_status"] = threshold_policy_result.get("status")
+    return results, summary
 
 
 def validate_known_bad_fault_injection_case(base_params):

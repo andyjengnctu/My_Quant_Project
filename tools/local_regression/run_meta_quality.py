@@ -37,6 +37,22 @@ PROJECT_SETTINGS_PATH = PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 ARCHITECTURE_PATH = PROJECT_ROOT / "doc" / "ARCHITECTURE.md"
 STATUS_VALUES = {"DONE", "PARTIAL", "TODO", "N/A"}
+CORE_TRADING_COVERAGE_TARGETS = [
+    "core/backtest_core.py",
+    "core/portfolio_engine.py",
+    "core/position_step.py",
+    "core/portfolio_entries.py",
+    "core/portfolio_exits.py",
+    "core/portfolio_ops.py",
+    "core/trade_plans.py",
+    "core/entry_plans.py",
+]
+CRITICAL_COVERAGE_TARGETS = [
+    "core/backtest_core.py",
+    "core/portfolio_engine.py",
+    "core/position_step.py",
+    "core/portfolio_exits.py",
+]
 COVERAGE_TARGETS = [
     "tools/validate/synthetic_cases.py",
     "tools/validate/synthetic_meta_cases.py",
@@ -65,7 +81,11 @@ COVERAGE_TARGETS = [
     "core/price_utils.py",
     "core/history_filters.py",
     "core/portfolio_stats.py",
+    *CORE_TRADING_COVERAGE_TARGETS,
 ]
+COVERAGE_LINE_MIN_FLOOR = 55.0
+COVERAGE_BRANCH_MIN_FLOOR = 50.0
+COVERAGE_MAX_LINE_BRANCH_GAP = 5.0
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = {
     "quick_gate": ("quick_gate_summary.json",),
@@ -91,6 +111,28 @@ def _ratio_percent(numerator: Any, denominator: Any) -> float:
     if denominator_value <= 0.0:
         return 0.0
     return (numerator_value / denominator_value) * 100.0
+
+
+def _coverage_percent_from_summary(summary: Dict[str, Any], *, branch: bool = False) -> float:
+    if branch:
+        return _ratio_percent(summary.get("covered_branches", 0), summary.get("num_branches", 0))
+    return _ratio_percent(summary.get("covered_lines", 0), summary.get("num_statements", 0))
+
+
+def _coverage_threshold_policy_ok(line_min_percent: float, branch_min_percent: float) -> tuple[bool, str]:
+    branch_priority_gap_ok = (line_min_percent - branch_min_percent) <= COVERAGE_MAX_LINE_BRANCH_GAP
+    ok = (
+        line_min_percent >= COVERAGE_LINE_MIN_FLOOR
+        and branch_min_percent >= COVERAGE_BRANCH_MIN_FLOOR
+        and line_min_percent >= branch_min_percent
+        and branch_priority_gap_ok
+    )
+    detail = (
+        f"line_min={line_min_percent:.2f} | branch_min={branch_min_percent:.2f} | "
+        f"line_floor={COVERAGE_LINE_MIN_FLOOR:.2f} | branch_floor={COVERAGE_BRANCH_MIN_FLOOR:.2f} | "
+        f"max_gap={COVERAGE_MAX_LINE_BRANCH_GAP:.2f}"
+    )
+    return ok, detail
 
 
 def _load_checklist_tables() -> Dict[str, List[List[str]]]:
@@ -826,7 +868,11 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             results, summaries = run_synthetic_consistency_suite(base_params)
             synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
             run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
-            run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count, "formal_helper_probe": formal_helper_probe}, ensure_ascii=False)
+            run_result["stdout"] = json.dumps({
+                "synthetic_case_count": len(summaries),
+                "synthetic_fail_count": synthetic_fail_count,
+                "formal_helper_probe": formal_helper_probe,
+            }, ensure_ascii=False)
         except Exception as exc:
             run_result["returncode"] = 1
             run_result["stderr"] = f"{type(exc).__name__}: {exc}"
@@ -866,24 +912,55 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
         summary = dict(file_info.get("summary", {})) if isinstance(file_info, dict) else {}
         if not summary:
             missing_targets.append(rel_path)
-            key_files[rel_path] = {"present": False, "covered_lines": 0}
+            key_files[rel_path] = {"present": False, "covered_lines": 0, "covered_branches": 0}
             continue
         covered_lines = int(summary.get("covered_lines", 0) or 0)
+        covered_branches = int(summary.get("covered_branches", 0) or 0)
+        num_statements = int(summary.get("num_statements", 0) or 0)
+        num_branches = int(summary.get("num_branches", 0) or 0)
         if covered_lines <= 0:
             zero_covered_targets.append(rel_path)
         key_files[rel_path] = {
             "present": True,
             "covered_lines": covered_lines,
-            "num_statements": int(summary.get("num_statements", 0) or 0),
+            "num_statements": num_statements,
             "percent_covered": float(summary.get("percent_covered", 0.0) or 0.0),
-            "covered_branches": int(summary.get("covered_branches", 0) or 0),
-            "num_branches": int(summary.get("num_branches", 0) or 0),
+            "covered_branches": covered_branches,
+            "num_branches": num_branches,
+            "line_percent_covered": _ratio_percent(covered_lines, num_statements),
+            "branch_percent_covered": _ratio_percent(covered_branches, num_branches),
         }
+
+    core_target_missing = sorted(rel_path for rel_path in CORE_TRADING_COVERAGE_TARGETS if rel_path not in COVERAGE_TARGETS)
 
     line_percent_covered = _ratio_percent(totals.get("covered_lines", 0), totals.get("num_statements", 0))
     branch_percent_covered = _ratio_percent(totals.get("covered_branches", 0), totals.get("num_branches", 0))
     line_min_percent = float(manifest["coverage_line_min_percent"])
     branch_min_percent = float(manifest["coverage_branch_min_percent"])
+    critical_line_min_percent = float(manifest["coverage_critical_line_min_percent"])
+    critical_branch_min_percent = float(manifest["coverage_critical_branch_min_percent"])
+    threshold_policy_ok, threshold_policy_detail = _coverage_threshold_policy_ok(line_min_percent, branch_min_percent)
+
+    critical_under_line_targets: List[str] = []
+    critical_under_branch_targets: List[str] = []
+    critical_file_coverage: Dict[str, Dict[str, Any]] = {}
+    for rel_path in CRITICAL_COVERAGE_TARGETS:
+        summary = dict(key_files.get(rel_path, {}))
+        line_percent = _coverage_percent_from_summary(summary)
+        branch_percent = _coverage_percent_from_summary(summary, branch=True)
+        critical_file_coverage[rel_path] = {
+            "present": bool(summary.get("present")),
+            "line_percent_covered": line_percent,
+            "branch_percent_covered": branch_percent,
+            "covered_lines": int(summary.get("covered_lines", 0) or 0),
+            "num_statements": int(summary.get("num_statements", 0) or 0),
+            "covered_branches": int(summary.get("covered_branches", 0) or 0),
+            "num_branches": int(summary.get("num_branches", 0) or 0),
+        }
+        if line_percent < critical_line_min_percent:
+            critical_under_line_targets.append(rel_path)
+        if branch_percent < critical_branch_min_percent:
+            critical_under_branch_targets.append(rel_path)
 
     coverage_json_detail = run_result.get("stderr", "").splitlines()[0] if run_result.get("stderr") else str(json_file)
     if coverage_reuse_error:
@@ -913,6 +990,18 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             extra={"totals": totals},
         ),
         summarize_result(
+            "coverage_thresholds_respect_formal_floor",
+            threshold_policy_ok,
+            detail=threshold_policy_detail,
+            extra={
+                "line_min_percent": line_min_percent,
+                "branch_min_percent": branch_min_percent,
+                "line_floor": COVERAGE_LINE_MIN_FLOOR,
+                "branch_floor": COVERAGE_BRANCH_MIN_FLOOR,
+                "max_gap": COVERAGE_MAX_LINE_BRANCH_GAP,
+            },
+        ),
+        summarize_result(
             "coverage_line_percent_within_minimum",
             line_percent_covered >= line_min_percent,
             detail=f"line_percent={line_percent_covered:.2f} | min={line_min_percent:.2f}",
@@ -925,6 +1014,12 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             extra={"branch_percent_covered": branch_percent_covered, "branch_min_percent": branch_min_percent},
         ),
         summarize_result(
+            "coverage_core_trading_targets_declared",
+            not core_target_missing,
+            detail=f"missing_core_targets={core_target_missing}",
+            extra={"missing_core_targets": core_target_missing},
+        ),
+        summarize_result(
             "coverage_key_targets_present",
             not missing_targets,
             detail=f"missing={missing_targets}",
@@ -935,6 +1030,24 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             not zero_covered_targets,
             detail=f"zero_covered={zero_covered_targets}",
             extra={"zero_covered_targets": zero_covered_targets},
+        ),
+        summarize_result(
+            "coverage_critical_files_line_percent_within_minimum",
+            not critical_under_line_targets,
+            detail=f"critical_line_under={critical_under_line_targets} | min={critical_line_min_percent:.2f}",
+            extra={
+                "critical_under_line_targets": critical_under_line_targets,
+                "critical_line_min_percent": critical_line_min_percent,
+            },
+        ),
+        summarize_result(
+            "coverage_critical_files_branch_percent_within_minimum",
+            not critical_under_branch_targets,
+            detail=f"critical_branch_under={critical_under_branch_targets} | min={critical_branch_min_percent:.2f}",
+            extra={
+                "critical_under_branch_targets": critical_under_branch_targets,
+                "critical_branch_min_percent": critical_branch_min_percent,
+            },
         ),
     ]
 
@@ -956,11 +1069,17 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             "branch_percent_covered": branch_percent_covered,
             "line_min_percent": line_min_percent,
             "branch_min_percent": branch_min_percent,
+            "critical_line_min_percent": critical_line_min_percent,
+            "critical_branch_min_percent": critical_branch_min_percent,
             "synthetic_fail_count": synthetic_fail_count,
         },
         "key_files": key_files,
+        "critical_file_coverage": critical_file_coverage,
+        "missing_core_targets": core_target_missing,
         "missing_targets": missing_targets,
         "zero_covered_targets": zero_covered_targets,
+        "critical_under_line_targets": critical_under_line_targets,
+        "critical_under_branch_targets": critical_under_branch_targets,
     }
 
 
@@ -1175,8 +1294,13 @@ def main(argv=None) -> int:
             "branch_percent_covered": coverage_summary["totals"]["branch_percent_covered"],
             "line_min_percent": coverage_summary["totals"]["line_min_percent"],
             "branch_min_percent": coverage_summary["totals"]["branch_min_percent"],
+            "critical_line_min_percent": coverage_summary["totals"]["critical_line_min_percent"],
+            "critical_branch_min_percent": coverage_summary["totals"]["critical_branch_min_percent"],
+            "missing_core_targets": coverage_summary["missing_core_targets"],
             "missing_targets": coverage_summary["missing_targets"],
             "zero_covered_targets": coverage_summary["zero_covered_targets"],
+            "critical_under_line_targets": coverage_summary["critical_under_line_targets"],
+            "critical_under_branch_targets": coverage_summary["critical_under_branch_targets"],
         },
         "checklist": {
             "ok": checklist_summary["ok"],

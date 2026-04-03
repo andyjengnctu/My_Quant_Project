@@ -96,9 +96,9 @@
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
 | B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏與 convergence 紀錄失同步；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 top-level project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
-| B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | PARTIAL | 已有 key target presence/hit guard，但目前 checklist 尚未明確要求 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 等高風險核心模組必須納入 coverage targets | `tools/local_regression/run_meta_quality.py` |
-| B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | TODO | 目前只有 overall coverage minimum threshold 與 key target hit；尚未阻擋「總 coverage 過關但核心交易檔 line / branch coverage 仍偏薄」的情況 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
-| B30 | P1 | 覆蓋率 | overall coverage minimum threshold 應逐步提高，branch 優先 | PARTIAL | 目前已具備正式 minimum threshold gate，但門檻仍為 `line 50% / branch 45%`，對高分支交易規則仍偏保守；後續應先提高 branch，再提高 line | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py` |
+| B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B30 | P1 | 覆蓋率 | overall coverage minimum threshold 應逐步提高，branch 優先 | DONE | 已將正式 coverage 基線提高為 `line 55% / branch 50%`，並新增 threshold floor guard，阻擋門檻回退到舊的 `50 / 45`；branch 與 line 的 gap 也已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -240,22 +240,16 @@
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
-| 覆蓋率 | B28 | key coverage targets 應包含核心交易模組 | 現有 key target hit guard 尚未明確要求核心交易模組入列；coverage target 仍可能偏向 reporting / helper，而非交易核心 | `tools/local_regression/run_meta_quality.py` |
-| 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 | 已有 minimum threshold gate，但目前 `line 50% / branch 45%` 對高分支交易規則偏保守 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py` |
 
 ### E2. 目前所有 `TODO` 的主表項目摘要
 
 | 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
-| 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate | 目前只檢 overall coverage 與 key target hit；尚未對核心交易檔設置 per-file minimum coverage guard | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
 | ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
-| D97 | `validate_core_trading_modules_in_coverage_targets_case` | TODO | B28 |
-| D98 | `validate_critical_file_coverage_minimum_gate_case` | TODO | B29 |
-| D99 | `validate_coverage_threshold_floor_case` | TODO | B30 |
 
 ## F. 已完成覆蓋摘要
 
@@ -291,6 +285,9 @@
 | Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
 | Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` | 2026-04-02 |
 | Meta | B27 | 禁止循環依賴（模組層級 import cycle） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` | 2026-04-03 |
+| 覆蓋率 | B28 | key coverage targets 應包含核心交易模組 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -360,6 +357,9 @@
 | D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
 | D95 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
 | D96 | `validate_no_top_level_import_cycles_case` | B27 | 2026-04-03 |
+| D97 | `validate_core_trading_modules_in_coverage_targets_case` | B28 | 2026-04-03 |
+| D98 | `validate_critical_file_coverage_minimum_gate_case` | B29 | 2026-04-03 |
+| D99 | `validate_coverage_threshold_floor_case` | B30 | 2026-04-03 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
@@ -529,6 +529,12 @@
 | 2026-04-03 | B28 | 補入核心交易模組 coverage target completeness 主表項目 | NEW -> PARTIAL | `run_meta_quality.py` 已有 key target hit guard，但尚未明確要求核心交易模組入列 |
 | 2026-04-03 | B29 | 補入 critical file per-file coverage minimum gate 主表項目 | NEW -> TODO | 目前僅有 overall coverage gate，尚未建立核心檔 per-file minimum guard |
 | 2026-04-03 | B30 | 補入 coverage threshold gradual uplift 主表項目 | NEW -> PARTIAL | 已有 minimum threshold gate，但正式基線仍為 `line 50% / branch 45%` |
+| 2026-04-03 | D97 | 補上核心交易模組 coverage target completeness guard 並驗證 | TODO -> DONE | `validate_core_trading_modules_in_coverage_targets_case` |
+| 2026-04-03 | D98 | 補上 critical file per-file coverage minimum guard 並驗證 | TODO -> DONE | `validate_critical_file_coverage_minimum_gate_case` |
+| 2026-04-03 | D99 | 補上 coverage threshold floor guard 並驗證 | TODO -> DONE | `validate_coverage_threshold_floor_case` |
+| 2026-04-03 | B28 | 核心交易模組已納入 `COVERAGE_TARGETS`，主表收斂為 DONE | PARTIAL -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` 已阻擋核心交易模組 coverage target 漏列 |
+| 2026-04-03 | B29 | 核心檔 per-file coverage minimum guard 已建立，主表收斂為 DONE | TODO -> DONE | `run_meta_quality.py` 已正式檢查 critical file line / branch minimum coverage |
+| 2026-04-03 | B30 | 正式 coverage 基線已提高並補 floor guard，主表收斂為 DONE | PARTIAL -> DONE | `common.py` / `manifest.json` 已提升到 `line 55 / branch 50`，並由 `run_meta_quality.py` 阻擋回退 |
 
 ## H. 完成判準
 

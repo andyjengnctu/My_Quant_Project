@@ -37,6 +37,9 @@ from .synthetic_unit_cases import (
 )
 from .synthetic_meta_cases import (
     validate_cmd_document_contract_case,
+    validate_core_trading_modules_in_coverage_targets_case,
+    validate_coverage_threshold_floor_case,
+    validate_critical_file_coverage_minimum_gate_case,
     validate_known_bad_fault_injection_case,
     validate_no_reverse_app_layer_dependencies_case,
     validate_no_top_level_import_cycles_case,
@@ -137,6 +140,9 @@ def get_synthetic_validators():
         validate_portfolio_stats_unit_case,
         validate_independent_oracle_golden_case,
         validate_registry_checklist_entry_consistency_case,
+        validate_core_trading_modules_in_coverage_targets_case,
+        validate_critical_file_coverage_minimum_gate_case,
+        validate_coverage_threshold_floor_case,
         validate_known_bad_fault_injection_case,
         validate_cmd_document_contract_case,
         validate_no_reverse_app_layer_dependencies_case,
