@@ -970,25 +970,34 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    from tools.validate import synthetic_cases as synthetic_cases_module
+
+    manifest = local_common.load_manifest()
+    overall_line_floor = float(manifest["coverage_line_min_percent"])
+    overall_branch_floor = float(manifest["coverage_branch_min_percent"])
+    critical_line_floor = float(manifest["coverage_critical_line_min_percent"])
+    critical_branch_floor = float(manifest["coverage_critical_branch_min_percent"])
+    synthetic_case_count = len(synthetic_cases_module.get_synthetic_validators())
+
     with tempfile.TemporaryDirectory(prefix="meta_quality_reuse_cov_") as temp_dir:
         run_dir = Path(temp_dir)
         coverage_dir = run_dir / "coverage_artifacts"
         coverage_dir.mkdir(parents=True, exist_ok=True)
         coverage_payload = {
             "totals": {
-                "covered_lines": 120,
+                "covered_lines": int(max(overall_line_floor, 60.0) * 2),
                 "num_statements": 200,
-                "covered_branches": 120,
+                "covered_branches": int(max(overall_branch_floor, 60.0) * 2),
                 "num_branches": 200,
-                "percent_covered": 60.0,
+                "percent_covered": float((max(overall_line_floor, 60.0) + max(overall_branch_floor, 60.0)) / 2.0),
             },
             "files": {
                 rel_path: {
                     "summary": {
-                        "covered_lines": 30 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "covered_lines": int(critical_line_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
                         "num_statements": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
-                        "percent_covered": 30.0 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 100.0,
-                        "covered_branches": 25 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "percent_covered": float(critical_line_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 100.0,
+                        "covered_branches": int(critical_branch_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
                         "num_branches": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
                     }
                 }
@@ -1003,16 +1012,10 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
             "stderr": "",
             "timed_out": False,
             "synthetic_fail_count": 0,
-            "synthetic_case_count": 99,
+            "synthetic_case_count": synthetic_case_count,
             "json_generated": True,
         })
 
-        manifest = {
-            "coverage_line_min_percent": 55.0,
-            "coverage_branch_min_percent": 50.0,
-            "coverage_critical_line_min_percent": 25.0,
-            "coverage_critical_branch_min_percent": 20.0,
-        }
         with patch("tools.validate.synthetic_cases.run_synthetic_consistency_suite", side_effect=AssertionError("should reuse existing coverage artifacts")):
             coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
 
