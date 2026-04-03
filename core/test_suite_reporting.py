@@ -86,6 +86,16 @@ def _coverage_percent(numerator: Any, denominator: Any) -> float:
     return (numerator_value / denominator_value) * 100.0
 
 
+def _append_int_detail(details: list[str], *, key: str, raw_value: Any) -> None:
+    try:
+        details.append(f"{key}={int(raw_value)}")
+    except (TypeError, ValueError) as exc:
+        raw_preview = repr(raw_value)
+        if len(raw_preview) > 80:
+            raw_preview = raw_preview[:77] + "..."
+        details.append(f"{key}=INVALID({type(exc).__name__}:{raw_preview})")
+
+
 def print_test_suite_human_summary(
     result: Dict[str, Any],
     *,
@@ -155,15 +165,9 @@ def print_test_suite_human_summary(
         if summary_write_error:
             details.append(f"summary_write_error={summary_write_error}")
         if "fail_count" in payload:
-            try:
-                details.append(f"fail_count={int(payload.get('fail_count', 0))}")
-            except (TypeError, ValueError):
-                pass
+            _append_int_detail(details, key="fail_count", raw_value=payload.get("fail_count", 0))
         if "failed_count" in payload:
-            try:
-                details.append(f"failed_count={int(payload.get('failed_count', 0))}")
-            except (TypeError, ValueError):
-                pass
+            _append_int_detail(details, key="failed_count", raw_value=payload.get("failed_count", 0))
         return ", ".join(details)
 
     def _blocked_reason(step_name: str) -> str:

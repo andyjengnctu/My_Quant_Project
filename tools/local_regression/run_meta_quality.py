@@ -736,32 +736,51 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _load_reusable_coverage_artifacts(coverage_dir: Path) -> Dict[str, Any] | None:
+def _load_reusable_coverage_artifacts(coverage_dir: Path) -> tuple[Dict[str, Any] | None, str]:
+    def _preview_value(raw_value: Any) -> str:
+        preview = repr(raw_value)
+        if len(preview) > 100:
+            preview = preview[:97] + "..."
+        return preview
+
+    def _coerce_int(raw_value: Any, *, field_name: str) -> int:
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name}={_preview_value(raw_value)} ({type(exc).__name__})") from exc
+
     json_file = coverage_dir / "coverage_synthetic.json"
     run_info_file = coverage_dir / "coverage_run_info.json"
     if not json_file.exists() or not run_info_file.exists():
-        return None
+        return None, ""
     try:
         payload = json.loads(json_file.read_text(encoding="utf-8"))
         run_info = json.loads(run_info_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
+    except (OSError, ValueError, TypeError) as exc:
+        return None, f"coverage_reuse_error={type(exc).__name__}:{exc}"
     if not isinstance(payload, dict) or not isinstance(run_info, dict):
-        return None
-    if run_info.get("source") != "validate_consistency":
-        return None
-    return {
-        "payload": payload,
-        "run_result": {
-            "returncode": int(run_info.get("returncode", 1)),
-            "stdout": str(run_info.get("stdout", "") or ""),
-            "stderr": str(run_info.get("stderr", "") or ""),
-            "timed_out": bool(run_info.get("timed_out", False)),
-        },
-        "synthetic_fail_count": int(run_info.get("synthetic_fail_count", 0) or 0),
-        "synthetic_case_count": int(run_info.get("synthetic_case_count", 0) or 0),
-        "json_file": str(json_file),
-    }
+        return None, (
+            "coverage_reuse_error=invalid_schema("
+            f"payload={type(payload).__name__},run_info={type(run_info).__name__})"
+        )
+    source = str(run_info.get("source", "") or "")
+    if source != "validate_consistency":
+        return None, f"coverage_reuse_error=unexpected_source({source or 'missing'})"
+    try:
+        return {
+            "payload": payload,
+            "run_result": {
+                "returncode": _coerce_int(run_info.get("returncode", 1), field_name="returncode"),
+                "stdout": str(run_info.get("stdout", "") or ""),
+                "stderr": str(run_info.get("stderr", "") or ""),
+                "timed_out": bool(run_info.get("timed_out", False)),
+            },
+            "synthetic_fail_count": _coerce_int(run_info.get("synthetic_fail_count", 0) or 0, field_name="synthetic_fail_count"),
+            "synthetic_case_count": _coerce_int(run_info.get("synthetic_case_count", 0) or 0, field_name="synthetic_case_count"),
+            "json_file": str(json_file),
+        }, ""
+    except ValueError as exc:
+        return None, f"coverage_reuse_error=invalid_run_info({exc})"
 
 
 def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
@@ -779,7 +798,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     reused_existing = False
     json_ok = False
 
-    reusable = _load_reusable_coverage_artifacts(coverage_dir)
+    reusable, coverage_reuse_error = _load_reusable_coverage_artifacts(coverage_dir)
     formal_helper_probe = _exercise_coverage_formal_helpers(coverage_dir)
     if reusable is not None:
         payload = reusable["payload"]
@@ -866,6 +885,10 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
     line_min_percent = float(manifest["coverage_line_min_percent"])
     branch_min_percent = float(manifest["coverage_branch_min_percent"])
 
+    coverage_json_detail = run_result.get("stderr", "").splitlines()[0] if run_result.get("stderr") else str(json_file)
+    if coverage_reuse_error:
+        coverage_json_detail = f"{coverage_json_detail} | {coverage_reuse_error}" if coverage_json_detail else coverage_reuse_error
+
     results = [
         summarize_result(
             "coverage_synthetic_suite_runs_successfully",
@@ -876,8 +899,8 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
         summarize_result(
             "coverage_json_generated",
             json_ok and json_file.exists(),
-            detail=run_result.get("stderr", "").splitlines()[0] if run_result.get("stderr") else str(json_file),
-            extra={"json_file": str(json_file)},
+            detail=coverage_json_detail,
+            extra={"json_file": str(json_file), "coverage_reuse_error": coverage_reuse_error},
         ),
         summarize_result(
             "coverage_overall_nonzero",
@@ -921,6 +944,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
         "results": results,
         "run_result": run_result,
         "json_file": str(json_file),
+        "coverage_reuse_error": coverage_reuse_error,
         "reused_existing": reused_existing,
         "totals": {
             "covered_lines": int(totals.get("covered_lines", 0) or 0),

@@ -45,6 +45,16 @@ STEP_NAMES = list(FORMAL_STEP_ORDER)
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
+def _format_optional_int_detail(key: str, raw_value: Any) -> str:
+    try:
+        return f"{key}={int(raw_value)}"
+    except (TypeError, ValueError) as exc:
+        raw_preview = repr(raw_value)
+        if len(raw_preview) > 80:
+            raw_preview = raw_preview[:77] + "..."
+        return f"{key}=INVALID({type(exc).__name__}:{raw_preview})"
+
+
 def _normalize_selected_steps(selected_steps: Optional[List[str]]) -> List[str]:
     if not selected_steps:
         return list(STEP_NAMES)
@@ -974,15 +984,9 @@ def execute_all(
                 if runtime_error:
                     failure_reasons.append(f"summary_error={runtime_error}")
                 if "fail_count" in summary_payload:
-                    try:
-                        failure_reasons.append(f"fail_count={int(summary_payload.get('fail_count', 0))}")
-                    except (TypeError, ValueError):
-                        pass
+                    failure_reasons.append(_format_optional_int_detail("fail_count", summary_payload.get("fail_count", 0)))
                 if "failed_count" in summary_payload:
-                    try:
-                        failure_reasons.append(f"failed_count={int(summary_payload.get('failed_count', 0))}")
-                    except (TypeError, ValueError):
-                        pass
+                    failure_reasons.append(_format_optional_int_detail("failed_count", summary_payload.get("failed_count", 0)))
             if run_result.get("error_type"):
                 effective_status = "FAIL"
                 failure_reasons.append(f"launch_error={run_result['error_type']}")
