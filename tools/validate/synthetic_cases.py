@@ -69,6 +69,7 @@ from .synthetic_reporting_cases import (
 from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
     validate_atomic_write_contract_case,
+    validate_atomic_write_retry_contract_case,
     validate_dataset_fingerprint_contract_case,
     validate_local_regression_summary_contract_case,
     validate_meta_quality_reuses_existing_coverage_artifacts_case,
@@ -174,6 +175,7 @@ def get_synthetic_validators():
         validate_output_contract_case,
         validate_dataset_fingerprint_contract_case,
         validate_atomic_write_contract_case,
+        validate_atomic_write_retry_contract_case,
         validate_portfolio_sim_prepared_tool_contract_case,
         validate_scanner_prepared_tool_contract_case,
         validate_scanner_reference_clean_df_contract_case,

@@ -895,6 +895,39 @@ def validate_atomic_write_contract_case(_base_params):
     return results, summary
 
 
+def validate_atomic_write_retry_contract_case(_base_params):
+    case_id = "ATOMIC_WRITE_RETRY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="atomic_write_retry_contract_") as temp_dir:
+        run_dir = Path(temp_dir)
+        json_path = run_dir / "atomic_retry_summary.json"
+        local_common.write_json(json_path, {"status": "original", "count": 1})
+
+        original_replace = local_common.os.replace
+        replace_attempts = {"count": 0}
+
+        def flaky_replace(src, dst):
+            replace_attempts["count"] += 1
+            if replace_attempts["count"] < 3:
+                raise PermissionError("simulated transient share violation")
+            return original_replace(src, dst)
+
+        with patch.object(local_common.os, "replace", side_effect=flaky_replace),              patch.object(local_common.time, "sleep", side_effect=lambda *_args, **_kwargs: None):
+            local_common.write_json(json_path, {"status": "retried", "count": 2})
+
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        remaining_temp_files = sorted(path.name for path in run_dir.glob(".*.tmp"))
+
+    add_check(results, "output_contract", case_id, "atomic_write_retry_eventually_succeeds_after_transient_permission_error", "retried", payload.get("status"))
+    add_check(results, "output_contract", case_id, "atomic_write_retry_attempt_count_matches_transient_failures", 3, replace_attempts["count"])
+    add_check(results, "output_contract", case_id, "atomic_write_retry_cleans_temp_files_after_success", [], remaining_temp_files)
+
+    summary["replace_attempts"] = replace_attempts["count"]
+    return results, summary
+
+
 def validate_meta_quality_performance_memory_contract_case(_base_params):
     case_id = "META_QUALITY_PERFORMANCE_MEMORY_CONTRACT"
     results = []

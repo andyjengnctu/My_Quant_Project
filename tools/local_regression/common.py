@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import errno
 import hashlib
 import io
 import json
@@ -187,6 +188,37 @@ def read_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
+_ATOMIC_REPLACE_MAX_ATTEMPTS = 6
+_ATOMIC_REPLACE_RETRY_DELAY_SEC = 0.05
+_RETRYABLE_ATOMIC_REPLACE_WINERRORS = {5, 32}
+_RETRYABLE_ATOMIC_REPLACE_ERRNOS = {errno.EACCES, errno.EBUSY, errno.EPERM}
+
+
+def _is_retryable_atomic_replace_error(exc: BaseException) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if not isinstance(exc, OSError):
+        return False
+    if getattr(exc, "winerror", None) in _RETRYABLE_ATOMIC_REPLACE_WINERRORS:
+        return True
+    return getattr(exc, "errno", None) in _RETRYABLE_ATOMIC_REPLACE_ERRNOS
+
+
+def _atomic_replace_file(temp_path: Path, path: Path) -> None:
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, _ATOMIC_REPLACE_MAX_ATTEMPTS + 1):
+        try:
+            os.replace(temp_path, path)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if not _is_retryable_atomic_replace_error(exc) or attempt >= _ATOMIC_REPLACE_MAX_ATTEMPTS:
+                raise
+            time.sleep(_ATOMIC_REPLACE_RETRY_DELAY_SEC * attempt)
+    if last_exc is not None:
+        raise last_exc
+
+
 def _atomic_replace_text(path: Path, text: str, *, encoding: str, newline: Optional[str] = None) -> Path:
     ensure_dir(path.parent)
     temp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
@@ -195,7 +227,7 @@ def _atomic_replace_text(path: Path, text: str, *, encoding: str, newline: Optio
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(temp_path, path)
+        _atomic_replace_file(temp_path, path)
     except Exception:
         try:
             temp_path.unlink()
