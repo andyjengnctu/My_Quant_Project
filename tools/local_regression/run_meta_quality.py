@@ -808,7 +808,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
             synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
             run_result["returncode"] = 0 if synthetic_fail_count == 0 else 1
             run_result["stdout"] = json.dumps({"synthetic_case_count": len(summaries), "synthetic_fail_count": synthetic_fail_count, "formal_helper_probe": formal_helper_probe}, ensure_ascii=False)
-        except BaseException as exc:
+        except Exception as exc:
             run_result["returncode"] = 1
             run_result["stderr"] = f"{type(exc).__name__}: {exc}"
         finally:
@@ -820,7 +820,7 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
                 cov.json_report(outfile=str(json_file), pretty_print=True)
                 payload = json.loads(json_file.read_text(encoding="utf-8"))
                 json_ok = True
-            except BaseException as exc:
+            except Exception as exc:
                 run_result["stderr"] = (run_result["stderr"] + "\n" if run_result["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
 
     totals = payload.get("totals", {}) if isinstance(payload, dict) else {}

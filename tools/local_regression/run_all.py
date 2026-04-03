@@ -223,7 +223,9 @@ def _run_inline_step_with_progress(
     def _runner() -> None:
         try:
             holder["result"] = func()
-        except BaseException as exc:
+        except (KeyboardInterrupt, SystemExit) as exc:
+            holder["fatal_exc"] = exc
+        except Exception as exc:
             holder["exc"] = exc
 
     started = time.time()
@@ -244,6 +246,8 @@ def _run_inline_step_with_progress(
                 "elapsed_sec": round(now - started, 1),
                 "timeout_sec": 0,
             })
+    if "fatal_exc" in holder:
+        raise holder["fatal_exc"]
     if "exc" in holder:
         raise holder["exc"]
     return holder["result"]
