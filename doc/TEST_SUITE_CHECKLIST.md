@@ -328,7 +328,9 @@
 | D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
 | D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | B12 / B18 | 2026-04-02 |
 | D15 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
+| D15 | `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
 | D19 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
+| D19 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
