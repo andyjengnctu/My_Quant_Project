@@ -307,7 +307,9 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
     g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
-    invalid_rows = g_note_result.get("extra", {}).get("invalid_note_rows", [])
+    invalid_rows = g_note_result.get("invalid_note_rows")
+    if invalid_rows is None:
+        invalid_rows = g_note_result.get("extra", {}).get("invalid_note_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_note_single_entry_guard_fails", "FAIL", g_note_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_multiple_entries", True, any(row.get("id") == "B38" for row in invalid_rows))
