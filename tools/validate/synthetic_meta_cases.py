@@ -22,6 +22,7 @@ from .meta_contracts import (
     summarize_no_top_level_import_cycles_contract,
     summarize_single_formal_test_entry_contract,
 )
+from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
 from tools.local_regression.meta_quality_coverage import build_coverage_summary
 from tools.local_regression.meta_quality_targets import (
     CORE_TRADING_COVERAGE_TARGETS,
