@@ -121,7 +121,7 @@ project/
       ├─ portfolio_payloads.py        # validate 投組 payload、年度欄位與 completed trade 摘要 helper
       ├─ reporting.py                 # validate 報表輸出、console summary 與 local regression summary JSON
       ├─ scanner_expectations.py      # scanner 預期 payload / reference check helper
-      ├─ synthetic_cases.py           # synthetic suite 入口、validator metadata registry 與相容 façade
+      ├─ synthetic_cases.py           # synthetic suite 入口、validator registry 與相容 façade
       ├─ synthetic_fixtures.py        # synthetic 測試資料與案例生成
       ├─ synthetic_param_cases.py     # synthetic 參數 guardrail / 排序與歷史門檻案例
       ├─ synthetic_flow_cases.py       # synthetic 延續候選/競爭候選/同日賣出封鎖/rotation 案例

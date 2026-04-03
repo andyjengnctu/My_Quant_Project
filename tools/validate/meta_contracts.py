@@ -204,7 +204,7 @@ def summarize_no_top_level_import_cycles_contract(project_root: Path) -> Dict[st
 
     for module_name, path in module_index.items():
         tree = _read_python_ast(path)
-        for node in tree.body:
+        for node in ast.walk(tree):
             if not isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue
             for imported_module in _iter_project_import_edges(
@@ -248,6 +248,54 @@ def load_imported_validate_names_from_synthetic_main_entry(project_root: Path) -
             if imported_name.startswith("validate_"):
                 imported_names.add(imported_name)
     return imported_names
+
+
+def _extract_constant_string(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _extract_constant_string_sequence(node: ast.AST | None) -> list[str]:
+    if not isinstance(node, (ast.Tuple, ast.List)):
+        return []
+    values: list[str] = []
+    for element in node.elts:
+        value = _extract_constant_string(element)
+        if value is None:
+            return []
+        values.append(value)
+    return values
+
+
+def load_synthetic_registry_entries_from_source(project_root: Path) -> list[Dict[str, Any]]:
+    source_path = project_root / "tools" / "validate" / "synthetic_cases.py"
+    tree = _read_python_ast(source_path)
+
+    registry_function = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "get_synthetic_validator_entries":
+            registry_function = node
+            break
+    if registry_function is None:
+        return []
+
+    entries: list[Dict[str, Any]] = []
+    for node in ast.walk(registry_function):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "_entry":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Name):
+            continue
+        keyword_map = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+        entries.append({
+            "name": node.args[0].id,
+            "layer": _extract_constant_string(keyword_map.get("layer")),
+            "cost_class": _extract_constant_string(keyword_map.get("cost_class")),
+            "impacted_modules": tuple(_extract_constant_string_sequence(keyword_map.get("impacted_modules"))),
+        })
+    return entries
 
 
 def load_defined_validate_names_from_synthetic_case_modules(project_root: Path) -> Set[str]:

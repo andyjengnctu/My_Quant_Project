@@ -17,9 +17,23 @@ from .meta_contracts import (
     extract_markdown_table_rows,
     load_defined_validate_names_from_synthetic_case_modules,
     load_imported_validate_names_from_synthetic_main_entry,
+    load_synthetic_registry_entries_from_source,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
     summarize_single_formal_test_entry_contract,
+)
+from tools.local_regression.meta_quality_coverage import build_coverage_summary
+from tools.local_regression.meta_quality_targets import (
+    CORE_TRADING_COVERAGE_TARGETS,
+    COVERAGE_BRANCH_MIN_FLOOR,
+    COVERAGE_LINE_MIN_FLOOR,
+    COVERAGE_MAX_LINE_BRANCH_GAP,
+    COVERAGE_TARGETS,
+    CRITICAL_COVERAGE_BRANCH_MIN_FLOOR,
+    CRITICAL_COVERAGE_LINE_MIN_FLOOR,
+    CRITICAL_COVERAGE_TARGETS,
+    ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
+    TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 
 
@@ -214,15 +228,12 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
 
 def validate_synthetic_registry_metadata_contract_case(_base_params):
-    from tools.validate.synthetic_cases import get_synthetic_validator_entries, get_synthetic_validator_metadata
-
     case_id = "META_SYNTHETIC_REGISTRY_METADATA"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    entries = get_synthetic_validator_entries()
-    metadata = get_synthetic_validator_metadata()
-    entry_names = [entry.name for entry in entries]
+    entries = load_synthetic_registry_entries_from_source(PROJECT_ROOT)
+    entry_names = [entry["name"] for entry in entries]
     allowed_layers = {
         "core_invariant",
         "unit_boundary",
@@ -236,13 +247,14 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     }
     allowed_cost_classes = {"fast", "medium", "heavy"}
 
-    invalid_layers = sorted(entry.name for entry in entries if entry.layer not in allowed_layers)
-    invalid_cost_classes = sorted(entry.name for entry in entries if entry.cost_class not in allowed_cost_classes)
-    missing_impacted_modules = sorted(entry.name for entry in entries if not entry.impacted_modules)
+    invalid_names = sorted(name for name in entry_names if not name.startswith("validate_"))
+    invalid_layers = sorted(entry["name"] for entry in entries if entry["layer"] not in allowed_layers)
+    invalid_cost_classes = sorted(entry["name"] for entry in entries if entry["cost_class"] not in allowed_cost_classes)
+    missing_impacted_modules = sorted(entry["name"] for entry in entries if not entry["impacted_modules"])
     invalid_impacted_modules = sorted(
-        f"{entry.name}:{module_path}"
+        f"{entry['name']}:{module_path}"
         for entry in entries
-        for module_path in entry.impacted_modules
+        for module_path in entry["impacted_modules"]
         if (not module_path)
         or (module_path.strip() != module_path)
         or module_path.startswith("/")
@@ -250,39 +262,34 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         or not module_path.endswith((".py", ".md", ".json"))
     )
     duplicated_impacted_modules = sorted(
-        entry.name for entry in entries if len(entry.impacted_modules) != len(set(entry.impacted_modules))
+        entry["name"] for entry in entries if len(entry["impacted_modules"]) != len(set(entry["impacted_modules"]))
     )
-    metadata_names = [row["name"] for row in metadata]
+    duplicate_entry_names = sorted(name for name in set(entry_names) if entry_names.count(name) > 1)
 
     add_check(results, "meta_registry", case_id, "registry_metadata_not_empty", True, len(entries) > 0)
-    add_check(results, "meta_registry", case_id, "registry_metadata_size_matches_entries", len(entries), len(metadata))
-    add_check(results, "meta_registry", case_id, "registry_metadata_names_match_entries", entry_names, metadata_names)
+    add_check(results, "meta_registry", case_id, "registry_metadata_names_unique", [], duplicate_entry_names)
+    add_check(results, "meta_registry", case_id, "registry_metadata_validator_names_prefixed", [], invalid_names)
     add_check(results, "meta_registry", case_id, "registry_metadata_layers_valid", [], invalid_layers)
     add_check(results, "meta_registry", case_id, "registry_metadata_cost_classes_valid", [], invalid_cost_classes)
     add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_present", [], missing_impacted_modules)
     add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_normalized", [], invalid_impacted_modules)
     add_check(results, "meta_registry", case_id, "registry_metadata_impacted_modules_unique_per_entry", [], duplicated_impacted_modules)
 
-    for entry in entries:
-        add_check(results, "meta_registry", case_id, f"{entry.name}_metadata_name_matches_validator", entry.name, entry.validator.__name__)
-
     layer_counts = {}
     for entry in entries:
-        layer_counts[entry.layer] = layer_counts.get(entry.layer, 0) + 1
+        layer_counts[entry["layer"]] = layer_counts.get(entry["layer"], 0) + 1
     summary["validator_count"] = len(entries)
     summary["layer_counts"] = layer_counts
     return results, summary
 
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
-    from tools.validate.synthetic_cases import get_synthetic_validator_entries
-
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    validator_entries = get_synthetic_validator_entries()
-    validator_names = [entry.name for entry in validator_entries]
+    validator_entries = load_synthetic_registry_entries_from_source(PROJECT_ROOT)
+    validator_names = [entry["name"] for entry in validator_entries]
     validator_name_set = set(validator_names)
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
@@ -426,10 +433,8 @@ def _summary_result_by_name(results, name):
 
 
 def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0, critical_line_percent=35.0, critical_branch_percent=30.0):
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
-
     files = {}
-    for rel_path in run_meta_quality_module.COVERAGE_TARGETS:
+    for rel_path in COVERAGE_TARGETS:
         summary = {
             "covered_lines": 8,
             "num_statements": 10,
@@ -437,7 +442,7 @@ def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0,
             "covered_branches": 4,
             "num_branches": 5,
         }
-        if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS:
+        if rel_path in CRITICAL_COVERAGE_TARGETS:
             summary = {
                 "covered_lines": int(critical_line_percent),
                 "num_statements": 100,
@@ -460,14 +465,12 @@ def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0,
 
 
 def validate_core_trading_modules_in_coverage_targets_case(_base_params):
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
-
     case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    expected_targets = list(run_meta_quality_module.CORE_TRADING_COVERAGE_TARGETS)
-    declared_targets = list(run_meta_quality_module.COVERAGE_TARGETS)
+    expected_targets = list(CORE_TRADING_COVERAGE_TARGETS)
+    declared_targets = list(COVERAGE_TARGETS)
     missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
     missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
 
@@ -503,14 +506,12 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
 
 
 def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
-
     case_id = "META_TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    expected_targets = list(run_meta_quality_module.TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS)
-    declared_targets = list(run_meta_quality_module.COVERAGE_TARGETS)
+    expected_targets = list(TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS)
+    declared_targets = list(COVERAGE_TARGETS)
     missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
     missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
 
@@ -547,8 +548,6 @@ def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
 
 
 def validate_critical_file_coverage_minimum_gate_case(_base_params):
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
-
     case_id = "META_CRITICAL_FILE_COVERAGE_MINIMUM_GATE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -558,10 +557,10 @@ def validate_critical_file_coverage_minimum_gate_case(_base_params):
         coverage_dir = run_dir / "coverage_artifacts"
         coverage_dir.mkdir(parents=True, exist_ok=True)
         payload = _build_meta_quality_reuse_payload(line_percent=72.0, branch_percent=68.0, critical_line_percent=35.0, critical_branch_percent=30.0)
-        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0]]["summary"]["covered_lines"] = 10
-        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0]]["summary"]["percent_covered"] = 10.0
-        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1]]["summary"]["covered_branches"] = 5
-        payload["files"][run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1]]["summary"]["num_branches"] = 100
+        payload["files"][CRITICAL_COVERAGE_TARGETS[0]]["summary"]["covered_lines"] = 10
+        payload["files"][CRITICAL_COVERAGE_TARGETS[0]]["summary"]["percent_covered"] = 10.0
+        payload["files"][CRITICAL_COVERAGE_TARGETS[1]]["summary"]["covered_branches"] = 5
+        payload["files"][CRITICAL_COVERAGE_TARGETS[1]]["summary"]["num_branches"] = 100
         write_path = coverage_dir / "coverage_synthetic.json"
         write_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
@@ -580,14 +579,14 @@ def validate_critical_file_coverage_minimum_gate_case(_base_params):
             "coverage_critical_line_min_percent": 30.0,
             "coverage_critical_branch_min_percent": 25.0,
         }
-        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
+        coverage_summary = build_coverage_summary(run_dir, manifest)
 
     line_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_files_line_percent_within_minimum")
     branch_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_files_branch_percent_within_minimum")
     line_fail_targets = coverage_summary.get("critical_under_line_targets", [])
     branch_fail_targets = coverage_summary.get("critical_under_branch_targets", [])
-    add_check(results, "meta_coverage", case_id, "critical_file_line_gate_detects_undercovered_file", True, run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[0] in line_fail_targets and line_gate_result.get("status") == "FAIL")
-    add_check(results, "meta_coverage", case_id, "critical_file_branch_gate_detects_undercovered_file", True, run_meta_quality_module.CRITICAL_COVERAGE_TARGETS[1] in branch_fail_targets and branch_gate_result.get("status") == "FAIL")
+    add_check(results, "meta_coverage", case_id, "critical_file_line_gate_detects_undercovered_file", True, CRITICAL_COVERAGE_TARGETS[0] in line_fail_targets and line_gate_result.get("status") == "FAIL")
+    add_check(results, "meta_coverage", case_id, "critical_file_branch_gate_detects_undercovered_file", True, CRITICAL_COVERAGE_TARGETS[1] in branch_fail_targets and branch_gate_result.get("status") == "FAIL")
     add_check(results, "meta_coverage", case_id, "critical_file_gate_blocks_overall_pass", False, coverage_summary.get("ok"))
 
     summary["line_fail_targets"] = line_fail_targets
@@ -597,19 +596,18 @@ def validate_critical_file_coverage_minimum_gate_case(_base_params):
 
 def validate_coverage_threshold_floor_case(_base_params):
     import tools.local_regression.common as common_module
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
 
     case_id = "META_COVERAGE_THRESHOLD_FLOOR"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     loaded_manifest = common_module.load_manifest()
-    expected_line_floor = int(run_meta_quality_module.COVERAGE_LINE_MIN_FLOOR)
-    expected_branch_floor = int(run_meta_quality_module.COVERAGE_BRANCH_MIN_FLOOR)
+    expected_line_floor = int(COVERAGE_LINE_MIN_FLOOR)
+    expected_branch_floor = int(COVERAGE_BRANCH_MIN_FLOOR)
 
     add_check(results, "meta_coverage", case_id, "manifest_line_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_line_min_percent"]) >= expected_line_floor)
     add_check(results, "meta_coverage", case_id, "manifest_branch_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_branch_min_percent"]) >= expected_branch_floor)
-    add_check(results, "meta_coverage", case_id, "manifest_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_line_min_percent"]) - float(loaded_manifest["coverage_branch_min_percent"]) <= float(run_meta_quality_module.COVERAGE_MAX_LINE_BRANCH_GAP))
+    add_check(results, "meta_coverage", case_id, "manifest_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_line_min_percent"]) - float(loaded_manifest["coverage_branch_min_percent"]) <= float(COVERAGE_MAX_LINE_BRANCH_GAP))
 
     with tempfile.TemporaryDirectory(prefix="meta_cov_floor_") as temp_dir:
         run_dir = Path(temp_dir)
@@ -633,7 +631,7 @@ def validate_coverage_threshold_floor_case(_base_params):
             "coverage_critical_line_min_percent": 30.0,
             "coverage_critical_branch_min_percent": 25.0,
         }
-        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, failing_manifest)
+        coverage_summary = build_coverage_summary(run_dir, failing_manifest)
 
     threshold_policy_result = _summary_result_by_name(coverage_summary["results"], "coverage_thresholds_respect_formal_floor")
     add_check(results, "meta_coverage", case_id, "coverage_threshold_floor_blocks_regression", False, coverage_summary.get("ok"))
@@ -645,19 +643,18 @@ def validate_coverage_threshold_floor_case(_base_params):
 
 def validate_critical_coverage_threshold_floor_case(_base_params):
     import tools.local_regression.common as common_module
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
 
     case_id = "META_CRITICAL_COVERAGE_THRESHOLD_FLOOR"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     loaded_manifest = common_module.load_manifest()
-    expected_line_floor = int(run_meta_quality_module.CRITICAL_COVERAGE_LINE_MIN_FLOOR)
-    expected_branch_floor = int(run_meta_quality_module.CRITICAL_COVERAGE_BRANCH_MIN_FLOOR)
+    expected_line_floor = int(CRITICAL_COVERAGE_LINE_MIN_FLOOR)
+    expected_branch_floor = int(CRITICAL_COVERAGE_BRANCH_MIN_FLOOR)
 
     add_check(results, "meta_coverage", case_id, "manifest_critical_line_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_critical_line_min_percent"]) >= expected_line_floor)
     add_check(results, "meta_coverage", case_id, "manifest_critical_branch_floor_respects_formal_baseline", True, int(loaded_manifest["coverage_critical_branch_min_percent"]) >= expected_branch_floor)
-    add_check(results, "meta_coverage", case_id, "manifest_critical_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_critical_line_min_percent"]) - float(loaded_manifest["coverage_critical_branch_min_percent"]) <= float(run_meta_quality_module.COVERAGE_MAX_LINE_BRANCH_GAP))
+    add_check(results, "meta_coverage", case_id, "manifest_critical_branch_floor_priority_gap_valid", True, float(loaded_manifest["coverage_critical_line_min_percent"]) - float(loaded_manifest["coverage_critical_branch_min_percent"]) <= float(COVERAGE_MAX_LINE_BRANCH_GAP))
 
     with tempfile.TemporaryDirectory(prefix="meta_critical_cov_floor_") as temp_dir:
         run_dir = Path(temp_dir)
@@ -681,7 +678,7 @@ def validate_critical_coverage_threshold_floor_case(_base_params):
             "coverage_critical_line_min_percent": 25.0,
             "coverage_critical_branch_min_percent": 20.0,
         }
-        coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, failing_manifest)
+        coverage_summary = build_coverage_summary(run_dir, failing_manifest)
 
     threshold_policy_result = _summary_result_by_name(coverage_summary["results"], "coverage_critical_thresholds_respect_formal_floor")
     add_check(results, "meta_coverage", case_id, "critical_coverage_threshold_floor_blocks_regression", False, coverage_summary.get("ok"))
@@ -692,14 +689,12 @@ def validate_critical_coverage_threshold_floor_case(_base_params):
 
 
 def validate_entry_path_critical_coverage_gate_case(_base_params):
-    import tools.local_regression.run_meta_quality as run_meta_quality_module
-
     case_id = "META_ENTRY_PATH_CRITICAL_COVERAGE_GATE"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    expected_targets = list(run_meta_quality_module.ENTRY_PATH_CRITICAL_COVERAGE_TARGETS)
-    declared_targets = list(run_meta_quality_module.CRITICAL_COVERAGE_TARGETS)
+    expected_targets = list(ENTRY_PATH_CRITICAL_COVERAGE_TARGETS)
+    declared_targets = list(CRITICAL_COVERAGE_TARGETS)
     missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
     missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
 
