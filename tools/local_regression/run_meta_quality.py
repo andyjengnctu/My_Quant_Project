@@ -125,6 +125,10 @@ def _ids_from_table(rows: List[List[str]], idx: int = 1) -> List[str]:
     return values
 
 
+def _sorted_unique(values: List[str]) -> List[str]:
+    return sorted(dict.fromkeys(values))
+
+
 def _latest_statuses_from_convergence_rows(rows: List[List[str]]) -> Dict[str, str]:
     statuses: Dict[str, str] = {}
     for cols in rows:
@@ -161,9 +165,10 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     e2_ids = sorted(_ids_from_table(tables["E2"]))
     e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     f1_ids = sorted(_ids_from_table(tables["F1"]))
-    f2_ids = sorted(_ids_from_table(tables["F2"], idx=0))
+    f2_ids_raw = _ids_from_table(tables["F2"], idx=0)
+    f2_ids = _sorted_unique(f2_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
-    g_done_d_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status == "DONE")
+    g_done_d_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status == "DONE"])
     g_unfinished_d_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status in {"PARTIAL", "TODO", "N/A"})
     g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
 
@@ -222,8 +227,8 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         summarize_result(
             "checklist_done_d_summary_matches_convergence_done_records",
             f2_ids == g_done_d_ids,
-            detail=f"f2={f2_ids} | g_done={g_done_d_ids}",
-            extra={"f2_ids": f2_ids, "g_done_d_ids": g_done_d_ids},
+            detail=f"f2_unique={f2_ids} | f2_raw={sorted(f2_ids_raw)} | g_done={g_done_d_ids}",
+            extra={"f2_ids": f2_ids, "f2_ids_raw": sorted(f2_ids_raw), "g_done_d_ids": g_done_d_ids},
         )
     )
     results.append(
