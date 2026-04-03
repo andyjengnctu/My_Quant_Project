@@ -130,6 +130,26 @@ def _extract_checklist_note_entries(note: str) -> List[str]:
     return sorted(note_entries)
 
 
+def _extract_checklist_test_entries(entry: str) -> List[str]:
+    normalized = str(entry or "").strip()
+    if not normalized:
+        return []
+
+    test_entries: Set[str] = set()
+    for raw_token in re.findall(r"`([^`]+)`", normalized):
+        token = raw_token.strip().replace("\\", "/")
+        if not token:
+            continue
+        if token.startswith("validate_") or re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py", token):
+            test_entries.add(token)
+
+    text_without_backticks = re.sub(r"`[^`]+`", " ", normalized)
+    test_entries.update(re.findall(r"\bvalidate_[A-Za-z0-9_]+\b", text_without_backticks))
+    test_entries.update(re.findall(r"\b(?:apps|core|tools)/[A-Za-z0-9_./-]+\.py\b", text_without_backticks))
+    test_entries.update(re.findall(r"\brun_[A-Za-z0-9_.-]+\.py\b", text_without_backticks))
+    return sorted(test_entries)
+
+
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     tables = _load_checklist_tables()
     main_statuses = _load_main_statuses(tables)
@@ -226,13 +246,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     for row in f2_rows:
         if len(row) < 2:
             continue
-        entry = row[1].replace("`", "").strip()
-        is_single_entry = (
-            entry.startswith("validate_")
-            or entry.endswith(".py")
-        ) and (" " not in entry)
-        if not is_single_entry:
-            invalid_f2_entries.append({"id": row[0] if row else "", "entry": entry})
+        raw_entry = row[1].strip()
+        parsed_entries = _extract_checklist_test_entries(raw_entry)
+        if len(parsed_entries) != 1:
+            invalid_f2_entries.append({
+                "id": row[0] if row else "",
+                "entry": raw_entry.replace("`", "").strip(),
+                "entries": parsed_entries,
+            })
     results.append(
         summarize_result(
             "checklist_f2_rows_use_single_test_entry",
@@ -242,27 +263,43 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
+    allowed_g_from_statuses = STATUS_VALUES | {"NEW"}
+    allowed_g_to_statuses = set(STATUS_VALUES)
+    invalid_g_transition_rows = []
     no_op_convergence_rows = []
     invalid_g_note_rows = []
     for row in tables["G"]:
         if len(row) < 4:
             continue
+        row_id = row[1].strip()
         transition = row[3].strip()
         if "->" not in transition:
+            invalid_g_transition_rows.append({"id": row_id, "transition": transition})
             continue
         from_status, to_status = [part.strip() for part in transition.split("->", 1)]
+        if (from_status not in allowed_g_from_statuses) or (to_status not in allowed_g_to_statuses):
+            invalid_g_transition_rows.append({"id": row_id, "transition": transition})
+            continue
         if from_status == to_status:
-            no_op_convergence_rows.append({"id": row[1].strip(), "transition": transition})
+            no_op_convergence_rows.append({"id": row_id, "transition": transition})
         note = row[4].strip() if len(row) > 4 else ""
         note_entries = _extract_checklist_note_entries(note)
         if len(note_entries) >= 2:
             invalid_g_note_rows.append(
                 {
-                    "id": row[1].strip(),
+                    "id": row_id,
                     "note": note,
                     "entries": note_entries,
                 }
             )
+    results.append(
+        summarize_result(
+            "checklist_g_rows_have_valid_status_transition",
+            not invalid_g_transition_rows,
+            detail=f"invalid={invalid_g_transition_rows}",
+            extra={"invalid_transition_rows": invalid_g_transition_rows},
+        )
+    )
     results.append(
         summarize_result(
             "checklist_g_rows_require_actual_status_change",

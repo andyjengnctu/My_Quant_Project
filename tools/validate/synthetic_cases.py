@@ -39,7 +39,9 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
 )
 from .synthetic_meta_cases import (
+    validate_checklist_f2_single_entry_delimiter_case,
     validate_checklist_g_single_note_entry_delimiter_case,
+    validate_checklist_g_transition_format_case,
     validate_cmd_document_contract_case,
     validate_core_trading_modules_in_coverage_targets_case,
     validate_coverage_threshold_floor_case,
@@ -175,6 +177,8 @@ def get_synthetic_validator_entries():
         _entry(validate_portfolio_stats_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/portfolio_stats.py",)),
         _entry(validate_independent_oracle_golden_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py", "core/history_filters.py", "core/portfolio_stats.py")),
         _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/validate/synthetic_cases.py")),
+        _entry(validate_checklist_f2_single_entry_delimiter_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
+        _entry(validate_checklist_g_transition_format_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_synthetic_registry_metadata_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_cases.py",)),
         _entry(validate_core_trading_modules_in_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),
         _entry(validate_test_suite_orchestrator_coverage_targets_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_meta_quality.py",)),

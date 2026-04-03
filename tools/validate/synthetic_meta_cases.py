@@ -120,6 +120,32 @@ def _extract_cmd_python_commands():
     return commands
 
 
+def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_idx: int, update_cols):
+    original_had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    in_target_section = False
+    for line_idx, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if stripped.startswith("## ") or stripped.startswith("### "):
+            current_heading = stripped.lstrip("#").strip()
+            if in_target_section and current_heading != heading:
+                break
+            in_target_section = current_heading == heading
+            continue
+        if not in_target_section or not stripped.startswith("|"):
+            continue
+        cols = [part.strip() for part in raw_line.split("|")[1:-1]]
+        if len(cols) <= id_col_idx or cols[id_col_idx] != row_id:
+            continue
+        updated_cols = update_cols(list(cols))
+        lines[line_idx] = "| " + " | ".join(updated_cols) + " |"
+        updated_text = "\n".join(lines)
+        if original_had_trailing_newline:
+            updated_text += "\n"
+        return updated_text
+    raise ValueError(f"找不到 checklist heading={heading}, row_id={row_id}")
+
+
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -293,15 +319,21 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    needle = "| 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |"
-    replacement = "| 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` / `meta_contracts.py` |"
-    if needle not in original_text:
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="B38",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:4] + ["`run_meta_quality.py` / `meta_contracts.py`"],
+        )
+    except ValueError:
         add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
         return results, summary
 
     with tempfile.TemporaryDirectory(prefix="meta_checklist_g_note_") as temp_dir:
         mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(original_text.replace(needle, replacement, 1), encoding="utf-8")
+        mutated_path.write_text(mutated_text, encoding="utf-8")
         with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
@@ -315,6 +347,86 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
     add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_multiple_entries", True, any(row.get("id") == "B38" for row in invalid_rows))
 
     summary["guard_status"] = g_note_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
+def validate_checklist_f2_single_entry_delimiter_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_F2_SINGLE_ENTRY_DELIMITER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="F2. 目前所有 `DONE` 的建議測試項目摘要",
+            row_id="D111",
+            id_col_idx=0,
+            update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2], cols[3]],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_f2_entry_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    f2_result = result_by_name.get("checklist_f2_rows_use_single_test_entry", {})
+    invalid_rows = f2_result.get("invalid_entries")
+    if invalid_rows is None:
+        invalid_rows = f2_result.get("extra", {}).get("invalid_entries", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_f2_single_entry_guard_fails", "FAIL", f2_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "D111" for row in invalid_rows))
+
+    summary["guard_status"] = f2_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
+def validate_checklist_g_transition_format_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_TRANSITION_FORMAT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="B38",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:3] + ["DONE"] + cols[4:],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_transition_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_transition_result = result_by_name.get("checklist_g_rows_have_valid_status_transition", {})
+    invalid_rows = g_transition_result.get("invalid_transition_rows")
+    if invalid_rows is None:
+        invalid_rows = g_transition_result.get("extra", {}).get("invalid_transition_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_transition_guard_fails", "FAIL", g_transition_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_transition_reports_invalid_row", True, any(row.get("id") == "B38" for row in invalid_rows))
+
+    summary["guard_status"] = g_transition_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     return results, summary
 
