@@ -71,6 +71,10 @@ REQUIRED_DATASET_PREP_SUMMARY_KEYS = {
     "dataset_dir",
     "source",
     "csv_count",
+    "csv_total_bytes",
+    "csv_members_sha256",
+    "csv_content_sha256",
+    "fingerprint_algorithm",
     "reused_existing",
 }
 
@@ -337,13 +341,17 @@ def validate_local_regression_summary_contract_case(_base_params):
             "dataset_dir": "data/tw_stock_data_vip_reduced",
             "source": "existing",
             "csv_count": 24,
+            "csv_total_bytes": 2400,
+            "csv_members_sha256": "a" * 64,
+            "csv_content_sha256": "b" * 64,
+            "fingerprint_algorithm": "sha256",
             "reused_existing": True,
             "extracted_files": 0,
         })
         dataset_pass_json = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
         dataset_pass_text = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
         add_check(results, "output_contract", case_id, "dataset_prepare_pass_required_keys", [], sorted(REQUIRED_DATASET_PREP_SUMMARY_KEYS - set(dataset_pass_json.keys())))
-        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and "csv_count   : 24" in dataset_pass_text)
+        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and "csv_count   : 24" in dataset_pass_text and "members_sha : " in dataset_pass_text and "content_sha : " in dataset_pass_text)
 
         dataset_fail = run_all_module._write_dataset_prepare_summary(run_dir, {
             "status": "FAIL",
@@ -799,6 +807,91 @@ def validate_artifact_lifecycle_contract_case(_base_params):
     summary["root_copy_overwrite_checked"] = True
     summary["pass_fail_bundle_selection_checked"] = True
     summary["artifacts_manifest_checked"] = True
+    return results, summary
+
+
+def validate_dataset_fingerprint_contract_case(_base_params):
+    case_id = "DATASET_FINGERPRINT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dataset_info = local_common.ensure_reduced_dataset()
+    add_check(results, "output_contract", case_id, "dataset_fingerprint_has_required_keys", [], sorted([
+        key for key in ["csv_count", "csv_total_bytes", "csv_members_sha256", "csv_content_sha256", "fingerprint_algorithm"]
+        if key not in dataset_info
+    ]))
+    add_check(results, "output_contract", case_id, "dataset_fingerprint_algorithm_is_sha256", "sha256", dataset_info.get("fingerprint_algorithm"))
+    add_check(results, "output_contract", case_id, "dataset_member_hash_length_is_64", 64, len(str(dataset_info.get("csv_members_sha256", ""))))
+    add_check(results, "output_contract", case_id, "dataset_content_hash_length_is_64", 64, len(str(dataset_info.get("csv_content_sha256", ""))))
+    add_check(results, "output_contract", case_id, "dataset_total_bytes_positive", True, int(dataset_info.get("csv_total_bytes", 0)) > 0)
+
+    with tempfile.TemporaryDirectory(prefix="dataset_fingerprint_contract_") as temp_dir:
+        run_dir = Path(temp_dir) / "run_dir"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        written = run_all_module._write_dataset_prepare_summary(run_dir, {
+            "status": "PASS",
+            "duration_sec": 0.123,
+            **dataset_info,
+        })
+        summary_json = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
+        summary_txt = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "dataset_prepare_summary_preserves_member_hash", dataset_info.get("csv_members_sha256"), summary_json.get("csv_members_sha256"))
+    add_check(results, "output_contract", case_id, "dataset_prepare_summary_preserves_content_hash", dataset_info.get("csv_content_sha256"), summary_json.get("csv_content_sha256"))
+    add_check(results, "output_contract", case_id, "dataset_prepare_summary_preserves_total_bytes", dataset_info.get("csv_total_bytes"), summary_json.get("csv_total_bytes"))
+    add_check(results, "output_contract", case_id, "dataset_prepare_summary_text_displays_hashes", True, "members_sha : " in summary_txt and "content_sha : " in summary_txt)
+
+    summary["csv_count"] = int(dataset_info.get("csv_count", 0))
+    summary["csv_total_bytes"] = int(dataset_info.get("csv_total_bytes", 0))
+    summary["member_hash_prefix"] = str(dataset_info.get("csv_members_sha256", ""))[:12]
+    return results, summary
+
+
+
+def validate_atomic_write_contract_case(_base_params):
+    case_id = "ATOMIC_WRITE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="atomic_write_contract_") as temp_dir:
+        run_dir = Path(temp_dir)
+        json_path = run_dir / "atomic_summary.json"
+        text_path = run_dir / "atomic_summary.txt"
+
+        local_common.write_json(json_path, {"status": "original", "count": 1})
+        local_common.write_text(text_path, "original-text\n")
+        original_json = json_path.read_text(encoding="utf-8")
+        original_text = text_path.read_text(encoding="utf-8")
+
+        with patch.object(local_common.os, "replace", side_effect=OSError("simulated atomic replace failure")):
+            try:
+                local_common.write_json(json_path, {"status": "new", "count": 2})
+            except OSError:
+                pass
+            else:
+                raise AssertionError("write_json should raise when os.replace fails")
+
+            try:
+                local_common.write_text(text_path, "new-text\n")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("write_text should raise when os.replace fails")
+
+        remaining_temp_files = sorted(path.name for path in run_dir.glob(".*.tmp"))
+        add_check(results, "output_contract", case_id, "atomic_write_json_preserves_previous_contents_on_replace_failure", original_json, json_path.read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "atomic_write_text_preserves_previous_contents_on_replace_failure", original_text, text_path.read_text(encoding="utf-8"))
+        add_check(results, "output_contract", case_id, "atomic_write_cleanup_removes_temp_files_after_failure", [], remaining_temp_files)
+
+        local_common.write_json(json_path, {"status": "final", "count": 3})
+        local_common.write_text(text_path, "final-text\n")
+        final_json = json.loads(json_path.read_text(encoding="utf-8"))
+        final_text = text_path.read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "atomic_write_json_success_after_failure", "final", final_json.get("status"))
+    add_check(results, "output_contract", case_id, "atomic_write_text_success_after_failure", "final-text\n", final_text)
+
+    summary["cleanup_checked"] = True
     return results, summary
 
 

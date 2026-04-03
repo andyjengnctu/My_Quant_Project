@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
 import os
 import re
@@ -86,6 +88,17 @@ MANIFEST_STR_FIELDS = {
     "bundle_name",
     "dataset",
 }
+DATASET_INFO_KEYS = (
+    "dataset_dir",
+    "source",
+    "csv_count",
+    "reused_existing",
+    "csv_total_bytes",
+    "csv_members_sha256",
+    "csv_content_sha256",
+    "fingerprint_algorithm",
+    "extracted_files",
+)
 
 
 
@@ -174,28 +187,40 @@ def read_json(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
-def write_json(path: Path, payload: Dict[str, Any]) -> Path:
+def _atomic_replace_text(path: Path, text: str, *, encoding: str, newline: Optional[str] = None) -> Path:
     ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
+    temp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        with temp_path.open("w", encoding=encoding, newline=newline) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
     return path
+
+
+def write_json(path: Path, payload: Dict[str, Any]) -> Path:
+    json_text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    return _atomic_replace_text(path, json_text, encoding="utf-8")
 
 
 def write_text(path: Path, text: str) -> Path:
-    ensure_dir(path.parent)
-    path.write_text(text, encoding="utf-8")
-    return path
+    return _atomic_replace_text(path, text, encoding="utf-8")
 
 
 def write_csv(path: Path, rows: Iterable[Dict[str, Any]], fieldnames: List[str]) -> Path:
-    ensure_dir(path.parent)
-    with path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-    return path
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return _atomic_replace_text(path, buffer.getvalue(), encoding="utf-8-sig", newline="")
 
 
 def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
@@ -427,6 +452,17 @@ def resolve_git_commit() -> str:
     return "unknown"
 
 
+def compute_file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
     artifacts = []
     for path in sorted(run_dir.rglob("*")):
@@ -435,6 +471,7 @@ def build_artifacts_manifest(run_dir: Path) -> Dict[str, Any]:
         artifacts.append({
             "relative_path": str(path.relative_to(run_dir)).replace("\\", "/"),
             "size_bytes": path.stat().st_size,
+            "sha256": compute_file_sha256(path),
         })
     return {"artifact_count": len(artifacts), "artifacts": artifacts}
 
@@ -446,6 +483,35 @@ def _current_dataset_csv_members() -> List[str]:
         str(path.relative_to(REDUCED_DATASET_DIR)).replace("\\", "/")
         for path in REDUCED_DATASET_DIR.rglob("*.csv")
     )
+
+
+def _build_dataset_fingerprint(dataset_dir: Path, members: List[str]) -> Dict[str, Any]:
+    members_digest = hashlib.sha256()
+    content_digest = hashlib.sha256()
+    total_size_bytes = 0
+
+    for rel_path in members:
+        file_path = dataset_dir / rel_path
+        stat = file_path.stat()
+        file_sha256 = compute_file_sha256(file_path)
+        total_size_bytes += int(stat.st_size)
+
+        members_digest.update(rel_path.encode("utf-8"))
+        members_digest.update(b"\0")
+        members_digest.update(str(int(stat.st_size)).encode("ascii"))
+        members_digest.update(b"\0")
+
+        content_digest.update(rel_path.encode("utf-8"))
+        content_digest.update(b"\0")
+        content_digest.update(file_sha256.encode("ascii"))
+        content_digest.update(b"\0")
+
+    return {
+        "csv_total_bytes": total_size_bytes,
+        "csv_members_sha256": members_digest.hexdigest(),
+        "csv_content_sha256": content_digest.hexdigest(),
+        "fingerprint_algorithm": "sha256",
+    }
 
 
 def ensure_reduced_dataset() -> Dict[str, Any]:
@@ -460,6 +526,7 @@ def ensure_reduced_dataset() -> Dict[str, Any]:
         "source": "repo_data_dir",
         "csv_count": len(actual_members),
         "reused_existing": True,
+        **_build_dataset_fingerprint(REDUCED_DATASET_DIR, actual_members),
     }
 
 

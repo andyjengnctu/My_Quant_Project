@@ -47,6 +47,7 @@ from .synthetic_meta_cases import (
     validate_no_top_level_import_cycles_case,
     validate_registry_checklist_entry_consistency_case,
     validate_single_formal_test_entry_contract_case,
+    validate_test_suite_orchestrator_coverage_targets_case,
 )
 from .synthetic_display_cases import validate_display_reporting_sanity_case
 from .synthetic_reporting_cases import (
@@ -67,6 +68,8 @@ from .synthetic_reporting_cases import (
 )
 from .synthetic_contract_cases import (
     validate_artifact_lifecycle_contract_case,
+    validate_atomic_write_contract_case,
+    validate_dataset_fingerprint_contract_case,
     validate_local_regression_summary_contract_case,
     validate_meta_quality_reuses_existing_coverage_artifacts_case,
     validate_debug_trade_log_prepared_tool_contract_case,
@@ -143,6 +146,7 @@ def get_synthetic_validators():
         validate_independent_oracle_golden_case,
         validate_registry_checklist_entry_consistency_case,
         validate_core_trading_modules_in_coverage_targets_case,
+        validate_test_suite_orchestrator_coverage_targets_case,
         validate_critical_file_coverage_minimum_gate_case,
         validate_coverage_threshold_floor_case,
         validate_critical_coverage_threshold_floor_case,
@@ -168,6 +172,8 @@ def get_synthetic_validators():
         validate_issue_excel_report_schema_case,
         validate_portfolio_export_report_artifacts_case,
         validate_output_contract_case,
+        validate_dataset_fingerprint_contract_case,
+        validate_atomic_write_contract_case,
         validate_portfolio_sim_prepared_tool_contract_case,
         validate_scanner_prepared_tool_contract_case,
         validate_scanner_reference_clean_df_contract_case,

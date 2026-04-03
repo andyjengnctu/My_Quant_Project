@@ -441,6 +441,50 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     return results, summary
 
 
+def validate_test_suite_orchestrator_coverage_targets_case(_base_params):
+    import tools.local_regression.run_meta_quality as run_meta_quality_module
+
+    case_id = "META_TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_targets = list(run_meta_quality_module.TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS)
+    declared_targets = list(run_meta_quality_module.COVERAGE_TARGETS)
+    missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
+    missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
+
+    module_symbol_expectations = {
+        "tools.local_regression.common": {"ensure_reduced_dataset", "build_artifacts_manifest", "write_json"},
+        "tools.local_regression.formal_pipeline": {"FORMAL_STEP_ORDER", "FORMAL_SINGLE_ENTRY"},
+        "tools.local_regression.run_meta_quality": {"COVERAGE_TARGETS", "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS"},
+        "core.test_suite_reporting": {"print_test_suite_human_summary", "TEST_SUITE_STEP_LABELS"},
+    }
+    module_import_failures = []
+    module_symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in module_symbol_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
+        if missing_symbols:
+            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+
+    add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_coverage_targets_exist", [], missing_files)
+    add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_coverage_targets_declared", [], missing_targets)
+    add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "test_suite_orchestrator_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    summary["expected_target_count"] = len(expected_targets)
+    summary["missing_targets"] = missing_targets
+    summary["reloaded_modules"] = reloaded_modules
+    return results, summary
+
+
 def validate_critical_file_coverage_minimum_gate_case(_base_params):
     import tools.local_regression.run_meta_quality as run_meta_quality_module
 

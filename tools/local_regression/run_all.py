@@ -514,8 +514,13 @@ def _write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) -> Di
             f"dataset_dir : {summary.get('dataset_dir', '')}",
             f"source      : {summary.get('source', '')}",
             f"csv_count   : {summary.get('csv_count', 0)}",
+            f"total_bytes : {summary.get('csv_total_bytes', 0)}",
             f"reused      : {summary.get('reused_existing', False)}",
         ]
+        if summary.get('csv_members_sha256'):
+            lines.append(f"members_sha : {summary.get('csv_members_sha256', '')}")
+        if summary.get('csv_content_sha256'):
+            lines.append(f"content_sha : {summary.get('csv_content_sha256', '')}")
         if "extracted_files" in summary:
             lines.append(f"extracted   : {summary.get('extracted_files', 0)}")
         write_text(run_dir / "dataset_prepare_summary.txt", "\n".join(lines) + "\n")
@@ -878,7 +883,7 @@ def execute_all(
                 )
                 dataset_info = {
                     key: dataset_prepare_summary[key]
-                    for key in ("dataset_dir", "source", "csv_count", "reused_existing", "extracted_files")
+                    for key in DATASET_INFO_KEYS
                     if key in dataset_prepare_summary
                 }
             except Exception as exc:

@@ -101,6 +101,10 @@
 | B30 | P1 | 覆蓋率 | overall coverage minimum threshold 應逐步提高，branch 優先 | DONE | 已將正式 coverage 基線提高為 `line 55% / branch 50%`，並新增 threshold floor guard，阻擋門檻回退到舊的 `50 / 45`；branch 與 line 的 gap 也已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B31 | P1 | 覆蓋率 | entry path 關鍵模組應納入 critical file per-file coverage gate | DONE | 已將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並新增 entry-path completeness / importability guard，避免 only-exit / engine critical gate 漏掉實際高風險進場邏輯 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B32 | P1 | 覆蓋率 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | DONE | 已將 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 正式基線提高為 `30% / 25%`，並新增 critical threshold floor guard，阻擋 critical per-file 門檻回退到舊的 `25 / 20`；critical branch 與 line 的 gap 亦已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B33 | P1 | I/O | reduced dataset 應具備 member / content fingerprint gate | DONE | 已為 reduced dataset 補上 `csv_members_sha256`、`csv_content_sha256`、`csv_total_bytes` 與 `fingerprint_algorithm`，並將 fingerprint 同步寫入 dataset prepare summary，避免資料集內容漂移卻仍被誤視為同一 baseline | `tools/local_regression/common.py`, `tools/local_regression/run_all.py`, `tools/validate/synthetic_contract_cases.py` |
+| B34 | P1 | I/O | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite | DONE | 已將 `write_json` / `write_text` / `write_csv` 收斂為同一 atomic replace helper，並補 replace-failure recovery contract，要求舊內容不得被半寫覆蓋且 temp 檔必須清乾淨 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
+| B35 | P1 | 覆蓋率 | test suite orchestrator modules 應納入 coverage targets | DONE | 已將 `tools/local_regression/common.py`、`formal_pipeline.py`、`run_meta_quality.py`、`run_all.py`、`core/test_suite_reporting.py`、`apps/test_suite.py` 納入 `TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS`，並新增 completeness / importability guard，避免測試編排層退化卻仍以 coverage 過關 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B36 | P1 | I/O | artifacts manifest 應具備 sha256，不可只靠 size_bytes | DONE | 已為每個 artifact manifest entry 補上 `sha256`，並新增 contract 對照實際檔案 hash，避免同大小內容漂移被 size 假象掩蓋 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -154,6 +158,10 @@
 |---|---|---|
 | D18 | contract tests for CSV / XLSX / JSON outputs | 已補 validate summary / optimizer profile / issue report 的 schema contract；更多工具輸出仍可補 |
 | D28 | `validate_artifact_lifecycle_contract_case` | 已補 bundle/archive/root-copy/retention lifecycle、PASS/FAIL bundle selection、artifacts manifest 與 rerun 覆寫內容契約 |
+| D102 | `validate_dataset_fingerprint_contract_case` | 已補 reduced dataset member/content fingerprint 與 dataset prepare summary contract |
+| D103 | `validate_atomic_write_contract_case` | 已補 atomic write replace-failure recovery contract，要求舊內容保留且 temp 檔清除 |
+| D104 | `tools/local_regression/common.py` | 已補 artifacts manifest `sha256` 生成與對照實檔內容契約 |
+| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | 已補 test suite orchestrator modules coverage target completeness / importability guard |
 | D30 | `validate_params_io_error_path_case` | 已補壞 JSON、缺必要欄位、未知欄位、缺檔時的 fail-fast 與錯誤訊息定位 |
 | D31 | `validate_module_loader_error_path_case` | 已補 syntax error、缺必要屬性與 checked path/reason 彙整的錯誤路徑 |
 | D32 | `validate_preflight_error_path_case` | 已補 requirements 檔缺失、非法 steps、import failure detail 的錯誤路徑 |
@@ -294,6 +302,10 @@
 | 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B31 | entry path 關鍵模組應納入 critical file per-file coverage gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-03 |
 | 覆蓋率 | B32 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| I/O | B33 | reduced dataset 應具備 member / content fingerprint gate | `tools/local_regression/common.py`, `tools/local_regression/run_all.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
+| I/O | B34 | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
+| 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -380,6 +392,10 @@
 | D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 | 2026-04-02 |
 | D68 | `validate_scanner_reference_clean_df_contract_case` | B19 | 2026-04-02 |
 | D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 | 2026-04-02 |
+| D102 | `validate_dataset_fingerprint_contract_case` | B33 | 2026-04-03 |
+| D103 | `validate_atomic_write_contract_case` | B34 | 2026-04-03 |
+| D104 | `tools/local_regression/common.py` | B36 | 2026-04-03 |
+| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 | 2026-04-03 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
 | D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 | 2026-04-01 |
 | D77 | `validate_synthetic_extended_miss_buy_case` | B09 | 2026-04-01 |
@@ -546,6 +562,14 @@
 | 2026-04-03 | D100 | 新增 entry path critical coverage gate 建議測試並驗證 | NEW -> DONE | `validate_entry_path_critical_coverage_gate_case` |
 | 2026-04-03 | B31 | 進場關鍵模組已納入 critical file coverage gate，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` 已阻擋 `core/portfolio_entries.py` / `core/entry_plans.py` 漏出 critical gate |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
+| 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
+| 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |
+| 2026-04-03 | D104 | 擴充 artifact manifest sha256 生成邏輯並由 contract 驗證對照 | NEW -> DONE | `tools/local_regression/common.py` |
+| 2026-04-03 | D105 | 新增 test suite orchestrator coverage target completeness guard 並驗證 | NEW -> DONE | `validate_test_suite_orchestrator_coverage_targets_case` |
+| 2026-04-03 | B33 | 補上 reduced dataset member/content fingerprint gate，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `tools/local_regression/run_all.py` + `synthetic_contract_cases.py` |
+| 2026-04-03 | B34 | 補上 atomic write 與 replace-failure recovery contract，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `synthetic_contract_cases.py` |
+| 2026-04-03 | B35 | 將 test suite orchestrator modules 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` + `synthetic_meta_cases.py` |
+| 2026-04-03 | B36 | 補上 artifacts manifest sha256 contract，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` + `synthetic_contract_cases.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | `common.py` / `manifest.json` 已提升到 `critical line 30 / critical branch 25`，並由 `run_meta_quality.py` 阻擋回退 |
 
 ## H. 完成判準

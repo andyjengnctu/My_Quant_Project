@@ -58,7 +58,15 @@ CRITICAL_COVERAGE_TARGETS = [
     "core/portfolio_exits.py",
     *ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
 ]
-COVERAGE_TARGETS = [
+TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
+    "tools/local_regression/common.py",
+    "tools/local_regression/formal_pipeline.py",
+    "tools/local_regression/run_meta_quality.py",
+    "tools/local_regression/run_all.py",
+    "core/test_suite_reporting.py",
+    "apps/test_suite.py",
+]
+COVERAGE_TARGETS = list(dict.fromkeys([
     "tools/validate/synthetic_cases.py",
     "tools/validate/synthetic_meta_cases.py",
     "tools/validate/synthetic_unit_cases.py",
@@ -76,8 +84,7 @@ COVERAGE_TARGETS = [
     "tools/validate/synthetic_regression_cases.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
-    "apps/test_suite.py",
-    "tools/local_regression/run_all.py",
+    *TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
     "tools/validate/reporting.py",
     "tools/portfolio_sim/reporting.py",
     "core/scanner_display.py",
@@ -87,7 +94,7 @@ COVERAGE_TARGETS = [
     "core/history_filters.py",
     "core/portfolio_stats.py",
     *CORE_TRADING_COVERAGE_TARGETS,
-]
+]))
 COVERAGE_LINE_MIN_FLOOR = 55.0
 COVERAGE_BRANCH_MIN_FLOOR = 50.0
 CRITICAL_COVERAGE_LINE_MIN_FLOOR = 30.0

@@ -136,7 +136,7 @@ def _base_test_suite_result_payload():
             {"name": "meta_quality", "status": "PASS", "duration_sec": 1.81, "failure_reasons": []},
         ],
         "step_payloads": {
-            "dataset_prepare": {"status": "PASS", "duration_sec": 0.62, "csv_count": 617, "source": "data/tw_stock_data_vip_reduced"},
+            "dataset_prepare": {"status": "PASS", "duration_sec": 0.62, "csv_count": 617, "source": "data/tw_stock_data_vip_reduced", "csv_members_sha256": "abcdef1234567890" * 4},
             "quick_gate": {"status": "PASS", "step_count": 88, "failed_count": 0},
             "consistency": {"status": "PASS", "total_checks": 2752, "fail_count": 0, "skip_count": 0, "real_ticker_count": 24},
             "chain_checks": {"status": "PASS", "ticker_count": 24, "highlights": {"traded_ticker_count": 7, "missed_buy_ticker_count": 2, "blocked_by_counts": {"cash": 3, "slots": 1}}, "portfolio_snapshot": {"trade_rows": 14, "reserved_buy_fill_rate": 83.33}},
@@ -182,7 +182,7 @@ def validate_test_suite_summary_reporting_case(_base_params):
     summary_text = _capture_test_suite_summary(result_payload)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_title_and_bundle", True, "Test Suite 結果整理" in summary_text and "bundle 模式 : minimum_set" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_step_table", True, "[步驟摘要]" in summary_text and "quick gate" in summary_text and "meta quality" in summary_text)
-    add_check(results, "reporting_schema", case_id, "test_suite_summary_has_highlights", True, "step_count=88" in summary_text and "total_checks=2752" in summary_text and "db_trial_count=1" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_summary_has_highlights", True, "step_count=88" in summary_text and "total_checks=2752" in summary_text and "db_trial_count=1" in summary_text and "members_sha=abcdef123456" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_chain_and_meta_details", True, "blocked_by : cash:3, slots:1" in summary_text and "coverage_line=58.23" in summary_text and "coverage_branch=50.00" in summary_text and "checklist_status=PARTIAL" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_summary_has_retention", True, "retention  : removed=2 | bytes=4096" in summary_text)
 

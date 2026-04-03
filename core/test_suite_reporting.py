@@ -261,10 +261,12 @@ def print_test_suite_human_summary(
     dataset_prepare = step_payloads.get("dataset_prepare", {})
     dataset_status, dataset_detail = _step_overview("dataset_prepare", dataset_prepare, {})
     if dataset_status == "PASS":
+        members_sha = str(dataset_prepare.get("csv_members_sha256", "") or "")
+        fingerprint_suffix = f" | members_sha={members_sha[:12]}" if members_sha else ""
         print(
             f"dataset prep: PASS | {dataset_prepare.get('duration_sec', 0.0):.2f}s | "
             f"csv_count={dataset_prepare.get('csv_count', 0)} | "
-            f"source={_safe_display_text(dataset_prepare.get('source'))}"
+            f"source={_safe_display_text(dataset_prepare.get('source'))}{fingerprint_suffix}"
         )
     else:
         print(f"dataset prep: {dataset_status} | {dataset_detail}")
