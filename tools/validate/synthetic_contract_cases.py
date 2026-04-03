@@ -502,19 +502,23 @@ def validate_local_regression_summary_contract_case(_base_params):
 
         runtime_run_dir = temp_path / "quick_gate_runtime_failure"
         runtime_run_dir.mkdir(parents=True, exist_ok=True)
-        with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=runtime_run_dir), \
-             patch.object(run_quick_gate_module, "load_manifest", return_value={**local_common.MANIFEST_DEFAULTS, "dataset": "reduced"}), \
-             patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}), \
-             patch.object(run_quick_gate_module, "run_static_checks", side_effect=RuntimeError("synthetic quick gate crash")):
-            runtime_rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
+        runtime_stdout = io.StringIO()
+        with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=runtime_run_dir):
+            with patch.object(run_quick_gate_module, "load_manifest", return_value={**local_common.MANIFEST_DEFAULTS, "dataset": "reduced"}):
+                with patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}):
+                    with patch.object(run_quick_gate_module, "run_static_checks", side_effect=RuntimeError("synthetic quick gate crash")):
+                        with redirect_stdout(runtime_stdout):
+                            runtime_rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
 
         runtime_json = json.loads((runtime_run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
         runtime_console = (runtime_run_dir / "quick_gate_console.log").read_text(encoding="utf-8")
+        runtime_stdout_text = runtime_stdout.getvalue()
         add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_return_code", 1, runtime_rc)
         add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_status", "FAIL", runtime_json.get("status"))
         add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_marks_runtime_step", ["__runtime__"], runtime_json.get("failed_steps"))
         add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_includes_error_fields", True, runtime_json.get("error_type") == "RuntimeError" and "synthetic quick gate crash" in runtime_json.get("runtime_error", ""))
         add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_console_has_runtime_error", True, "synthetic quick gate crash" in runtime_console)
+        add_check(results, "output_contract", case_id, "quick_gate_runtime_failure_does_not_leak_runtime_payload_to_parent_stdout", "", runtime_stdout_text)
 
         write_json(run_dir / "preflight_summary.json", preflight_payload)
         write_json(run_dir / "master_summary.json", master_payload)
