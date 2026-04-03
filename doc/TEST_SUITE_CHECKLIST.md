@@ -107,6 +107,7 @@
 | B36 | P1 | I/O | artifacts manifest 應具備 sha256，不可只靠 size_bytes | DONE | 已為每個 artifact manifest entry 補上 `sha256`，並新增 contract 對照實際檔案 hash，避免同大小內容漂移被 size 假象掩蓋 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
 | B37 | P2 | Meta | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | DONE | 已將 synthetic registry 升級為 metadata registry，補上 layer / cost class / impacted modules，並新增 metadata contract；同時保留 `get_synthetic_validators()` 相容 façade，避免 formal 入口、coverage 與 checklist guard 斷裂 | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` |
 | B38 | P1 | 覆蓋率 | formal pipeline step entry wrappers 應納入 coverage targets | DONE | 已將 `tools/local_regression/run_quick_gate.py` 與 `tools/validate/cli.py` 納入 `COVERAGE_TARGETS`，並新增 formal-step completeness / importability guard，避免正式步驟 wrapper 退化卻 coverage baseline 未偵測 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B39 | P1 | 覆蓋率 | split formal-step implementation modules 應納入 coverage targets | DONE | 已將 `tools/validate/main.py` 納入 `COVERAGE_TARGETS`，並新增 formal-step implementation completeness / importability guard，避免 `tools/validate/cli.py` 仍在、但 consistency 真正執行本體退化卻 coverage baseline 未偵測 | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -207,6 +208,7 @@
 | D112 | `validate_checklist_f2_single_entry_delimiter_case` | 已補 `F2` 測試入口 delimiter-agnostic single-entry guard，直接阻擋 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口 |
 | D113 | `validate_checklist_g_transition_format_case` | 已補 `G` transition format guard，直接阻擋缺少 `->`、非法狀態值或非實際狀態轉移格式 |
 | D114 | `validate_checklist_done_d_detail_resolved_case` | 已補 DONE 的 D 區細項 resolved-detail guard，直接阻擋已收斂項目仍保留未完成語彙 |
+| D115 | `validate_formal_step_implementation_coverage_targets_case` | 已補 split formal-step implementation coverage target completeness / importability guard，直接阻擋 `tools/validate/main.py` 漏出 `COVERAGE_TARGETS` |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | 已補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，避免 formal helper / synthetic reporting 再度耦合 app 入口 |
 | D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case、synthetic 正式註冊清單完整一致，以及 registry 反向對照 `F2` DONE validator 摘要完整性的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
 | D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
@@ -226,7 +228,7 @@
 | D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
 | D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
 | D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
-| D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 狀態失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述 |
+| D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 狀態失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述；另已補 split formal-step implementation coverage target completeness guard，避免 `cli.py` 還在但 `tools/validate/main.py` 漏出 coverage baseline |
 | D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | 已補同 K 棒停利/停損取最壞停損 synthetic case，直接釘死同棒雙觸發時必須以停損結算 |
 | D76 | `validate_synthetic_half_tp_full_year_case` | 已補半倉停利與 full-year yearly return synthetic case，確認半倉列與年度報酬列同步存在 |
@@ -320,6 +322,7 @@
 | I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
 | Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -356,6 +359,7 @@
 | D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 | 2026-04-03 |
 | D113 | `validate_checklist_g_transition_format_case` | B26 | 2026-04-03 |
 | D114 | `validate_checklist_done_d_detail_resolved_case` | B26 | 2026-04-03 |
+| D115 | `validate_formal_step_implementation_coverage_targets_case` | B39 | 2026-04-03 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
 | D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
@@ -600,7 +604,9 @@
 | 2026-04-03 | D112 | 新增 `F2` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
 | 2026-04-03 | D113 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
 | 2026-04-03 | D114 | 新增 DONE 的 D 區細項 resolved-detail guard 並驗證 | NEW -> DONE | `validate_checklist_done_d_detail_resolved_case` |
+| 2026-04-03 | D115 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
 | 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |
+| 2026-04-03 | B39 | 將 split formal-step implementation modules 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/meta_quality_targets.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | 基線已提升，並由 `run_meta_quality.py` 阻擋回退。 |
 
 | 2026-04-03 | D108 | 新增 synthetic registry metadata contract case 並驗證 | NEW -> DONE | `validate_synthetic_registry_metadata_contract_case` |

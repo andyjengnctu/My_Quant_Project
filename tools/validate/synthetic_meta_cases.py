@@ -35,6 +35,7 @@ from tools.local_regression.meta_quality_targets import (
     CRITICAL_COVERAGE_TARGETS,
     ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
     FORMAL_STEP_ENTRY_COVERAGE_TARGETS,
+    FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 
@@ -737,6 +738,49 @@ def validate_formal_step_entry_coverage_targets_case(_base_params):
     summary["expected_step_scripts"] = expected_step_scripts
     summary["declared_entry_targets"] = declared_entry_targets
     summary["missing_step_scripts"] = missing_step_scripts
+    summary["reloaded_modules"] = reloaded_modules
+    return results, summary
+
+
+def validate_formal_step_implementation_coverage_targets_case(_base_params):
+    case_id = "META_FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_targets = list(FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS)
+    declared_targets = list(COVERAGE_TARGETS)
+    missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
+    missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
+
+    module_symbol_expectations = {
+        "tools.validate.main": {
+            "main",
+            "_run_synthetic_suite_with_optional_coverage",
+            "resolve_validate_dataset_profile_key",
+        },
+    }
+    module_import_failures = []
+    module_symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in module_symbol_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
+        if missing_symbols:
+            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+
+    add_check(results, "meta_coverage", case_id, "formal_step_implementation_coverage_targets_exist", [], missing_files)
+    add_check(results, "meta_coverage", case_id, "formal_step_implementation_coverage_targets_declared", [], missing_targets)
+    add_check(results, "meta_coverage", case_id, "formal_step_implementation_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "formal_step_implementation_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    summary["expected_target_count"] = len(expected_targets)
+    summary["missing_targets"] = missing_targets
     summary["reloaded_modules"] = reloaded_modules
     return results, summary
 
