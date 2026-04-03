@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import importlib
 import json
@@ -695,6 +696,51 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     summary["expected_target_count"] = len(expected_targets)
     summary["missing_targets"] = missing_targets
     summary["reloaded_modules"] = reloaded_modules
+    return results, summary
+
+
+
+
+def validate_peak_traced_memory_tracker_context_management_case(_base_params):
+    case_id = "META_PEAK_TRACED_MEMORY_TRACKER_CONTEXT_MANAGEMENT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    tracked_files = [
+        PROJECT_ROOT / "tools/local_regression/run_chain_checks.py",
+        PROJECT_ROOT / "tools/local_regression/run_meta_quality.py",
+        PROJECT_ROOT / "tools/local_regression/run_ml_smoke.py",
+        PROJECT_ROOT / "tools/local_regression/run_quick_gate.py",
+        PROJECT_ROOT / "tools/validate/main.py",
+    ]
+
+    manual_lifecycle_files = []
+    missing_with_context_files = []
+    syntax_errors = []
+    scanned_files = []
+    for path in tracked_files:
+        rel_path = str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        scanned_files.append(rel_path)
+        source = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError as exc:
+            syntax_errors.append(f"{rel_path}: {exc.msg}")
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"__enter__", "__exit__"}:
+                manual_lifecycle_files.append(rel_path)
+                break
+
+        if "with PeakTracedMemoryTracker() as tracker:" not in source:
+            missing_with_context_files.append(rel_path)
+
+    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_files_parse", [], syntax_errors)
+    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_manual_lifecycle_forbidden", [], sorted(set(manual_lifecycle_files)))
+    add_check(results, "meta_contract", case_id, "peak_traced_memory_tracker_uses_with_context", [], sorted(set(missing_with_context_files)))
+
+    summary["tracked_files"] = scanned_files
     return results, summary
 
 

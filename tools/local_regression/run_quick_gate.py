@@ -601,65 +601,62 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
-    started = time.perf_counter()
-    manifest: Optional[Dict[str, Any]] = None
-    dataset_info: Any = None
-    run_dir: Optional[Path] = None
-    steps: List[Dict[str, Any]] = []
-    summary: Optional[Dict[str, Any]] = None
-    exit_code = 1
-
-    try:
-        run_dir = resolve_run_dir("quick_gate")
-        manifest = load_manifest()
-        timeout = int(manifest["subprocess_timeout_sec"])
-        dataset_info = ensure_reduced_dataset()
-
-        steps.extend(run_static_checks())
-        steps.extend(check_output_path_contract())
-        steps.extend(check_outputs_root_layout())
-        steps.extend(check_dataset_profile_contract())
-        steps.extend(check_log_path_contract())
-        steps.extend(check_local_regression_contract())
-        steps.extend(check_help(timeout))
-        steps.extend(check_dataset_cli_errors(timeout))
-        steps.extend(check_generic_cli_errors(timeout))
-        steps.extend(check_error_paths(timeout))
-        steps.extend(check_dataset_runtime_error_paths())
-
-        failed = [step for step in steps if step["status"] != "PASS"]
-        summary = {
-            "status": "PASS" if not failed else "FAIL",
-            "dataset": manifest["dataset"],
-            "dataset_info": dataset_info,
-            "step_count": len(steps),
-            "failed_count": len(failed),
-            "failed_steps": [step["name"] for step in failed],
-            "steps": steps,
-        }
-        exit_code = 0 if not failed else 1
-    except Exception as exc:
-        summary = _build_runtime_failure_summary(
-            manifest=manifest,
-            dataset_info=dataset_info,
-            steps=steps,
-            exc=exc,
-            duration_sec=round(time.perf_counter() - started, 3),
-            peak_traced_memory_mb=tracker.snapshot_peak_mb(),
-        )
+    with PeakTracedMemoryTracker() as tracker:
+        started = time.perf_counter()
+        manifest: Optional[Dict[str, Any]] = None
+        dataset_info: Any = None
+        run_dir: Optional[Path] = None
+        steps: List[Dict[str, Any]] = []
+        summary: Optional[Dict[str, Any]] = None
         exit_code = 1
-    finally:
-        if summary is not None:
-            summary["duration_sec"] = round(time.perf_counter() - started, 3)
-            summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
-        tracker.__exit__(None, None, None)
 
-    if run_dir is not None and summary is not None:
-        _write_quick_gate_outputs(run_dir, summary)
-    return exit_code
+        try:
+            run_dir = resolve_run_dir("quick_gate")
+            manifest = load_manifest()
+            timeout = int(manifest["subprocess_timeout_sec"])
+            dataset_info = ensure_reduced_dataset()
 
+            steps.extend(run_static_checks())
+            steps.extend(check_output_path_contract())
+            steps.extend(check_outputs_root_layout())
+            steps.extend(check_dataset_profile_contract())
+            steps.extend(check_log_path_contract())
+            steps.extend(check_local_regression_contract())
+            steps.extend(check_help(timeout))
+            steps.extend(check_dataset_cli_errors(timeout))
+            steps.extend(check_generic_cli_errors(timeout))
+            steps.extend(check_error_paths(timeout))
+            steps.extend(check_dataset_runtime_error_paths())
+
+            failed = [step for step in steps if step["status"] != "PASS"]
+            summary = {
+                "status": "PASS" if not failed else "FAIL",
+                "dataset": manifest["dataset"],
+                "dataset_info": dataset_info,
+                "step_count": len(steps),
+                "failed_count": len(failed),
+                "failed_steps": [step["name"] for step in failed],
+                "steps": steps,
+            }
+            exit_code = 0 if not failed else 1
+        except Exception as exc:
+            summary = _build_runtime_failure_summary(
+                manifest=manifest,
+                dataset_info=dataset_info,
+                steps=steps,
+                exc=exc,
+                duration_sec=round(time.perf_counter() - started, 3),
+                peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+            )
+            exit_code = 1
+        finally:
+            if summary is not None:
+                summary["duration_sec"] = round(time.perf_counter() - started, 3)
+                summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
+
+        if run_dir is not None and summary is not None:
+            _write_quick_gate_outputs(run_dir, summary)
+        return exit_code
 
 if __name__ == "__main__":
     run_cli_entrypoint(main)

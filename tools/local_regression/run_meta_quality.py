@@ -844,65 +844,64 @@ def main(argv=None) -> int:
     if cli["help"]:
         return 0
 
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
-    manifest = load_manifest()
-    ensure_reduced_dataset()
-    run_dir = resolve_run_dir("meta_quality")
+    with PeakTracedMemoryTracker() as tracker:
+        manifest = load_manifest()
+        ensure_reduced_dataset()
+        run_dir = resolve_run_dir("meta_quality")
 
-    started = os.times().elapsed
-    coverage_summary = _build_coverage_summary(run_dir, manifest)
-    checklist_summary = _summarize_checklist_consistency()
-    formal_entry_summary = _summarize_formal_entry_consistency()
-    current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
-    current_meta_quality_peak_traced_memory_mb = tracker.snapshot_peak_mb()
-    performance_summary = _build_performance_summary(
-        run_dir,
-        manifest,
-        current_meta_quality_duration_sec=current_meta_quality_duration_sec,
-        current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
-    )
+        started = os.times().elapsed
+        coverage_summary = _build_coverage_summary(run_dir, manifest)
+        checklist_summary = _summarize_checklist_consistency()
+        formal_entry_summary = _summarize_formal_entry_consistency()
+        current_meta_quality_duration_sec = round(os.times().elapsed - started, 3)
+        current_meta_quality_peak_traced_memory_mb = tracker.snapshot_peak_mb()
+        performance_summary = _build_performance_summary(
+            run_dir,
+            manifest,
+            current_meta_quality_duration_sec=current_meta_quality_duration_sec,
+            current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
+        )
 
-    all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
-    failures = [item["name"] for item in all_results if item["status"] != "PASS"]
-    overall_status = "PASS" if not failures else "FAIL"
+        all_results = [*coverage_summary["results"], *checklist_summary["results"], *formal_entry_summary["results"], *performance_summary["results"]]
+        failures = [item["name"] for item in all_results if item["status"] != "PASS"]
+        overall_status = "PASS" if not failures else "FAIL"
 
-    summary = {
-        "status": overall_status,
-        "failures": failures,
-        "fail_count": len(failures),
-        "coverage": {
-            "ok": coverage_summary["ok"],
-            "status": "DONE" if coverage_summary["ok"] else "PARTIAL",
-            "totals": coverage_summary["totals"],
-            "json_file": coverage_summary["json_file"],
-            "line_percent_covered": coverage_summary["totals"]["line_percent_covered"],
-            "branch_percent_covered": coverage_summary["totals"]["branch_percent_covered"],
-            "line_min_percent": coverage_summary["totals"]["line_min_percent"],
-            "branch_min_percent": coverage_summary["totals"]["branch_min_percent"],
-            "critical_line_min_percent": coverage_summary["totals"]["critical_line_min_percent"],
-            "critical_branch_min_percent": coverage_summary["totals"]["critical_branch_min_percent"],
-            "missing_core_targets": coverage_summary["missing_core_targets"],
-            "missing_targets": coverage_summary["missing_targets"],
-            "zero_covered_targets": coverage_summary["zero_covered_targets"],
-            "critical_under_line_targets": coverage_summary["critical_under_line_targets"],
-            "critical_under_branch_targets": coverage_summary["critical_under_branch_targets"],
-        },
-        "checklist": {
-            "ok": checklist_summary["ok"],
-            "status": "TODO" if checklist_summary["todo_ids"] else ("PARTIAL" if checklist_summary["partial_ids"] else "DONE"),
-            "partial_ids": checklist_summary["partial_ids"],
-            "todo_ids": checklist_summary["todo_ids"],
-            "done_ids": checklist_summary["done_ids"],
-            "unfinished_d_ids": checklist_summary["unfinished_d_ids"],
-        },
-        "formal_entry": {
-            "ok": formal_entry_summary["ok"],
-            "registry_steps": formal_entry_summary["registry_steps"],
-            "registry_commands": formal_entry_summary["registry_commands"],
-            "run_all_steps": formal_entry_summary["run_all_steps"],
-            "preflight_steps": formal_entry_summary["preflight_steps"],
-            "test_suite_steps": formal_entry_summary["test_suite_steps"],
+        summary = {
+            "status": overall_status,
+            "failures": failures,
+            "fail_count": len(failures),
+            "coverage": {
+                "ok": coverage_summary["ok"],
+                "status": "DONE" if coverage_summary["ok"] else "PARTIAL",
+                "totals": coverage_summary["totals"],
+                "json_file": coverage_summary["json_file"],
+                "line_percent_covered": coverage_summary["totals"]["line_percent_covered"],
+                "branch_percent_covered": coverage_summary["totals"]["branch_percent_covered"],
+                "line_min_percent": coverage_summary["totals"]["line_min_percent"],
+                "branch_min_percent": coverage_summary["totals"]["branch_min_percent"],
+                "critical_line_min_percent": coverage_summary["totals"]["critical_line_min_percent"],
+                "critical_branch_min_percent": coverage_summary["totals"]["critical_branch_min_percent"],
+                "missing_core_targets": coverage_summary["missing_core_targets"],
+                "missing_targets": coverage_summary["missing_targets"],
+                "zero_covered_targets": coverage_summary["zero_covered_targets"],
+                "critical_under_line_targets": coverage_summary["critical_under_line_targets"],
+                "critical_under_branch_targets": coverage_summary["critical_under_branch_targets"],
+            },
+            "checklist": {
+                "ok": checklist_summary["ok"],
+                "status": "TODO" if checklist_summary["todo_ids"] else ("PARTIAL" if checklist_summary["partial_ids"] else "DONE"),
+                "partial_ids": checklist_summary["partial_ids"],
+                "todo_ids": checklist_summary["todo_ids"],
+                "done_ids": checklist_summary["done_ids"],
+                "unfinished_d_ids": checklist_summary["unfinished_d_ids"],
+            },
+            "formal_entry": {
+                "ok": formal_entry_summary["ok"],
+                "registry_steps": formal_entry_summary["registry_steps"],
+                "registry_commands": formal_entry_summary["registry_commands"],
+                "run_all_steps": formal_entry_summary["run_all_steps"],
+                "preflight_steps": formal_entry_summary["preflight_steps"],
+                "test_suite_steps": formal_entry_summary["test_suite_steps"],
         },
         "performance": {
             "ok": performance_summary["ok"],
@@ -959,7 +958,6 @@ def main(argv=None) -> int:
         "performance_peak_traced_memory_mb": performance_summary["max_step_peak_traced_memory_mb"],
         "optimizer_trial_avg_objective_wall_sec": performance_summary["optimizer_trial_avg_objective_wall_sec"],
     }, ensure_ascii=False))
-    tracker.__exit__(None, None, None)
     return 0 if overall_status == "PASS" else 1
 
 

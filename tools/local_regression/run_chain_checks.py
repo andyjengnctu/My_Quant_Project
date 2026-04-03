@@ -351,39 +351,21 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
-    started = time.perf_counter()
-    manifest = load_manifest()
-    run_dir = resolve_run_dir("chain_checks")
-    dataset_info = ensure_reduced_dataset()
+    with PeakTracedMemoryTracker() as tracker:
+        started = time.perf_counter()
+        manifest = load_manifest()
+        run_dir = resolve_run_dir("chain_checks")
+        dataset_info = ensure_reduced_dataset()
 
-    try:
-        params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
-        start_year = int(manifest["portfolio_start_year"])
-        max_positions = int(manifest["portfolio_max_positions"])
-        enable_rotation = bool(manifest["portfolio_enable_rotation"])
-        benchmark_ticker = str(manifest["benchmark_ticker"])
-        context = load_market_context(params)
+        try:
+            params = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
+            start_year = int(manifest["portfolio_start_year"])
+            max_positions = int(manifest["portfolio_max_positions"])
+            enable_rotation = bool(manifest["portfolio_enable_rotation"])
+            benchmark_ticker = str(manifest["benchmark_ticker"])
+            context = load_market_context(params)
 
-        primary_summary = _compute_chain_summary(
-            manifest=manifest,
-            dataset_info=dataset_info,
-            context=context,
-            params=params,
-            start_year=start_year,
-            max_positions=max_positions,
-            enable_rotation=enable_rotation,
-            benchmark_ticker=benchmark_ticker,
-            write_outputs=True,
-            run_dir=run_dir,
-        )
-        debug_row_count_cache = {row["ticker"]: int(row.get("debug_row_count", 0)) for row in primary_summary.get("rows", [])}
-
-        rerun_summaries = []
-        rerun_digests = []
-        for rerun_index in range(2, CHAIN_RERUN_COUNT + 1):
-            rerun_summary = _compute_chain_summary(
+            primary_summary = _compute_chain_summary(
                 manifest=manifest,
                 dataset_info=dataset_info,
                 context=context,
@@ -392,88 +374,104 @@ def main(argv=None) -> int:
                 max_positions=max_positions,
                 enable_rotation=enable_rotation,
                 benchmark_ticker=benchmark_ticker,
-                write_outputs=False,
-                debug_row_count_cache=debug_row_count_cache,
+                write_outputs=True,
+                run_dir=run_dir,
             )
-            rerun_payload = _canonical_chain_payload(rerun_summary)
-            rerun_summaries.append({
-                "run_index": rerun_index,
-                "status": rerun_summary["status"],
-                "digest": _payload_digest(rerun_payload),
-                "failure_count": len(rerun_summary.get("failures", [])),
-            })
-            rerun_digests.append(rerun_summaries[-1]["digest"])
-            if rerun_summary["status"] != "PASS":
-                primary_summary["failures"].append(f"rerun_{rerun_index}_status={rerun_summary['status']}")
+            debug_row_count_cache = {row["ticker"]: int(row.get("debug_row_count", 0)) for row in primary_summary.get("rows", [])}
 
-        primary_payload = _canonical_chain_payload(primary_summary)
-        primary_digest = _payload_digest(primary_payload)
-        rerun_match = all(digest == primary_digest for digest in rerun_digests)
-        if not rerun_match:
-            primary_summary["failures"].append("chain_rerun_inconsistent")
+            rerun_summaries = []
+            rerun_digests = []
+            for rerun_index in range(2, CHAIN_RERUN_COUNT + 1):
+                rerun_summary = _compute_chain_summary(
+                    manifest=manifest,
+                    dataset_info=dataset_info,
+                    context=context,
+                    params=params,
+                    start_year=start_year,
+                    max_positions=max_positions,
+                    enable_rotation=enable_rotation,
+                    benchmark_ticker=benchmark_ticker,
+                    write_outputs=False,
+                    debug_row_count_cache=debug_row_count_cache,
+                )
+                rerun_payload = _canonical_chain_payload(rerun_summary)
+                rerun_summaries.append({
+                    "run_index": rerun_index,
+                    "status": rerun_summary["status"],
+                    "digest": _payload_digest(rerun_payload),
+                    "failure_count": len(rerun_summary.get("failures", [])),
+                })
+                rerun_digests.append(rerun_summaries[-1]["digest"])
+                if rerun_summary["status"] != "PASS":
+                    primary_summary["failures"].append(f"rerun_{rerun_index}_status={rerun_summary['status']}")
 
-        primary_summary["rerun_consistency"] = {
-            "enabled": True,
-            "run_count": CHAIN_RERUN_COUNT,
-            "primary_digest": primary_digest,
-            "all_match": rerun_match,
-            "runs": rerun_summaries,
-        }
-        primary_summary["status"] = "PASS" if not primary_summary["failures"] else "FAIL"
-        summary = primary_summary
-    except Exception as exc:
-        summary = {
-            "status": "FAIL",
-            "dataset": manifest["dataset"],
-            "dataset_info": dataset_info,
-            "runtime_error": f"{type(exc).__name__}: {exc}",
-            "portfolio_snapshot": {},
-            "scanner_snapshot": {},
-            "ticker_count": 0,
-            "csv_count": 0,
-            "duplicate_issue_count": 0,
-            "skipped_ticker_count": 0,
-            "duplicate_issues": [],
-            "skipped": [],
-            "detail_count": 0,
-            "highlights": {},
-            "failures": [f"runtime_error={type(exc).__name__}"],
-            "rows": [],
-            "rerun_consistency": {
+            primary_payload = _canonical_chain_payload(primary_summary)
+            primary_digest = _payload_digest(primary_payload)
+            rerun_match = all(digest == primary_digest for digest in rerun_digests)
+            if not rerun_match:
+                primary_summary["failures"].append("chain_rerun_inconsistent")
+
+            primary_summary["rerun_consistency"] = {
                 "enabled": True,
                 "run_count": CHAIN_RERUN_COUNT,
-                "primary_digest": "",
-                "all_match": False,
-                "runs": [],
-            },
-        }
-
-    summary["duration_sec"] = round(time.perf_counter() - started, 3)
-    summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
-    write_json(run_dir / "chain_summary.json", summary)
-    write_json(run_dir / "chain_checks_summary.json", summary)
-    write_text(
-        run_dir / "chain_console.log",
-        json.dumps(
-            {
-                "status": summary["status"],
-                "ticker_count": summary.get("ticker_count", 0),
-                "failures": summary.get("failures", []),
-                "runtime_error": summary.get("runtime_error", ""),
-                "rerun_consistency": summary.get("rerun_consistency", {}),
-                "scanner_snapshot": {
-                    "candidate_count": summary.get("scanner_snapshot", {}).get("candidate_count", 0),
-                    "history_qualified_count": summary.get("scanner_snapshot", {}).get("history_qualified_count", 0),
-                    "duplicate_issue_count": summary.get("scanner_snapshot", {}).get("duplicate_issue_count", 0),
+                "primary_digest": primary_digest,
+                "all_match": rerun_match,
+                "runs": rerun_summaries,
+            }
+            primary_summary["status"] = "PASS" if not primary_summary["failures"] else "FAIL"
+            summary = primary_summary
+        except Exception as exc:
+            summary = {
+                "status": "FAIL",
+                "dataset": manifest["dataset"],
+                "dataset_info": dataset_info,
+                "runtime_error": f"{type(exc).__name__}: {exc}",
+                "portfolio_snapshot": {},
+                "scanner_snapshot": {},
+                "ticker_count": 0,
+                "csv_count": 0,
+                "duplicate_issue_count": 0,
+                "skipped_ticker_count": 0,
+                "duplicate_issues": [],
+                "skipped": [],
+                "detail_count": 0,
+                "highlights": {},
+                "failures": [f"runtime_error={type(exc).__name__}"],
+                "rows": [],
+                "rerun_consistency": {
+                    "enabled": True,
+                    "run_count": CHAIN_RERUN_COUNT,
+                    "primary_digest": "",
+                    "all_match": False,
+                    "runs": [],
                 },
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-    )
-    print(json.dumps({"status": summary["status"], "ticker_count": summary.get("ticker_count", 0), "failures": summary.get("failures", []), "runtime_error": summary.get("runtime_error", "")}, ensure_ascii=False))
-    tracker.__exit__(None, None, None)
-    return 0 if summary["status"] == "PASS" else 1
+            }
+
+        summary["duration_sec"] = round(time.perf_counter() - started, 3)
+        summary["peak_traced_memory_mb"] = tracker.snapshot_peak_mb()
+        write_json(run_dir / "chain_summary.json", summary)
+        write_json(run_dir / "chain_checks_summary.json", summary)
+        write_text(
+            run_dir / "chain_console.log",
+            json.dumps(
+                {
+                    "status": summary["status"],
+                    "ticker_count": summary.get("ticker_count", 0),
+                    "failures": summary.get("failures", []),
+                    "runtime_error": summary.get("runtime_error", ""),
+                    "rerun_consistency": summary.get("rerun_consistency", {}),
+                    "scanner_snapshot": {
+                        "candidate_count": summary.get("scanner_snapshot", {}).get("candidate_count", 0),
+                        "history_qualified_count": summary.get("scanner_snapshot", {}).get("history_qualified_count", 0),
+                        "duplicate_issue_count": summary.get("scanner_snapshot", {}).get("duplicate_issue_count", 0),
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        print(json.dumps({"status": summary["status"], "ticker_count": summary.get("ticker_count", 0), "failures": summary.get("failures", []), "runtime_error": summary.get("runtime_error", "")}, ensure_ascii=False))
+        return 0 if summary["status"] == "PASS" else 1
 
 
 if __name__ == "__main__":

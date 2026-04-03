@@ -2,6 +2,7 @@ from __future__ import annotations
 
 CORE_TRADING_COVERAGE_TARGETS = [
     "core/backtest_core.py",
+    "core/backtest_finalize.py",
     "core/portfolio_engine.py",
     "core/position_step.py",
     "core/portfolio_entries.py",
@@ -12,6 +13,7 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/portfolio_candidates.py",
     "core/portfolio_fast_data.py",
     "core/extended_signals.py",
+    "core/signal_utils.py",
 ]
 ENTRY_PATH_CRITICAL_COVERAGE_TARGETS = [
     "core/portfolio_entries.py",
@@ -19,6 +21,7 @@ ENTRY_PATH_CRITICAL_COVERAGE_TARGETS = [
 ]
 CRITICAL_COVERAGE_TARGETS = [
     "core/backtest_core.py",
+    "core/backtest_finalize.py",
     "core/portfolio_engine.py",
     "core/position_step.py",
     "core/portfolio_exits.py",

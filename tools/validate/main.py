@@ -172,161 +172,170 @@ def main(argv=None, environ=None):
         print("說明: 預設資料集為縮減；reduced 測試資料路徑為 <repo>/data/tw_stock_data_vip_reduced。")
         return 0
 
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
+    with PeakTracedMemoryTracker() as tracker:
+        import pandas as pd
+        from tools.validate.checks import (
+            add_fail_result,
+            add_skip_result,
+            normalize_ticker_text,
+            is_insufficient_data_error,
+        )
+        from tools.validate.real_cases import run_real_ticker_scan
+        from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
+        from tools.validate.reporting import print_console_summary, write_issue_excel_report, write_local_regression_summary
+        from tools.validate.synthetic_cases import run_synthetic_consistency_suite
+        from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
-    import pandas as pd
-    from tools.validate.checks import (
-        add_fail_result,
-        add_skip_result,
-        normalize_ticker_text,
-        is_insufficient_data_error,
-    )
-    from tools.validate.real_cases import run_real_ticker_scan
-    from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
-    from tools.validate.reporting import print_console_summary, write_issue_excel_report, write_local_regression_summary
-    from tools.validate.synthetic_cases import run_synthetic_consistency_suite
-    from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
+        suite_run_dir = environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
+        output_dir = suite_run_dir if suite_run_dir else OUTPUT_DIR
+        os.makedirs(output_dir, exist_ok=True)
 
-    suite_run_dir = environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
-    output_dir = suite_run_dir if suite_run_dir else OUTPUT_DIR
-    os.makedirs(output_dir, exist_ok=True)
+        try:
+            dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(argv, environ)
+            selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
+            set_active_data_dir(selected_data_dir)
+            dataset_label = get_dataset_profile_label(dataset_profile_key)
+        except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
 
-    try:
-        dataset_profile_key, dataset_source = resolve_validate_dataset_profile_key(argv, environ)
-        selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
-        set_active_data_dir(selected_data_dir)
-        dataset_label = get_dataset_profile_label(dataset_profile_key)
-    except ValueError as e:
-        print(f"❌ {e}", file=sys.stderr)
-        return 1
+        try:
+            base_params = load_params()
+        except (FileNotFoundError, RuntimeError, ValueError) as e:
+            print(f"❌ {e}", file=sys.stderr)
+            return 1
 
-    try:
-        base_params = load_params()
-    except (FileNotFoundError, RuntimeError, ValueError) as e:
-        print(f"❌ {e}", file=sys.stderr)
-        return 1
+        print(
+            f"驗證資料集: {dataset_label} | "
+            f"來源: {dataset_source} | 路徑: {DATA_DIR}"
+        )
+        all_results = []
+        summaries = []
+        start_time = time.time()
 
-    print(
-        f"驗證資料集: {dataset_label} | "
-        f"來源: {dataset_source} | 路徑: {DATA_DIR}"
-    )
-    all_results = []
-    summaries = []
-    start_time = time.time()
-
-    selected_tickers = []
-    real_data_unavailable_reason = None
-    if not os.path.isdir(DATA_DIR):
-        real_data_unavailable_reason = build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR)
-        print(real_data_unavailable_reason)
-        print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
-    else:
-        selected_tickers = discover_available_tickers()
-        if not selected_tickers:
-            real_data_unavailable_reason = build_empty_dataset_dir_message(dataset_profile_key, DATA_DIR)
+        selected_tickers = []
+        real_data_unavailable_reason = None
+        if not os.path.isdir(DATA_DIR):
+            real_data_unavailable_reason = build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR)
             print(real_data_unavailable_reason)
             print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
+        else:
+            selected_tickers = discover_available_tickers()
+            if not selected_tickers:
+                real_data_unavailable_reason = build_empty_dataset_dir_message(dataset_profile_key, DATA_DIR)
+                print(real_data_unavailable_reason)
+                print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
 
-    total_tickers = len(selected_tickers)
-    if total_tickers > 0:
-        print(f"開始自動掃描 {total_tickers} 檔股票...")
-        real_results, real_summaries, scan_stats = run_real_ticker_scan(
-            selected_tickers,
-            base_params,
-            project_root=PROJECT_ROOT,
-            data_dir=DATA_DIR,
-            csv_map_getter=get_data_dir_csv_map,
-            add_fail_result=add_fail_result,
-            add_skip_result=add_skip_result,
-            format_exception_summary=format_exception_summary,
-            is_insufficient_data_error=is_insufficient_data_error,
-            progress_printer=print_progress,
-        )
-        all_results.extend(real_results)
-        summaries.extend(real_summaries)
-        print(" " * 160, end="\r")
-        print()
-    else:
-        scan_stats = {"total_tickers": 0}
+        total_tickers = len(selected_tickers)
+        if total_tickers > 0:
+            print(f"開始自動掃描 {total_tickers} 檔股票...")
+            real_results, real_summaries, scan_stats = run_real_ticker_scan(
+                selected_tickers,
+                base_params,
+                project_root=PROJECT_ROOT,
+                data_dir=DATA_DIR,
+                csv_map_getter=get_data_dir_csv_map,
+                add_fail_result=add_fail_result,
+                add_skip_result=add_skip_result,
+                format_exception_summary=format_exception_summary,
+                is_insufficient_data_error=is_insufficient_data_error,
+                progress_printer=print_progress,
+            )
+            all_results.extend(real_results)
+            summaries.extend(real_summaries)
+            print(" " * 160, end="\r")
+            print()
+        else:
+            scan_stats = {"total_tickers": 0}
 
-    print("開始執行 synthetic coverage suite...")
-    try:
-        synthetic_results, synthetic_summaries = _run_synthetic_suite_with_optional_coverage(
-            suite_run_dir,
-            base_params,
-            run_synthetic_consistency_suite,
-            VALIDATION_RECOVERABLE_EXCEPTIONS,
-        )
-        all_results.extend(synthetic_results)
-        summaries.extend(synthetic_summaries)
-    except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
-        add_fail_result(
-            all_results,
-            "synthetic_suite",
-            "SYNTHETIC_SUITE",
-            "runtime",
-            "suite runs successfully",
-            format_exception_summary(e),
-            "synthetic coverage suite 失敗時不可靜默略過，否則 miss buy / half TP / 多檔互動覆蓋會出現假象。"
-        )
-        summaries.append({
-            "ticker": "SYNTHETIC_SUITE",
-            "validation_runtime": f"FAIL: {format_exception_summary(e)}",
-            "synthetic": True,
-        })
+        print("開始執行 synthetic coverage suite...")
+        try:
+            synthetic_results, synthetic_summaries = _run_synthetic_suite_with_optional_coverage(
+                suite_run_dir,
+                base_params,
+                run_synthetic_consistency_suite,
+                VALIDATION_RECOVERABLE_EXCEPTIONS,
+            )
+            all_results.extend(synthetic_results)
+            summaries.extend(synthetic_summaries)
+        except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
+            add_fail_result(
+                all_results,
+                "synthetic_suite",
+                "SYNTHETIC_SUITE",
+                "runtime",
+                "suite runs successfully",
+                format_exception_summary(e),
+                "synthetic coverage suite 失敗時不可靜默略過，否則 miss buy / half TP / 多檔互動覆蓋會出現假象。"
+            )
+            summaries.append({
+                "ticker": "SYNTHETIC_SUITE",
+                "validation_runtime": f"FAIL: {format_exception_summary(e)}",
+                "synthetic": True,
+            })
 
-    real_data_coverage_ok = real_data_unavailable_reason is None
-    if real_data_unavailable_reason is not None:
-        add_skip_result(
-            all_results,
-            "system",
-            "REAL_DATA_COVERAGE",
-            "real_data_scan_required",
-            f"{real_data_unavailable_reason} 最嚴格檢查不可只靠 synthetic coverage suite；本次結果只能視為工具與合成案例檢查，不可視為完整通過。"
-        )
-        summaries.append({
-            "ticker": "REAL_DATA_COVERAGE",
-            "validation_runtime": f"SKIP: {real_data_unavailable_reason}",
-            "synthetic": False,
-        })
+        real_data_coverage_ok = real_data_unavailable_reason is None
+        if real_data_unavailable_reason is not None:
+            add_skip_result(
+                all_results,
+                "system",
+                "REAL_DATA_COVERAGE",
+                "real_data_scan_required",
+                f"{real_data_unavailable_reason} 最嚴格檢查不可只靠 synthetic coverage suite；本次結果只能視為工具與合成案例檢查，不可視為完整通過。"
+            )
+            summaries.append({
+                "ticker": "REAL_DATA_COVERAGE",
+                "validation_runtime": f"SKIP: {real_data_unavailable_reason}",
+                "synthetic": False,
+            })
 
-    df_results = pd.DataFrame(all_results)
-    df_summary = pd.DataFrame(summaries)
-    df_failed = df_results[df_results["status"] == "FAIL"].copy() if not df_results.empty else pd.DataFrame()
+        df_results = pd.DataFrame(all_results)
+        df_summary = pd.DataFrame(summaries)
+        df_failed = df_results[df_results["status"] == "FAIL"].copy() if not df_results.empty else pd.DataFrame()
 
-    for df_obj in [df_results, df_summary, df_failed]:
-        if not df_obj.empty and "ticker" in df_obj.columns:
-            df_obj["ticker"] = df_obj["ticker"].map(normalize_ticker_text)
+        for df_obj in [df_results, df_summary, df_failed]:
+            if not df_obj.empty and "ticker" in df_obj.columns:
+                df_obj["ticker"] = df_obj["ticker"].map(normalize_ticker_text)
 
-    if not df_failed.empty:
-        df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
-
-    timestamp = get_taipei_now().strftime("%Y%m%d_%H%M%S")
-    csv_path = None
-
-    if df_failed.empty:
-        df_failed_summary = pd.DataFrame(columns=["ticker", "failed_checks"])
-        df_failed_module = pd.DataFrame(columns=["module", "failed_checks"])
-    else:
-        df_failed_summary = (
-            df_failed.groupby("ticker", dropna=False)
-            .agg(failed_checks=("passed", "size"))
-            .reset_index()
-            .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
-        )
-        df_failed_module = (
-            df_failed.groupby("module", dropna=False)
-            .agg(failed_checks=("passed", "size"))
-            .reset_index()
-            .sort_values(by=["failed_checks", "module"], ascending=[False, True])
-        )
-
-    xlsx_path = None
-    if suite_run_dir:
         if not df_failed.empty:
-            csv_path = os.path.join(output_dir, f"consistency_failures_{timestamp}.csv")
-            df_failed.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
+
+        timestamp = get_taipei_now().strftime("%Y%m%d_%H%M%S")
+        csv_path = None
+
+        if df_failed.empty:
+            df_failed_summary = pd.DataFrame(columns=["ticker", "failed_checks"])
+            df_failed_module = pd.DataFrame(columns=["module", "failed_checks"])
+        else:
+            df_failed_summary = (
+                df_failed.groupby("ticker", dropna=False)
+                .agg(failed_checks=("passed", "size"))
+                .reset_index()
+                .sort_values(by=["failed_checks", "ticker"], ascending=[False, True])
+            )
+            df_failed_module = (
+                df_failed.groupby("module", dropna=False)
+                .agg(failed_checks=("passed", "size"))
+                .reset_index()
+                .sort_values(by=["failed_checks", "module"], ascending=[False, True])
+            )
+
+        xlsx_path = None
+        if suite_run_dir:
+            if not df_failed.empty:
+                csv_path = os.path.join(output_dir, f"consistency_failures_{timestamp}.csv")
+                df_failed.to_csv(csv_path, index=False, encoding="utf-8-sig")
+                xlsx_path = write_issue_excel_report(
+                    df_failed=df_failed,
+                    df_failed_summary=df_failed_summary,
+                    df_failed_module=df_failed_module,
+                    timestamp=timestamp,
+                    output_dir=output_dir,
+                    normalize_ticker=normalize_ticker_text,
+                )
+        else:
+            csv_path = os.path.join(output_dir, f"consistency_full_scan_{timestamp}.csv")
+            df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
             xlsx_path = write_issue_excel_report(
                 df_failed=df_failed,
                 df_failed_summary=df_failed_summary,
@@ -335,51 +344,38 @@ def main(argv=None, environ=None):
                 output_dir=output_dir,
                 normalize_ticker=normalize_ticker_text,
             )
-    else:
-        csv_path = os.path.join(output_dir, f"consistency_full_scan_{timestamp}.csv")
-        df_results.to_csv(csv_path, index=False, encoding="utf-8-sig")
-        xlsx_path = write_issue_excel_report(
+
+        elapsed_time = time.time() - start_time
+
+        print_console_summary(
+            df_results=df_results,
             df_failed=df_failed,
-            df_failed_summary=df_failed_summary,
-            df_failed_module=df_failed_module,
-            timestamp=timestamp,
-            output_dir=output_dir,
-            normalize_ticker=normalize_ticker_text,
+            df_summary=df_summary,
+            csv_path=csv_path,
+            xlsx_path=xlsx_path,
+            elapsed_time=elapsed_time,
+            real_summary_count=scan_stats["total_tickers"],
+            real_tickers=selected_tickers,
+            normalize_ticker_text=normalize_ticker_text,
+            max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
         )
 
-    elapsed_time = time.time() - start_time
+        write_local_regression_summary(
+            dataset_profile_key=dataset_profile_key,
+            dataset_source=dataset_source,
+            data_dir=DATA_DIR,
+            csv_path=csv_path,
+            xlsx_path=xlsx_path,
+            elapsed_time=elapsed_time,
+            selected_tickers=selected_tickers,
+            df_results=df_results,
+            df_failed=df_failed,
+            output_dir=output_dir,
+            real_data_coverage_ok=real_data_coverage_ok,
+            peak_traced_memory_mb=tracker.snapshot_peak_mb(),
+        )
 
-    print_console_summary(
-        df_results=df_results,
-        df_failed=df_failed,
-        df_summary=df_summary,
-        csv_path=csv_path,
-        xlsx_path=xlsx_path,
-        elapsed_time=elapsed_time,
-        real_summary_count=scan_stats["total_tickers"],
-        real_tickers=selected_tickers,
-        normalize_ticker_text=normalize_ticker_text,
-        max_console_fail_preview=MAX_CONSOLE_FAIL_PREVIEW,
-    )
-
-    write_local_regression_summary(
-        dataset_profile_key=dataset_profile_key,
-        dataset_source=dataset_source,
-        data_dir=DATA_DIR,
-        csv_path=csv_path,
-        xlsx_path=xlsx_path,
-        elapsed_time=elapsed_time,
-        selected_tickers=selected_tickers,
-        df_results=df_results,
-        df_failed=df_failed,
-        output_dir=output_dir,
-        real_data_coverage_ok=real_data_coverage_ok,
-        peak_traced_memory_mb=tracker.snapshot_peak_mb(),
-    )
-
-    tracker.__exit__(None, None, None)
-    return 1 if ((not df_failed.empty) or (not real_data_coverage_ok)) else 0
-
+        return 1 if ((not df_failed.empty) or (not real_data_coverage_ok)) else 0
 
 if __name__ == "__main__":
     run_cli_entrypoint(main)

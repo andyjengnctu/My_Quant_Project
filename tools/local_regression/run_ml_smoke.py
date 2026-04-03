@@ -134,109 +134,106 @@ def _read_latest_profile_metrics(new_paths: Dict[str, Path]) -> Dict[str, Any]:
 
 
 def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
-    started = time.perf_counter()
-    label_dir = ensure_dir(parent_run_dir / label)
-    models_dir = ensure_dir(label_dir / "models")
-    params_path = models_dir / "best_params.json"
-    db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
-    failures = []
+    with PeakTracedMemoryTracker() as tracker:
+        started = time.perf_counter()
+        label_dir = ensure_dir(parent_run_dir / label)
+        models_dir = ensure_dir(label_dir / "models")
+        params_path = models_dir / "best_params.json"
+        db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
+        failures = []
 
-    before_profile_summaries = _collect_optimizer_profile_summaries()
+        before_profile_summaries = _collect_optimizer_profile_summaries()
 
-    outcome = run_command(
-        [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
-        timeout=int(manifest["ml_smoke_timeout_sec"]),
-        env={
-            "V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"])),
-            OPTIMIZER_SEED_ENV_VAR: str(ML_SMOKE_REPRO_SEED),
-            MODELS_DIR_ENV_VAR: str(models_dir),
-            BEST_PARAMS_PATH_ENV_VAR: str(params_path),
-        },
-    )
-    write_text(
-        label_dir / "ml_smoke_console.log",
-        "\n".join(
-            [
-                f"$ {outcome['cmd']}",
-                f"returncode={outcome['returncode']}",
-                f"timed_out={outcome.get('timed_out', False)}",
-                f"error_type={outcome.get('error_type', '')}",
-                f"error_message={outcome.get('error_message', '')}",
-                "",
-                "[stdout]",
-                outcome["stdout"],
-                "",
-                "[stderr]",
-                outcome["stderr"],
-            ]
-        ),
-    )
+        outcome = run_command(
+            [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
+            timeout=int(manifest["ml_smoke_timeout_sec"]),
+            env={
+                "V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"])),
+                OPTIMIZER_SEED_ENV_VAR: str(ML_SMOKE_REPRO_SEED),
+                MODELS_DIR_ENV_VAR: str(models_dir),
+                BEST_PARAMS_PATH_ENV_VAR: str(params_path),
+            },
+        )
+        write_text(
+            label_dir / "ml_smoke_console.log",
+            "\n".join(
+                [
+                    f"$ {outcome['cmd']}",
+                    f"returncode={outcome['returncode']}",
+                    f"timed_out={outcome.get('timed_out', False)}",
+                    f"error_type={outcome.get('error_type', '')}",
+                    f"error_message={outcome.get('error_message', '')}",
+                    "",
+                    "[stdout]",
+                    outcome["stdout"],
+                    "",
+                    "[stderr]",
+                    outcome["stderr"],
+                ]
+            ),
+        )
 
-    after_profile_summaries = _collect_optimizer_profile_summaries()
-    new_profile_summaries = {
-        name: path for name, path in after_profile_summaries.items() if name not in before_profile_summaries
-    }
-    profile_metrics = _read_latest_profile_metrics(new_profile_summaries)
-
-    if outcome.get("timed_out"):
-        failures.append("optimizer_timed_out")
-    elif outcome["returncode"] != 0:
-        failures.append("optimizer_exit_nonzero")
-
-    if not db_path.exists():
-        failures.append("missing_optimizer_db")
-        db_metrics = {
-            "trial_count": 0,
-            "qualified_trial_count": 0,
-            "best_trial_value": None,
-            "db_read_error": "",
+        after_profile_summaries = _collect_optimizer_profile_summaries()
+        new_profile_summaries = {
+            name: path for name, path in after_profile_summaries.items() if name not in before_profile_summaries
         }
-    else:
-        db_metrics = _read_db_metrics(db_path)
-        if db_metrics["db_read_error"]:
-            failures.append("optimizer_db_unreadable")
-        elif db_metrics["trial_count"] < 1:
-            failures.append("no_trials_recorded")
+        profile_metrics = _read_latest_profile_metrics(new_profile_summaries)
 
-    params_info = _load_params_payload(params_path)
-    best_params_required = db_metrics["qualified_trial_count"] > 0
-    if not params_path.exists():
-        if best_params_required:
-            failures.append("missing_best_params_for_qualified_trial")
-    elif params_info["params_read_error"]:
-        failures.append("best_params_invalid_json")
-    elif params_info["missing_keys"]:
-        failures.append(f"best_params_missing_keys:{','.join(params_info['missing_keys'])}")
+        if outcome.get("timed_out"):
+            failures.append("optimizer_timed_out")
+        elif outcome["returncode"] != 0:
+            failures.append("optimizer_exit_nonzero")
 
-    payload_digest = _canonical_payload_digest(params_info["payload"]) if params_info["payload"] else ""
-    result = {
-        "label": label,
-        "status": "PASS" if not failures else "FAIL",
-        "db_path": str(db_path),
-        "best_params_path": str(params_path),
-        "db_trial_count": db_metrics["trial_count"],
-        "qualified_trial_count": db_metrics["qualified_trial_count"],
-        "best_trial_value": db_metrics["best_trial_value"],
-        "best_params_required": best_params_required,
-        "best_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
-        "best_params_payload": params_info["payload"],
-        "best_params_digest": payload_digest,
-        "db_read_error": db_metrics["db_read_error"],
-        "best_params_read_error": params_info["params_read_error"],
-        "optimizer_profile_summary_path": profile_metrics["optimizer_profile_summary_path"],
-        "optimizer_profile_trial_count": profile_metrics["optimizer_profile_trial_count"],
-        "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
-        "optimizer_profile_read_error": profile_metrics["optimizer_profile_read_error"],
-        "failures": failures,
-        "duration_sec": round(time.perf_counter() - started, 3),
-        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
-    }
-    write_json(label_dir / "ml_smoke_summary.json", result)
-    tracker.__exit__(None, None, None)
-    return result
+        if not db_path.exists():
+            failures.append("missing_optimizer_db")
+            db_metrics = {
+                "trial_count": 0,
+                "qualified_trial_count": 0,
+                "best_trial_value": None,
+                "db_read_error": "",
+            }
+        else:
+            db_metrics = _read_db_metrics(db_path)
+            if db_metrics["db_read_error"]:
+                failures.append("optimizer_db_unreadable")
+            elif db_metrics["trial_count"] < 1:
+                failures.append("no_trials_recorded")
 
+        params_info = _load_params_payload(params_path)
+        best_params_required = db_metrics["qualified_trial_count"] > 0
+        if not params_path.exists():
+            if best_params_required:
+                failures.append("missing_best_params_for_qualified_trial")
+        elif params_info["params_read_error"]:
+            failures.append("best_params_invalid_json")
+        elif params_info["missing_keys"]:
+            failures.append(f"best_params_missing_keys:{','.join(params_info['missing_keys'])}")
+
+        payload_digest = _canonical_payload_digest(params_info["payload"]) if params_info["payload"] else ""
+        result = {
+            "label": label,
+            "status": "PASS" if not failures else "FAIL",
+            "db_path": str(db_path),
+            "best_params_path": str(params_path),
+            "db_trial_count": db_metrics["trial_count"],
+            "qualified_trial_count": db_metrics["qualified_trial_count"],
+            "best_trial_value": db_metrics["best_trial_value"],
+            "best_params_required": best_params_required,
+            "best_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
+            "best_params_payload": params_info["payload"],
+            "best_params_digest": payload_digest,
+            "db_read_error": db_metrics["db_read_error"],
+            "best_params_read_error": params_info["params_read_error"],
+            "optimizer_profile_summary_path": profile_metrics["optimizer_profile_summary_path"],
+            "optimizer_profile_trial_count": profile_metrics["optimizer_profile_trial_count"],
+            "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
+            "optimizer_profile_read_error": profile_metrics["optimizer_profile_read_error"],
+            "failures": failures,
+            "duration_sec": round(time.perf_counter() - started, 3),
+            "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
+        }
+        write_json(label_dir / "ml_smoke_summary.json", result)
+        return result
 
 def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) -> Dict[str, Any]:
     comparisons = {
@@ -287,52 +284,49 @@ def main(argv=None) -> int:
     if parsed["help"]:
         return 0
 
-    tracker = PeakTracedMemoryTracker()
-    tracker.__enter__()
-    started = time.perf_counter()
-    manifest = load_manifest()
-    run_dir = resolve_run_dir("ml_smoke")
-    dataset_info = ensure_reduced_dataset()
-    smoke_dir = ensure_dir(run_dir / "optimizer_repro")
-    failures = []
+    with PeakTracedMemoryTracker() as tracker:
+        started = time.perf_counter()
+        manifest = load_manifest()
+        run_dir = resolve_run_dir("ml_smoke")
+        dataset_info = ensure_reduced_dataset()
+        smoke_dir = ensure_dir(run_dir / "optimizer_repro")
+        failures = []
 
-    first_run = _run_single_optimizer_smoke(label="run_1", parent_run_dir=smoke_dir, manifest=manifest)
-    second_run = _run_single_optimizer_smoke(label="run_2", parent_run_dir=smoke_dir, manifest=manifest)
-    for single_run in (first_run, second_run):
-        failures.extend(f"{single_run['label']}::{failure}" for failure in single_run["failures"])
+        first_run = _run_single_optimizer_smoke(label="run_1", parent_run_dir=smoke_dir, manifest=manifest)
+        second_run = _run_single_optimizer_smoke(label="run_2", parent_run_dir=smoke_dir, manifest=manifest)
+        for single_run in (first_run, second_run):
+            failures.extend(f"{single_run['label']}::{failure}" for failure in single_run["failures"])
 
-    repro_summary = _build_repro_summary(first_run, second_run)
-    if not repro_summary["all_match"]:
-        failures.append("optimizer_repro_mismatch")
+        repro_summary = _build_repro_summary(first_run, second_run)
+        if not repro_summary["all_match"]:
+            failures.append("optimizer_repro_mismatch")
 
-    summary = {
-        "status": "PASS" if not failures else "FAIL",
-        "dataset": manifest["dataset"],
-        "dataset_info": dataset_info,
-        "db_path": first_run["db_path"],
-        "db_trial_count": first_run["db_trial_count"],
-        "db_read_error": first_run["db_read_error"],
-        "best_params_path": first_run["best_params_path"],
-        "best_params_required": first_run["best_params_required"],
-        "qualified_trial_count": first_run["qualified_trial_count"],
-        "best_trial_value": first_run["best_trial_value"],
-        "best_params_keys": first_run["best_params_keys"],
-        "best_params_read_error": first_run["best_params_read_error"],
-        "optimizer_profile_summary_path": first_run["optimizer_profile_summary_path"],
-        "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
-        "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
-        "optimizer_profile_read_error": first_run["optimizer_profile_read_error"],
-        "runtime_error": "",
-        "optimizer_repro": repro_summary,
-        "failures": failures,
-        "duration_sec": round(time.perf_counter() - started, 3),
-        "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
-    }
-    write_json(run_dir / "ml_smoke_summary.json", summary)
-    print(json.dumps({"status": summary["status"], "db_trial_count": summary["db_trial_count"], "optimizer_repro_all_match": repro_summary["all_match"]}, ensure_ascii=False))
-    tracker.__exit__(None, None, None)
-    return 0 if not failures else 1
-
+        summary = {
+            "status": "PASS" if not failures else "FAIL",
+            "dataset": manifest["dataset"],
+            "dataset_info": dataset_info,
+            "db_path": first_run["db_path"],
+            "db_trial_count": first_run["db_trial_count"],
+            "db_read_error": first_run["db_read_error"],
+            "best_params_path": first_run["best_params_path"],
+            "best_params_required": first_run["best_params_required"],
+            "qualified_trial_count": first_run["qualified_trial_count"],
+            "best_trial_value": first_run["best_trial_value"],
+            "best_params_keys": first_run["best_params_keys"],
+            "best_params_read_error": first_run["best_params_read_error"],
+            "optimizer_profile_summary_path": first_run["optimizer_profile_summary_path"],
+            "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
+            "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
+            "optimizer_profile_read_error": first_run["optimizer_profile_read_error"],
+            "runtime_error": "",
+            "optimizer_repro": repro_summary,
+            "failures": failures,
+            "duration_sec": round(time.perf_counter() - started, 3),
+            "peak_traced_memory_mb": tracker.snapshot_peak_mb(),
+        }
+        write_json(run_dir / "ml_smoke_summary.json", summary)
+        print(json.dumps({"status": summary["status"], "db_trial_count": summary["db_trial_count"], "optimizer_repro_all_match": repro_summary["all_match"]}, ensure_ascii=False))
+        return 0 if not failures else 1
 
 if __name__ == "__main__":
     run_cli_entrypoint(main)
