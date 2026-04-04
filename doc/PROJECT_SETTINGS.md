@@ -16,7 +16,7 @@
 5. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 6. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
 7. 檢查到問題就直接在本輪提供修改。
-8. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`F1` / `F2` / `G` 僅為同步索引；各區詳細維護格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
+8. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`F` / `G` 僅為同步索引；各區詳細維護格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
 9. 文件分工必須遵守：`doc/PROJECT_SETTINGS.md` 只保留原則、權責、前置順序、禁止事項與單一真理來源；`doc/TEST_SUITE_CHECKLIST.md` 只保留測試清單、覆蓋狀態、測試映射、收斂紀錄與欄位細則。
 10. `doc/TEST_SUITE_CHECKLIST.md` 應優先保留可機械比對的表格、ID 與必要欄位；不得保留與當前收斂狀態無直接關聯的歷史敘事、時效性效能數字、結案心得或補充註記。
 11. checklist 的摘要區只能保留最小必要索引；時間軸與完成日期只保留在收斂紀錄，測試入口與缺口細節以主表為準，不得在多個摘要區重複抄寫同一事實。

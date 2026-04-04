@@ -31,9 +31,9 @@
 2. 先補長期固定測試，再補可隨策略升級調整的測試；優先補 synthetic / unit / contract test，避免讓 GPT 端重跑本地完整動態流程。
 3. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `F1` / `F2` / `G`。任何 `Bxx` / `Dxx` / 狀態變更，必須同一次 patch 更新完畢。
-6. 摘要表只保留最小必要欄位：`F1` 不重複抄寫測試入口與完成日期，`F2` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
-7. `F2` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
+5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `F` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Dxx` / 狀態變更，必須同一次 patch 更新完畢。
+6. 摘要表只保留最小必要欄位：`F` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
+7. `F` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -101,7 +101,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard，以及 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 紀錄失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及 legacy `D` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`F` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -153,64 +153,13 @@
 | ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
 
-## F. 已完成覆蓋摘要
+## F. 已完成建議測試映射
 
-使用方式：本節只保留 `DONE` 項目的最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。測試入口與缺口細節以主表為準，時間軸僅寫在 `G`。
+使用方式：本節只保留 `DONE` 的建議測試項目最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。主表狀態、測試入口細節與缺口摘要仍以主表為準，時間軸僅寫在 `G`。
 
-維護規則：`F1` 固定只留「類型 / ID / 項目」，`F2` 固定只留「ID / 建議測試名稱 / 對應主表項目」；兩表均依 ID 升冪排序。交付前至少核對一次「主表 `DONE` IDs == `F1` `DONE` IDs」。
+維護規則：`F` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。交付前至少核對一次「所有已註冊 validator / script 類型的 `Dxx` 已同步列入 `F`，且 `F` 與 `G` 的最新狀態一致」。
 
-### F1. 目前所有 `DONE` 的主表項目摘要
-
-| 類型 | ID | 項目 |
-|---|---|---|
-| 規則 | B01 | 杜絕未來函數 |
-| 規則 | B02 | 同 K 棒停利/停損取最壞停損 |
-| 規則 | B03 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 |
-| 規則 | B04 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip |
-| 規則 | B05 | 只能盤前掛單；盤中不得新增/改單/換股 |
-| 規則 | B06 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 |
-| 規則 | B07 | 未成交不得同日盤中自動改掛其他股票 |
-| 規則 | B08 | 停利/停損只能對已持有部位預先設定 |
-| 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 |
-| 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner |
-| 契約 | B11 | 跨工具 schema / 欄位語意一致 |
-| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 |
-| 邊界值 | B13 | 數值穩定性、rounding、tick、odd lot |
-| 韌性 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 |
-| 錯誤處理 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 |
-| CLI | B16 | 互斥參數、預設值、help 與實作一致 |
-| I/O | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 |
-| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 |
-| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 |
-| 文件 | B20 | `doc/CMD.md` 指令與實作一致 |
-| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 |
-| 覆蓋率 | B22 | line / branch coverage 報表 |
-| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 |
-| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail |
-| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 |
-| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） |
-| Meta | B27 | 禁止循環依賴（模組層級 import cycle） |
-| 覆蓋率 | B28 | key coverage targets 應包含核心交易模組 |
-| 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate |
-| 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 |
-| 覆蓋率 | B31 | entry path 關鍵模組應納入 critical file per-file coverage gate |
-| 覆蓋率 | B32 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 |
-| I/O | B33 | reduced dataset 應具備 member / content fingerprint gate |
-| I/O | B34 | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite |
-| 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets |
-| I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes |
-| Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） |
-| 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets |
-| 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets |
-| Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 |
-| 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 |
-| Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 |
-| I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 |
-| Meta | B44 | `quick_gate` 不得移除裸 `except` static guard |
-| I/O | B45 | `quick_gate` 不得移除 output path / outputs root / log path guard |
-| 錯誤處理 | B46 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 |
-
-### F2. 目前所有 `DONE` 的建議測試項目摘要
+### F. 目前所有 `DONE` 的建議測試項目摘要
 
 | ID | 建議測試名稱 | 對應主表項目 |
 |---|---|---|
@@ -338,6 +287,7 @@
 | D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
 | D127 | `validate_console_tail_read_error_traceability_case` | B46 |
 | D128 | `validate_checklist_g_ordering_case` | B26 |
+| D129 | `validate_checklist_no_legacy_f1_section_case` | B26 |
 
 ## G. 逐項收斂紀錄
 
@@ -378,8 +328,8 @@
 | 2026-04-02 | B23 | 檢出 synthetic 主入口漏註冊既有 `validate_*` case，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cases.py` 尚未完整覆蓋 imported validate cases |
 | 2026-04-02 | B23 | 補齊 synthetic 主入口遺漏註冊與 registry completeness guard 後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cases.py` |
 | 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | B26 | 檢出 `F2` `DONE` 摘要漏列既有完成項目，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身仍有回寫 / 摘要失同步缺口 |
-| 2026-04-02 | B26 | 補齊 checklist main / `F2` / `G` sync 與 `DONE` 摘要缺漏 blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | B26 | 檢出完成摘要索引仍有漏同步風險，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身仍有回寫 / 摘要失同步缺口 |
+| 2026-04-02 | B26 | 補齊 checklist main / `F` / `G` sync blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | D14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
 | 2026-04-02 | D15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` |
 | 2026-04-02 | D16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
@@ -430,9 +380,9 @@
 | 2026-04-02 | D69 | 新增 meta quality coverage artifact reuse contract case 並驗證 | NEW -> DONE | `validate_meta_quality_reuses_existing_coverage_artifacts_case` |
 | 2026-04-02 | D70 | 新增 imported validate cases vs synthetic registry formal guard 缺口 | NEW -> TODO | 需補正式註冊完整性檢查。 |
 | 2026-04-02 | D70 | 補 imported / defined validate cases 與 synthetic registry 完整一致 formal guard | TODO -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-02 | D71 | 新增主表 / `F2` / `G` 完整同步 formal guard 缺口 | NEW -> TODO | 需補 checklist 自身同步性檢查。 |
-| 2026-04-02 | D71 | 補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | D72 | 新增 checklist `DONE` 摘要缺漏自動偵測缺口 | NEW -> TODO | 需阻擋 `F2` 遺漏已完成 D 項仍被判定為已收斂 |
+| 2026-04-02 | D71 | 新增主表 / `F` / `G` 完整同步 formal guard 缺口 | NEW -> TODO | 需補 checklist 自身同步性檢查。 |
+| 2026-04-02 | D71 | 補主表 / `F` / `G` 收斂紀錄完整同步 formal guard | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | D72 | 新增 checklist 完成映射同步缺口 | NEW -> TODO | 需阻擋已完成 D 項遺漏於 `F` 仍被判定為已收斂 |
 | 2026-04-02 | D72 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-03 | B27 | 補 top-level import cycle formal guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-03 | B28 | 補入核心交易模組 coverage target completeness 主表項目 | NEW -> PARTIAL | `run_meta_quality.py` 已有 key target hit guard，但尚未明確要求核心交易模組入列 |
@@ -494,7 +444,7 @@
 | 2026-04-03 | D109 | 新增 optimizer objective / export contract case 並驗證 | NEW -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-03 | D110 | 新增 formal step entry wrappers coverage target completeness 建議測試並驗證 | NEW -> DONE | `validate_formal_step_entry_coverage_targets_case` |
 | 2026-04-03 | D111 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
-| 2026-04-03 | D112 | 新增 `F2` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
+| 2026-04-03 | D112 | 新增 `F` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
 | 2026-04-03 | D113 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
 | 2026-04-03 | D114 | 新增 checklist legacy `D` 區移除 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_d_section_case` |
 | 2026-04-03 | D115 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
@@ -517,3 +467,5 @@
 | 2026-04-04 | D126 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
 | 2026-04-04 | D127 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
 | 2026-04-04 | D128 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
+
+| 2026-04-04 | D129 | 新增 legacy F1 回流 guard 並驗證 | NEW -> DONE | validate_checklist_no_legacy_f1_section_case |

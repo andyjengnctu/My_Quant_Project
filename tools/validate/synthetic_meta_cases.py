@@ -81,7 +81,7 @@ def _load_main_table_catalog():
 
 def _load_done_d_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要")
+    rows = extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要")
     parsed = []
     for cols in rows:
         if len(cols) < 3:
@@ -97,23 +97,17 @@ def _load_done_d_rows():
 
 
 def _load_done_b_rows():
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要")
     catalog = _load_main_table_catalog()
-    parsed = []
-    for cols in rows:
-        if len(cols) < 3:
-            continue
-        catalog_row = catalog.get(cols[1], {})
-        parsed.append(
-            {
-                "kind": cols[0],
-                "b_id": cols[1],
-                "item": cols[2],
-                "entry": catalog_row.get("entry", ""),
-            }
-        )
-    return parsed
+    return [
+        {
+            "kind": row["kind"],
+            "b_id": b_id,
+            "item": row["item"],
+            "entry": row["entry"],
+        }
+        for b_id, row in sorted(catalog.items())
+        if row.get("status") == "DONE"
+    ]
 
 
 def _load_convergence_latest_statuses():
@@ -454,7 +448,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     try:
         mutated_text = _replace_markdown_table_row(
             original_text,
-            heading="F2. 目前所有 `DONE` 的建議測試項目摘要",
+            heading="F. 目前所有 `DONE` 的建議測試項目摘要",
             row_id="D111",
             id_col_idx=0,
             update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2]],
@@ -470,7 +464,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    f2_result = result_by_name.get("checklist_f2_rows_use_single_test_entry", {})
+    f2_result = result_by_name.get("checklist_f_rows_use_single_test_entry", {})
     invalid_rows = f2_result.get("invalid_entries")
     if invalid_rows is None:
         invalid_rows = f2_result.get("extra", {}).get("invalid_entries", [])
@@ -480,6 +474,51 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
 
     summary["guard_status"] = f2_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
+def validate_checklist_no_legacy_f1_section_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_NO_LEGACY_F1_SECTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    if "### F1. 目前所有 `DONE` 的主表項目摘要" in original_text:
+        add_check(results, "meta_checklist", case_id, "baseline_has_no_legacy_f1_section", True, False)
+        return results, summary
+
+    insertion_target = "### F. 目前所有 `DONE` 的建議測試項目摘要"
+    if insertion_target not in original_text:
+        add_check(results, "meta_checklist", case_id, "target_f_section_exists_for_mutation", True, False)
+        return results, summary
+
+    legacy_block = (
+        "### F1. 目前所有 `DONE` 的主表項目摘要\n\n"
+        "| 類型 | ID | 項目 |\n"
+        "|---|---|---|\n"
+        "| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） |\n\n"
+    )
+    mutated_text = original_text.replace(insertion_target, legacy_block + insertion_target, 1)
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_legacy_f1_section_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    legacy_result = result_by_name.get("checklist_has_no_legacy_f1_section", {})
+    legacy_present = legacy_result.get("legacy_f1_section_present")
+    if legacy_present is None:
+        legacy_present = legacy_result.get("extra", {}).get("legacy_f1_section_present")
+
+    add_check(results, "meta_checklist", case_id, "mutated_legacy_f1_section_guard_fails", "FAIL", legacy_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_legacy_f1_section_reported", True, bool(legacy_present))
+
+    summary["guard_status"] = legacy_result.get("status")
+    summary["legacy_f1_section_present"] = legacy_present
     return results, summary
 
 
