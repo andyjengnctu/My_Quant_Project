@@ -1029,6 +1029,42 @@ def validate_atomic_write_retry_contract_case(_base_params):
     summary["replace_attempts"] = replace_attempts["count"]
     return results, summary
 
+def validate_atomic_write_cleanup_error_preserves_root_exception_case(_base_params):
+    case_id = "ATOMIC_WRITE_CLEANUP_ERROR_PRESERVES_ROOT_EXCEPTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="atomic_write_cleanup_error_contract_") as temp_dir:
+        run_dir = Path(temp_dir)
+        json_path = run_dir / "atomic_cleanup_summary.json"
+        local_common.write_json(json_path, {"status": "original", "count": 1})
+
+        original_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.parent == run_dir and self.name.startswith(f".{json_path.name}.") and self.name.endswith(".tmp"):
+                raise PermissionError("simulated temp cleanup failure")
+            return original_unlink(self, *args, **kwargs)
+
+        with patch.object(local_common.os, "replace", side_effect=OSError("simulated atomic replace failure")),              patch.object(Path, "unlink", new=failing_unlink):
+            try:
+                local_common.write_json(json_path, {"status": "new", "count": 2})
+            except OSError as exc:
+                raised_exc = exc
+            else:
+                raise AssertionError("write_json should raise original replace failure when temp cleanup also fails")
+
+        remaining_temp_files = sorted(path.name for path in run_dir.glob(".*.tmp"))
+        notes = list(getattr(raised_exc, "__notes__", []) or [])
+
+    add_check(results, "output_contract", case_id, "atomic_write_cleanup_failure_preserves_root_exception_type", "OSError", type(raised_exc).__name__)
+    add_check(results, "output_contract", case_id, "atomic_write_cleanup_failure_preserves_root_exception_message", True, "simulated atomic replace failure" in str(raised_exc))
+    add_check(results, "output_contract", case_id, "atomic_write_cleanup_failure_records_cleanup_note", True, any("simulated temp cleanup failure" in note for note in notes))
+    add_check(results, "output_contract", case_id, "atomic_write_cleanup_failure_leaves_temp_file_visible_for_manual_cleanup", 1, len(remaining_temp_files))
+
+    summary["cleanup_notes_count"] = len(notes)
+    return results, summary
+
 
 def validate_meta_quality_performance_memory_contract_case(_base_params):
     case_id = "META_QUALITY_PERFORMANCE_MEMORY_CONTRACT"

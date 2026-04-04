@@ -228,11 +228,16 @@ def _atomic_replace_text(path: Path, text: str, *, encoding: str, newline: Optio
             f.flush()
             os.fsync(f.fileno())
         _atomic_replace_file(temp_path, path)
-    except Exception:
+    except Exception as exc:
         try:
             temp_path.unlink()
         except FileNotFoundError:
             pass
+        except OSError as cleanup_exc:
+            add_note = getattr(exc, "add_note", None)
+            cleanup_detail = f"atomic temp cleanup failed: {type(cleanup_exc).__name__}: {cleanup_exc}"
+            if callable(add_note):
+                add_note(cleanup_detail)
         raise
     return path
 
