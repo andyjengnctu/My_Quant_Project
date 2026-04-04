@@ -137,6 +137,7 @@ def _build_dummy_ohlcv_df() -> pd.DataFrame:
 
 
 def validate_model_io_schema_case(base_params):
+    params = base_params if base_params is not None else V16StrategyParams()
     case_id = "MODEL_IO_SCHEMA"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -277,6 +278,7 @@ def validate_model_io_schema_case(base_params):
 
 
 def validate_ranking_scoring_sanity_case(base_params):
+    params = base_params if base_params is not None else V16StrategyParams()
     case_id = "RANKING_SCORING_SANITY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
