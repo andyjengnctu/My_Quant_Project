@@ -1,40 +1,5 @@
-from core.config import V16StrategyParams
+from strategies.breakout.search_space import build_trial_params
 from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
-
-
-def build_trial_params(session, trial):
-    ai_use_bb = trial.suggest_categorical("use_bb", [True, False])
-    ai_use_kc = trial.suggest_categorical("use_kc", [True, False])
-    ai_use_vol = trial.suggest_categorical("use_vol", [True, False])
-
-    if ai_use_vol:
-        vol_short_len = trial.suggest_int("vol_short_len", 1, 10)
-        vol_long_len = trial.suggest_int("vol_long_len", vol_short_len, 30)
-    else:
-        vol_short_len = 5
-        vol_long_len = 19
-
-    return V16StrategyParams(
-        atr_len=trial.suggest_int("atr_len", 3, 25),
-        atr_times_init=trial.suggest_float("atr_times_init", 1.0, 3.5, step=0.1),
-        atr_times_trail=trial.suggest_float("atr_times_trail", 2.0, 4.5, step=0.1),
-        atr_buy_tol=trial.suggest_float("atr_buy_tol", 0.1, 3.5, step=0.1),
-        high_len=trial.suggest_int("high_len", session.optimizer_high_len_min, session.optimizer_high_len_max, step=session.optimizer_high_len_step),
-        tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
-        use_bb=ai_use_bb,
-        use_kc=ai_use_kc,
-        use_vol=ai_use_vol,
-        bb_len=trial.suggest_int("bb_len", 10, 30, step=1) if ai_use_bb else 20,
-        bb_mult=trial.suggest_float("bb_mult", 1.0, 2.5, step=0.1) if ai_use_bb else 2.0,
-        kc_len=trial.suggest_int("kc_len", 3, 30, step=1) if ai_use_kc else 20,
-        kc_mult=trial.suggest_float("kc_mult", 1.0, 3.0, step=0.1) if ai_use_kc else 2.0,
-        vol_short_len=vol_short_len,
-        vol_long_len=vol_long_len,
-        min_history_trades=trial.suggest_int("min_history_trades", 0, 5),
-        min_history_ev=trial.suggest_float("min_history_ev", -1.0, 0.5, step=0.1),
-        min_history_win_rate=trial.suggest_float("min_history_win_rate", 0.0, 0.6, step=0.01),
-        use_compounding=True,
-    )
 
 
 def build_initial_profile_row(trial_number, prep_wall_sec, prep_profile):

@@ -3,6 +3,12 @@
 from config.runtime_defaults import (  # noqa: F401
     BUY_SORT_METHOD,
     EV_CALC_METHOD,
+    RUNTIME_PARAM_DEFAULTS,
+    RUNTIME_PARAM_SPECS,
+    RUNTIME_PARAM_TYPES,
+    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+)
+from config.training_policy import (  # noqa: F401
     MAX_PORTFOLIO_MDD_PCT,
     MIN_ANNUAL_TRADES,
     MIN_BUY_FILL_RATE,
@@ -10,12 +16,10 @@ from config.runtime_defaults import (  # noqa: F401
     MIN_FULL_YEAR_RETURN_PCT,
     MIN_MONTHLY_WIN_RATE,
     MIN_TRADE_WIN_RATE,
-    RUNTIME_PARAM_DEFAULTS,
-    RUNTIME_PARAM_SPECS,
-    RUNTIME_PARAM_TYPES,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    build_training_score_policy_snapshot,
+    build_training_threshold_snapshot,
 )
 from core.capital_policy import (  # noqa: F401
     resolve_portfolio_entry_budget,
@@ -24,6 +28,7 @@ from core.capital_policy import (  # noqa: F401
     resolve_single_backtest_sizing_capital,
 )
 from core.strategy_params import (  # noqa: F401
+    BREAKOUT_PARAM_SPECS,
     V16StrategyParams,
     build_runtime_param_raw_value,
     normalize_runtime_param_value,

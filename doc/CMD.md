@@ -26,14 +26,17 @@ set V16_OPTIMIZER_SEED=20260401
 # optimizer 架構
 python apps/ml_optimizer.py --dataset full            # 正式入口
 # apps/ml_optimizer.py 為薄入口，從 tools.optimizer 套件 façade 匯入 main
-# tools/optimizer/__init__.py 統一匯出 optimizer 公開介面；main.py 負責 CLI/啟動，session.py 提供 session façade，prep.py / objective.py 為 façade，實作分散於 raw_cache.py / trial_inputs.py / objective_profiles.py / objective_filters.py / objective_runner.py / callbacks.py / runtime.py
+# tools/optimizer/__init__.py 統一匯出 optimizer 公開介面；main.py 負責 CLI/啟動，session.py 提供 session façade，prep.py / objective.py 為 façade，實作分散於 raw_cache.py / trial_inputs.py / objective_profiles.py / objective_filters.py / objective_runner.py / callbacks.py / runtime.py；其中 breakout 策略參數契約與搜尋空間已分別移至 strategies/breakout/schema.py、strategies/breakout/search_space.py
 - `apps/ml_optimizer.py` 僅在完成指定訓練次數，或輸入 0 走提取匯出模式時，才會更新 `models/best_params.json`；若使用者中斷且未達指定次數，禁止自動覆寫。
 - 系統評分由 `core/portfolio_stats.py::calc_portfolio_score()` 統一計算；`SCORE_CALC_METHOD` 控制主體算法，`SCORE_NUMERATOR_METHOD` 可在 `ANNUAL_RETURN` 與 `TOTAL_RETURN` 間切換分子，分母固定為 `|MDD| + 0.0001`。
 - 若要固定 optimizer 搜尋路徑，可設 `V16_OPTIMIZER_SEED=<seed>`。
 
 # 設定 / 參數架構
-# config/runtime_defaults.py：純設定資料（全域戰略開關、threshold、runtime 預設值）
-# core/strategy_params.py：V16StrategyParams、guardrail、runtime 參數正規化與 JSON 契約
+# config/runtime_defaults.py：純設定資料（全域戰略開關、顯示倍率、runtime 預設值）
+# config/training_policy.py：score 設定與 optimizer 硬門檻
+# strategies/breakout/schema.py：breakout 策略參數契約、defaults、guardrail
+# strategies/breakout/search_space.py：breakout optimizer 搜尋空間
+# core/strategy_params.py：breakout 參數契約 façade，保留既有匯入路徑
 # core/capital_policy.py：單股/投組/scanner 共用資金與 sizing 規則
 # core/config.py：相容 façade；保留既有匯入路徑
 
