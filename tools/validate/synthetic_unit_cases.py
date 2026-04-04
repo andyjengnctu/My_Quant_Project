@@ -51,7 +51,7 @@ def validate_price_utils_unit_case(_base_params):
 
 
 def validate_history_filters_unit_case(_base_params):
-    import core.history_filters as history_filters
+    import config.training_policy as training_policy
 
     case_id = "UNIT_HISTORY_FILTERS"
     results = []
@@ -62,7 +62,7 @@ def validate_history_filters_unit_case(_base_params):
     params.min_history_ev = -1e9
     params.min_history_win_rate = 0.0
 
-    original_ev_method = history_filters.EV_CALC_METHOD
+    original_ev_method = training_policy.EV_CALC_METHOD
     try:
         params.min_history_trades = 0
         params.min_history_ev = 0.0
@@ -75,7 +75,7 @@ def validate_history_filters_unit_case(_base_params):
         add_check(results, "unit_history_filters", case_id, "insufficient_trade_count_rejected", False, insufficient[0])
         add_check(results, "unit_history_filters", case_id, "insufficient_trade_count_preserved", 4, insufficient[3])
 
-        history_filters.EV_CALC_METHOD = "A"
+        training_policy.EV_CALC_METHOD = "A"
         params.min_history_trades = 1
         params.min_history_ev = 0.4
         params.min_history_win_rate = 0.7
@@ -84,7 +84,7 @@ def validate_history_filters_unit_case(_base_params):
         add_check(results, "unit_history_filters", case_id, "method_a_expected_value", 0.5, method_a[1], tol=1e-9)
         add_check(results, "unit_history_filters", case_id, "method_a_win_rate", 0.75, method_a[2], tol=1e-9)
 
-        history_filters.EV_CALC_METHOD = "B"
+        training_policy.EV_CALC_METHOD = "B"
         params.min_history_ev = 1.4
         params.min_history_win_rate = 0.5
         method_b = evaluate_history_candidate_metrics(4, 2, 0.0, 4.0, -1.0, params)
@@ -104,7 +104,7 @@ def validate_history_filters_unit_case(_base_params):
         add_check(results, "unit_history_filters", case_id, "method_b_all_loss_expected_value", -1.0, all_loss[1], tol=1e-9)
         add_check(results, "unit_history_filters", case_id, "method_b_all_loss_win_rate", 0.0, all_loss[2], tol=1e-9)
     finally:
-        history_filters.EV_CALC_METHOD = original_ev_method
+        training_policy.EV_CALC_METHOD = original_ev_method
 
     summary["ev_methods_checked"] = ["A", "B"]
     return results, summary
@@ -190,7 +190,7 @@ def _oracle_history_expected_value(method: str, trade_count: int, win_count: int
 
 
 def validate_independent_oracle_golden_case(_base_params):
-    import core.history_filters as history_filters
+    import config.training_policy as training_policy
 
     case_id = 'UNIT_INDEPENDENT_ORACLE_GOLDEN'
     results = []
@@ -201,7 +201,7 @@ def validate_independent_oracle_golden_case(_base_params):
     params.min_history_ev = -1e9
     params.min_history_win_rate = 0.0
 
-    original_ev_method = history_filters.EV_CALC_METHOD
+    original_ev_method = training_policy.EV_CALC_METHOD
     try:
         oracle_net = _oracle_net_sell_price(100.0, 10, params)
         prod_net = calc_net_sell_price(100.0, 10, params)
@@ -211,18 +211,18 @@ def validate_independent_oracle_golden_case(_base_params):
         prod_qty = calc_position_size(100.0, 95.0, 10_000.0, 0.02, params)
         add_check(results, 'unit_independent_oracle', case_id, 'oracle_position_size_matches_production', oracle_qty, prod_qty)
 
-        history_filters.EV_CALC_METHOD = 'A'
+        training_policy.EV_CALC_METHOD = 'A'
         method_a = evaluate_history_candidate_metrics(4, 3, 2.0, 3.0, -1.0, params)
         add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_a_matches_production', _oracle_history_expected_value('A', 4, 3, 2.0, 3.0, -1.0), method_a[1], tol=1e-9)
 
-        history_filters.EV_CALC_METHOD = 'B'
+        training_policy.EV_CALC_METHOD = 'B'
         method_b = evaluate_history_candidate_metrics(4, 2, 0.0, 4.0, -1.0, params)
         add_check(results, 'unit_independent_oracle', case_id, 'oracle_history_ev_method_b_matches_production', _oracle_history_expected_value('B', 4, 2, 0.0, 4.0, -1.0), method_b[1], tol=1e-9)
 
         add_check(results, 'unit_independent_oracle', case_id, 'oracle_calc_sim_years_matches_production', 366.0 / 365.25, calc_sim_years(list(pd.to_datetime(['2024-12-31', '2025-12-31'])), start_idx=0), tol=1e-9)
         add_check(results, 'unit_independent_oracle', case_id, 'oracle_annual_return_pct_matches_production', 10.0, calc_annual_return_pct(100.0, 121.0, 2.0), tol=1e-9)
     finally:
-        history_filters.EV_CALC_METHOD = original_ev_method
+        training_policy.EV_CALC_METHOD = original_ev_method
 
     summary['oracle_checks'] = 6
     return results, summary
