@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
 import math
 from pathlib import Path
+from contextlib import redirect_stdout
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,12 +12,15 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.buy_sort import calc_buy_sort_value
+from core.strategy_dashboard import print_strategy_dashboard
 from core.config import SCORE_CALC_METHOD, V16StrategyParams
 from core.params_io import params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
+from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.study_utils import INVALID_TRIAL_VALUE, build_best_params_payload_from_trial, build_optimizer_trial_params
+from tools.scanner.reporting import print_scanner_summary
 from tools.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
 
@@ -241,7 +246,7 @@ def validate_model_io_schema_case(base_params):
         with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
-            buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", base_params))
+            buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
 
         expected_keys = ["expected_value", "message", "proj_cost", "sanitize_issue", "sort_value", "status", "ticker"]
         add_check(results, "strategy_schema", case_id, "scanner_buy_result_keys", expected_keys, sorted(buy_result.keys()))
@@ -255,14 +260,14 @@ def validate_model_io_schema_case(base_params):
         with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "tools.scanner.stock_processor.run_v16_backtest", return_value=candidate_stats
         ):
-            candidate_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", base_params))
+            candidate_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
         add_check(results, "strategy_schema", case_id, "scanner_candidate_status", "candidate", candidate_result["status"])
         add_check(results, "strategy_schema", case_id, "scanner_candidate_proj_cost_none", None, candidate_result["proj_cost"])
         add_check(results, "strategy_schema", case_id, "scanner_candidate_expected_value_none", None, candidate_result["expected_value"])
         add_check(results, "strategy_schema", case_id, "scanner_candidate_sort_value_none", None, candidate_result["sort_value"])
 
         with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", side_effect=skip_exc):
-            skip_result = process_single_stock(str(file_path), "2330", base_params)
+            skip_result = process_single_stock(str(file_path), "2330", params)
         normalized_skip = normalize_scanner_result(skip_result)
         add_check(results, "strategy_schema", case_id, "scanner_skip_status", "skip_insufficient", normalized_skip["status"])
         add_check(results, "strategy_schema", case_id, "scanner_skip_message_none", None, normalized_skip["message"])
@@ -328,7 +333,7 @@ def validate_ranking_scoring_sanity_case(base_params):
         with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
             "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
-            buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", base_params))
+            buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
         from tools.scanner.stock_processor import BUY_SORT_METHOD as ACTIVE_BUY_SORT_METHOD
         expected_sort = calc_buy_sort_value(
             ACTIVE_BUY_SORT_METHOD,
@@ -341,6 +346,326 @@ def validate_ranking_scoring_sanity_case(base_params):
         add_check(results, "strategy_score", case_id, "scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))
 
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
+    return results, summary
+
+
+def validate_strategy_repeatability_case(base_params):
+    params = base_params if base_params is not None else V16StrategyParams()
+    case_id = "STRATEGY_REPEATABILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with TemporaryDirectory() as tmp_dir:
+        file_path = Path(tmp_dir) / "2330.csv"
+        _build_dummy_ohlcv_df().to_csv(file_path, index=False)
+        sanitize_stats = {
+            "invalid_row_count": 0,
+            "duplicate_date_count": 0,
+            "dropped_row_count": 0,
+            "negative_volume_corrected_count": 0,
+        }
+        dummy_df = _build_dummy_ohlcv_df()
+        buy_stats = {
+            "is_candidate": True,
+            "is_setup_today": True,
+            "buy_limit": 105.0,
+            "stop_loss": 99.0,
+            "expected_value": 1.25,
+            "win_rate": 55.0,
+            "trade_count": 12,
+            "max_drawdown": 9.5,
+            "extended_candidate_today": None,
+        }
+        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        ):
+            scanner_result_1 = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
+            scanner_result_2 = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
+
+    add_check(results, "strategy_repeatability", case_id, "scanner_result_repeatable", scanner_result_1, scanner_result_2)
+
+    def _run_objective_once():
+        session = _FakeOptimizerSession(fixed_tp_percent=0.25)
+        trial = _FakeOptunaTrial(
+            number=2,
+            preset_values={
+                "use_bb": False,
+                "use_kc": False,
+                "use_vol": False,
+                "atr_len": 11,
+                "atr_times_init": 1.6,
+                "atr_times_trail": 2.6,
+                "atr_buy_tol": 0.9,
+                "high_len": 60,
+                "min_history_trades": 1,
+                "min_history_ev": 0.0,
+                "min_history_win_rate": 0.35,
+            },
+        )
+        perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
+        with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
+            "tools.optimizer.objective_runner.run_portfolio_timeline",
+            side_effect=_make_fake_portfolio_runner(
+                ret_pct=26.0,
+                mdd=-9.0,
+                annual_return_pct=18.0,
+                yearly_return_rows=[{"year": 2024, "return_pct": 12.5}, {"year": 2025, "return_pct": 9.3}],
+            ),
+        ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
+            "tools.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
+        ), patch("tools.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
+            objective_value = run_optimizer_objective(session, trial)
+
+        stable_user_attrs = {
+            key: trial.user_attrs.get(key)
+            for key in (
+                "prep_mode",
+                "prep_start_method",
+                "pf_return",
+                "annual_return_pct",
+                "r_squared",
+                "m_win_rate",
+                "base_score",
+                "profile_row",
+            )
+        }
+        return {
+            "value": objective_value,
+            "trial_params": dict(trial.params),
+            "user_attrs": stable_user_attrs,
+            "profile_rows": list(session.profile_recorder.rows),
+        }
+
+    optimizer_run_1 = _run_objective_once()
+    optimizer_run_2 = _run_objective_once()
+    add_check(results, "strategy_repeatability", case_id, "optimizer_objective_repeatable", optimizer_run_1, optimizer_run_2)
+
+    summary["scanner_status"] = scanner_result_1.get("status")
+    summary["optimizer_value"] = optimizer_run_1["value"]
+    return results, summary
+
+
+def validate_strategy_minimum_viability_case(base_params):
+    params = base_params if base_params is not None else V16StrategyParams()
+    case_id = "STRATEGY_MINIMUM_VIABILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with TemporaryDirectory() as tmp_dir:
+        file_path = Path(tmp_dir) / "2330.csv"
+        _build_dummy_ohlcv_df().to_csv(file_path, index=False)
+        sanitize_stats = {
+            "invalid_row_count": 0,
+            "duplicate_date_count": 0,
+            "dropped_row_count": 0,
+            "negative_volume_corrected_count": 0,
+        }
+        dummy_df = _build_dummy_ohlcv_df()
+        buy_stats = {
+            "is_candidate": True,
+            "is_setup_today": True,
+            "buy_limit": 105.0,
+            "stop_loss": 99.0,
+            "expected_value": 1.25,
+            "win_rate": 55.0,
+            "trade_count": 12,
+            "max_drawdown": 9.5,
+            "extended_candidate_today": None,
+        }
+        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        ):
+            scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
+    add_check(results, "strategy_viability", case_id, "scanner_smoke_status", "buy", scanner_result["status"])
+
+    session = _FakeOptimizerSession(fixed_tp_percent=0.25)
+    trial = _FakeOptunaTrial(
+        number=3,
+        preset_values={
+            "use_bb": False,
+            "use_kc": False,
+            "use_vol": False,
+            "atr_len": 11,
+            "atr_times_init": 1.6,
+            "atr_times_trail": 2.6,
+            "atr_buy_tol": 0.9,
+            "high_len": 60,
+            "min_history_trades": 1,
+            "min_history_ev": 0.0,
+            "min_history_win_rate": 0.35,
+        },
+    )
+    perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
+    with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
+        "tools.optimizer.objective_runner.run_portfolio_timeline",
+        side_effect=_make_fake_portfolio_runner(
+            ret_pct=26.0,
+            mdd=-9.0,
+            annual_return_pct=18.0,
+            yearly_return_rows=[{"year": 2024, "return_pct": 12.5}, {"year": 2025, "return_pct": 9.3}],
+        ),
+    ), patch("tools.optimizer.objective_runner.apply_filter_rules", return_value=None), patch(
+        "tools.optimizer.objective_runner.calc_portfolio_score", return_value=88.123
+    ), patch("tools.optimizer.objective_runner.time.perf_counter", side_effect=lambda: next(perf_counter_values)):
+        optimizer_value = run_optimizer_objective(session, trial)
+    add_check(results, "strategy_viability", case_id, "optimizer_smoke_returns_score", 88.123, optimizer_value)
+
+    scanner_summary_buffer = io.StringIO()
+    with redirect_stdout(scanner_summary_buffer):
+        print_scanner_summary(
+            count_scanned=1,
+            elapsed_time=0.12,
+            count_history_qualified=1,
+            count_skipped_insufficient=0,
+            count_sanitized_candidates=0,
+            max_workers=1,
+            pool_start_method="spawn",
+            candidate_rows=[{"kind": "buy", "text": "2330 EV=1.25R", "sort_value": 1.25, "ticker": "2330"}],
+            scanner_issue_log_path="outputs/scanner/issues.csv",
+        )
+    scanner_summary_text = scanner_summary_buffer.getvalue()
+    add_check(results, "strategy_viability", case_id, "scanner_reporting_smoke_runs", True, "明日候選清單" in scanner_summary_text and "issues.csv" in scanner_summary_text)
+
+    yearly_buffer = io.StringIO()
+    yearly_rows = [
+        {"year": 2024, "year_return_pct": 12.5, "is_full_year": True, "start_date": "2024-01-02", "end_date": "2024-12-31"},
+        {"year": 2025, "year_return_pct": 9.3, "is_full_year": False, "start_date": "2025-01-02", "end_date": "2025-06-30"},
+    ]
+    with redirect_stdout(yearly_buffer):
+        df_yearly = print_yearly_return_report(yearly_rows)
+    add_check(results, "strategy_viability", case_id, "portfolio_reporting_smoke_runs", 2, len(df_yearly))
+
+    dashboard_buffer = io.StringIO()
+    with redirect_stdout(dashboard_buffer):
+        print_strategy_dashboard(
+            params=params,
+            title="策略 smoke",
+            mode_display="synthetic",
+            max_pos=3,
+            trades=7,
+            missed_b=2,
+            missed_s=1,
+            final_eq=123456.0,
+            avg_exp=42.0,
+            sys_ret=26.0,
+            bm_ret=8.0,
+            sys_mdd=-9.0,
+            bm_mdd=-12.0,
+            win_rate=57.0,
+            payoff=1.8,
+            ev=1.3,
+            r_sq=0.87,
+            m_win_rate=61.0,
+            bm_r_sq=0.72,
+            bm_m_win_rate=55.0,
+            normal_trades=6,
+            extended_trades=1,
+            annual_trades=12.5,
+            reserved_buy_fill_rate=78.0,
+            annual_return_pct=18.0,
+            bm_annual_return_pct=6.1,
+            min_full_year_return_pct=5.5,
+            bm_min_full_year_return_pct=1.2,
+        )
+    add_check(results, "strategy_viability", case_id, "strategy_dashboard_smoke_runs", True, "【訓練參數】" in dashboard_buffer.getvalue() and "系統得分" in dashboard_buffer.getvalue())
+
+    summary["scanner_status"] = scanner_result["status"]
+    summary["optimizer_value"] = optimizer_value
+    summary["yearly_rows"] = len(df_yearly)
+    return results, summary
+
+
+def validate_strategy_reporting_schema_compatibility_case(base_params):
+    params = base_params if base_params is not None else V16StrategyParams()
+    case_id = "STRATEGY_REPORTING_SCHEMA_COMPATIBILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    default_payload = params_to_json_dict(V16StrategyParams())
+    export_trial = SimpleNamespace(
+        number=4,
+        params={
+            "high_len": 65,
+            "atr_len": 13,
+            "atr_buy_tol": 0.9,
+            "atr_times_init": 1.8,
+            "atr_times_trail": 2.8,
+            "bb_len": 20,
+            "bb_mult": 2.0,
+            "kc_len": 20,
+            "kc_mult": 2.0,
+            "vol_short_len": 5,
+            "vol_long_len": 19,
+            "fixed_risk": 0.01,
+            "min_history_trades": 1,
+            "min_history_ev": 0.0,
+            "min_history_win_rate": 0.3,
+        },
+        user_attrs={"fixed_tp_percent": 0.27},
+        value=88.123,
+    )
+    export_colors = {"red": "", "green": "", "reset": ""}
+
+    with TemporaryDirectory() as tmp_dir:
+        export_path = Path(tmp_dir) / "best_params.json"
+        study = _FakeStudy([export_trial], best_trial=export_trial)
+        export_status = export_best_params_if_requested(
+            study,
+            best_params_path=str(export_path),
+            fixed_tp_percent=None,
+            colors=export_colors,
+        )
+        exported_payload = json.loads(export_path.read_text(encoding="utf-8"))
+
+        file_path = Path(tmp_dir) / "2330.csv"
+        _build_dummy_ohlcv_df().to_csv(file_path, index=False)
+        sanitize_stats = {
+            "invalid_row_count": 0,
+            "duplicate_date_count": 0,
+            "dropped_row_count": 0,
+            "negative_volume_corrected_count": 0,
+        }
+        dummy_df = _build_dummy_ohlcv_df()
+        buy_stats = {
+            "is_candidate": True,
+            "is_setup_today": True,
+            "buy_limit": 105.0,
+            "stop_loss": 99.0,
+            "expected_value": 1.25,
+            "win_rate": 55.0,
+            "trade_count": 12,
+            "max_drawdown": 9.5,
+            "extended_candidate_today": None,
+        }
+        with patch("tools.scanner.stock_processor.sanitize_ohlcv_dataframe", return_value=(dummy_df, sanitize_stats)), patch(
+            "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
+        ):
+            scanner_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
+
+    add_check(results, "strategy_reporting", case_id, "best_params_export_status", 0, export_status)
+    add_check(results, "strategy_reporting", case_id, "best_params_export_keys_match_strategy_schema", sorted(default_payload.keys()), sorted(exported_payload.keys()))
+
+    expected_scanner_keys = ["expected_value", "message", "proj_cost", "sanitize_issue", "sort_value", "status", "ticker"]
+    add_check(results, "strategy_reporting", case_id, "scanner_normalized_payload_keys_stable", expected_scanner_keys, sorted(scanner_result.keys()))
+
+    yearly_rows = [
+        {"year": 2024, "year_return_pct": 12.5, "is_full_year": True, "start_date": "2024-01-02", "end_date": "2024-12-31"},
+        {"year": 2025, "year_return_pct": 9.3, "is_full_year": False, "start_date": "2025-01-02", "end_date": "2025-06-30"},
+    ]
+    with redirect_stdout(io.StringIO()):
+        df_yearly = print_yearly_return_report(yearly_rows)
+    add_check(
+        results,
+        "strategy_reporting",
+        case_id,
+        "yearly_report_columns_stable",
+        ["year", "year_return_pct", "is_full_year", "start_date", "end_date", "year_label", "year_type"],
+        list(df_yearly.columns),
+    )
+    add_check(results, "strategy_reporting", case_id, "yearly_report_year_type_values", ["完整", "非完整"], df_yearly["year_type"].tolist())
+
+    summary["exported_key_count"] = len(exported_payload)
+    summary["scanner_status"] = scanner_result["status"]
     return results, summary
 
 

@@ -131,6 +131,9 @@ from .synthetic_strategy_cases import (
     validate_model_io_schema_case,
     validate_optimizer_objective_export_contract_case,
     validate_ranking_scoring_sanity_case,
+    validate_strategy_minimum_viability_case,
+    validate_strategy_repeatability_case,
+    validate_strategy_reporting_schema_compatibility_case,
 )
 from .synthetic_regression_cases import (
     validate_optimizer_raw_cache_rerun_consistency_case,
@@ -272,6 +275,9 @@ def get_synthetic_validator_entries():
         _entry(validate_model_io_schema_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/study_utils.py", "tools/scanner/stock_processor.py")),
         _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py")),
         _entry(validate_ranking_scoring_sanity_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/buy_sort.py", "core/portfolio_stats.py")),
+        _entry(validate_strategy_repeatability_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "tools/optimizer/objective_runner.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_strategy_minimum_viability_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "core/strategy_dashboard.py", "tools/scanner/reporting.py", "tools/portfolio_sim/reporting.py")),
+        _entry(validate_strategy_reporting_schema_compatibility_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "tools/optimizer/runtime.py", "tools/portfolio_sim/reporting.py", "tools/scanner/stock_processor.py")),
         _entry(validate_scanner_worker_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/stock_processor.py",)),
         _entry(validate_scan_runner_repeatability_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/scanner/scan_runner.py",)),
         _entry(validate_optimizer_raw_cache_rerun_consistency_case, layer="regression_contract", cost_class="medium", impacted_modules=("tools/optimizer/raw_cache.py",)),

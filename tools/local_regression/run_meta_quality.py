@@ -74,7 +74,7 @@ def _load_checklist_tables() -> Dict[str, List[List[str]]]:
         "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
         "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
         "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
-        "F": extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要"),
+        "F": extract_markdown_table_rows(text, "T. 目前所有 `DONE` 的建議測試項目摘要"),
         "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
