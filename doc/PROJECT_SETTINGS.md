@@ -43,10 +43,6 @@
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。
 8. 架構或模組責任有變動時，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 9. 凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-10. 純設定資料不得與核心交易規則、資金政策混置於同一模組；涉及參數契約或資金規則時，需以模組責任拆分並維持相容 façade。
-11. 策略專屬參數契約/搜尋空間、selection policy、execution policy 與全域訓練政策必須分層管理；不得把 breakout 等單一策略參數、optimizer 搜尋範圍、執行資金/費用規則與全域 score/threshold 混置於同一模組。
-12. 使用者會直接調整的 module-level 參數或 spec 項目，必須在同一行以註解標示用途與預設值。
-
 
 ## E. 交易與策略原則
 
