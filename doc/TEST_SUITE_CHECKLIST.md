@@ -110,6 +110,7 @@
 | B39 | P1 | 覆蓋率 | split formal-step implementation modules 應納入 coverage targets | DONE | 已將 `tools/validate/main.py` 納入 `COVERAGE_TARGETS`，並新增 formal-step implementation completeness / importability guard，避免 `tools/validate/cli.py` 仍在、但 consistency 真正執行本體退化卻 coverage baseline 未偵測 | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` |
 | B40 | P1 | Meta | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | DONE | 已將 `run_chain_checks.py`、`run_meta_quality.py`、`run_ml_smoke.py`、`run_quick_gate.py`、`tools/validate/main.py` 收斂為 `with PeakTracedMemoryTracker() as tracker:`，並新增 static guard，直接阻擋手動 `__enter__` / `__exit__` 導致 early return / runtime error 路徑漏掉 `__exit__` | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` |
 | B41 | P1 | 文件 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | DONE | 已移除 `apps/local_regression.py` / `apps/validate_consistency.py` 的殘留文件指引，並新增 formal guard，直接阻擋文件再出現已移除入口或「手動刪除」式 app 測試入口清理說明 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
+| B42 | P1 | Meta | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | DONE | 已補 thin wrapper export contract，直接阻擋 `apps/portfolio_sim.py`、`apps/vip_scanner.py` 出現 lazy export 重複、`__all__` 漏列或 lazy symbol 無法解析，避免對外 façade 可 `getattr` 但 public export contract 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -262,6 +263,7 @@
 | D101 | `validate_critical_coverage_threshold_floor_case` | 已補 critical per-file threshold stage-2 floor guard，直接阻擋 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 低於正式基線，並要求 critical branch floor 不得回退 |
 | D116 | `validate_peak_traced_memory_tracker_context_management_case` | 已補 `PeakTracedMemoryTracker` lifecycle guard，直接阻擋手動 `__enter__` / `__exit__` 與缺少 `with PeakTracedMemoryTracker() as tracker:` 的正式步驟腳本 |
 | D118 | `validate_no_legacy_app_entry_doc_references_case` | 已補文件殘留 legacy app 測試入口 / 手動刪檔指引 guard，直接阻擋 `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 再出現已移除入口或手動刪檔說明 |
+| D119 | `validate_app_thin_wrapper_export_contract_case` | 已補 thin wrapper lazy export contract，直接阻擋 `LAZY_EXPORTS` 重複、`__all__` 漏列與 lazy symbol 無法解析 |
 
 ## E. 未完成缺口摘要
 
@@ -330,6 +332,7 @@
 | 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-04 |
+| Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -413,6 +416,7 @@
 | D101 | `validate_critical_coverage_threshold_floor_case` | B32 | 2026-04-03 |
 | D116 | `validate_peak_traced_memory_tracker_context_management_case` | B40 | 2026-04-03 |
 | D118 | `validate_no_legacy_app_entry_doc_references_case` | B41 | 2026-04-04 |
+| D119 | `validate_app_thin_wrapper_export_contract_case` | B42 | 2026-04-04 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D109 | `validate_optimizer_objective_export_contract_case` | C06 | 2026-04-03 |
@@ -603,6 +607,8 @@
 | 2026-04-03 | B40 | 補上 `PeakTracedMemoryTracker` context-manager lifecycle contract，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-04 | D118 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
 | 2026-04-04 | B41 | 移除 legacy app 測試入口文件殘留與手動刪檔指引後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-04 | D119 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
+| 2026-04-04 | B42 | 補上 app thin wrapper public export contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
 | 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
 | 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |

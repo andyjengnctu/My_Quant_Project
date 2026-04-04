@@ -272,6 +272,59 @@ def validate_no_legacy_app_entry_doc_references_case(_base_params):
     return results, summary
 
 
+def validate_app_thin_wrapper_export_contract_case(_base_params):
+    case_id = "META_APP_THIN_WRAPPER_EXPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    module_names = [
+        "apps.portfolio_sim",
+        "apps.vip_scanner",
+    ]
+    import_failures = []
+    duplicated_lazy_export_failures = []
+    missing_all_export_failures = []
+    unresolved_lazy_export_failures = []
+
+    for module_name in module_names:
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+
+        lazy_exports = list(getattr(module, "LAZY_EXPORTS", ()))
+        exported_names = set(getattr(module, "__all__", []))
+        duplicated_lazy_exports = sorted(name for name in set(lazy_exports) if lazy_exports.count(name) > 1)
+        missing_all_exports = sorted(set(lazy_exports) - exported_names)
+        unresolved_lazy_exports = []
+        for export_name in sorted(set(lazy_exports)):
+            try:
+                getattr(module, export_name)
+            except AttributeError:
+                unresolved_lazy_exports.append(export_name)
+
+        if duplicated_lazy_exports:
+            duplicated_lazy_export_failures.append(f"{module_name}: {duplicated_lazy_exports}")
+        if missing_all_exports:
+            missing_all_export_failures.append(f"{module_name}: {missing_all_exports}")
+        if unresolved_lazy_exports:
+            unresolved_lazy_export_failures.append(f"{module_name}: {unresolved_lazy_exports}")
+
+    add_check(results, "meta_entry_contract", case_id, "thin_wrapper_modules_importable", [], import_failures)
+    add_check(results, "meta_entry_contract", case_id, "thin_wrapper_lazy_exports_unique", [], duplicated_lazy_export_failures)
+    add_check(results, "meta_entry_contract", case_id, "thin_wrapper_lazy_exports_listed_in___all__", [], missing_all_export_failures)
+    add_check(results, "meta_entry_contract", case_id, "thin_wrapper_lazy_exports_resolvable", [], unresolved_lazy_export_failures)
+
+    summary["module_names"] = module_names
+    summary["import_failures"] = import_failures
+    summary["duplicated_lazy_export_failures"] = duplicated_lazy_export_failures
+    summary["missing_all_export_failures"] = missing_all_export_failures
+    summary["unresolved_lazy_export_failures"] = unresolved_lazy_export_failures
+    return results, summary
+
+
 def validate_synthetic_registry_metadata_contract_case(_base_params):
     case_id = "META_SYNTHETIC_REGISTRY_METADATA"
     results = []
