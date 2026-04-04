@@ -17,10 +17,9 @@ project/
 │  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）
 ├─ config/
 │  ├─ __init__.py                     # 純設定資料套件
-│  ├─ runtime_defaults.py             # 全域戰略開關、顯示倍率與 runtime 預設值
-│  ├─ training_policy.py             # score 設定與 optimizer 硬門檻
-│  ├─ selection_policy.py            # 投組層 / scanner 歷史績效門檻
-│  └─ execution_policy.py            # 共用資金、費用與複利設定
+│  ├─ training_policy.py              # EV/買入排序/score 與 optimizer 硬門檻
+│  ├─ selection_policy.py             # 投組層 / scanner 歷史績效門檻
+│  └─ execution_policy.py             # 共用資金、費用、複利與 runtime 執行預設
 ├─ core/
 │  ├─ __init__.py                     # 套件初始化檔
 │  ├─ buy_sort.py                 # 買入候選排序邏輯
@@ -73,6 +72,7 @@ project/
 │  └─ breakout/
 │     ├─ __init__.py                  # breakout 策略 façade
 │     ├─ schema.py                    # breakout 策略參數契約、defaults、guardrail
+│     ├─ adapter.py                   # breakout 參數分層轉接與 section split
 │     └─ search_space.py              # breakout optimizer 搜尋空間
 ├─ requirements/
 │  ├─ export_requirements_lock.py     # 輸出 requirements lock 的輔助腳本

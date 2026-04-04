@@ -2,15 +2,11 @@
 
 from config.execution_policy import (  # noqa: F401
     EXECUTION_POLICY_PARAM_SPECS,
-    build_execution_policy_snapshot,
-)
-from config.runtime_defaults import (  # noqa: F401
-    BUY_SORT_METHOD,
-    EV_CALC_METHOD,
     RUNTIME_PARAM_DEFAULTS,
     RUNTIME_PARAM_SPECS,
     RUNTIME_PARAM_TYPES,
-    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    build_execution_policy_snapshot,
+    build_runtime_param_snapshot,
 )
 from config.selection_policy import (  # noqa: F401
     SELECTION_POLICY_PARAM_SPECS,
@@ -24,8 +20,11 @@ from config.training_policy import (  # noqa: F401
     MIN_FULL_YEAR_RETURN_PCT,
     MIN_MONTHLY_WIN_RATE,
     MIN_TRADE_WIN_RATE,
+    BUY_SORT_METHOD,
+    EV_CALC_METHOD,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
+    SYSTEM_SCORE_DISPLAY_MULTIPLIER,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
 )

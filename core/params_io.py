@@ -8,7 +8,7 @@ from core.strategy_params import (
     strategy_params_to_dict,
     validate_strategy_param_ranges,
 )
-from config.runtime_defaults import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
+from config.execution_policy import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
 from core.log_utils import format_exception_summary
 
 

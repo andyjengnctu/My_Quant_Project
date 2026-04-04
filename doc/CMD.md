@@ -32,10 +32,9 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 - 若要固定 optimizer 搜尋路徑，可設 `V16_OPTIMIZER_SEED=<seed>`。
 
 # 設定 / 參數架構
-# config/runtime_defaults.py：純設定資料（全域戰略開關、顯示倍率、runtime 預設值）
-# config/training_policy.py：score 設定與 optimizer 硬門檻
+# config/training_policy.py：EV/買入排序/score 類全域訓練政策與 optimizer 硬門檻
 # config/selection_policy.py：投組層 / scanner 歷史績效門檻
-# config/execution_policy.py：共用資金、費用與複利設定
+# config/execution_policy.py：共用資金、費用、複利、scanner/live capital 與 runtime 執行預設
 # strategies/breakout/schema.py：breakout 策略專屬參數契約與 guardrail
 # strategies/breakout/adapter.py：breakout 參數分層轉接與 section split
 # strategies/breakout/search_space.py：breakout optimizer 搜尋空間
