@@ -12,7 +12,9 @@ from .check_result_utils import is_insufficient_data_error, make_consistency_par
 
 
 def build_execution_only_params(params):
-    return make_consistency_params(params)
+    execution_params = make_consistency_params(params)
+    execution_params.use_compounding = False
+    return execution_params
 
 
 def make_synthetic_validation_params(base_params, *, tp_percent=None):

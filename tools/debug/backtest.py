@@ -62,7 +62,7 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
             )
             current_capital += pnl_realized
 
-        sizing_cap = resolve_single_backtest_sizing_capital(params)
+        sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
         position, active_extended_signal = process_debug_entry_for_day(
             position=position,
             pos_qty_start_of_bar=pos_qty_start_of_bar,

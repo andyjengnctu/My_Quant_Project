@@ -1360,6 +1360,96 @@ def validate_scanner_prepared_tool_contract_case(base_params):
     return results, summary
 
 
+def validate_execution_only_fixed_capital_contract_case(base_params):
+    from core.backtest_core import run_v16_backtest
+    from tools.validate.real_case_runners import build_single_ticker_portfolio_context, run_single_ticker_portfolio_check
+    from tools.validate.scanner_expectations import build_execution_only_params
+
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.initial_capital = 1000.0
+    params.fixed_risk = 1.0
+    params.buy_fee = 0.0
+    params.sell_fee = 0.0
+    params.tax_rate = 0.0
+    params.min_fee = 0.0
+    params.atr_buy_tol = 0.0
+    params.atr_times_init = 1.0
+    params.atr_times_trail = 1.0
+    params.use_compounding = True
+
+    case_id = "OUTPUT_EXECUTION_ONLY_FIXED_CAPITAL"
+    ticker = case_id
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 95.0, 100.0, 110.0],
+            "High": [100.0, 100.0, 96.0, 100.0, 111.0],
+            "Low": [100.0, 100.0, 89.0, 100.0, 109.0],
+            "Close": [100.0, 100.0, 90.0, 100.0, 110.0],
+            "Volume": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        },
+        index=pd.to_datetime([
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+        ]),
+    )
+    precomputed_signals = (
+        pd.Series([10.0, 10.0, 10.0, 10.0, 10.0], dtype=float).to_numpy(),
+        pd.Series([True, False, True, False, False], dtype=bool).to_numpy(),
+        pd.Series([False, True, False, True, False], dtype=bool).to_numpy(),
+        pd.Series([100.0, float("nan"), 100.0, float("nan"), float("nan")], dtype=float).to_numpy(),
+    )
+
+    single_stats, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals)
+    prepared_df = df.copy()
+    prepared_df["ATR"] = precomputed_signals[0]
+    prepared_df["is_setup"] = precomputed_signals[1]
+    prepared_df["ind_sell_signal"] = precomputed_signals[2]
+    prepared_df["buy_limit"] = precomputed_signals[3]
+
+    execution_params = build_execution_only_params(params)
+    portfolio_context = build_single_ticker_portfolio_context(ticker, prepared_df, standalone_logs)
+    portfolio_stats = run_single_ticker_portfolio_check(
+        ticker,
+        prepared_df,
+        standalone_logs,
+        execution_params,
+        portfolio_context=portfolio_context,
+    )
+    portfolio_sim_stats = run_portfolio_sim_tool_check(
+        ticker,
+        f"{ticker}.csv",
+        execution_params,
+        prepared_df=prepared_df,
+        standalone_logs=standalone_logs,
+        packed_fast_data=portfolio_context["fast_data"],
+        sorted_dates=portfolio_context["sorted_dates"],
+        start_year=portfolio_context["start_year"],
+    )
+
+    expected_final_eq = 1040.0
+    expected_total_return = 4.0
+
+    add_check(results, "output_contract", case_id, "execution_only_params_disable_compounding", False, bool(execution_params.use_compounding))
+    add_check(results, "output_contract", case_id, "single_backtest_trade_count", 2, int(single_stats["trade_count"]))
+    add_check(results, "output_contract", case_id, "single_backtest_final_equity_uses_fixed_cap_without_leverage_after_loss", expected_final_eq, params.initial_capital * (1.0 + float(single_stats["asset_growth"]) / 100.0))
+    add_check(results, "output_contract", case_id, "single_backtest_total_return_uses_fixed_cap_without_leverage_after_loss", expected_total_return, float(single_stats["asset_growth"]))
+    add_check(results, "output_contract", case_id, "execution_only_portfolio_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_stats["total_return"]))
+    add_check(results, "output_contract", case_id, "execution_only_portfolio_final_equity_matches_single_backtest", expected_final_eq, float(portfolio_stats["final_eq"]))
+    add_check(results, "output_contract", case_id, "execution_only_portfolio_sim_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_sim_stats["total_return"]))
+    add_check(results, "output_contract", case_id, "execution_only_portfolio_sim_final_equity_matches_single_backtest", expected_final_eq, float(portfolio_sim_stats["final_eq"]))
+
+    summary["single_asset_growth"] = float(single_stats["asset_growth"])
+    summary["portfolio_total_return"] = float(portfolio_stats["total_return"])
+    summary["portfolio_sim_total_return"] = float(portfolio_sim_stats["total_return"])
+    return results, summary
+
+
 def validate_scanner_reference_clean_df_contract_case(base_params):
     case_id = "SCANNER_REFERENCE_CLEAN_DF_CONTRACT"
     results = []

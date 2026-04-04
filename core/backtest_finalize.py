@@ -147,7 +147,7 @@ def build_backtest_stats(
 
     extended_candidate_today = None
     if (not had_open_position_at_end) and active_extended_signal is not None:
-        sizing_cap = resolve_single_backtest_sizing_capital(params)
+        sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
         extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, close_last, sizing_cap, params)
 
     return {

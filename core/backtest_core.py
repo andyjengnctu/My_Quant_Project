@@ -80,7 +80,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
         isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
-        sizing_cap = resolve_single_backtest_sizing_capital(params)
+        sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital)
 
         if isSetup_prev:
             signal_state = create_signal_tracking_state(buy_limits[j - 1], ATR_main[j - 1], params)

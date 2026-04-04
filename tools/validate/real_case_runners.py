@@ -152,12 +152,13 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
 
     single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
     scanner_ref_stats = run_scanner_reference_check_on_clean_df(ticker, df, scanner_params)
+    execution_params = build_execution_only_params(params)
     portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
-    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, portfolio_context=portfolio_context)
+    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, execution_params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
         ticker,
         file_path,
-        params,
+        execution_params,
         prepared_df=prep_df,
         standalone_logs=standalone_logs,
         packed_fast_data=portfolio_context["fast_data"],

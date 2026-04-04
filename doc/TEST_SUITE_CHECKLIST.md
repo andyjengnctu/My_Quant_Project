@@ -123,6 +123,7 @@
 | B44 | P1 | Meta | `quick_gate` 不得移除裸 `except` static guard | DONE | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 必須保留 `bare_except_scan`，且遇到裸 `except` 時必須回報 FAIL 與命中文件 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B46 | P1 | 錯誤處理 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | DONE | 已補 dataset prepare fallback summary write traceability 與 console tail read-error traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗必須回寫 `fallback_write_errors` / stderr，且 `gather_recent_console_tail()` 讀檔失敗不得靜默略過 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
+| B55 | P1 | 契約 | consistency / execution-only 驗證路徑必須強制 fixed-capital，單股與單檔投組比較不得受複利污染 | DONE | 已補 direct synthetic contract，直接釘死 execution-only params 必須關閉 compounding，且 single backtest / 單檔 portfolio timeline / portfolio_sim prepared 在固定資金且虧損後不得超過剩餘資金再放大倉位，三者總報酬與 final equity 必須一致 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/real_case_runners.py`, `tools/validate/scanner_expectations.py`, `core/config.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -295,6 +296,7 @@
 | T128 | `validate_strategy_reporting_schema_compatibility_case` | B51 |
 | T129 | `validate_reduced_dataset_dynamic_contract_case` | B53 |
 | T130 | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` | B54 |
+| T131 | `validate_execution_only_fixed_capital_contract_case` | B55 |
 
 ## G. 逐項收斂紀錄
 
@@ -462,11 +464,12 @@
 | 2026-04-04 | B44 | 補上 quick_gate bare-except static guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B45 | 補上 quick_gate output path / outputs root / log path guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B46 | 補上 formal pipeline fallback / console tail traceability contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-04 | B54 | 補上單股固定資金 contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_history_cases.py` |
 | 2026-04-04 | B48 | 補 strategy-layer repeatability formal case 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-04 | B50 | 補 strategy minimum viability formal smoke 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-04 | B51 | 補 strategy reporting / artifact schema compatibility formal case 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-04 | B53 | 將 reduced dataset contract 改為目錄快照動態推導，移除固定成員 / 固定筆數依賴後收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` |
+| 2026-04-04 | B54 | 補上單股固定資金 contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_history_cases.py` |
+| 2026-04-04 | B55 | 補 execution-only fixed-capital parity contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | T113 | 新增 run_all CLI error usage contract 並驗證 | NEW -> DONE | `validate_run_all_cli_error_usage_contract_case` |
 | 2026-04-04 | T114 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
 | 2026-04-04 | T115 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
@@ -478,10 +481,11 @@
 | 2026-04-04 | T121 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-04 | T122 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
 | 2026-04-04 | T123 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
-| 2026-04-04 | T130 | 新增單股固定資金 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` |
 | 2026-04-04 | T124 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-04 | T125 | 新增 legacy F1 回流 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_f1_section_case` |
 | 2026-04-04 | T126 | 新增 strategy-layer repeatability formal case 並驗證 | NEW -> DONE | `validate_strategy_repeatability_case` |
 | 2026-04-04 | T127 | 新增 strategy minimum viability formal smoke 並驗證 | NEW -> DONE | `validate_strategy_minimum_viability_case` |
 | 2026-04-04 | T128 | 新增 strategy reporting / artifact schema compatibility formal case 並驗證 | NEW -> DONE | `validate_strategy_reporting_schema_compatibility_case` |
 | 2026-04-04 | T129 | 將 reduced dataset contract 改為動態快照驗證並完成同步 | NEW -> DONE | `validate_reduced_dataset_dynamic_contract_case` |
+| 2026-04-04 | T130 | 新增單股固定資金 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` |
+| 2026-04-04 | T131 | 新增 execution-only fixed-capital parity contract 並驗證 | NEW -> DONE | `validate_execution_only_fixed_capital_contract_case` |
