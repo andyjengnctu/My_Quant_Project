@@ -238,7 +238,7 @@ def get_synthetic_validator_entries():
         _entry(validate_portfolio_export_report_artifacts_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/portfolio_sim/reporting.py",)),
         _entry(validate_output_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/validate/reporting.py")),
         _entry(validate_dataset_fingerprint_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/local_regression/run_all.py")),
-        _entry(validate_reduced_dataset_dynamic_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "data/tw_stock_data_vip_reduced")),
+        _entry(validate_reduced_dataset_dynamic_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/validate/synthetic_contract_cases.py")),
         _entry(validate_run_all_dataset_prepare_pass_main_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
         _entry(validate_atomic_write_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
         _entry(validate_atomic_write_retry_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
