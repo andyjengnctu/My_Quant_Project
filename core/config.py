@@ -22,6 +22,7 @@ from config.training_policy import (  # noqa: F401
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    OPTIMIZER_FIXED_TP_PERCENT,
     build_selection_policy_snapshot,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,

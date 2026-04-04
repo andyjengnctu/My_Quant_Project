@@ -18,6 +18,7 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.model_paths import resolve_best_params_path, resolve_models_dir
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
+from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
@@ -40,7 +41,6 @@ DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 OPTIMIZER_HIGH_LEN_MIN = 40
 OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
-OPTIMIZER_FIXED_TP_PERCENT = None
 OPTIMIZER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False

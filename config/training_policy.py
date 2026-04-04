@@ -20,7 +20,13 @@ SCORE_CALC_METHOD = 'RoMD'
 # 'TOTAL_RETURN' = 分子使用總報酬率
 SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'  
 
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # (AI註: 系統得分顯示倍率，僅影響 console/report 顯示，預設 1000.0)
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響 console/report 顯示，預設 1000.0)
+
+# 停利比例固定開關
+# None = 由 optimizer 搜尋 tp_percent
+# 0.0 = 固定關閉停利
+# 其他數值 = 固定停利比例
+OPTIMIZER_FIXED_TP_PERCENT = None  # 
 
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
@@ -62,6 +68,7 @@ def build_training_score_policy_snapshot():
         "SCORE_CALC_METHOD": SCORE_CALC_METHOD,
         "SCORE_NUMERATOR_METHOD": SCORE_NUMERATOR_METHOD,
         "SYSTEM_SCORE_DISPLAY_MULTIPLIER": SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+        "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
     }
 
 def build_selection_policy_snapshot():

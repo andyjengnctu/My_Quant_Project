@@ -30,9 +30,10 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 - `apps/ml_optimizer.py` 僅在完成指定訓練次數，或輸入 0 走提取匯出模式時，才會更新 `models/best_params.json`；若使用者中斷且未達指定次數，禁止自動覆寫。
 - 系統評分由 `core/portfolio_stats.py::calc_portfolio_score()` 統一計算；`SCORE_CALC_METHOD` 控制主體算法，`SCORE_NUMERATOR_METHOD` 可在 `ANNUAL_RETURN` 與 `TOTAL_RETURN` 間切換分子，分母固定為 `|MDD| + 0.0001`。
 - 若要固定 optimizer 搜尋路徑，可設 `V16_OPTIMIZER_SEED=<seed>`。
+- 若要固定或關閉 optimizer 停利搜尋，請改 `config/training_policy.py` 的 `OPTIMIZER_FIXED_TP_PERCENT`；`None` 代表搜尋、`0.0` 代表固定關閉。
 
 # 設定 / 參數架構
-# config/training_policy.py：selection gate、EV/買入排序/score 類全域訓練政策與 optimizer 硬門檻
+# config/training_policy.py：selection gate、EV/買入排序/score 類全域訓練政策、optimizer 固定停利比例與硬門檻
 # config/execution_policy.py：共用資金、費用、複利、scanner/live capital 與 runtime 執行預設
 # strategies/breakout/schema.py：breakout 策略專屬參數契約與 guardrail
 # strategies/breakout/adapter.py：breakout 參數分層轉接與 section split
