@@ -28,7 +28,8 @@
 3. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `F1` / `F2` / `G`。任何 `Bxx` / `Dxx` / 狀態變更，必須同一次 patch 更新完畢。
-6. `F2` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator、script 或完成摘要。`G` 僅記錄實際狀態變更；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
+6. 摘要表只保留最小必要欄位：`F1` 不重複抄寫測試入口與完成日期，`F2` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
+7. `F2` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -131,10 +132,7 @@
 
 ## E. 未完成缺口摘要
 
-使用方式：本節僅在同輪無法一次清空時暫存未完成缺口；若本輪已清空，維持空表即可，不再另設 `D` 區 backlog。
-
-
-說明：本節只作為目前所有未完成項目的快速索引，方便優先查看 `PARTIAL` 與 `TODO`；主維護來源仍是本檔前文各表格，不另作第二份主清單。
+使用方式：本節僅在同輪無法一次清空時暫存未完成缺口；若本輪已清空，維持空表即可。主維護來源仍是主表；`E3` 僅在確實存在未完成 `Dxx` 時填寫，平時保持空表。
 
 ### E1. 目前所有 `PARTIAL` 的主表項目摘要
 
@@ -148,194 +146,193 @@
 
 ### E3. 目前所有未完成的建議測試項目摘要
 
-| ID | 建議測試名稱 / 項目 | 目前狀態 | 對應主表項目 |
+| ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |
 |---|---|---|---|
 
 ## F. 已完成覆蓋摘要
 
-說明：本節只作為目前所有 `DONE` 項目的快速索引；不區分原本既有或本輪新增。主維護來源仍是本檔前文各表格與收斂紀錄，不另作第二份主清單。
+使用方式：本節只保留 `DONE` 項目的最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。測試入口與缺口細節以主表為準，時間軸僅寫在 `G`。
 
-維護規則：依本檔前述「收斂原則」維護；交付前至少核對一次「主表 `DONE` IDs == `F1` `DONE` IDs」。
+維護規則：`F1` 固定只留「類型 / ID / 項目」，`F2` 固定只留「ID / 建議測試名稱 / 對應主表項目」；兩表均依 ID 升冪排序。交付前至少核對一次「主表 `DONE` IDs == `F1` `DONE` IDs」。
 
 ### F1. 目前所有 `DONE` 的主表項目摘要
 
-| 類型 | ID | 項目 | 對應測試入口 | 完成日期 |
-|---|---|---|---|---|
-| 規則 | B02 | 同 K 棒停利/停損取最壞停損 | 既有 synthetic case | 既有 |
-| 規則 | B01 | 杜絕未來函數 | `tools/validate/synthetic_history_cases.py` | 2026-04-02 |
-| 品質 | B13 | 數值穩定性、rounding、tick、odd lot | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
-| 品質 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py`, `tools/validate/synthetic_error_cases.py` | 2026-04-02 |
-| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | `tools/local_regression/run_meta_quality.py`, `core/runtime_utils.py`, `apps/test_suite.py` | 2026-04-02 |
-| 品質 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | `tools/validate/synthetic_data_quality_cases.py` | 2026-04-02 |
-| 品質 | B16 | 互斥參數、預設值、help 與實作一致 | `tools/validate/synthetic_cli_cases.py`, `apps/*.py`, `core/runtime_utils.py` | 2026-04-02 |
-| 規則 | B03 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
-| 規則 | B04 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
-| 規則 | B05 | 只能盤前掛單；盤中不得新增/改單/換股 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
-| 規則 | B06 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
-| 規則 | B07 | 未成交不得同日盤中自動改掛其他股票 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
-| 規則 | B08 | 停利/停損只能對已持有部位預先設定 | `tools/validate/synthetic_take_profit_cases.py` | 2026-04-01 |
-| 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | `tools/validate/synthetic_flow_cases.py` | 2026-04-01 |
-| 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | `tools/validate/synthetic_history_cases.py` | 2026-04-01 |
-| 契約 | B11 | 跨工具 schema / 欄位語意一致 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_portfolio_cases.py` | 2026-04-02 |
-| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 | `tools/local_regression/run_ml_smoke.py`, `tools/local_regression/run_chain_checks.py`, `tools/validate/synthetic_regression_cases.py` | 2026-04-02 |
-| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 | `tools/local_regression/run_chain_checks.py`, `tools/local_regression/run_ml_smoke.py`, `tools/validate/synthetic_regression_cases.py` | 2026-04-02 |
-| I/O | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 | `tools/validate/synthetic_contract_cases.py` | 2026-04-02 |
-| 文件 | B20 | `doc/CMD.md` 指令與實作一致 | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
-| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py` | 2026-04-02 |
-| Meta | B22 | line / branch coverage 報表 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` | 2026-04-02 |
-| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` | 2026-04-03 |
-| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | `tools/validate/synthetic_meta_cases.py` | 2026-04-01 |
-| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` | 2026-04-02 |
-| Meta | B27 | 禁止循環依賴（模組層級 import cycle） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` | 2026-04-03 |
-| 覆蓋率 | B28 | key coverage targets 應包含核心交易模組 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 覆蓋率 | B31 | entry path 關鍵模組應納入 critical file per-file coverage gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-03 |
-| 覆蓋率 | B32 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| I/O | B33 | reduced dataset 應具備 member / content fingerprint gate | `tools/local_regression/common.py`, `tools/local_regression/run_all.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
-| I/O | B34 | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite | `tools/local_regression/common.py`, `tools/validate/reporting.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
-| 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` | 2026-04-03 |
-| Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
-| 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-04 |
-| Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
-| I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
-| Meta | B44 | `quick_gate` 不得移除裸 `except` static guard | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
-| I/O | B45 | `quick_gate` 不得移除 output path / outputs root / log path guard | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
-| 錯誤處理 | B46 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
-| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
+| 類型 | ID | 項目 |
+|---|---|---|
+| 規則 | B01 | 杜絕未來函數 |
+| 規則 | B02 | 同 K 棒停利/停損取最壞停損 |
+| 規則 | B03 | 權益曲線、資金、PnL 一律為扣費扣稅後淨值 |
+| 規則 | B04 | 半倉停利只算現金回收，尾倉才算完整 Round-Trip |
+| 規則 | B05 | 只能盤前掛單；盤中不得新增/改單/換股 |
+| 規則 | B06 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 |
+| 規則 | B07 | 未成交不得同日盤中自動改掛其他股票 |
+| 規則 | B08 | 停利/停損只能對已持有部位預先設定 |
+| 規則 | B09 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 |
+| 規則 | B10 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner |
+| 契約 | B11 | 跨工具 schema / 欄位語意一致 |
+| 決定性 | B12 | 同資料、同參數、同 seed 結果可重現 |
+| 邊界值 | B13 | 數值穩定性、rounding、tick、odd lot |
+| 韌性 | B14 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 |
+| 錯誤處理 | B15 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 |
+| CLI | B16 | 互斥參數、預設值、help 與實作一致 |
+| I/O | B17 | 輸出工件、bundle、retention、rerun 覆寫行為 |
+| 回歸 | B18 | 重跑一致性、狀態汙染、cache 汙染 |
+| 效能 | B19 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 |
+| 文件 | B20 | `doc/CMD.md` 指令與實作一致 |
+| 顯示 | B21 | 報表欄位、排序、百分比格式與來源一致 |
+| 覆蓋率 | B22 | line / branch coverage 報表 |
+| Meta | B23 | checklist / 測試註冊 / 正式入口一致性 |
+| Meta | B24 | known-bad fault injection：關鍵規則故意破壞後測試必須 fail |
+| Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 |
+| Meta | B26 | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） |
+| Meta | B27 | 禁止循環依賴（模組層級 import cycle） |
+| 覆蓋率 | B28 | key coverage targets 應包含核心交易模組 |
+| 覆蓋率 | B29 | critical files 應具備 per-file line / branch minimum gate |
+| 覆蓋率 | B30 | overall coverage minimum threshold 應逐步提高，branch 優先 |
+| 覆蓋率 | B31 | entry path 關鍵模組應納入 critical file per-file coverage gate |
+| 覆蓋率 | B32 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 |
+| I/O | B33 | reduced dataset 應具備 member / content fingerprint gate |
+| I/O | B34 | summary / manifest / artifact 寫檔應採 atomic write，避免 partial overwrite |
+| 覆蓋率 | B35 | test suite orchestrator modules 應納入 coverage targets |
+| I/O | B36 | artifacts manifest 應具備 sha256，不可只靠 size_bytes |
+| Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） |
+| 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets |
+| 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets |
+| Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 |
+| 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 |
+| Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 |
+| I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 |
+| Meta | B44 | `quick_gate` 不得移除裸 `except` static guard |
+| I/O | B45 | `quick_gate` 不得移除 output path / outputs root / log path guard |
+| 錯誤處理 | B46 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
 
-| ID | 建議測試名稱 | 對應主表項目 | 完成日期 |
-|---|---|---|---|
-| D01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 | 2026-04-01 |
-| D02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 | 2026-04-01 |
-| D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 | 2026-04-01 |
-| D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 | 2026-04-01 |
-| D05 | `validate_synthetic_fee_tax_net_equity_case` | B03 | 2026-04-01 |
-| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 | 2026-04-01 |
-| D07 | `validate_synthetic_missed_sell_accounting_case` | B11 | 2026-04-01 |
-| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 | 2026-04-01 |
-| D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 | 2026-04-01 |
-| D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 | 2026-04-01 |
-| D60 | `validate_synthetic_setup_index_prev_day_only_case` | B01 | 2026-04-02 |
-| D11 | `validate_price_utils_unit_case` | B13 | 2026-04-01 |
-| D12 | `validate_history_filters_unit_case` | B13 | 2026-04-01 |
-| D13 | `validate_portfolio_stats_unit_case` | B13 | 2026-04-01 |
-| D22 | `validate_registry_checklist_entry_consistency_case` | B23 | 2026-04-01 |
-| D29 | `tools/local_regression/formal_pipeline.py` | B23 | 2026-04-02 |
-| D70 | `tools/validate/synthetic_cases.py` | B23 | 2026-04-02 |
-| D108 | `validate_synthetic_registry_metadata_contract_case` | B37 | 2026-04-03 |
-| D18 | `validate_output_contract_case` | B11 / B17 | 2026-04-02 |
-| D49 | `validate_local_regression_summary_contract_case` | B11 | 2026-04-02 |
-| D28 | `validate_artifact_lifecycle_contract_case` | B17 | 2026-04-02 |
-| D26 | `validate_cmd_document_contract_case` | B20 | 2026-04-01 |
-| D25 | `tools/validate/meta_contracts.py` | B26 | 2026-04-02 |
-| D59 | `validate_single_formal_test_entry_contract_case` | B26 | 2026-04-02 |
-| D71 | `tools/validate/synthetic_meta_cases.py` | B26 | 2026-04-02 |
-| D72 | `apps/test_suite.py` | B26 | 2026-04-02 |
-| D111 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 | 2026-04-03 |
-| D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 | 2026-04-03 |
-| D113 | `validate_checklist_g_transition_format_case` | B26 | 2026-04-03 |
-| D114 | `validate_checklist_no_legacy_d_section_case` | B26 | 2026-04-03 |
-| D115 | `validate_formal_step_implementation_coverage_targets_case` | B39 | 2026-04-03 |
-| D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
-| D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
-| D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 | 2026-04-02 |
-| D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 | 2026-04-02 |
-| D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 | 2026-04-02 |
-| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 / B17 | 2026-04-03 |
-| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 | 2026-04-03 |
-| D57 | `validate_test_suite_summary_checklist_status_sync_case` | B21 | 2026-04-02 |
-| D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 | 2026-04-02 |
-| D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 | 2026-04-02 |
-| D65 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 | 2026-04-02 |
-| D20 | `tools/local_regression/run_meta_quality.py` | B22 | 2026-04-02 |
-| D21 | `core/runtime_utils.py` | B19 | 2026-04-02 |
-| D63 | `validate_meta_quality_performance_memory_contract_case` | B19 | 2026-04-02 |
-| D23 | `validate_known_bad_fault_injection_case` | B24 | 2026-04-01 |
-| D24 | `validate_independent_oracle_golden_case` | B25 | 2026-04-01 |
-| D30 | `validate_params_io_error_path_case` | B15 | 2026-04-02 |
-| D31 | `validate_module_loader_error_path_case` | B15 | 2026-04-02 |
-| D32 | `validate_preflight_error_path_case` | B15 | 2026-04-02 |
-| D46 | `validate_downloader_market_date_fallback_case` | B15 | 2026-04-02 |
-| D47 | `validate_downloader_sync_error_path_case` | B15 | 2026-04-02 |
-| D48 | `validate_downloader_main_error_path_case` | B15 | 2026-04-02 |
-| D61 | `validate_downloader_universe_fetch_error_path_case` | B15 | 2026-04-02 |
-| D62 | `validate_downloader_universe_screening_init_error_path_case` | B15 | 2026-04-02 |
-| D33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 | 2026-04-02 |
-| D34 | `validate_sanitize_ohlcv_failfast_case` | B14 | 2026-04-02 |
-| D35 | `validate_load_clean_df_data_quality_case` | B14 | 2026-04-02 |
-| D36 | `validate_dataset_cli_contract_case` | B16 | 2026-04-02 |
-| D37 | `validate_local_regression_cli_contract_case` | B16 | 2026-04-02 |
-| D117 | `validate_run_all_cli_error_usage_contract_case` | B16 | 2026-04-04 |
-| D45 | `validate_extended_tool_cli_contract_case` | B16 | 2026-04-02 |
-| D41 | `tools/scanner/scan_runner.py` | B12 / B18 | 2026-04-02 |
-| D15 | `tools/local_regression/run_ml_smoke.py` | B12 | 2026-04-02 |
-| D92 | `validate_scanner_worker_repeatability_case` | B12 | 2026-04-02 |
-| D93 | `validate_scan_runner_repeatability_case` | B12 | 2026-04-02 |
-| D19 | `tools/local_regression/run_chain_checks.py` | B18 | 2026-04-02 |
-| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 | 2026-04-02 |
-| D95 | `validate_run_all_repeatability_case` | B18 | 2026-04-02 |
-| D96 | `validate_no_top_level_import_cycles_case` | B27 | 2026-04-03 |
-| D97 | `validate_core_trading_modules_in_coverage_targets_case` | B28 | 2026-04-03 |
-| D98 | `validate_critical_file_coverage_minimum_gate_case` | B29 | 2026-04-03 |
-| D99 | `validate_coverage_threshold_floor_case` | B30 | 2026-04-03 |
-| D100 | `validate_entry_path_critical_coverage_gate_case` | B31 | 2026-04-03 |
-| D101 | `validate_critical_coverage_threshold_floor_case` | B32 | 2026-04-03 |
-| D116 | `validate_peak_traced_memory_tracker_context_management_case` | B40 | 2026-04-03 |
-| D118 | `validate_no_legacy_app_entry_doc_references_case` | B41 | 2026-04-04 |
-| D119 | `validate_app_thin_wrapper_export_contract_case` | B42 | 2026-04-04 |
-| D120 | `validate_package_zip_runtime_contract_case` | B43 | 2026-04-04 |
-| D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
-| D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
-| D109 | `validate_optimizer_objective_export_contract_case` | C06 | 2026-04-03 |
-| D17 | `tools/validate/synthetic_reporting_cases.py` | B21 | 2026-04-02 |
-| D42 | `validate_issue_excel_report_schema_case` | B21 | 2026-04-02 |
-| D43 | `validate_portfolio_export_report_artifacts_case` | B21 | 2026-04-02 |
-| D50 | `validate_test_suite_summary_failure_reporting_case` | B21 | 2026-04-02 |
-| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 | 2026-04-02 |
-| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 | 2026-04-02 |
-| D66 | `validate_scanner_prepared_tool_contract_case` | B19 | 2026-04-02 |
-| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 | 2026-04-02 |
-| D68 | `validate_scanner_reference_clean_df_contract_case` | B19 | 2026-04-02 |
-| D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 | 2026-04-02 |
-| D102 | `validate_dataset_fingerprint_contract_case` | B33 | 2026-04-03 |
-| D103 | `validate_atomic_write_contract_case` | B34 | 2026-04-03 |
-| D104 | `tools/local_regression/common.py` | B36 | 2026-04-03 |
-| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 | 2026-04-03 |
-| D110 | `validate_formal_step_entry_coverage_targets_case` | B38 | 2026-04-03 |
-| D106 | `validate_atomic_write_retry_contract_case` | B34 | 2026-04-03 |
-| D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 | 2026-04-04 |
-| D123 | `validate_validate_summary_atomic_write_contract_case` | B34 | 2026-04-04 |
-| D124 | `validate_quick_gate_bare_except_guard_contract_case` | B44 | 2026-04-04 |
-| D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 | 2026-04-04 |
-| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 | 2026-04-04 |
-| D127 | `validate_console_tail_read_error_traceability_case` | B46 | 2026-04-04 |
-| D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 | 2026-04-03 |
-| D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
-| D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 | 2026-04-01 |
-| D77 | `validate_synthetic_extended_miss_buy_case` | B09 | 2026-04-01 |
-| D78 | `validate_synthetic_competing_candidates_case` | B09 | 2026-04-01 |
-| D79 | `validate_synthetic_same_day_sell_block_case` | B06 | 2026-04-01 |
-| D80 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 | 2026-04-01 |
-| D81 | `validate_synthetic_missed_buy_no_replacement_case` | B07 | 2026-04-01 |
-| D82 | `validate_synthetic_unexecutable_half_tp_case` | B04 | 2026-04-01 |
-| D83 | `validate_synthetic_history_ev_threshold_case` | B10 | 2026-04-01 |
-| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 | 2026-04-01 |
-| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 | 2026-04-01 |
-| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 | 2026-04-02 |
-| D87 | `validate_synthetic_proj_cost_cash_capped_case` | B09 | 2026-04-01 |
-| D88 | `validate_synthetic_param_guardrail_case` | B15 | 2026-04-02 |
-| D89 | `validate_validate_console_summary_reporting_case` | B21 | 2026-04-02 |
-| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 | 2026-04-04 |
-| D90 | `validate_portfolio_yearly_report_schema_case` | B21 | 2026-04-02 |
-| D91 | `validate_test_suite_summary_reporting_case` | B21 | 2026-04-02 |
-
+| ID | 建議測試名稱 | 對應主表項目 |
+|---|---|---|
+| D01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |
+| D02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 |
+| D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 |
+| D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 |
+| D05 | `validate_synthetic_fee_tax_net_equity_case` | B03 |
+| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 |
+| D07 | `validate_synthetic_missed_sell_accounting_case` | B11 |
+| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 |
+| D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 |
+| D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 |
+| D11 | `validate_price_utils_unit_case` | B13 |
+| D12 | `validate_history_filters_unit_case` | B13 |
+| D13 | `validate_portfolio_stats_unit_case` | B13 |
+| D14 | `validate_model_io_schema_case` | C01 |
+| D15 | `tools/local_regression/run_ml_smoke.py` | B12 |
+| D16 | `validate_ranking_scoring_sanity_case` | C03 |
+| D17 | `tools/validate/synthetic_reporting_cases.py` | B21 |
+| D18 | `validate_output_contract_case` | B11 / B17 |
+| D19 | `tools/local_regression/run_chain_checks.py` | B18 |
+| D20 | `tools/local_regression/run_meta_quality.py` | B22 |
+| D21 | `core/runtime_utils.py` | B19 |
+| D22 | `validate_registry_checklist_entry_consistency_case` | B23 |
+| D23 | `validate_known_bad_fault_injection_case` | B24 |
+| D24 | `validate_independent_oracle_golden_case` | B25 |
+| D25 | `tools/validate/meta_contracts.py` | B26 |
+| D26 | `validate_cmd_document_contract_case` | B20 |
+| D27 | `validate_display_reporting_sanity_case` | B21 |
+| D28 | `validate_artifact_lifecycle_contract_case` | B17 |
+| D29 | `tools/local_regression/formal_pipeline.py` | B23 |
+| D30 | `validate_params_io_error_path_case` | B15 |
+| D31 | `validate_module_loader_error_path_case` | B15 |
+| D32 | `validate_preflight_error_path_case` | B15 |
+| D33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 |
+| D34 | `validate_sanitize_ohlcv_failfast_case` | B14 |
+| D35 | `validate_load_clean_df_data_quality_case` | B14 |
+| D36 | `validate_dataset_cli_contract_case` | B16 |
+| D37 | `validate_local_regression_cli_contract_case` | B16 |
+| D41 | `tools/scanner/scan_runner.py` | B12 / B18 |
+| D42 | `validate_issue_excel_report_schema_case` | B21 |
+| D43 | `validate_portfolio_export_report_artifacts_case` | B21 |
+| D45 | `validate_extended_tool_cli_contract_case` | B16 |
+| D46 | `validate_downloader_market_date_fallback_case` | B15 |
+| D47 | `validate_downloader_sync_error_path_case` | B15 |
+| D48 | `validate_downloader_main_error_path_case` | B15 |
+| D49 | `validate_local_regression_summary_contract_case` | B11 |
+| D50 | `validate_test_suite_summary_failure_reporting_case` | B21 |
+| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 |
+| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 |
+| D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 |
+| D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 |
+| D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 |
+| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 / B17 |
+| D57 | `validate_test_suite_summary_checklist_status_sync_case` | B21 |
+| D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 |
+| D59 | `validate_single_formal_test_entry_contract_case` | B26 |
+| D60 | `validate_synthetic_setup_index_prev_day_only_case` | B01 |
+| D61 | `validate_downloader_universe_fetch_error_path_case` | B15 |
+| D62 | `validate_downloader_universe_screening_init_error_path_case` | B15 |
+| D63 | `validate_meta_quality_performance_memory_contract_case` | B19 |
+| D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 |
+| D65 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 |
+| D66 | `validate_scanner_prepared_tool_contract_case` | B19 |
+| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 |
+| D68 | `validate_scanner_reference_clean_df_contract_case` | B19 |
+| D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 |
+| D70 | `tools/validate/synthetic_cases.py` | B23 |
+| D71 | `tools/validate/synthetic_meta_cases.py` | B26 |
+| D72 | `apps/test_suite.py` | B26 |
+| D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 |
+| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 |
+| D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 |
+| D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 |
+| D77 | `validate_synthetic_extended_miss_buy_case` | B09 |
+| D78 | `validate_synthetic_competing_candidates_case` | B09 |
+| D79 | `validate_synthetic_same_day_sell_block_case` | B06 |
+| D80 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 |
+| D81 | `validate_synthetic_missed_buy_no_replacement_case` | B07 |
+| D82 | `validate_synthetic_unexecutable_half_tp_case` | B04 |
+| D83 | `validate_synthetic_history_ev_threshold_case` | B10 |
+| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 |
+| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 |
+| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 |
+| D87 | `validate_synthetic_proj_cost_cash_capped_case` | B09 |
+| D88 | `validate_synthetic_param_guardrail_case` | B15 |
+| D89 | `validate_validate_console_summary_reporting_case` | B21 |
+| D90 | `validate_portfolio_yearly_report_schema_case` | B21 |
+| D91 | `validate_test_suite_summary_reporting_case` | B21 |
+| D92 | `validate_scanner_worker_repeatability_case` | B12 |
+| D93 | `validate_scan_runner_repeatability_case` | B12 |
+| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 |
+| D95 | `validate_run_all_repeatability_case` | B18 |
+| D96 | `validate_no_top_level_import_cycles_case` | B27 |
+| D97 | `validate_core_trading_modules_in_coverage_targets_case` | B28 |
+| D98 | `validate_critical_file_coverage_minimum_gate_case` | B29 |
+| D99 | `validate_coverage_threshold_floor_case` | B30 |
+| D100 | `validate_entry_path_critical_coverage_gate_case` | B31 |
+| D101 | `validate_critical_coverage_threshold_floor_case` | B32 |
+| D102 | `validate_dataset_fingerprint_contract_case` | B33 |
+| D103 | `validate_atomic_write_contract_case` | B34 |
+| D104 | `tools/local_regression/common.py` | B36 |
+| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 |
+| D106 | `validate_atomic_write_retry_contract_case` | B34 |
+| D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 |
+| D108 | `validate_synthetic_registry_metadata_contract_case` | B37 |
+| D109 | `validate_optimizer_objective_export_contract_case` | C06 |
+| D110 | `validate_formal_step_entry_coverage_targets_case` | B38 |
+| D111 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 |
+| D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
+| D113 | `validate_checklist_g_transition_format_case` | B26 |
+| D114 | `validate_checklist_no_legacy_d_section_case` | B26 |
+| D115 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
+| D116 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
+| D117 | `validate_run_all_cli_error_usage_contract_case` | B16 |
+| D118 | `validate_no_legacy_app_entry_doc_references_case` | B41 |
+| D119 | `validate_app_thin_wrapper_export_contract_case` | B42 |
+| D120 | `validate_package_zip_runtime_contract_case` | B43 |
+| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 |
+| D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 |
+| D123 | `validate_validate_summary_atomic_write_contract_case` | B34 |
+| D124 | `validate_quick_gate_bare_except_guard_contract_case` | B44 |
+| D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 |
+| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
+| D127 | `validate_console_tail_read_error_traceability_case` | B46 |
 
 ## G. 逐項收斂紀錄
 

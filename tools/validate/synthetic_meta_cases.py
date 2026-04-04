@@ -57,19 +57,40 @@ def _load_main_table_statuses():
     return statuses
 
 
+def _load_main_table_catalog():
+    text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    catalog = {}
+    for cols in extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"):
+        if len(cols) > 5:
+            catalog[cols[0]] = {
+                "kind": "規則",
+                "item": cols[2],
+                "entry": cols[5],
+                "status": cols[3],
+            }
+    for cols in extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"):
+        if len(cols) > 6:
+            catalog[cols[0]] = {
+                "kind": cols[2],
+                "item": cols[3],
+                "entry": cols[6],
+                "status": cols[4],
+            }
+    return catalog
+
+
 def _load_done_d_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     rows = extract_markdown_table_rows(text, "F2. 目前所有 `DONE` 的建議測試項目摘要")
     parsed = []
     for cols in rows:
-        if len(cols) < 4:
+        if len(cols) < 3:
             continue
         parsed.append(
             {
                 "id": cols[0],
                 "name": cols[1].replace("`", "").strip(),
                 "b_id": cols[2],
-                "done_date": cols[3],
             }
         )
     return parsed
@@ -78,17 +99,18 @@ def _load_done_d_rows():
 def _load_done_b_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     rows = extract_markdown_table_rows(text, "F1. 目前所有 `DONE` 的主表項目摘要")
+    catalog = _load_main_table_catalog()
     parsed = []
     for cols in rows:
-        if len(cols) < 5:
+        if len(cols) < 3:
             continue
+        catalog_row = catalog.get(cols[1], {})
         parsed.append(
             {
                 "kind": cols[0],
                 "b_id": cols[1],
                 "item": cols[2],
-                "entry": cols[3],
-                "done_date": cols[4],
+                "entry": catalog_row.get("entry", ""),
             }
         )
     return parsed
@@ -435,7 +457,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
             heading="F2. 目前所有 `DONE` 的建議測試項目摘要",
             row_id="D111",
             id_col_idx=0,
-            update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2], cols[3]],
+            update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2]],
         )
     except ValueError:
         add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
@@ -664,15 +686,17 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             True,
             row["b_id"] in mapped_b_ids,
         )
-        entry_path = row["entry"].split(",")[0].strip().strip("`")
-        add_check(
-            results,
-            "meta_registry",
-            case_id,
-            f"{row['b_id']}_declared_entry_file_exists",
-            True,
-            (PROJECT_ROOT / entry_path).exists(),
-        )
+        entry_candidates = re.findall(r"(?:apps|core|tools)/[A-Za-z0-9_./-]+\.py", row["entry"])
+        if entry_candidates:
+            entry_path = entry_candidates[0]
+            add_check(
+                results,
+                "meta_registry",
+                case_id,
+                f"{row['b_id']}_declared_entry_file_exists",
+                True,
+                (PROJECT_ROOT / entry_path).exists(),
+            )
 
     summary["done_d_count"] = len(done_d_rows)
     summary["done_b_count"] = len(done_b_ids)
