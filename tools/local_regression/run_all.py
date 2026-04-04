@@ -649,23 +649,60 @@ def _safe_write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) 
             "error_message": payload.get("error_message", str(exc)),
             "summary_write_error": f"{type(exc).__name__}: {exc}",
         }
+        fallback_write_errors: List[str] = []
+        wrote_json = False
+        wrote_text = False
+
+        def _record_fallback_write_error(channel: str, write_exc: OSError) -> None:
+            fallback_write_errors.append(f"{channel}:{type(write_exc).__name__}: {write_exc}")
+            fallback_summary["fallback_write_errors"] = list(fallback_write_errors)
+
         try:
             write_json(run_dir / "dataset_prepare_summary.json", fallback_summary)
-        except OSError:
-            pass
+            wrote_json = True
+        except OSError as write_json_exc:
+            _record_fallback_write_error("json", write_json_exc)
+
+        fallback_lines = [
+            f"status      : {fallback_summary['status']}",
+            f"duration_sec: {duration_sec}",
+            f"error_type  : {fallback_summary['error_type']}",
+            f"error_msg   : {fallback_summary['error_message']}",
+            f"write_error : {fallback_summary['summary_write_error']}",
+        ]
+        if fallback_write_errors:
+            fallback_lines.append(f"fallback_write_errors: {' | '.join(fallback_write_errors)}")
         try:
-            write_text(
-                run_dir / "dataset_prepare_summary.txt",
-                "\n".join([
-                    f"status      : {fallback_summary['status']}",
-                    f"duration_sec: {duration_sec}",
-                    f"error_type  : {fallback_summary['error_type']}",
-                    f"error_msg   : {fallback_summary['error_message']}",
-                    f"write_error : {fallback_summary['summary_write_error']}",
-                ]) + "\n",
+            write_text(run_dir / "dataset_prepare_summary.txt", "\n".join(fallback_lines) + "\n")
+            wrote_text = True
+        except OSError as write_text_exc:
+            _record_fallback_write_error("txt", write_text_exc)
+
+        if fallback_write_errors and wrote_json:
+            try:
+                write_json(run_dir / "dataset_prepare_summary.json", fallback_summary)
+            except OSError as rewrite_json_exc:
+                _record_fallback_write_error("json_rewrite", rewrite_json_exc)
+
+        if fallback_write_errors and wrote_text:
+            fallback_lines = [
+                f"status      : {fallback_summary['status']}",
+                f"duration_sec: {duration_sec}",
+                f"error_type  : {fallback_summary['error_type']}",
+                f"error_msg   : {fallback_summary['error_message']}",
+                f"write_error : {fallback_summary['summary_write_error']}",
+                f"fallback_write_errors: {' | '.join(fallback_write_errors)}",
+            ]
+            try:
+                write_text(run_dir / "dataset_prepare_summary.txt", "\n".join(fallback_lines) + "\n")
+            except OSError as rewrite_text_exc:
+                _record_fallback_write_error("txt_rewrite", rewrite_text_exc)
+
+        if fallback_write_errors and not wrote_json and not wrote_text:
+            print(
+                "[run_all] dataset prepare fallback summary write failed | " + " | ".join(fallback_write_errors),
+                file=sys.stderr,
             )
-        except OSError:
-            pass
         return fallback_summary
 
 

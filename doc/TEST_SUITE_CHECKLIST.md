@@ -114,6 +114,7 @@
 | B43 | P1 | I/O | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | DONE | 已補 `package_zip` runtime contract，直接釘死 root 既有舊 ZIP 不分 branch label 都必須移入 `arch/`，且新 ZIP 僅可包含 tracked/untracked 非忽略檔，不得夾帶 `__pycache__/` 或 `*.pyc` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
 | B44 | P1 | Meta | `quick_gate` 不得移除裸 `except` static guard | DONE | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 必須保留 `bare_except_scan`，且遇到裸 `except` 時必須回報 FAIL 與命中文件 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
+| B46 | P1 | 錯誤處理 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | DONE | 已補 dataset prepare fallback summary write traceability 與 console tail read-error traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗必須回寫 `fallback_write_errors` / stderr，且 `gather_recent_console_tail()` 讀檔失敗不得靜默略過 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -179,6 +180,8 @@
 | D123 | `validate_validate_summary_atomic_write_contract_case` | 已補 `write_local_regression_summary()` 正式路徑 atomic write contract，要求 `validate_consistency_summary.json` replace 失敗時保留舊內容且清乾淨 temp 檔 |
 | D124 | `validate_quick_gate_bare_except_guard_contract_case` | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 不得移除 `bare_except_scan`，且裸 `except` 必須命中 FAIL |
 | D125 | `validate_quick_gate_output_path_guard_contract_case` | 已補 `quick_gate` output path / outputs root / log path guard contract，直接釘死正式入口 summary 必須保留關鍵步驟，且 guard FAIL 時需傳遞到 `failed_steps` |
+| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | 已補 dataset prepare fallback summary write traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗不得靜默吞掉，必須回寫 `fallback_write_errors`，且兩個 fallback 檔都寫不出時需輸出 stderr 訊息 |
+| D127 | `validate_console_tail_read_error_traceability_case` | 已補 console tail read-error traceability contract，直接釘死 `gather_recent_console_tail()` 讀不到 log 時不得靜默略過，必須把讀檔錯誤寫回 tail 內容 |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | 已補 `run_all.main()` dataset prepare PASS 主路徑 contract，直接驗證正式入口可保留 dataset fingerprint 並完成 master summary |
 | D30 | `validate_params_io_error_path_case` | 已補壞 JSON、缺必要欄位、未知欄位、缺檔時的 fail-fast 與錯誤訊息定位 |
 | D31 | `validate_module_loader_error_path_case` | 已補 syntax error、缺必要屬性與 checked path/reason 彙整的錯誤路徑 |
@@ -453,6 +456,8 @@
 | D123 | `validate_validate_summary_atomic_write_contract_case` | B34 | 2026-04-04 |
 | D124 | `validate_quick_gate_bare_except_guard_contract_case` | B44 | 2026-04-04 |
 | D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 | 2026-04-04 |
+| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 | 2026-04-04 |
+| D127 | `validate_console_tail_read_error_traceability_case` | B46 | 2026-04-04 |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 | 2026-04-03 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
 | D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 | 2026-04-01 |
@@ -636,6 +641,9 @@
 | 2026-04-04 | D125 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-04 | B44 | 補上 quick_gate bare-except static guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B45 | 補上 quick_gate output path / outputs root / log path guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-04 | D126 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
+| 2026-04-04 | D127 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
+| 2026-04-04 | B46 | 補上 formal pipeline fallback / console tail traceability contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
 | 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
 | 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |
@@ -702,4 +710,5 @@
 - 2026-04-03：D22 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist。
 - 2026-04-04：D118 修補後發現 `validate_no_legacy_app_entry_doc_references_case` 已 import 但漏註冊於 synthetic main entry；本輪已補回 `tools/validate/synthetic_cases.py` 註冊，屬既有 D22 / B23 guard 命中，無主表狀態變更。
 - 2026-04-04：嚴格檢查補記：`tools/validate/synthetic_reporting_cases.py` 與 `tools/validate/synthetic_contract_cases.py` 的 meta quality fixture / 斷言原先仍沿用舊的 overall coverage threshold `50 / 45`；本輪已同步改為正式基線 `55 / 50`，避免 reporting / contract case 與 `meta_quality_targets.py`、manifest、checklist 主表脫鉤；主表狀態無變更。
+- 2026-04-04：嚴格檢查補記：`tools/local_regression/run_all.py` 的 dataset prepare fallback summary 寫檔失敗與 `tools/local_regression/common.py` 的 console tail 讀檔失敗原先會被靜默吞掉；本輪已補 traceability contract，要求回寫 `fallback_write_errors` / stderr 與 `[read_error] ...` tail marker，避免 formal pipeline 關鍵錯誤只在記憶體中消失；主表已新增 `B46`。
 

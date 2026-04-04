@@ -1432,3 +1432,70 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
     add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_flag", True, coverage_summary.get("reused_existing"))
     add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_returncode", 0, coverage_summary.get("run_result", {}).get("returncode"))
     return results, summary
+
+
+
+def validate_dataset_prepare_fallback_write_traceability_case(_base_params):
+    case_id = "DATASET_PREPARE_FALLBACK_WRITE_TRACEABILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="dataset_prepare_fallback_trace_") as temp_dir:
+        run_dir = Path(temp_dir)
+        stderr_buffer = io.StringIO()
+
+        def _fail_json(_path, _payload):
+            raise OSError("json fallback disk full")
+
+        def _fail_text(_path, _text):
+            raise OSError("text fallback permission denied")
+
+        with patch.object(run_all_module, "_write_dataset_prepare_summary", side_effect=ValueError("primary summary write failed")),              patch.object(run_all_module, "write_json", side_effect=_fail_json),              patch.object(run_all_module, "write_text", side_effect=_fail_text),              patch("sys.stderr", stderr_buffer):
+            fallback_summary = run_all_module._safe_write_dataset_prepare_summary(
+                run_dir,
+                {
+                    "status": "FAIL",
+                    "duration_sec": 1.234,
+                    "error_type": "RuntimeError",
+                    "error_message": "dataset missing",
+                },
+            )
+
+    fallback_write_errors = fallback_summary.get("fallback_write_errors", [])
+    stderr_text = stderr_buffer.getvalue()
+    add_check(results, "output_contract", case_id, "fallback_summary_preserves_primary_write_error", "ValueError: primary summary write failed", fallback_summary.get("summary_write_error"))
+    add_check(results, "output_contract", case_id, "fallback_summary_records_json_write_failure", True, any(str(item).startswith("json:OSError: json fallback disk full") for item in fallback_write_errors))
+    add_check(results, "output_contract", case_id, "fallback_summary_records_text_write_failure", True, any(str(item).startswith("txt:OSError: text fallback permission denied") for item in fallback_write_errors))
+    add_check(results, "output_contract", case_id, "fallback_summary_emits_stderr_when_no_fallback_file_written", True, "dataset prepare fallback summary write failed" in stderr_text and "json fallback disk full" in stderr_text and "text fallback permission denied" in stderr_text)
+
+    summary["fallback_error_count"] = len(fallback_write_errors)
+    return results, summary
+
+
+
+def validate_console_tail_read_error_traceability_case(_base_params):
+    case_id = "CONSOLE_TAIL_READ_ERROR_TRACEABILITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="console_tail_trace_") as temp_dir:
+        run_dir = Path(temp_dir)
+        ok_log = run_dir / "ok.log"
+        bad_log = run_dir / "bad.log"
+        ok_log.write_text("line-1\nline-2\n", encoding="utf-8")
+        bad_log.write_text("unreadable\n", encoding="utf-8")
+        original_read_text = Path.read_text
+
+        def _patched_read_text(self, *args, **kwargs):
+            if self == bad_log:
+                raise OSError("simulated tail read failure")
+            return original_read_text(self, *args, **kwargs)
+
+        with patch.object(Path, "read_text", _patched_read_text):
+            tail_text = local_common.gather_recent_console_tail(run_dir, limit_lines=5)
+
+    add_check(results, "output_contract", case_id, "console_tail_keeps_readable_log_tail", True, "===== ok.log =====" in tail_text and "line-2" in tail_text)
+    add_check(results, "output_contract", case_id, "console_tail_surfaces_read_error_instead_of_silent_skip", True, "===== bad.log =====" in tail_text and "[read_error] OSError: simulated tail read failure" in tail_text)
+
+    summary["tail_has_read_error_marker"] = "[read_error]" in tail_text
+    return results, summary

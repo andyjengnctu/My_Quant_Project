@@ -465,7 +465,8 @@ def gather_recent_console_tail(run_dir: Path, limit_lines: int = 80) -> str:
     for log_path in sorted(run_dir.glob("*.log")):
         try:
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+        except OSError as exc:
+            chunks.append(f"===== {log_path.name} =====\n[read_error] {type(exc).__name__}: {exc}")
             continue
         chunks.append(f"===== {log_path.name} =====\n" + "\n".join(lines[-limit_lines:]))
     return "\n\n".join(chunks).strip()
