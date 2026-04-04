@@ -3,29 +3,13 @@ import numpy as np
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.config import V16StrategyParams
 from core.position_step import execute_bar_step
-from core.price_utils import (
-    adjust_long_buy_limit,
-    adjust_long_sell_fill_price,
-    adjust_long_stop_price,
-    adjust_long_target_price,
-    calc_entry_price,
-    calc_half_take_profit_sell_qty,
-    calc_net_sell_price,
-    calc_reference_candidate_qty,
-    can_execute_half_take_profit,
-    get_exit_sell_block_reason,
-)
+from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from core.signal_utils import generate_signals
 from core.trade_plans import (
-    build_cash_capped_entry_plan,
-    build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,
-    build_normal_candidate_plan,
     build_normal_entry_plan,
     create_signal_tracking_state,
-    evaluate_history_candidate_metrics,
     execute_pre_market_entry_plan,
-    resize_candidate_plan_to_capital,
     should_clear_extended_signal,
 )
 
@@ -194,7 +178,6 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         params=params,
         current_capital=currentCapital,
         current_equity=currentEquity,
-        peak_capital=final_state['peak_capital'],
         max_drawdown_pct=maxDrawdownPct,
         trade_count=tradeCount,
         full_wins=fullWins,

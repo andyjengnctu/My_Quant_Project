@@ -103,7 +103,6 @@ def build_backtest_stats(
     params,
     current_capital,
     current_equity,
-    peak_capital,
     max_drawdown_pct,
     trade_count,
     full_wins,
@@ -122,7 +121,6 @@ def build_backtest_stats(
     end_position_qty,
     avg_bars_held,
 ):
-    del peak_capital
     win_rate = (full_wins / trade_count * 100) if trade_count > 0 else 0
     avg_win = total_profit / full_wins if full_wins > 0 else 0
     loss_count = trade_count - full_wins

@@ -672,6 +672,7 @@
 
 ### G1. 補充註記（不記狀態變更）
 
+- 2026-04-04：嚴格檢查補記：移除 `core.backtest_core` 偶然 re-export 依賴，將 scanner / debug / validate 相關匯入改回各自直接來源模組（如 `core.price_utils`、`core.entry_plans`、`core.extended_signals`、`core.signal_utils`、`core.position_step`、`core.history_filters`）；僅屬分層與介面收斂，主表狀態無變更。
 - 2026-04-04：D37 補納 `apps/package_zip.py` no-arg CLI 契約，並同步把 `apps/package_zip.py --help` 加回 quick gate `HELP_TARGETS`，避免 `doc/CMD.md` 新增正式指令後與 B16 / B20 覆蓋失同步。
 - 2026-04-01：D25 先補 `run_meta_quality.py` formal check 的主表 / 未完成摘要 / 已完成摘要一致性校驗，後續於 2026-04-02 收斂為 `PARTIAL -> DONE`。
 - 2026-04-02：D49 補 `validate_local_regression_summary_contract_case` 的 cfile staging 與 runtime FAIL summary / console artifact 檢查。

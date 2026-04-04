@@ -3,7 +3,7 @@ import tempfile
 
 import pandas as pd
 
-from core.backtest_core import calc_reference_candidate_qty, can_execute_half_take_profit
+from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.entry_plans import (
     build_cash_capped_entry_plan,

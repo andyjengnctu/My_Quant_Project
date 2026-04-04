@@ -72,7 +72,7 @@ def _remove_python_caches() -> tuple[int, int]:
     return removed_cache_dirs, removed_pyc_files
 
 
-def _archive_existing_root_zips(branch_label: str) -> int:
+def _archive_existing_root_zips() -> int:
     archive_dir = PROJECT_ROOT / "arch"
     archive_dir.mkdir(exist_ok=True)
     moved_count = 0
@@ -139,7 +139,7 @@ def main(argv=None) -> int:
     branch_label = _sanitize_filename_component(branch_name)
     head_sha = _get_head_short_sha()
     removed_cache_dirs, removed_pyc_files = _remove_python_caches()
-    moved_count = _archive_existing_root_zips(branch_label)
+    moved_count = _archive_existing_root_zips()
     package_paths = _collect_package_paths()
     zip_path = _build_zip(branch_label, head_sha, package_paths)
 

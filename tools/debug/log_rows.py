@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.backtest_core import can_execute_half_take_profit
+from core.price_utils import can_execute_half_take_profit
 
 
 def get_debug_tp_half_price(tp_half, qty, params):
