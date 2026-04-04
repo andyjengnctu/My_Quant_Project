@@ -325,6 +325,7 @@
 | Meta | B37 | synthetic registry 應具備 metadata contract（layer / cost / impacted modules） | `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B38 | formal pipeline step entry wrappers 應納入 coverage targets | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 覆蓋率 | B39 | split formal-step implementation modules 應納入 coverage targets | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
+| Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
