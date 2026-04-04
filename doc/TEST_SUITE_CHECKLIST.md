@@ -23,17 +23,17 @@
 - `P2`：品質與工具鏈補強。
 
 索引管理：
-- `Bxx` / `Cxx` 為主表穩定追蹤 ID。
-- `Dxx` 為建議測試項目的 stable tracking ID namespace；即使舊 `D` 區已刪除，既有 `Dxx` 仍持續沿用，不重編、不回收。
+- `Bxx` 為主表穩定追蹤 ID。
+- `Txx` 為建議測試項目的 stable tracking ID namespace；出現結構調整時，仍以穩定追蹤與同輪同步更新為原則。
 
 收斂原則：
 1. 本檔主責維護主表、覆蓋狀態、對應測試入口與收斂紀錄；原則性規則不在本檔重寫。
 2. 先補長期固定測試，再補可隨策略升級調整的測試；優先補 synthetic / unit / contract test，避免讓 GPT 端重跑本地完整動態流程。
 3. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `F` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Dxx` / 狀態變更，必須同一次 patch 更新完畢。
-6. 摘要表只保留最小必要欄位：`E` 固定只留一張未完成暫存表；`F` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
-7. `F` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator 或 script。`E` / `F` 固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
+5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `F` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Txx` / 狀態變更，必須同一次 patch 更新完畢。
+6. 摘要表只保留最小必要欄位：`F` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
+7. `F` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -101,7 +101,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard，以及 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `E` / `F` / `G` 收斂同步 formal guard，並阻擋 convergence 紀錄失同步、`F` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及 legacy `D` / `E1-E3` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`F` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -125,155 +125,175 @@
 
 ### B3. 可隨策略升級調整的測試
 
-| ID | 優先級 | 類別 | 項目 | 原則 | 建議落點 |
-|---|---|---|---|---|---|
-| C01 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | 驗輸入欄位、輸出欄位、型別、缺值處理；不驗固定分數 | `tools/optimizer/`, `tools/scanner/` |
-| C02 | P1 | 重現性 | 同 seed 下 optimizer / model inference 可重現 | 驗結果穩定在可接受範圍；不綁死搜尋路徑細節 | `tools/local_regression/`, `tools/optimizer/` |
-| C03 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | 驗排序值可用、方向一致、型別正確；不驗固定名次 | `core/buy_sort.py`, `tools/scanner/` |
-| C04 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | 驗 CLI 與輸出仍可用；不驗內部中間流程 | `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
-| C05 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | 驗欄位存在與語意；不驗具體績效數值 | `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
-| C06 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | 驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序與 export 成敗；不驗固定分數 | `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py` |
+| ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|---|---|
+| B47 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | DONE | 已新增 model I/O schema case，直接驗輸入欄位、輸出欄位、型別與缺值處理 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/`, `tools/scanner/` |
+| B48 | P1 | 重現性 | 同 seed 下 optimizer / model inference 可重現 | TODO | 尚缺 strategy-layer repeatability formal check；目前僅一般性 repeatability 已納入主表 | `tools/validate/synthetic_strategy_cases.py`, `tools/local_regression/`, `tools/optimizer/` |
+| B49 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | DONE | 已新增 ranking / scoring sanity case，直接驗排序值可用、方向一致與型別正確 | `tools/validate/synthetic_strategy_cases.py`, `core/buy_sort.py`, `tools/scanner/` |
+| B50 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | TODO | 尚缺 strategy-upgrade 最低可用性 formal smoke / contract coverage | `tools/validate/synthetic_strategy_cases.py`, `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
+| B51 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | TODO | 尚缺 strategy-specific reporting / artifact schema compatibility formal check | `tools/validate/synthetic_strategy_cases.py`, `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
+| B52 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | DONE | 已新增 optimizer objective / export contract case，直接驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序與 export 成敗 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py` |
 
 ## E. 未完成缺口摘要
 
-使用方式：本節僅在同輪無法一次清空時暫存未完成缺口；若本輪已清空，維持空表即可。主維護來源仍是主表；本節固定只保留一張未完成暫存表，避免 `E1` / `E2` / `E3` 分拆維護。
+使用方式：本節僅在同輪無法一次清空時暫存未完成缺口；若本輪已清空，維持空表即可。主維護來源仍是主表；`E3` 僅在確實存在未完成 `Txx` 時填寫，平時保持空表。
 
-| ID | 目前狀態 | 項目 | 缺口摘要 / 對應主表項目 | 建議落點 |
+### E1. 目前所有 `PARTIAL` 的主表項目摘要
+
+| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|
+
+### E2. 目前所有 `TODO` 的主表項目摘要
+
+| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
+|---|---|---|---|---|
+| 策略升級 | B48 | 同 seed 下 optimizer / model inference 可重現 | 尚缺 strategy-layer repeatability formal check；目前僅一般性 repeatability 已納入主表 | `tools/validate/synthetic_strategy_cases.py`, `tools/local_regression/`, `tools/optimizer/` |
+| 策略升級 | B50 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | 尚缺 strategy-upgrade 最低可用性 formal smoke / contract coverage | `tools/validate/synthetic_strategy_cases.py`, `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
+| 策略升級 | B51 | 新策略輸出仍符合既有 artifact / reporting schema | 尚缺 strategy-specific reporting / artifact schema compatibility formal check | `tools/validate/synthetic_strategy_cases.py`, `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
+
+### E3. 目前所有未完成的建議測試項目摘要
+
+| ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |
+|---|---|---|---|
+| T126 | `validate_strategy_repeatability_case` | TODO | B48 |
+| T127 | `validate_strategy_minimum_viability_case` | TODO | B50 |
+| T128 | `validate_strategy_reporting_schema_compatibility_case` | TODO | B51 |
 
 ## F. 已完成建議測試映射
 
 使用方式：本節只保留 `DONE` 的建議測試項目最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。主表狀態、測試入口細節與缺口摘要仍以主表為準，時間軸僅寫在 `G`。
 
-維護規則：`F` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。交付前至少核對一次「所有已註冊 validator / script 類型的 `Dxx` 已同步列入 `F`，且 `F` 與 `G` 的最新狀態一致」。
+維護規則：`F` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。交付前至少核對一次「所有已註冊 validator / script 類型的 `Txx` 已同步列入 `F`，且 `F` 與 `G` 的最新狀態一致」。
+
+### F. 目前所有 `DONE` 的建議測試項目摘要
 
 | ID | 建議測試名稱 | 對應主表項目 |
 |---|---|---|
-| D01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |
-| D02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 |
-| D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 |
-| D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 |
-| D05 | `validate_synthetic_fee_tax_net_equity_case` | B03 |
-| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 |
-| D07 | `validate_synthetic_missed_sell_accounting_case` | B11 |
-| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 |
-| D09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 |
-| D10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 |
-| D11 | `validate_price_utils_unit_case` | B13 |
-| D12 | `validate_history_filters_unit_case` | B13 |
-| D13 | `validate_portfolio_stats_unit_case` | B13 |
-| D14 | `validate_model_io_schema_case` | C01 |
-| D15 | `tools/local_regression/run_ml_smoke.py` | B12 |
-| D16 | `validate_ranking_scoring_sanity_case` | C03 |
-| D17 | `tools/validate/synthetic_reporting_cases.py` | B21 |
-| D18 | `validate_output_contract_case` | B11 / B17 |
-| D19 | `tools/local_regression/run_chain_checks.py` | B18 |
-| D20 | `tools/local_regression/run_meta_quality.py` | B22 |
-| D21 | `core/runtime_utils.py` | B19 |
-| D22 | `validate_registry_checklist_entry_consistency_case` | B23 |
-| D23 | `validate_known_bad_fault_injection_case` | B24 |
-| D24 | `validate_independent_oracle_golden_case` | B25 |
-| D25 | `tools/validate/meta_contracts.py` | B26 |
-| D26 | `validate_cmd_document_contract_case` | B20 |
-| D27 | `validate_display_reporting_sanity_case` | B21 |
-| D28 | `validate_artifact_lifecycle_contract_case` | B17 |
-| D29 | `tools/local_regression/formal_pipeline.py` | B23 |
-| D30 | `validate_params_io_error_path_case` | B15 |
-| D31 | `validate_module_loader_error_path_case` | B15 |
-| D32 | `validate_preflight_error_path_case` | B15 |
-| D33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 |
-| D34 | `validate_sanitize_ohlcv_failfast_case` | B14 |
-| D35 | `validate_load_clean_df_data_quality_case` | B14 |
-| D36 | `validate_dataset_cli_contract_case` | B16 |
-| D37 | `validate_local_regression_cli_contract_case` | B16 |
-| D41 | `tools/scanner/scan_runner.py` | B12 / B18 |
-| D42 | `validate_issue_excel_report_schema_case` | B21 |
-| D43 | `validate_portfolio_export_report_artifacts_case` | B21 |
-| D45 | `validate_extended_tool_cli_contract_case` | B16 |
-| D46 | `validate_downloader_market_date_fallback_case` | B15 |
-| D47 | `validate_downloader_sync_error_path_case` | B15 |
-| D48 | `validate_downloader_main_error_path_case` | B15 |
-| D49 | `validate_local_regression_summary_contract_case` | B11 |
-| D50 | `validate_test_suite_summary_failure_reporting_case` | B21 |
-| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 |
-| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 |
-| D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 |
-| D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 |
-| D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 |
-| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 / B17 |
-| D57 | `validate_test_suite_summary_checklist_status_sync_case` | B21 |
-| D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 |
-| D59 | `validate_single_formal_test_entry_contract_case` | B26 |
-| D60 | `validate_synthetic_setup_index_prev_day_only_case` | B01 |
-| D61 | `validate_downloader_universe_fetch_error_path_case` | B15 |
-| D62 | `validate_downloader_universe_screening_init_error_path_case` | B15 |
-| D63 | `validate_meta_quality_performance_memory_contract_case` | B19 |
-| D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 |
-| D65 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 |
-| D66 | `validate_scanner_prepared_tool_contract_case` | B19 |
-| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 |
-| D68 | `validate_scanner_reference_clean_df_contract_case` | B19 |
-| D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 |
-| D70 | `tools/validate/synthetic_cases.py` | B23 |
-| D71 | `tools/validate/synthetic_meta_cases.py` | B26 |
-| D72 | `apps/test_suite.py` | B26 |
-| D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 |
-| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 |
-| D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 |
-| D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 |
-| D77 | `validate_synthetic_extended_miss_buy_case` | B09 |
-| D78 | `validate_synthetic_competing_candidates_case` | B09 |
-| D79 | `validate_synthetic_same_day_sell_block_case` | B06 |
-| D80 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 |
-| D81 | `validate_synthetic_missed_buy_no_replacement_case` | B07 |
-| D82 | `validate_synthetic_unexecutable_half_tp_case` | B04 |
-| D83 | `validate_synthetic_history_ev_threshold_case` | B10 |
-| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 |
-| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 |
-| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 |
-| D87 | `validate_synthetic_proj_cost_cash_capped_case` | B09 |
-| D88 | `validate_synthetic_param_guardrail_case` | B15 |
-| D89 | `validate_validate_console_summary_reporting_case` | B21 |
-| D90 | `validate_portfolio_yearly_report_schema_case` | B21 |
-| D91 | `validate_test_suite_summary_reporting_case` | B21 |
-| D92 | `validate_scanner_worker_repeatability_case` | B12 |
-| D93 | `validate_scan_runner_repeatability_case` | B12 |
-| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 |
-| D95 | `validate_run_all_repeatability_case` | B18 |
-| D96 | `validate_no_top_level_import_cycles_case` | B27 |
-| D97 | `validate_core_trading_modules_in_coverage_targets_case` | B28 |
-| D98 | `validate_critical_file_coverage_minimum_gate_case` | B29 |
-| D99 | `validate_coverage_threshold_floor_case` | B30 |
-| D100 | `validate_entry_path_critical_coverage_gate_case` | B31 |
-| D101 | `validate_critical_coverage_threshold_floor_case` | B32 |
-| D102 | `validate_dataset_fingerprint_contract_case` | B33 |
-| D103 | `validate_atomic_write_contract_case` | B34 |
-| D104 | `tools/local_regression/common.py` | B36 |
-| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 |
-| D106 | `validate_atomic_write_retry_contract_case` | B34 |
-| D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 |
-| D108 | `validate_synthetic_registry_metadata_contract_case` | B37 |
-| D109 | `validate_optimizer_objective_export_contract_case` | C06 |
-| D110 | `validate_formal_step_entry_coverage_targets_case` | B38 |
-| D111 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 |
-| D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
-| D113 | `validate_checklist_g_transition_format_case` | B26 |
-| D114 | `validate_checklist_no_legacy_d_section_case` | B26 |
-| D115 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
-| D116 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
-| D117 | `validate_run_all_cli_error_usage_contract_case` | B16 |
-| D118 | `validate_no_legacy_app_entry_doc_references_case` | B41 |
-| D119 | `validate_app_thin_wrapper_export_contract_case` | B42 |
-| D120 | `validate_package_zip_runtime_contract_case` | B43 |
-| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 |
-| D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 |
-| D123 | `validate_validate_summary_atomic_write_contract_case` | B34 |
-| D124 | `validate_quick_gate_bare_except_guard_contract_case` | B44 |
-| D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 |
-| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
-| D127 | `validate_console_tail_read_error_traceability_case` | B46 |
-| D128 | `validate_checklist_g_ordering_case` | B26 |
-| D129 | `validate_checklist_no_legacy_f1_section_case` | B26 |
+| T01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |
+| T02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 |
+| T03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 |
+| T04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 |
+| T05 | `validate_synthetic_fee_tax_net_equity_case` | B03 |
+| T06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 |
+| T07 | `validate_synthetic_missed_sell_accounting_case` | B11 |
+| T08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 |
+| T09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 |
+| T10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 |
+| T11 | `validate_price_utils_unit_case` | B13 |
+| T12 | `validate_history_filters_unit_case` | B13 |
+| T13 | `validate_portfolio_stats_unit_case` | B13 |
+| T14 | `validate_model_io_schema_case` | B47 |
+| T15 | `tools/local_regression/run_ml_smoke.py` | B12 |
+| T16 | `validate_ranking_scoring_sanity_case` | B49 |
+| T17 | `tools/validate/synthetic_reporting_cases.py` | B21 |
+| T18 | `validate_output_contract_case` | B11 / B17 |
+| T19 | `tools/local_regression/run_chain_checks.py` | B18 |
+| T20 | `tools/local_regression/run_meta_quality.py` | B22 |
+| T21 | `core/runtime_utils.py` | B19 |
+| T22 | `validate_registry_checklist_entry_consistency_case` | B23 |
+| T23 | `validate_known_bad_fault_injection_case` | B24 |
+| T24 | `validate_independent_oracle_golden_case` | B25 |
+| T25 | `tools/validate/meta_contracts.py` | B26 |
+| T26 | `validate_cmd_document_contract_case` | B20 |
+| T27 | `validate_display_reporting_sanity_case` | B21 |
+| T28 | `validate_artifact_lifecycle_contract_case` | B17 |
+| T29 | `tools/local_regression/formal_pipeline.py` | B23 |
+| T30 | `validate_params_io_error_path_case` | B15 |
+| T31 | `validate_module_loader_error_path_case` | B15 |
+| T32 | `validate_preflight_error_path_case` | B15 |
+| T33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 |
+| T34 | `validate_sanitize_ohlcv_failfast_case` | B14 |
+| T35 | `validate_load_clean_df_data_quality_case` | B14 |
+| T36 | `validate_dataset_cli_contract_case` | B16 |
+| T37 | `validate_local_regression_cli_contract_case` | B16 |
+| T38 | `tools/scanner/scan_runner.py` | B12 / B18 |
+| T39 | `validate_issue_excel_report_schema_case` | B21 |
+| T40 | `validate_portfolio_export_report_artifacts_case` | B21 |
+| T41 | `validate_extended_tool_cli_contract_case` | B16 |
+| T42 | `validate_downloader_market_date_fallback_case` | B15 |
+| T43 | `validate_downloader_sync_error_path_case` | B15 |
+| T44 | `validate_downloader_main_error_path_case` | B15 |
+| T45 | `validate_local_regression_summary_contract_case` | B11 |
+| T46 | `validate_test_suite_summary_failure_reporting_case` | B21 |
+| T47 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 |
+| T48 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 |
+| T49 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 |
+| T50 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 |
+| T51 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 |
+| T52 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 / B17 |
+| T53 | `validate_test_suite_summary_checklist_status_sync_case` | B21 |
+| T54 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 |
+| T55 | `validate_single_formal_test_entry_contract_case` | B26 |
+| T56 | `validate_synthetic_setup_index_prev_day_only_case` | B01 |
+| T57 | `validate_downloader_universe_fetch_error_path_case` | B15 |
+| T58 | `validate_downloader_universe_screening_init_error_path_case` | B15 |
+| T59 | `validate_meta_quality_performance_memory_contract_case` | B19 |
+| T60 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 |
+| T61 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 |
+| T62 | `validate_scanner_prepared_tool_contract_case` | B19 |
+| T63 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 |
+| T64 | `validate_scanner_reference_clean_df_contract_case` | B19 |
+| T65 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 |
+| T66 | `tools/validate/synthetic_cases.py` | B23 |
+| T67 | `tools/validate/synthetic_meta_cases.py` | B26 |
+| T68 | `apps/test_suite.py` | B26 |
+| T69 | `validate_no_reverse_app_layer_dependencies_case` | B23 |
+| T70 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 |
+| T71 | `validate_synthetic_same_bar_stop_priority_case` | B02 |
+| T72 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 |
+| T73 | `validate_synthetic_extended_miss_buy_case` | B09 |
+| T74 | `validate_synthetic_competing_candidates_case` | B09 |
+| T75 | `validate_synthetic_same_day_sell_block_case` | B06 |
+| T76 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 |
+| T77 | `validate_synthetic_missed_buy_no_replacement_case` | B07 |
+| T78 | `validate_synthetic_unexecutable_half_tp_case` | B04 |
+| T79 | `validate_synthetic_history_ev_threshold_case` | B10 |
+| T80 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 |
+| T81 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 |
+| T82 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 |
+| T83 | `validate_synthetic_proj_cost_cash_capped_case` | B09 |
+| T84 | `validate_synthetic_param_guardrail_case` | B15 |
+| T85 | `validate_validate_console_summary_reporting_case` | B21 |
+| T86 | `validate_portfolio_yearly_report_schema_case` | B21 |
+| T87 | `validate_test_suite_summary_reporting_case` | B21 |
+| T88 | `validate_scanner_worker_repeatability_case` | B12 |
+| T89 | `validate_scan_runner_repeatability_case` | B12 |
+| T90 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 |
+| T91 | `validate_run_all_repeatability_case` | B18 |
+| T92 | `validate_no_top_level_import_cycles_case` | B27 |
+| T93 | `validate_core_trading_modules_in_coverage_targets_case` | B28 |
+| T94 | `validate_critical_file_coverage_minimum_gate_case` | B29 |
+| T95 | `validate_coverage_threshold_floor_case` | B30 |
+| T96 | `validate_entry_path_critical_coverage_gate_case` | B31 |
+| T97 | `validate_critical_coverage_threshold_floor_case` | B32 |
+| T98 | `validate_dataset_fingerprint_contract_case` | B33 |
+| T99 | `validate_atomic_write_contract_case` | B34 |
+| T100 | `tools/local_regression/common.py` | B36 |
+| T101 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 |
+| T102 | `validate_atomic_write_retry_contract_case` | B34 |
+| T103 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 |
+| T104 | `validate_synthetic_registry_metadata_contract_case` | B37 |
+| T105 | `validate_optimizer_objective_export_contract_case` | B52 |
+| T106 | `validate_formal_step_entry_coverage_targets_case` | B38 |
+| T107 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 |
+| T108 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
+| T109 | `validate_checklist_g_transition_format_case` | B26 |
+| T110 | `validate_checklist_no_legacy_d_section_case` | B26 |
+| T111 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
+| T112 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
+| T113 | `validate_run_all_cli_error_usage_contract_case` | B16 |
+| T114 | `validate_no_legacy_app_entry_doc_references_case` | B41 |
+| T115 | `validate_app_thin_wrapper_export_contract_case` | B42 |
+| T116 | `validate_package_zip_runtime_contract_case` | B43 |
+| T117 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 |
+| T118 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 |
+| T119 | `validate_validate_summary_atomic_write_contract_case` | B34 |
+| T120 | `validate_quick_gate_bare_except_guard_contract_case` | B44 |
+| T121 | `validate_quick_gate_output_path_guard_contract_case` | B45 |
+| T122 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
+| T123 | `validate_console_tail_read_error_traceability_case` | B46 |
+| T124 | `validate_checklist_g_ordering_case` | B26 |
+| T125 | `validate_checklist_no_legacy_f1_section_case` | B26 |
 
 ## G. 逐項收斂紀錄
 
@@ -281,28 +301,28 @@
 
 | 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
 |---|---|---|---|---|
-| 2026-04-01 | D01 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_same_day_buy_sell_forbidden_case |
-| 2026-04-01 | D02 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_intraday_reprice_forbidden_case |
-| 2026-04-01 | D03 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_no_intraday_switch_after_failed_fill_case |
-| 2026-04-01 | D04 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_exit_orders_only_for_held_positions_case |
-| 2026-04-01 | D05 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_fee_tax_net_equity_case |
-| 2026-04-01 | D06 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_round_trip_pnl_only_on_tail_exit_case |
-| 2026-04-01 | D07 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_missed_sell_accounting_case |
-| 2026-04-01 | D08 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_candidate_order_fill_layer_separation_case |
-| 2026-04-01 | D09 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_portfolio_history_filter_only_case |
-| 2026-04-01 | D10 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_lookahead_prev_day_only_case |
-| 2026-04-01 | D11 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_price_utils_unit_case |
-| 2026-04-01 | D12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
-| 2026-04-01 | D13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
-| 2026-04-01 | D15 | 新增 optimizer fixed-seed 雙跑一致性檢查 | TODO -> PARTIAL | `run_ml_smoke.py` 已比較雙跑 trial / best_params digest；scanner 尚未補 |
-| 2026-04-01 | D18 | 新增 CSV / XLSX / JSON output contract case 並驗證 | TODO -> PARTIAL | validate_output_contract_case |
-| 2026-04-01 | D19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | 已補雙跑流程，但 scanner 入口尚未收斂。 |
-| 2026-04-01 | D20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入正式入口摘要。 |
-| 2026-04-01 | D21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
-| 2026-04-01 | D22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |
-| 2026-04-01 | D23 | 新增 meta fault-injection case 並驗證 | TODO -> DONE | validate_known_bad_fault_injection_case |
-| 2026-04-01 | D24 | 新增 independent oracle golden case 並驗證 | TODO -> DONE | validate_independent_oracle_golden_case |
-| 2026-04-01 | D26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
+| 2026-04-01 | T01 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_same_day_buy_sell_forbidden_case |
+| 2026-04-01 | T02 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_intraday_reprice_forbidden_case |
+| 2026-04-01 | T03 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_no_intraday_switch_after_failed_fill_case |
+| 2026-04-01 | T04 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_exit_orders_only_for_held_positions_case |
+| 2026-04-01 | T05 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_fee_tax_net_equity_case |
+| 2026-04-01 | T06 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_round_trip_pnl_only_on_tail_exit_case |
+| 2026-04-01 | T07 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_missed_sell_accounting_case |
+| 2026-04-01 | T08 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_candidate_order_fill_layer_separation_case |
+| 2026-04-01 | T09 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_portfolio_history_filter_only_case |
+| 2026-04-01 | T10 | 新增 synthetic case 並驗證 | TODO -> DONE | validate_synthetic_lookahead_prev_day_only_case |
+| 2026-04-01 | T11 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_price_utils_unit_case |
+| 2026-04-01 | T12 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_history_filters_unit_case |
+| 2026-04-01 | T13 | 新增 unit-like 邊界案例並驗證 | TODO -> DONE | validate_portfolio_stats_unit_case |
+| 2026-04-01 | T15 | 新增 optimizer fixed-seed 雙跑一致性檢查 | TODO -> PARTIAL | `run_ml_smoke.py` 已比較雙跑 trial / best_params digest；scanner 尚未補 |
+| 2026-04-01 | T18 | 新增 CSV / XLSX / JSON output contract case 並驗證 | TODO -> PARTIAL | validate_output_contract_case |
+| 2026-04-01 | T19 | 新增 chain checks 雙跑 digest 對比與 optimizer 雙跑 | TODO -> PARTIAL | 已補雙跑流程，但 scanner 入口尚未收斂。 |
+| 2026-04-01 | T20 | 新增 `run_meta_quality.py` 產出 coverage baseline | TODO -> PARTIAL | 目前已覆蓋 synthetic coverage suite 與 key target coverage，並納入正式入口摘要。 |
+| 2026-04-01 | T21 | 新增 `run_meta_quality.py` performance baseline gating | TODO -> PARTIAL | 已正式檢查 reduced suite 各步驟 / total duration 與 optimizer 平均 trial wall time；記憶體回歸仍未納入 |
+| 2026-04-01 | T22 | 新增 meta registry case 並驗證 | TODO -> DONE | validate_registry_checklist_entry_consistency_case |
+| 2026-04-01 | T23 | 新增 meta fault-injection case 並驗證 | TODO -> DONE | validate_known_bad_fault_injection_case |
+| 2026-04-01 | T24 | 新增 independent oracle golden case 並驗證 | TODO -> DONE | validate_independent_oracle_golden_case |
+| 2026-04-01 | T26 | 新增 CMD 指令契約案例並驗證 | TODO -> DONE | validate_cmd_document_contract_case |
 | 2026-04-02 | B01 | 補 setup index prev-day-only invariant 後主表收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_history_cases.py` |
 | 2026-04-02 | B11 | 跨工具 schema / 欄位語意補齊，主表收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-02 | B12 | 決定性主表收斂為 DONE | PARTIAL -> DONE | `run_ml_smoke.py` |
@@ -316,60 +336,60 @@
 | 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B26 | 檢出完成摘要索引仍有漏同步風險，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身仍有回寫 / 摘要失同步缺口 |
 | 2026-04-02 | B26 | 補齊 checklist main / `F` / `G` sync blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | D14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
-| 2026-04-02 | D15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` |
-| 2026-04-02 | D16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
-| 2026-04-02 | D17 | reporting schema compatibility checks 收斂完成，並新增輸出檔 schema 補強 | TODO -> DONE | `validate_issue_excel_report_schema_case` |
-| 2026-04-02 | D18 | 擴充 local regression summary contract 並收斂完成 | PARTIAL -> DONE | `validate_output_contract_case` |
-| 2026-04-02 | D19 | 補 `run_all.py` 同 run dir rerun summary / bundle repeatability 後收斂完成 | PARTIAL -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` |
-| 2026-04-02 | D20 | 補 manifest 化 line / branch threshold gate 與 summary sync | PARTIAL -> DONE | `run_meta_quality.py` |
-| 2026-04-02 | D21 | 補 traced peak memory regression gate 後 performance baseline 收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | D25 | 擴充 checklist sufficiency formal check 到單一正式入口與 legacy entry 檢查後收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | D27 | 擴充 scanner summary / banner 與 display re-export 後收斂完成 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
-| 2026-04-02 | D28 | 擴充 artifact lifecycle contract 並驗證 | PARTIAL -> DONE | validate_artifact_lifecycle_contract_case |
-| 2026-04-02 | D29 | 新增 formal-entry consistency checks 並驗證 | TODO -> DONE | `run_meta_quality.py` formal-entry consistency checks |
-| 2026-04-02 | D30 | 新增 params_io 錯誤路徑案例並驗證 | TODO -> DONE | `validate_params_io_error_path_case` |
-| 2026-04-02 | D31 | 新增 module_loader 錯誤路徑案例並驗證 | TODO -> DONE | `validate_module_loader_error_path_case` |
-| 2026-04-02 | D32 | 新增 preflight 錯誤路徑案例並驗證 | TODO -> DONE | `validate_preflight_error_path_case` |
-| 2026-04-02 | D33 | 新增資料清洗 expected behavior 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_expected_behavior_case` |
-| 2026-04-02 | D34 | 新增資料清洗 fail-fast 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_failfast_case` |
-| 2026-04-02 | D35 | 新增 `load_clean_df` 資料品質整合案例並驗證 | TODO -> DONE | `validate_load_clean_df_data_quality_case` |
-| 2026-04-02 | D36 | 新增 dataset wrapper CLI 契約案例並驗證 | TODO -> DONE | `validate_dataset_cli_contract_case` |
-| 2026-04-02 | D37 | 新增 local regression / no-arg CLI 契約案例並驗證 | TODO -> DONE | `validate_local_regression_cli_contract_case` |
-| 2026-04-02 | D41 | 新增 scanner reduced snapshot 雙跑 digest 並驗證 | TODO -> DONE | `run_chain_checks.py` 已將 scanner 候選 / 狀態 / issue line 納入 rerun consistency payload |
-| 2026-04-02 | D42 | 新增 issue Excel report schema 案例並驗證 | NEW -> DONE | `validate_issue_excel_report_schema_case` |
-| 2026-04-02 | D43 | 新增 portfolio export report artifacts 案例並驗證 | NEW -> DONE | `validate_portfolio_export_report_artifacts_case` |
-| 2026-04-02 | D45 | 補齊剩餘直接入口 CLI 契約並收斂 B16 | TODO -> DONE | `validate_extended_tool_cli_contract_case` |
-| 2026-04-02 | D46 | 新增 downloader market-date fallback 案例並驗證 | TODO -> DONE | `validate_downloader_market_date_fallback_case` |
-| 2026-04-02 | D47 | 新增 downloader sync 錯誤聚合案例並驗證 | TODO -> DONE | `validate_downloader_sync_error_path_case` |
-| 2026-04-02 | D48 | 新增 downloader main 失敗摘要案例並驗證 | TODO -> DONE | `validate_downloader_main_error_path_case` |
-| 2026-04-02 | D49 | 新增 local regression summary contract case 並驗證 | TODO -> DONE | `validate_local_regression_summary_contract_case` |
-| 2026-04-02 | D50 | 新增腳本失敗摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_failure_reporting_case` |
-| 2026-04-02 | D51 | 新增 manifest blocked 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_manifest_failure_reporting_case` |
-| 2026-04-02 | D52 | 新增 partial selected-steps 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_optional_dataset_skip_case` |
-| 2026-04-02 | D53 | 新增 preflight fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_preflight_failure_reporting_case` |
-| 2026-04-02 | D54 | 新增 dataset prepare fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` |
-| 2026-04-02 | D55 | 新增 summary unreadable 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_unreadable_payload_reporting_case` |
-| 2026-04-02 | D56 | 補 `run_all.py` preflight 早退 dataset not-run contract 並驗證 | TODO -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
-| 2026-04-02 | D57 | 補 checklist status vocabulary sync 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_checklist_status_sync_case` |
-| 2026-04-02 | D58 | 補 meta quality coverage guardrail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
-| 2026-04-02 | D59 | 新增單一正式測試入口契約案例並驗證 | NEW -> DONE | `validate_single_formal_test_entry_contract_case` |
-| 2026-04-02 | D60 | 新增 setup-index prev-day-only synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_setup_index_prev_day_only_case` |
-| 2026-04-02 | D61 | 新增 downloader universe fetch fatal error case 並驗證 | NEW -> DONE | `validate_downloader_universe_fetch_error_path_case` |
-| 2026-04-02 | D62 | 新增 downloader screening init fatal error case 並驗證 | NEW -> DONE | `validate_downloader_universe_screening_init_error_path_case` |
-| 2026-04-02 | D63 | 新增 meta quality performance memory contract case 並驗證 | NEW -> DONE | `validate_meta_quality_performance_memory_contract_case` |
-| 2026-04-02 | D64 | 新增 test suite meta quality memory reporting case 並驗證 | NEW -> DONE | `validate_test_suite_summary_meta_quality_memory_reporting_case` |
-| 2026-04-02 | D65 | 新增 portfolio_sim prepared tool contract case 並驗證 | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
-| 2026-04-02 | D66 | 新增 scanner prepared tool contract case 並驗證 | NEW -> DONE | `validate_scanner_prepared_tool_contract_case` |
-| 2026-04-02 | D67 | 新增 debug trade log prepared tool contract case 並驗證 | NEW -> DONE | `validate_debug_trade_log_prepared_tool_contract_case` |
-| 2026-04-02 | D68 | 新增 scanner reference clean-df contract case 並驗證 | NEW -> DONE | `validate_scanner_reference_clean_df_contract_case` |
-| 2026-04-02 | D69 | 新增 meta quality coverage artifact reuse contract case 並驗證 | NEW -> DONE | `validate_meta_quality_reuses_existing_coverage_artifacts_case` |
-| 2026-04-02 | D70 | 新增 imported validate cases vs synthetic registry formal guard 缺口 | NEW -> TODO | 需補正式註冊完整性檢查。 |
-| 2026-04-02 | D70 | 補 imported / defined validate cases 與 synthetic registry 完整一致 formal guard | TODO -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-02 | D71 | 新增主表 / `F` / `G` 完整同步 formal guard 缺口 | NEW -> TODO | 需補 checklist 自身同步性檢查。 |
-| 2026-04-02 | D71 | 補主表 / `F` / `G` 收斂紀錄完整同步 formal guard | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-02 | D72 | 新增 checklist 完成映射同步缺口 | NEW -> TODO | 需阻擋已完成 D 項遺漏於 `F` 仍被判定為已收斂 |
-| 2026-04-02 | D72 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | T14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
+| 2026-04-02 | T15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` |
+| 2026-04-02 | T16 | 新增 ranking / scoring sanity 案例並驗證 | TODO -> DONE | `validate_ranking_scoring_sanity_case` |
+| 2026-04-02 | T17 | reporting schema compatibility checks 收斂完成，並新增輸出檔 schema 補強 | TODO -> DONE | `validate_issue_excel_report_schema_case` |
+| 2026-04-02 | T18 | 擴充 local regression summary contract 並收斂完成 | PARTIAL -> DONE | `validate_output_contract_case` |
+| 2026-04-02 | T19 | 補 `run_all.py` 同 run dir rerun summary / bundle repeatability 後收斂完成 | PARTIAL -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` |
+| 2026-04-02 | T20 | 補 manifest 化 line / branch threshold gate 與 summary sync | PARTIAL -> DONE | `run_meta_quality.py` |
+| 2026-04-02 | T21 | 補 traced peak memory regression gate 後 performance baseline 收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | T25 | 擴充 checklist sufficiency formal check 到單一正式入口與 legacy entry 檢查後收斂完成 | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | T27 | 擴充 scanner summary / banner 與 display re-export 後收斂完成 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
+| 2026-04-02 | T28 | 擴充 artifact lifecycle contract 並驗證 | PARTIAL -> DONE | validate_artifact_lifecycle_contract_case |
+| 2026-04-02 | T29 | 新增 formal-entry consistency checks 並驗證 | TODO -> DONE | `run_meta_quality.py` formal-entry consistency checks |
+| 2026-04-02 | T30 | 新增 params_io 錯誤路徑案例並驗證 | TODO -> DONE | `validate_params_io_error_path_case` |
+| 2026-04-02 | T31 | 新增 module_loader 錯誤路徑案例並驗證 | TODO -> DONE | `validate_module_loader_error_path_case` |
+| 2026-04-02 | T32 | 新增 preflight 錯誤路徑案例並驗證 | TODO -> DONE | `validate_preflight_error_path_case` |
+| 2026-04-02 | T33 | 新增資料清洗 expected behavior 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_expected_behavior_case` |
+| 2026-04-02 | T34 | 新增資料清洗 fail-fast 案例並驗證 | TODO -> DONE | `validate_sanitize_ohlcv_failfast_case` |
+| 2026-04-02 | T35 | 新增 `load_clean_df` 資料品質整合案例並驗證 | TODO -> DONE | `validate_load_clean_df_data_quality_case` |
+| 2026-04-02 | T36 | 新增 dataset wrapper CLI 契約案例並驗證 | TODO -> DONE | `validate_dataset_cli_contract_case` |
+| 2026-04-02 | T37 | 新增 local regression / no-arg CLI 契約案例並驗證 | TODO -> DONE | `validate_local_regression_cli_contract_case` |
+| 2026-04-02 | T38 | 新增 scanner reduced snapshot 雙跑 digest 並驗證 | TODO -> DONE | `run_chain_checks.py` 已將 scanner 候選 / 狀態 / issue line 納入 rerun consistency payload |
+| 2026-04-02 | T39 | 新增 issue Excel report schema 案例並驗證 | NEW -> DONE | `validate_issue_excel_report_schema_case` |
+| 2026-04-02 | T40 | 新增 portfolio export report artifacts 案例並驗證 | NEW -> DONE | `validate_portfolio_export_report_artifacts_case` |
+| 2026-04-02 | T41 | 補齊剩餘直接入口 CLI 契約並收斂 B16 | TODO -> DONE | `validate_extended_tool_cli_contract_case` |
+| 2026-04-02 | T42 | 新增 downloader market-date fallback 案例並驗證 | TODO -> DONE | `validate_downloader_market_date_fallback_case` |
+| 2026-04-02 | T43 | 新增 downloader sync 錯誤聚合案例並驗證 | TODO -> DONE | `validate_downloader_sync_error_path_case` |
+| 2026-04-02 | T44 | 新增 downloader main 失敗摘要案例並驗證 | TODO -> DONE | `validate_downloader_main_error_path_case` |
+| 2026-04-02 | T45 | 新增 local regression summary contract case 並驗證 | TODO -> DONE | `validate_local_regression_summary_contract_case` |
+| 2026-04-02 | T46 | 新增腳本失敗摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_failure_reporting_case` |
+| 2026-04-02 | T47 | 新增 manifest blocked 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_manifest_failure_reporting_case` |
+| 2026-04-02 | T48 | 新增 partial selected-steps 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_optional_dataset_skip_case` |
+| 2026-04-02 | T49 | 新增 preflight fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_preflight_failure_reporting_case` |
+| 2026-04-02 | T50 | 新增 dataset prepare fail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` |
+| 2026-04-02 | T51 | 新增 summary unreadable 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_unreadable_payload_reporting_case` |
+| 2026-04-02 | T52 | 補 `run_all.py` preflight 早退 dataset not-run contract 並驗證 | TODO -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
+| 2026-04-02 | T53 | 補 checklist status vocabulary sync 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_checklist_status_sync_case` |
+| 2026-04-02 | T54 | 補 meta quality coverage guardrail 摘要案例並驗證 | TODO -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
+| 2026-04-02 | T55 | 新增單一正式測試入口契約案例並驗證 | NEW -> DONE | `validate_single_formal_test_entry_contract_case` |
+| 2026-04-02 | T56 | 新增 setup-index prev-day-only synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_setup_index_prev_day_only_case` |
+| 2026-04-02 | T57 | 新增 downloader universe fetch fatal error case 並驗證 | NEW -> DONE | `validate_downloader_universe_fetch_error_path_case` |
+| 2026-04-02 | T58 | 新增 downloader screening init fatal error case 並驗證 | NEW -> DONE | `validate_downloader_universe_screening_init_error_path_case` |
+| 2026-04-02 | T59 | 新增 meta quality performance memory contract case 並驗證 | NEW -> DONE | `validate_meta_quality_performance_memory_contract_case` |
+| 2026-04-02 | T60 | 新增 test suite meta quality memory reporting case 並驗證 | NEW -> DONE | `validate_test_suite_summary_meta_quality_memory_reporting_case` |
+| 2026-04-02 | T61 | 新增 portfolio_sim prepared tool contract case 並驗證 | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
+| 2026-04-02 | T62 | 新增 scanner prepared tool contract case 並驗證 | NEW -> DONE | `validate_scanner_prepared_tool_contract_case` |
+| 2026-04-02 | T63 | 新增 debug trade log prepared tool contract case 並驗證 | NEW -> DONE | `validate_debug_trade_log_prepared_tool_contract_case` |
+| 2026-04-02 | T64 | 新增 scanner reference clean-df contract case 並驗證 | NEW -> DONE | `validate_scanner_reference_clean_df_contract_case` |
+| 2026-04-02 | T65 | 新增 meta quality coverage artifact reuse contract case 並驗證 | NEW -> DONE | `validate_meta_quality_reuses_existing_coverage_artifacts_case` |
+| 2026-04-02 | T66 | 新增 imported validate cases vs synthetic registry formal guard 缺口 | NEW -> TODO | 需補正式註冊完整性檢查。 |
+| 2026-04-02 | T66 | 補 imported / defined validate cases 與 synthetic registry 完整一致 formal guard | TODO -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-02 | T67 | 新增主表 / `F` / `G` 完整同步 formal guard 缺口 | NEW -> TODO | 需補 checklist 自身同步性檢查。 |
+| 2026-04-02 | T67 | 補主表 / `F` / `G` 收斂紀錄完整同步 formal guard | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-02 | T68 | 新增 checklist 完成映射同步缺口 | NEW -> TODO | 需阻擋已完成 D 項遺漏於 `F` 仍被判定為已收斂 |
+| 2026-04-02 | T68 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-03 | B27 | 補 top-level import cycle formal guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-03 | B28 | 補入核心交易模組 coverage target completeness 主表項目 | NEW -> PARTIAL | `run_meta_quality.py` 已有 key target hit guard，但尚未明確要求核心交易模組入列 |
 | 2026-04-03 | B28 | 核心交易模組已納入 `COVERAGE_TARGETS`，主表收斂為 DONE | PARTIAL -> DONE | `run_meta_quality.py` |
@@ -387,71 +407,75 @@
 | 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |
 | 2026-04-03 | B39 | 將 split formal-step implementation modules 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/meta_quality_targets.py` |
 | 2026-04-03 | B40 | 補上 `PeakTracedMemoryTracker` context-manager lifecycle contract，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-03 | C06 | 補 optimizer objective / export contract 最低維護線 | NEW -> DONE | `tools/validate/synthetic_strategy_cases.py` |
-| 2026-04-03 | D73 | 新增 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-03 | D74 | 新增 manifest failure master summary schema contract 並驗證 | NEW -> DONE | `validate_run_all_manifest_failure_master_summary_contract_case` |
-| 2026-04-03 | D75 | 將既有同棒停損優先 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_bar_stop_priority_case` |
-| 2026-04-03 | D76 | 將既有半倉停利 full-year synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_half_tp_full_year_case` |
-| 2026-04-03 | D77 | 將既有 extended miss buy synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_extended_miss_buy_case` |
-| 2026-04-03 | D78 | 將既有 competing candidates synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_competing_candidates_case` |
-| 2026-04-03 | D79 | 將既有 same-day sell block synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_day_sell_block_case` |
-| 2026-04-03 | D80 | 將既有 rotation T+1 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_rotation_t_plus_one_case` |
-| 2026-04-03 | D81 | 將既有 missed buy no replacement synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_missed_buy_no_replacement_case` |
-| 2026-04-03 | D82 | 將既有 unexecutable half TP synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_unexecutable_half_tp_case` |
-| 2026-04-03 | D83 | 將既有 history EV threshold synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_history_ev_threshold_case` |
-| 2026-04-03 | D84 | 將既有 single-backtest own-history guard synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_single_backtest_not_gated_by_own_history_case` |
-| 2026-04-03 | D85 | 將既有 PIT same-day exit excluded synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_same_day_exit_excluded_case` |
-| 2026-04-03 | D86 | 將既有 PIT multiple same-day exits synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_multiple_same_day_exits_case` |
-| 2026-04-03 | D87 | 將既有 projected-cost cash-capped synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_proj_cost_cash_capped_case` |
-| 2026-04-03 | D88 | 將既有 param guardrail synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_param_guardrail_case` |
-| 2026-04-03 | D89 | 將既有 validate console summary reporting contract 回寫 checklist | NEW -> DONE | `validate_validate_console_summary_reporting_case` |
-| 2026-04-03 | D90 | 將既有 portfolio yearly report schema contract 回寫 checklist | NEW -> DONE | `validate_portfolio_yearly_report_schema_case` |
-| 2026-04-03 | D91 | 將既有 test suite PASS summary reporting contract 回寫 checklist | NEW -> DONE | `validate_test_suite_summary_reporting_case` |
-| 2026-04-03 | D92 | 將既有 scanner worker repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scanner_worker_repeatability_case` |
-| 2026-04-03 | D93 | 將既有 scan runner repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scan_runner_repeatability_case` |
-| 2026-04-03 | D94 | 將既有 optimizer raw cache rerun consistency case 回寫 checklist | NEW -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` |
-| 2026-04-03 | D95 | 將既有 run_all repeatability case 回寫 checklist | NEW -> DONE | `validate_run_all_repeatability_case` |
-| 2026-04-03 | D96 | 新增 top-level import cycle guard 並驗證 | NEW -> DONE | `validate_no_top_level_import_cycles_case` |
-| 2026-04-03 | D97 | 新增核心交易模組 coverage target completeness 建議測試項目 | NEW -> TODO | `validate_core_trading_modules_in_coverage_targets_case` |
-| 2026-04-03 | D97 | 補上核心交易模組 coverage target completeness guard 並驗證 | TODO -> DONE | `validate_core_trading_modules_in_coverage_targets_case` |
-| 2026-04-03 | D98 | 新增 critical file per-file coverage minimum guard 建議測試項目 | NEW -> TODO | `validate_critical_file_coverage_minimum_gate_case` |
-| 2026-04-03 | D98 | 補上 critical file per-file coverage minimum guard 並驗證 | TODO -> DONE | `validate_critical_file_coverage_minimum_gate_case` |
-| 2026-04-03 | D99 | 新增 coverage threshold floor 建議測試項目 | NEW -> TODO | `validate_coverage_threshold_floor_case` |
-| 2026-04-03 | D99 | 補上 coverage threshold floor guard 並驗證 | TODO -> DONE | `validate_coverage_threshold_floor_case` |
-| 2026-04-03 | D100 | 新增 entry path critical coverage gate 建議測試並驗證 | NEW -> DONE | `validate_entry_path_critical_coverage_gate_case` |
-| 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
-| 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
-| 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |
-| 2026-04-03 | D104 | 擴充 artifact manifest sha256 生成邏輯並由 contract 驗證對照 | NEW -> DONE | `tools/local_regression/common.py` |
-| 2026-04-03 | D105 | 新增 test suite orchestrator coverage target completeness guard 並驗證 | NEW -> DONE | `validate_test_suite_orchestrator_coverage_targets_case` |
-| 2026-04-03 | D106 | 新增 atomic write transient retry contract 並驗證 | NEW -> DONE | `validate_atomic_write_retry_contract_case` |
-| 2026-04-03 | D107 | 新增 run_all dataset prepare PASS 主路徑 contract 並驗證 | NEW -> DONE | `validate_run_all_dataset_prepare_pass_main_contract_case` |
-| 2026-04-03 | D108 | 新增 synthetic registry metadata contract case 並驗證 | NEW -> DONE | `validate_synthetic_registry_metadata_contract_case` |
-| 2026-04-03 | D109 | 新增 optimizer objective / export contract case 並驗證 | NEW -> DONE | `validate_optimizer_objective_export_contract_case` |
-| 2026-04-03 | D110 | 新增 formal step entry wrappers coverage target completeness 建議測試並驗證 | NEW -> DONE | `validate_formal_step_entry_coverage_targets_case` |
-| 2026-04-03 | D111 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
-| 2026-04-03 | D112 | 新增 `F` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
-| 2026-04-03 | D113 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
-| 2026-04-03 | D114 | 新增 checklist legacy `D` 區移除 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_d_section_case` |
-| 2026-04-03 | D115 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
-| 2026-04-03 | D116 | 新增 memory tracker lifecycle contract 並驗證 | NEW -> DONE | `validate_peak_traced_memory_tracker_context_management_case` |
+| 2026-04-03 | B52 | 補 optimizer objective / export contract 最低維護線 | NEW -> DONE | `tools/validate/synthetic_strategy_cases.py` |
+| 2026-04-03 | T69 | 新增 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-03 | T70 | 新增 manifest failure master summary schema contract 並驗證 | NEW -> DONE | `validate_run_all_manifest_failure_master_summary_contract_case` |
+| 2026-04-03 | T71 | 將既有同棒停損優先 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_bar_stop_priority_case` |
+| 2026-04-03 | T72 | 將既有半倉停利 full-year synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_half_tp_full_year_case` |
+| 2026-04-03 | T73 | 將既有 extended miss buy synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_extended_miss_buy_case` |
+| 2026-04-03 | T74 | 將既有 competing candidates synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_competing_candidates_case` |
+| 2026-04-03 | T75 | 將既有 same-day sell block synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_same_day_sell_block_case` |
+| 2026-04-03 | T76 | 將既有 rotation T+1 synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_rotation_t_plus_one_case` |
+| 2026-04-03 | T77 | 將既有 missed buy no replacement synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_missed_buy_no_replacement_case` |
+| 2026-04-03 | T78 | 將既有 unexecutable half TP synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_unexecutable_half_tp_case` |
+| 2026-04-03 | T79 | 將既有 history EV threshold synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_history_ev_threshold_case` |
+| 2026-04-03 | T80 | 將既有 single-backtest own-history guard synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_single_backtest_not_gated_by_own_history_case` |
+| 2026-04-03 | T81 | 將既有 PIT same-day exit excluded synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_same_day_exit_excluded_case` |
+| 2026-04-03 | T82 | 將既有 PIT multiple same-day exits synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_pit_multiple_same_day_exits_case` |
+| 2026-04-03 | T83 | 將既有 projected-cost cash-capped synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_proj_cost_cash_capped_case` |
+| 2026-04-03 | T84 | 將既有 param guardrail synthetic case 回寫 checklist | NEW -> DONE | `validate_synthetic_param_guardrail_case` |
+| 2026-04-03 | T85 | 將既有 validate console summary reporting contract 回寫 checklist | NEW -> DONE | `validate_validate_console_summary_reporting_case` |
+| 2026-04-03 | T86 | 將既有 portfolio yearly report schema contract 回寫 checklist | NEW -> DONE | `validate_portfolio_yearly_report_schema_case` |
+| 2026-04-03 | T87 | 將既有 test suite PASS summary reporting contract 回寫 checklist | NEW -> DONE | `validate_test_suite_summary_reporting_case` |
+| 2026-04-03 | T88 | 將既有 scanner worker repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scanner_worker_repeatability_case` |
+| 2026-04-03 | T89 | 將既有 scan runner repeatability synthetic case 回寫 checklist | NEW -> DONE | `validate_scan_runner_repeatability_case` |
+| 2026-04-03 | T90 | 將既有 optimizer raw cache rerun consistency case 回寫 checklist | NEW -> DONE | `validate_optimizer_raw_cache_rerun_consistency_case` |
+| 2026-04-03 | T91 | 將既有 run_all repeatability case 回寫 checklist | NEW -> DONE | `validate_run_all_repeatability_case` |
+| 2026-04-03 | T92 | 新增 top-level import cycle guard 並驗證 | NEW -> DONE | `validate_no_top_level_import_cycles_case` |
+| 2026-04-03 | T93 | 新增核心交易模組 coverage target completeness 建議測試項目 | NEW -> TODO | `validate_core_trading_modules_in_coverage_targets_case` |
+| 2026-04-03 | T93 | 補上核心交易模組 coverage target completeness guard 並驗證 | TODO -> DONE | `validate_core_trading_modules_in_coverage_targets_case` |
+| 2026-04-03 | T94 | 新增 critical file per-file coverage minimum guard 建議測試項目 | NEW -> TODO | `validate_critical_file_coverage_minimum_gate_case` |
+| 2026-04-03 | T94 | 補上 critical file per-file coverage minimum guard 並驗證 | TODO -> DONE | `validate_critical_file_coverage_minimum_gate_case` |
+| 2026-04-03 | T95 | 新增 coverage threshold floor 建議測試項目 | NEW -> TODO | `validate_coverage_threshold_floor_case` |
+| 2026-04-03 | T95 | 補上 coverage threshold floor guard 並驗證 | TODO -> DONE | `validate_coverage_threshold_floor_case` |
+| 2026-04-03 | T96 | 新增 entry path critical coverage gate 建議測試並驗證 | NEW -> DONE | `validate_entry_path_critical_coverage_gate_case` |
+| 2026-04-03 | T97 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
+| 2026-04-03 | T98 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
+| 2026-04-03 | T99 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |
+| 2026-04-03 | T100 | 擴充 artifact manifest sha256 生成邏輯並由 contract 驗證對照 | NEW -> DONE | `tools/local_regression/common.py` |
+| 2026-04-03 | T101 | 新增 test suite orchestrator coverage target completeness guard 並驗證 | NEW -> DONE | `validate_test_suite_orchestrator_coverage_targets_case` |
+| 2026-04-03 | T102 | 新增 atomic write transient retry contract 並驗證 | NEW -> DONE | `validate_atomic_write_retry_contract_case` |
+| 2026-04-03 | T103 | 新增 run_all dataset prepare PASS 主路徑 contract 並驗證 | NEW -> DONE | `validate_run_all_dataset_prepare_pass_main_contract_case` |
+| 2026-04-03 | T104 | 新增 synthetic registry metadata contract case 並驗證 | NEW -> DONE | `validate_synthetic_registry_metadata_contract_case` |
+| 2026-04-03 | T105 | 新增 optimizer objective / export contract case 並驗證 | NEW -> DONE | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-03 | T106 | 新增 formal step entry wrappers coverage target completeness 建議測試並驗證 | NEW -> DONE | `validate_formal_step_entry_coverage_targets_case` |
+| 2026-04-03 | T107 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
+| 2026-04-03 | T108 | 新增 `F` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
+| 2026-04-03 | T109 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
+| 2026-04-03 | T110 | 新增 checklist legacy `D` 區移除 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_d_section_case` |
+| 2026-04-03 | T111 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
+| 2026-04-03 | T112 | 新增 memory tracker lifecycle contract 並驗證 | NEW -> DONE | `validate_peak_traced_memory_tracker_context_management_case` |
 | 2026-04-04 | B41 | 移除 legacy app 測試入口文件殘留與手動刪檔指引後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-04 | B42 | 補上 app thin wrapper public export contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-04 | B43 | 補上 package_zip 正式入口 runtime contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-04 | B44 | 補上 quick_gate bare-except static guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B45 | 補上 quick_gate output path / outputs root / log path guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B46 | 補上 formal pipeline fallback / console tail traceability contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-04 | D117 | 新增 run_all CLI error usage contract 並驗證 | NEW -> DONE | `validate_run_all_cli_error_usage_contract_case` |
-| 2026-04-04 | D118 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
-| 2026-04-04 | D119 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
-| 2026-04-04 | D120 | 新增 package_zip runtime contract 並驗證 | NEW -> DONE | `validate_package_zip_runtime_contract_case` |
-| 2026-04-04 | D121 | 新增 non-candidate setup 不得 seed / revive extended candidate synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` |
-| 2026-04-04 | D122 | 新增 atomic write cleanup failure contract 並驗證 | NEW -> DONE | `validate_atomic_write_cleanup_error_preserves_root_exception_case` |
-| 2026-04-04 | D123 | 新增 validate summary 正式路徑 atomic write contract 並驗證 | NEW -> DONE | `validate_validate_summary_atomic_write_contract_case` |
-| 2026-04-04 | D124 | 新增 quick_gate bare-except guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_bare_except_guard_contract_case` |
-| 2026-04-04 | D125 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
-| 2026-04-04 | D126 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
-| 2026-04-04 | D127 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
-| 2026-04-04 | D128 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
+| 2026-04-04 | T113 | 新增 run_all CLI error usage contract 並驗證 | NEW -> DONE | `validate_run_all_cli_error_usage_contract_case` |
+| 2026-04-04 | T114 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
+| 2026-04-04 | T115 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
+| 2026-04-04 | T116 | 新增 package_zip runtime contract 並驗證 | NEW -> DONE | `validate_package_zip_runtime_contract_case` |
+| 2026-04-04 | T117 | 新增 non-candidate setup 不得 seed / revive extended candidate synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` |
+| 2026-04-04 | T118 | 新增 atomic write cleanup failure contract 並驗證 | NEW -> DONE | `validate_atomic_write_cleanup_error_preserves_root_exception_case` |
+| 2026-04-04 | T119 | 新增 validate summary 正式路徑 atomic write contract 並驗證 | NEW -> DONE | `validate_validate_summary_atomic_write_contract_case` |
+| 2026-04-04 | T120 | 新增 quick_gate bare-except guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_bare_except_guard_contract_case` |
+| 2026-04-04 | T121 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
+| 2026-04-04 | T122 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
+| 2026-04-04 | T123 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
+| 2026-04-04 | T124 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
 
-| 2026-04-04 | D129 | 新增 legacy F1 回流 guard 並驗證 | NEW -> DONE | validate_checklist_no_legacy_f1_section_case |
+| 2026-04-04 | T125 | 新增 legacy F1 回流 guard 並驗證 | NEW -> DONE | validate_checklist_no_legacy_f1_section_case |
+
+| 2026-04-04 | T126 | 新增 strategy-layer repeatability formal gap 追蹤 | NEW -> TODO | `validate_strategy_repeatability_case` |
+| 2026-04-04 | T127 | 新增 strategy-upgrade 最低可用性 formal gap 追蹤 | NEW -> TODO | `validate_strategy_minimum_viability_case` |
+| 2026-04-04 | T128 | 新增 strategy reporting / artifact schema compatibility formal gap 追蹤 | NEW -> TODO | `validate_strategy_reporting_schema_compatibility_case` |

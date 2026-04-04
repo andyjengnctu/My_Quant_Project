@@ -70,15 +70,18 @@ def _load_checklist_tables() -> Dict[str, List[List[str]]]:
     return {
         "B1": extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"),
         "B2": extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
-        "E": extract_markdown_table_rows(text, "E. 未完成缺口摘要"),
-        "F": extract_markdown_table_rows(text, "F. 已完成建議測試映射"),
+        "B3": extract_markdown_table_rows(text, "B3. 可隨策略升級調整的測試"),
+        "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
+        "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
+        "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
+        "F": extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要"),
         "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
 
 def _load_main_statuses(tables: Dict[str, List[List[str]]]) -> Dict[str, str]:
     statuses: Dict[str, str] = {}
-    for key, status_idx in (("B1", 3), ("B2", 4)):
+    for key, status_idx in (("B1", 3), ("B2", 4), ("B3", 4)):
         for cols in tables[key]:
             if len(cols) <= status_idx:
                 continue
@@ -91,21 +94,6 @@ def _ids_from_table(rows: List[List[str]], idx: int = 1) -> List[str]:
     for cols in rows:
         if len(cols) > idx:
             values.append(cols[idx])
-    return values
-
-
-def _ids_from_unfinished_summary(rows: List[List[str]], *, status: str | None = None, prefix: str | None = None) -> List[str]:
-    values: List[str] = []
-    for cols in rows:
-        if len(cols) < 2:
-            continue
-        item_id = cols[0].strip()
-        row_status = cols[1].strip()
-        if status is not None and row_status != status:
-            continue
-        if prefix is not None and not item_id.startswith(prefix):
-            continue
-        values.append(item_id)
     return values
 
 
@@ -200,16 +188,15 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     todo_ids = sorted(key for key, value in main_statuses.items() if value == "TODO")
     done_ids = sorted(key for key, value in main_statuses.items() if value == "DONE")
 
-    e_rows = tables["E"]
-    e1_ids = sorted(row[0].strip() for row in e_rows if len(row) > 1 and row[1].strip() == "PARTIAL" and not row[0].strip().startswith("D"))
-    e2_ids = sorted(row[0].strip() for row in e_rows if len(row) > 1 and row[1].strip() == "TODO" and not row[0].strip().startswith("D"))
-    e3_ids = sorted(_ids_from_unfinished_summary(e_rows, prefix="D"))
+    e1_ids = sorted(_ids_from_table(tables["E1"]))
+    e2_ids = sorted(_ids_from_table(tables["E2"]))
+    e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     f_rows = tables["F"]
     f_ids_raw = _ids_from_table(f_rows, idx=0)
     f_ids = _sorted_unique(f_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
-    g_done_d_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status == "DONE"])
-    g_unfinished_d_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("D") and status in {"PARTIAL", "TODO", "N/A"})
+    g_done_test_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status == "DONE"])
+    g_unfinished_test_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status in {"PARTIAL", "TODO", "N/A"})
     g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
 
     results.append(
@@ -258,7 +245,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     f_duplicate_ids = sorted({item_id for item_id in f_ids_raw if f_ids_raw.count(item_id) > 1})
     results.append(
         summarize_result(
-            "checklist_f_done_d_ids_unique",
+            "checklist_f_done_test_ids_unique",
             not f_duplicate_ids,
             detail=f"duplicates={f_duplicate_ids}",
             extra={"duplicate_ids": f_duplicate_ids},
@@ -389,57 +376,39 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     )
 
 
-    legacy_e_headings = {
-        heading: (heading in CHECKLIST_PATH.read_text(encoding="utf-8"))
-        for heading in (
-            "### E1. 目前所有 `PARTIAL` 的主表項目摘要",
-            "### E2. 目前所有 `TODO` 的主表項目摘要",
-            "### E3. 目前所有未完成的建議測試項目摘要",
-        )
-    }
     results.append(
         summarize_result(
-            "checklist_has_no_legacy_e_subsections",
-            not any(legacy_e_headings.values()),
-            detail=f"legacy_e_subsections={legacy_e_headings}",
-            extra={"legacy_e_subsections": legacy_e_headings},
+            "checklist_done_test_summary_matches_convergence_done_records",
+            f_ids == g_done_test_ids,
+            detail=f"f_unique={f_ids} | f_raw={sorted(f_ids_raw)} | g_done={g_done_test_ids}",
+            extra={"f_ids": f_ids, "f_ids_raw": sorted(f_ids_raw), "g_done_test_ids": g_done_test_ids},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_unfinished_test_summary_matches_convergence_unfinished_records",
+            e3_ids == g_unfinished_test_ids,
+            detail=f"e3={e3_ids} | g_unfinished={g_unfinished_test_ids}",
+            extra={"e3_ids": e3_ids, "g_unfinished_test_ids": g_unfinished_test_ids},
         )
     )
 
-
+    done_test_missing_from_f = sorted(set(g_done_test_ids) - set(f_ids))
+    done_test_missing_from_g = sorted(set(f_ids) - set(g_done_test_ids))
     results.append(
         summarize_result(
-            "checklist_done_d_summary_matches_convergence_done_records",
-            f_ids == g_done_d_ids,
-            detail=f"f_unique={f_ids} | f_raw={sorted(f_ids_raw)} | g_done={g_done_d_ids}",
-            extra={"f_ids": f_ids, "f_ids_raw": sorted(f_ids_raw), "g_done_d_ids": g_done_d_ids},
+            "checklist_done_test_summary_has_no_missing_done_records",
+            not done_test_missing_from_f,
+            detail=f"missing_from_f={done_test_missing_from_f}",
+            extra={"missing_from_f": done_test_missing_from_f},
         )
     )
     results.append(
         summarize_result(
-            "checklist_unfinished_d_summary_matches_convergence_unfinished_records",
-            e3_ids == g_unfinished_d_ids,
-            detail=f"e3={e3_ids} | g_unfinished={g_unfinished_d_ids}",
-            extra={"e3_ids": e3_ids, "g_unfinished_d_ids": g_unfinished_d_ids},
-        )
-    )
-
-    done_d_missing_from_f = sorted(set(g_done_d_ids) - set(f_ids))
-    done_d_missing_from_g = sorted(set(f_ids) - set(g_done_d_ids))
-    results.append(
-        summarize_result(
-            "checklist_done_d_summary_has_no_missing_done_records",
-            not done_d_missing_from_f,
-            detail=f"missing_from_f={done_d_missing_from_f}",
-            extra={"missing_from_f": done_d_missing_from_f},
-        )
-    )
-    results.append(
-        summarize_result(
-            "checklist_done_d_summary_all_have_convergence_records",
-            not done_d_missing_from_g,
-            detail=f"missing_from_g={done_d_missing_from_g}",
-            extra={"missing_from_g": done_d_missing_from_g},
+            "checklist_done_test_summary_all_have_convergence_records",
+            not done_test_missing_from_g,
+            detail=f"missing_from_g={done_test_missing_from_g}",
+            extra={"missing_from_g": done_test_missing_from_g},
         )
     )
 
@@ -457,13 +426,13 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    unfinished_d_ids = sorted(_ids_from_unfinished_summary(tables["E"], prefix="D"))
+    unfinished_test_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] != "DONE")
     results.append(
         summarize_result(
-            "checklist_unfinished_summary_nonempty_when_main_has_gaps",
-            (len(partial_ids) + len(todo_ids) == 0) or bool(e_rows),
-            detail=f"unfinished_rows={len(e_rows)} | unfinished_d={unfinished_d_ids}",
-            extra={"unfinished_row_count": len(e_rows), "unfinished_d_ids": unfinished_d_ids},
+            "checklist_unfinished_test_summary_nonempty_when_main_has_gaps",
+            (len(partial_ids) + len(todo_ids) == 0) or bool(unfinished_test_ids),
+            detail=f"unfinished_test={unfinished_test_ids}",
+            extra={"unfinished_test_ids": unfinished_test_ids},
         )
     )
 
@@ -474,10 +443,10 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         "partial_ids": partial_ids,
         "todo_ids": todo_ids,
         "done_ids": done_ids,
-        "unfinished_d_ids": unfinished_d_ids,
-        "done_d_ids": f_ids,
-        "g_done_d_ids": g_done_d_ids,
-        "g_unfinished_d_ids": g_unfinished_d_ids,
+        "unfinished_test_ids": unfinished_test_ids,
+        "done_test_ids": f_ids,
+        "g_done_test_ids": g_done_test_ids,
+        "g_unfinished_test_ids": g_unfinished_test_ids,
     }
 
 
@@ -911,7 +880,7 @@ def main(argv=None) -> int:
                 "partial_ids": checklist_summary["partial_ids"],
                 "todo_ids": checklist_summary["todo_ids"],
                 "done_ids": checklist_summary["done_ids"],
-                "unfinished_d_ids": checklist_summary["unfinished_d_ids"],
+                "unfinished_test_ids": checklist_summary["unfinished_test_ids"],
             },
             "formal_entry": {
                 "ok": formal_entry_summary["ok"],

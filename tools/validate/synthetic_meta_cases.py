@@ -48,6 +48,7 @@ def _load_main_table_statuses():
     headings = [
         ("B1. 專案設定對應清單（不含暫時特例）", 3),
         ("B2. 未明列於專案設定，但正式 test suite 應納入", 4),
+        ("B3. 可隨策略升級調整的測試", 4),
     ]
     for heading, status_idx in headings:
         rows = extract_markdown_table_rows(text, heading)
@@ -76,12 +77,20 @@ def _load_main_table_catalog():
                 "entry": cols[6],
                 "status": cols[4],
             }
+    for cols in extract_markdown_table_rows(text, "B3. 可隨策略升級調整的測試"):
+        if len(cols) > 6:
+            catalog[cols[0]] = {
+                "kind": cols[2],
+                "item": cols[3],
+                "entry": cols[6],
+                "status": cols[4],
+            }
     return catalog
 
 
-def _load_done_d_rows():
+def _load_done_test_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "F. 已完成建議測試映射")
+    rows = extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要")
     parsed = []
     for cols in rows:
         if len(cols) < 3:
@@ -448,8 +457,8 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     try:
         mutated_text = _replace_markdown_table_row(
             original_text,
-            heading="F. 已完成建議測試映射",
-            row_id="D111",
+            heading="F. 目前所有 `DONE` 的建議測試項目摘要",
+            row_id="T107",
             id_col_idx=0,
             update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2]],
         )
@@ -470,7 +479,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
         invalid_rows = f2_result.get("extra", {}).get("invalid_entries", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_f2_single_entry_guard_fails", "FAIL", f2_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "D111" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "T107" for row in invalid_rows))
 
     summary["guard_status"] = f2_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
@@ -489,7 +498,7 @@ def validate_checklist_no_legacy_f1_section_case(_base_params):
         add_check(results, "meta_checklist", case_id, "baseline_has_no_legacy_f1_section", True, False)
         return results, summary
 
-    insertion_target = "## F. 已完成建議測試映射"
+    insertion_target = "### F. 目前所有 `DONE` 的建議測試項目摘要"
     if insertion_target not in original_text:
         add_check(results, "meta_checklist", case_id, "target_f_section_exists_for_mutation", True, False)
         return results, summary
@@ -618,7 +627,7 @@ def validate_checklist_g_ordering_case(_base_params):
         mutated_text = _replace_markdown_table_row(
             original_text,
             heading="G. 逐項收斂紀錄",
-            row_id="D01",
+            row_id="T01",
             id_col_idx=1,
             update_cols=lambda cols: ["2026-04-05"] + cols[1:],
         )
@@ -657,7 +666,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
     convergence_statuses = _load_convergence_latest_statuses()
-    done_d_rows = _load_done_d_rows()
+    done_test_rows = _load_done_test_rows()
     done_b_rows = _load_done_b_rows()
     main_statuses = _load_main_table_statuses()
 
@@ -674,26 +683,26 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     add_check(results, "meta_registry", case_id, "defined_validate_cases_all_registered", [], missing_defined_names)
     add_check(results, "meta_registry", case_id, "registry_has_no_orphan_validate_case_names", [], orphan_registry_names)
 
-    done_d_names = [row["name"] for row in done_d_rows]
-    done_d_name_set = set(done_d_names)
-    add_check(results, "meta_registry", case_id, "done_d_names_unique", len(done_d_names), len(done_d_name_set))
+    done_test_names = [row["name"] for row in done_test_rows]
+    done_test_name_set = set(done_test_names)
+    add_check(results, "meta_registry", case_id, "done_test_names_unique", len(done_test_names), len(done_test_name_set))
 
-    done_d_validate_name_set = {
+    done_test_validate_name_set = {
         row["name"].split()[0]
-        for row in done_d_rows
+        for row in done_test_rows
         if row["name"].split() and row["name"].split()[0].startswith("validate_")
     }
-    missing_done_d_validator_names = sorted(validator_name_set - done_d_validate_name_set)
+    missing_done_test_validator_names = sorted(validator_name_set - done_test_validate_name_set)
     add_check(
         results,
         "meta_registry",
         case_id,
-        "all_registered_validate_cases_listed_in_done_f2_summary",
+        "all_registered_validate_cases_listed_in_done_f_summary",
         [],
-        missing_done_d_validator_names,
+        missing_done_test_validator_names,
     )
 
-    for row in done_d_rows:
+    for row in done_test_rows:
         test_name = row["name"]
         first_token = test_name.split()[0] if test_name.split() else test_name
         if first_token.startswith("validate_"):
@@ -737,7 +746,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
         )
 
     done_b_ids = [row["b_id"] for row in done_b_rows]
-    mapped_b_ids = {row["b_id"] for row in done_d_rows}
+    mapped_b_ids = {row["b_id"] for row in done_test_rows}
     for row in done_b_rows:
         add_check(
             results,
@@ -761,7 +770,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
             results,
             "meta_registry",
             case_id,
-            f"{row['b_id']}_done_summary_has_done_d_mapping",
+            f"{row['b_id']}_done_summary_has_done_test_mapping",
             True,
             row["b_id"] in mapped_b_ids,
         )
@@ -777,12 +786,12 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
                 (PROJECT_ROOT / entry_path).exists(),
             )
 
-    summary["done_d_count"] = len(done_d_rows)
+    summary["done_test_count"] = len(done_test_rows)
     summary["done_b_count"] = len(done_b_ids)
     summary["validator_count"] = len(validator_entries)
     summary["missing_imported_names"] = missing_imported_names
     summary["missing_defined_names"] = missing_defined_names
-    summary["missing_done_d_validator_names"] = missing_done_d_validator_names
+    summary["missing_done_test_validator_names"] = missing_done_test_validator_names
     return results, summary
 
 

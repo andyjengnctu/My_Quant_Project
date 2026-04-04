@@ -515,7 +515,7 @@ def validate_local_regression_summary_contract_case(_base_params):
                 "missing_targets": [],
                 "zero_covered_targets": [],
             },
-            "checklist": {"ok": True, "status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_d_ids": []},
+            "checklist": {"ok": True, "status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_test_ids": []},
             "formal_entry": {"ok": True, "project_settings_steps": [], "run_all_steps": [], "preflight_steps": []},
             "performance": {"ok": True, "skipped": False, "step_durations": {}},
             "results": [],
