@@ -14,6 +14,7 @@ from config.runtime_defaults import (  # noqa: F401
     RUNTIME_PARAM_SPECS,
     RUNTIME_PARAM_TYPES,
     SCORE_CALC_METHOD,
+    SCORE_NUMERATOR_METHOD,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
 )
 from core.capital_policy import (  # noqa: F401

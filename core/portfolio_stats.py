@@ -3,12 +3,22 @@ import numpy as np
 
 
 def calc_portfolio_score(sys_ret, sys_mdd, m_win_rate, r_sq, annual_return_pct=None):
-    from core.config import SCORE_CALC_METHOD
-    base_return = sys_ret if annual_return_pct is None else annual_return_pct
-    annualized_romd = base_return / (abs(sys_mdd) + 0.0001)
+    from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD
+
+    annual_return = sys_ret if annual_return_pct is None else annual_return_pct
+    if SCORE_NUMERATOR_METHOD == 'ANNUAL_RETURN':
+        numerator = annual_return
+    elif SCORE_NUMERATOR_METHOD == 'TOTAL_RETURN':
+        numerator = sys_ret
+    else:
+        raise ValueError(f"未知 SCORE_NUMERATOR_METHOD: {SCORE_NUMERATOR_METHOD}")
+
+    base_score = numerator / (abs(sys_mdd) + 0.0001)
     if SCORE_CALC_METHOD == 'LOG_R2':
-        return annualized_romd * (m_win_rate / 100.0) * r_sq
-    return annualized_romd
+        return base_score * (m_win_rate / 100.0) * r_sq
+    if SCORE_CALC_METHOD == 'RoMD':
+        return base_score
+    raise ValueError(f"未知 SCORE_CALC_METHOD: {SCORE_CALC_METHOD}")
 
 
 def calc_curve_stats(eq_list):

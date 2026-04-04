@@ -11,6 +11,7 @@ from core.config import (
     MIN_MONTHLY_WIN_RATE,
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
+    SCORE_NUMERATOR_METHOD,
 )
 from core.display_common import C_RESET, C_YELLOW, get_p
 
@@ -23,7 +24,7 @@ def print_scanner_header(params):
     print(
         f"   ➤ 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
-        f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}]"
+        f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET} / 分子 {C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}]"
     )
     print(
         f"   ➤ 訓練參數: "

@@ -16,8 +16,13 @@ BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 
 # 3. 系統評分 (Score) 算法切換
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型 (容許暴漲，尋找平穩向上的聖杯)
-# 'RoMD'   = 傳統報酬回撤比 (只看總報酬與最大回撤)
+# 'RoMD'   = 傳統報酬回撤比風格的基底分數
 SCORE_CALC_METHOD = 'RoMD'
+
+# 3-1. 系統評分分子切換
+# 'ANNUAL_RETURN' = 分子使用年化報酬率
+# 'TOTAL_RETURN'  = 分子使用總報酬率
+SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'
 
 # 4-1. Optimizer 投組績效門檻
 MIN_FULL_YEAR_RETURN_PCT = -30.0
