@@ -1,19 +1,9 @@
 
-# GPT 容器環境起始
-先做環境 bootstrap：先檢查並安裝 optuna、SQLAlchemy、yfinance、FinMind
-
-Python：3.13.5
-已有：numpy 2.3.5、pandas 2.2.3、openpyxl 3.1.5
-已補裝並驗證可 import：
-optuna 4.8.0
-SQLAlchemy 2.0.48
-yfinance 1.2.0
-
-# 打包
-$branch="test-branch-1"; $ts=Get-Date -Format "yyyyMMdd_HHmmss"; $sha=(git rev-parse --short $branch).Trim(); $arch=Join-Path (Get-Location) "arch"; New-Item -ItemType Directory -Path $arch -Force | Out-Null; Get-ChildItem -Path . -File -Filter "${branch}_*.zip" | Move-Item -Destination $arch -Force; git archive --format=zip -o "${branch}_${ts}_${sha}.zip" $branch
-
 # 重現環境
 python -m pip install -r requirements/requirements-lock.txt
+
+# 打包
+python apps/package_zip.py
 
 # 資料集切換
 python tools/validate/cli.py --dataset reduced
