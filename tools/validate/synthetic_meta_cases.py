@@ -23,6 +23,7 @@ from .meta_contracts import (
     summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
+    summarize_project_settings_dynamic_test_boundary_contract,
     summarize_single_formal_test_entry_contract,
 )
 from tools.local_regression.formal_pipeline import FORMAL_STEP_SPECS
@@ -296,6 +297,21 @@ def validate_single_formal_test_entry_contract_case(_base_params):
     summary["app_py_files"] = contract["app_py_files"]
     summary["legacy_entry_paths"] = contract["legacy_entry_paths"]
     summary["suspicious_app_entries"] = contract["suspicious_app_entries"]
+    return results, summary
+
+
+
+def validate_project_settings_dynamic_test_boundary_case(_base_params):
+    case_id = "META_PROJECT_SETTINGS_DYNAMIC_TEST_BOUNDARY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_project_settings_dynamic_test_boundary_contract(PROJECT_ROOT)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dynamic_test_rerun", True, contract["project_settings_declares_no_dynamic_test_rerun"])
+    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_formal_step_validator_bypass", True, contract["project_settings_declares_no_formal_step_bypass"])
+
+    summary["project_settings_declares_no_dynamic_test_rerun"] = contract["project_settings_declares_no_dynamic_test_rerun"]
+    summary["project_settings_declares_no_formal_step_bypass"] = contract["project_settings_declares_no_formal_step_bypass"]
     return results, summary
 
 
