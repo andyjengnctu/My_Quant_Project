@@ -1,6 +1,7 @@
 from .synthetic_guardrail_cases import (
     build_synthetic_param_guardrail_case,
     validate_synthetic_param_guardrail_case,
+    validate_use_compounding_failfast_guardrail_case,
 )
 from .synthetic_history_cases import (
     validate_synthetic_history_ev_threshold_case,

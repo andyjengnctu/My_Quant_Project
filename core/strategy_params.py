@@ -51,6 +51,10 @@ def validate_strategy_param_ranges(param_values):
     validate_breakout_param_ranges(param_values, build_rule_text=_build_rule_text)
     _validate_spec_ranges(param_values, SELECTION_POLICY_PARAM_SPECS)
     _validate_spec_ranges(param_values, EXECUTION_POLICY_PARAM_SPECS)
+
+    if param_values.get("use_compounding") is not True:
+        raise ValueError("參數 use_compounding 目前僅支援 True；正式口徑固定使用複利資金。")
+
     return param_values
 
 

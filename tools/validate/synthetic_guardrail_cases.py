@@ -154,3 +154,58 @@ def validate_synthetic_param_guardrail_case(base_params):
 
     summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + len(invalid_direct_setattr_cases) + 5
     return results, summary
+
+def validate_use_compounding_failfast_guardrail_case(base_params):
+    case = build_synthetic_param_guardrail_case(base_params)
+    case_id = "USE_COMPOUNDING_FAILFAST_GUARDRAIL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    invalid_payload = {**case["base_payload"], "use_compounding": False}
+
+    try:
+        build_params_from_mapping(invalid_payload)
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case_id,
+            "json_false_rejected",
+            "ValueError containing use_compounding",
+            "loaded_ok",
+            "use_compounding=False 不可在 JSON 載入路徑被接受後靜默忽略。"
+        )
+    except ValueError as e:
+        add_check(results, "synthetic_param_guardrail", case_id, "json_false_rejected", True, "use_compounding" in str(e))
+
+    try:
+        V16StrategyParams(**invalid_payload)
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case_id,
+            "dataclass_false_rejected",
+            "ValueError containing use_compounding",
+            "loaded_ok",
+            "use_compounding=False 不可在 dataclass 建立路徑被接受後靜默忽略。"
+        )
+    except ValueError as e:
+        add_check(results, "synthetic_param_guardrail", case_id, "dataclass_false_rejected", True, "use_compounding" in str(e))
+
+    params = V16StrategyParams()
+    try:
+        params.use_compounding = False
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case_id,
+            "setattr_false_rejected",
+            "ValueError containing use_compounding",
+            "setattr_ok",
+            "use_compounding=False 不可在 setattr 路徑被接受後靜默忽略。"
+        )
+    except ValueError as e:
+        add_check(results, "synthetic_param_guardrail", case_id, "setattr_false_rejected", True, "use_compounding" in str(e))
+
+    summary["guardrail_cases"] = 3
+    return results, summary
+

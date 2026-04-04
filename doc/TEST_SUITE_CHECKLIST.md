@@ -126,6 +126,7 @@
 | B55 | P1 | 契約 | consistency / 單檔 parity 驗證路徑必須維持複利資金，單股、單檔投組與 portfolio_sim 不得再強制切回 fixed-capital | DONE | 已補 direct synthetic contract，直接釘死 consistency parity params 必須保留 compounding，且 single backtest / 單檔 portfolio timeline / portfolio_sim prepared 在虧損後與獲利後都必須一致反映複利資金，candidate sizing 與實際 entry budget 兩條路徑不得分叉 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/real_case_runners.py`, `tools/validate/scanner_expectations.py`, `core/capital_policy.py`, `core/portfolio_entries.py` |
 | B56 | P1 | 契約 | scanner 參考投入 / 掛單股數必須使用 `scanner_live_capital`，不得再回退到 `initial_capital` 或回測複利資金 | DONE | 已補 direct synthetic contract，直接釘死 scanner projected qty / proj_cost / 顯示訊息都必須跟 `scanner_live_capital` 一致，且 `initial_capital` 與 scanner 資金來源不得混用 | `tools/validate/synthetic_contract_cases.py`, `core/capital_policy.py`, `core/price_utils.py`, `tools/scanner/stock_processor.py` |
 | B57 | P1 | 契約 | 系統評分分子必須可在總報酬率與年化報酬率之間切換，且 score 公式不得把分子 / 分母切換混成不同 mode | DONE | 已補 direct synthetic contract，直接釘死 `SCORE_NUMERATOR_METHOD` 可在 `ANNUAL_RETURN` / `TOTAL_RETURN` 間切換，兩者都必須共用同一個 `|MDD| + 0.0001` 分母，且 `LOG_R2` 品質單調性不得被新分子選項破壞 | `tools/validate/synthetic_strategy_cases.py`, `config/training_policy.py`, `core/portfolio_stats.py` |
+| B58 | P1 | 契約 | 保留中的單一模式參數不得接受不支援值後靜默忽略；目前 `use_compounding` 必須 fail-fast 拒絕 `False` | DONE | 已補 direct guardrail case，直接釘死 `use_compounding=False` 無論 JSON 載入、dataclass 建立或 setattr 都必須報錯，避免保留參數變成靜默 no-op | `tools/validate/synthetic_guardrail_cases.py`, `core/strategy_params.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -302,6 +303,7 @@
 | T132 | `validate_scanner_live_capital_contract_case` | B56 |
 | T133 | `validate_optimizer_interrupt_export_contract_case` | B52 |
 | T134 | `validate_score_numerator_option_case` | B57 |
+| T135 | `validate_use_compounding_failfast_guardrail_case` | B58 |
 
 ## G. 逐項收斂紀錄
 
@@ -511,3 +513,5 @@
 | 2026-04-04 | T132 | 新增 scanner live capital contract 並驗證 | NEW -> DONE | `validate_scanner_live_capital_contract_case` |
 | 2026-04-04 | T133 | 新增 optimizer interrupt export contract 並驗證 | NEW -> DONE | `validate_optimizer_interrupt_export_contract_case` |
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
+| 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
+| 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |

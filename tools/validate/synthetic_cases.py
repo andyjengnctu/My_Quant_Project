@@ -11,6 +11,7 @@ from .synthetic_param_cases import (
     validate_synthetic_proj_cost_cash_capped_case,
     validate_synthetic_single_backtest_uses_compounding_capital_case,
     validate_synthetic_single_backtest_not_gated_by_own_history_case,
+    validate_use_compounding_failfast_guardrail_case,
 )
 from .synthetic_history_cases import (
     validate_synthetic_setup_index_prev_day_only_case,
@@ -287,6 +288,7 @@ def get_synthetic_validator_entries():
         _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py")),
         _entry(validate_ranking_scoring_sanity_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/buy_sort.py", "core/portfolio_stats.py")),
         _entry(validate_score_numerator_option_case, layer="strategy_contract", cost_class="fast", impacted_modules=("config/training_policy.py", "core/portfolio_stats.py", "core/strategy_dashboard.py", "core/scanner_display.py")),
+        _entry(validate_use_compounding_failfast_guardrail_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/strategy_params.py", "core/params_io.py", "config/execution_policy.py")),
         _entry(validate_strategy_repeatability_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "tools/optimizer/objective_runner.py", "tools/scanner/stock_processor.py")),
         _entry(validate_strategy_minimum_viability_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "core/strategy_dashboard.py", "tools/scanner/reporting.py", "tools/portfolio_sim/reporting.py")),
         _entry(validate_strategy_reporting_schema_compatibility_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_strategy_cases.py", "tools/optimizer/runtime.py", "tools/portfolio_sim/reporting.py", "tools/scanner/stock_processor.py")),
