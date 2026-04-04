@@ -1,4 +1,4 @@
-from core.config import BUY_SORT_METHOD
+from core.config import get_buy_sort_method
 
 
 def calc_buy_sort_value(method, ev, proj_cost, win_rate, trade_count):
@@ -12,11 +12,11 @@ def calc_buy_sort_value(method, ev, proj_cost, win_rate, trade_count):
 
 
 def calc_active_buy_sort_value(ev, proj_cost, win_rate, trade_count):
-    return calc_buy_sort_value(BUY_SORT_METHOD, ev, proj_cost, win_rate, trade_count)
+    return calc_buy_sort_value(get_buy_sort_method(), ev, proj_cost, win_rate, trade_count)
 
 
 def get_buy_sort_title(method=None):
-    active_method = BUY_SORT_METHOD if method is None else method
+    active_method = get_buy_sort_method() if method is None else method
     if active_method == 'EV':
         return '按期望值 (EV) 由大到小排序'
     if active_method == 'PROJ_COST':

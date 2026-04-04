@@ -1,5 +1,24 @@
 """相容 façade：保留既有匯入路徑，實際 source of truth 已拆分。"""
 
+import config.training_policy as _training_policy
+
+
+def get_buy_sort_method():
+    return _training_policy.BUY_SORT_METHOD
+
+
+def get_ev_calc_method():
+    return _training_policy.EV_CALC_METHOD
+
+
+def get_score_calc_method():
+    return _training_policy.SCORE_CALC_METHOD
+
+
+def get_score_numerator_method():
+    return _training_policy.SCORE_NUMERATOR_METHOD
+
+
 from config.execution_policy import (  # noqa: F401
     EXECUTION_POLICY_PARAM_SPECS,
     RUNTIME_PARAM_DEFAULTS,

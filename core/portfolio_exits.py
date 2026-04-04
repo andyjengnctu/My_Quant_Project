@@ -1,5 +1,5 @@
 from core.buy_sort import calc_buy_sort_value
-from core.config import BUY_SORT_METHOD
+from core.config import get_buy_sort_method
 from core.position_step import execute_bar_step
 from core.price_utils import (
     adjust_long_sell_fill_price,
@@ -57,7 +57,7 @@ def try_rotate_weakest_position(
                 params,
             )
             holding_sort_value = calc_buy_sort_value(
-                BUY_SORT_METHOD,
+                get_buy_sort_method(),
                 holding_ev,
                 holding_cost,
                 holding_win_rate,

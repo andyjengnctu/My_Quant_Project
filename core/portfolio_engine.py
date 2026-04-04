@@ -1,7 +1,7 @@
 import pandas as pd
 import time
 from core.capital_policy import resolve_portfolio_sizing_equity
-from core.config import EV_CALC_METHOD
+from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
     build_normal_setup_index,
     build_trade_stats_index,
@@ -326,7 +326,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         avg_win_r = sum(t['r_mult'] for t in wins) / win_count if win_count > 0 else 0.0
         avg_loss_r = abs(sum(t['r_mult'] for t in losses) / loss_count) if loss_count > 0 else 0.0
-        if EV_CALC_METHOD == 'B':
+        if get_ev_calc_method() == 'B':
             payoff_for_ev = min(10.0, (avg_win_r / avg_loss_r)) if avg_loss_r > 0 else (99.9 if avg_win_r > 0 else 0.0)
             pf_ev = (win_rate / 100.0 * payoff_for_ev) - (1 - win_rate / 100.0)
         else:

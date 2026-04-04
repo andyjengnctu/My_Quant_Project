@@ -1,5 +1,5 @@
 from core.buy_sort import get_buy_sort_title
-from core.config import BUY_SORT_METHOD
+from core.config import get_buy_sort_method
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 
 
@@ -11,7 +11,7 @@ def print_scanner_start_banner(now_label):
 
 def print_scanner_summary(*, count_scanned, elapsed_time, count_history_qualified, count_skipped_insufficient, count_sanitized_candidates, max_workers, pool_start_method, candidate_rows, scanner_issue_log_path):
     candidate_rows.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
-    sort_title = get_buy_sort_title(BUY_SORT_METHOD)
+    sort_title = get_buy_sort_title(get_buy_sort_method())
 
     print(" " * 160, end="\r")
     print(f"{C_CYAN}================================================================================{C_RESET}")

@@ -129,7 +129,6 @@ def ensure_runtime_dirs():
 
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
-DOWNLOADER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 DOWNLOADER_ISSUE_LOG_PATH = None
 
 
@@ -141,7 +140,7 @@ def get_downloader_issue_log_path():
         DOWNLOADER_ISSUE_LOG_PATH = build_timestamped_log_path(
             "downloader_issues",
             log_dir=OUTPUT_DIR,
-            timestamp=DOWNLOADER_SESSION_TS
+            timestamp=get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
         )
     return DOWNLOADER_ISSUE_LOG_PATH
 

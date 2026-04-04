@@ -1,4 +1,4 @@
-from core.config import EV_CALC_METHOD
+from core.config import get_ev_calc_method
 
 
 def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_r_sum, loss_r_sum, params):
@@ -20,7 +20,7 @@ def evaluate_history_candidate_metrics(trade_count, win_count, total_r_sum, win_
 
     win_rate = win_count / trade_count
 
-    if EV_CALC_METHOD == "B":
+    if get_ev_calc_method() == "B":
         avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
         loss_count = trade_count - win_count
         avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0

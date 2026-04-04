@@ -2,7 +2,7 @@ import pandas as pd
 
 from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
-from core.config import BUY_SORT_METHOD
+from core.config import get_buy_sort_method
 from core.price_utils import (
     adjust_long_target_price,
     calc_entry_price,
@@ -49,7 +49,7 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
             buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 半倉停利:股數不足 | 參考投入:{proj_cost:>7,.0f}"
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
-        sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
+        sort_value = calc_buy_sort_value(get_buy_sort_method(), stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
         return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
     extended_candidate = stats.get('extended_candidate_today')
@@ -76,7 +76,7 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
             buy_str = f"延續掛單:{limit_price:>6.2f} | 停損:{init_sl:>6.2f} | 半倉停利:股數不足 | 參考投入:{proj_cost:>7,.0f}"
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
-        sort_value = calc_buy_sort_value(BUY_SORT_METHOD, stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
+        sort_value = calc_buy_sort_value(get_buy_sort_method(), stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
         return ('extended', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
     return ('candidate', None, None, None, None, ticker, sanitize_issue)

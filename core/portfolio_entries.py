@@ -1,5 +1,5 @@
 from core.capital_policy import resolve_portfolio_entry_budget
-from core.config import BUY_SORT_METHOD
+from core.config import get_buy_sort_method
 from core.trade_plans import (
     build_cash_capped_entry_plan,
     execute_pre_market_entry_plan,
@@ -36,7 +36,7 @@ def execute_reserved_entries_for_day(
             params,
         )
 
-        if BUY_SORT_METHOD == 'PROJ_COST':
+        if get_buy_sort_method() == 'PROJ_COST':
             chosen_key = None
             for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
                 probe_entry_plan = build_cash_capped_entry_plan(

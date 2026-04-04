@@ -41,7 +41,6 @@ DEFAULT_OPTIMIZER_MAX_WORKERS = min(6, max(1, (os.cpu_count() or 1) // 2))
 OPTIMIZER_HIGH_LEN_MIN = 40
 OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5
-OPTIMIZER_SESSION_TS = get_taipei_now().strftime("%Y%m%d_%H%M%S")
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
@@ -62,6 +61,7 @@ def ensure_runtime_dirs():
 
 
 def build_optimizer_session():
+    session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
     from tools.optimizer.profile import OptimizerProfileRecorder
     from tools.optimizer.session import OptimizerSession
     from tools.optimizer.study_utils import (
@@ -72,7 +72,7 @@ def build_optimizer_session():
 
     return OptimizerSession(
         output_dir=OUTPUT_DIR,
-        session_ts=OPTIMIZER_SESSION_TS,
+        session_ts=session_ts,
         profile_recorder_cls=OptimizerProfileRecorder,
         build_optimizer_trial_params=build_optimizer_trial_params,
         get_best_completed_trial_or_none=get_best_completed_trial_or_none,
