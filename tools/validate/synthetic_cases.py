@@ -197,6 +197,7 @@ def get_synthetic_validator_entries():
         _entry(validate_peak_traced_memory_tracker_context_management_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_chain_checks.py", "tools/local_regression/run_meta_quality.py", "tools/local_regression/run_ml_smoke.py", "tools/local_regression/run_quick_gate.py", "tools/validate/main.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_known_bad_fault_injection_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_meta_cases.py",)),
         _entry(validate_cmd_document_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/CMD.md",)),
+        _entry(validate_no_legacy_app_entry_doc_references_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/CMD.md", "doc/ARCHITECTURE.md", "tools/validate/meta_contracts.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_no_reverse_app_layer_dependencies_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/ARCHITECTURE.md", "tools/validate/meta_contracts.py")),
         _entry(validate_no_top_level_import_cycles_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/meta_contracts.py",)),
         _entry(validate_single_formal_test_entry_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/local_regression/formal_pipeline.py")),
