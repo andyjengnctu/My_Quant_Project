@@ -13,6 +13,21 @@ LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency
 LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)
 
+CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
+    "core/price_utils.py": (
+        "calc_entry_price",
+        "calc_net_sell_price",
+        "calc_position_size",
+        "calc_initial_risk_total",
+    ),
+    "core/capital_policy.py": (
+        "resolve_single_backtest_sizing_capital",
+        "resolve_portfolio_sizing_equity",
+        "resolve_portfolio_entry_budget",
+        "resolve_scanner_live_capital",
+    ),
+}
+
 
 def extract_markdown_table_rows(text: str, heading: str) -> List[List[str]]:
     lines = text.splitlines()
@@ -382,6 +397,46 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
         "architecture_declares_single_entry": ARCHITECTURE_SINGLE_ENTRY_TEXT in architecture_text,
     }
 
+
+
+
+
+def summarize_critical_helper_single_source_contract(project_root: Path) -> Dict[str, Any]:
+    top_level_definitions: Dict[str, List[str]] = {}
+    scanned_files: List[str] = []
+    for rel_dir in ("apps", "core", "tools", "config", "strategies"):
+        base_dir = project_root / rel_dir
+        if not base_dir.is_dir():
+            continue
+        for path in sorted(base_dir.rglob("*.py")):
+            rel_path = str(path.relative_to(project_root)).replace("\\", "/")
+            scanned_files.append(rel_path)
+            tree = _read_python_ast(path)
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    top_level_definitions.setdefault(node.name, []).append(rel_path)
+
+    missing_definitions: List[str] = []
+    duplicate_definitions: List[str] = []
+    canonical_definitions: Dict[str, str] = {}
+    for canonical_path, helper_names in CRITICAL_HELPER_SINGLE_SOURCE_SPECS.items():
+        for helper_name in helper_names:
+            canonical_definitions[helper_name] = canonical_path
+            definition_paths = sorted(top_level_definitions.get(helper_name, []))
+            if canonical_path not in definition_paths:
+                missing_definitions.append(f"{helper_name} -> {canonical_path}")
+                continue
+            extra_paths = [path for path in definition_paths if path != canonical_path]
+            if extra_paths:
+                duplicate_definitions.append(f"{helper_name} -> {', '.join(extra_paths)}")
+
+    return {
+        "scanned_files": scanned_files,
+        "canonical_definitions": canonical_definitions,
+        "top_level_definitions": {key: sorted(value) for key, value in sorted(top_level_definitions.items()) if key in canonical_definitions},
+        "missing_definitions": missing_definitions,
+        "duplicate_definitions": duplicate_definitions,
+    }
 
 
 def summarize_legacy_app_entry_doc_reference_contract(project_root: Path) -> Dict[str, Any]:

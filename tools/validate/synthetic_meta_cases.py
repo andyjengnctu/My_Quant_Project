@@ -19,6 +19,7 @@ from .meta_contracts import (
     load_defined_validate_names_from_synthetic_case_modules,
     load_imported_validate_names_from_synthetic_main_entry,
     load_synthetic_registry_entries_from_source,
+    summarize_critical_helper_single_source_contract,
     summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
@@ -243,6 +244,21 @@ def validate_no_reverse_app_layer_dependencies_case(_base_params):
 
     summary["violation_count"] = len(violations)
     summary["violations"] = violations
+    return results, summary
+
+
+def validate_critical_helper_single_source_contract_case(_base_params):
+    case_id = "META_CRITICAL_HELPER_SINGLE_SOURCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_critical_helper_single_source_contract(PROJECT_ROOT)
+    add_check(results, "meta_entry_contract", case_id, "critical_helpers_defined_in_canonical_modules", [], contract["missing_definitions"])
+    add_check(results, "meta_entry_contract", case_id, "critical_helpers_not_redefined_outside_canonical_modules", [], contract["duplicate_definitions"])
+
+    summary["tracked_helper_count"] = len(contract["canonical_definitions"])
+    summary["missing_definitions"] = contract["missing_definitions"]
+    summary["duplicate_definitions"] = contract["duplicate_definitions"]
     return results, summary
 
 
