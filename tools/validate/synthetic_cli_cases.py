@@ -3,7 +3,11 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import importlib
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
+import zipfile
 
 from .checks import add_check
 
@@ -223,6 +227,60 @@ def validate_run_all_cli_error_usage_contract_case(_base_params):
     add_check(results, "cli_contract", case_id, "run_all_missing_only_value_rc", 2, rc)
     add_check(results, "cli_contract", case_id, "run_all_missing_only_value_usage_mentions_meta_quality", True, "meta_quality" in stderr_text)
 
+    return results, summary
+
+
+def validate_package_zip_runtime_contract_case(_base_params):
+    case_id = "PACKAGE_ZIP_RUNTIME_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    app_package_zip = importlib.import_module("apps.package_zip")
+
+    with TemporaryDirectory(prefix="package_zip_contract_") as tmp_dir:
+        project_root = Path(tmp_dir)
+        (project_root / "apps").mkdir(parents=True)
+        (project_root / "arch").mkdir()
+        (project_root / "pkg").mkdir()
+        (project_root / "pkg" / "module.py").write_text("print('ok')\n", encoding="utf-8")
+        (project_root / "README.md").write_text("demo\n", encoding="utf-8")
+        (project_root / "pkg" / "__pycache__").mkdir()
+        (project_root / "pkg" / "__pycache__" / "module.cpython-312.pyc").write_bytes(b"cache")
+        (project_root / "orphan.pyc").write_bytes(b"orphan-cache")
+        (project_root / "main_20250101_deadbeef.zip").write_bytes(b"main-old")
+        (project_root / "other_branch_20250102_cafebabe.zip").write_bytes(b"other-old")
+
+        fake_now = SimpleNamespace(strftime=lambda fmt: "20260404_123456")
+
+        def _fake_run_git(*args):
+            if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+                return SimpleNamespace(stdout="feature/runtime-contract\n")
+            if args == ("rev-parse", "--short", "HEAD"):
+                return SimpleNamespace(stdout="abc1234\n")
+            if args == ("ls-files", "--cached", "--others", "--exclude-standard", "-z"):
+                return SimpleNamespace(stdout="pkg/module.py\0README.md\0pkg/__pycache__/module.cpython-312.pyc\0orphan.pyc\0")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        with patch.object(app_package_zip, "PROJECT_ROOT", project_root), \
+             patch.object(app_package_zip, "get_taipei_now", return_value=fake_now), \
+             patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git):
+            rc, stdout_text = _capture_stdout(app_package_zip.main, ["apps/package_zip.py"])
+
+        new_zip_path = project_root / "feature-runtime-contract_20260404_123456_abc1234.zip"
+        archived_root_zips = sorted(path.name for path in (project_root / "arch").glob("*.zip"))
+        add_check(results, "cli_contract", case_id, "package_zip_main_rc", 0, rc)
+        add_check(results, "cli_contract", case_id, "package_zip_output_exists", True, new_zip_path.exists())
+        add_check(results, "cli_contract", case_id, "package_zip_archives_all_root_zips", ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"], archived_root_zips)
+        add_check(results, "cli_contract", case_id, "package_zip_root_old_zip_removed", False, (project_root / "other_branch_20250102_cafebabe.zip").exists())
+        add_check(results, "cli_contract", case_id, "package_zip_cache_dir_removed", False, (project_root / "pkg" / "__pycache__").exists())
+        add_check(results, "cli_contract", case_id, "package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
+        add_check(results, "cli_contract", case_id, "package_zip_stdout_reports_archived_count", True, "[package_zip] archived old root zips=2" in stdout_text)
+
+        with zipfile.ZipFile(new_zip_path) as zf:
+            member_names = sorted(zf.namelist())
+        add_check(results, "cli_contract", case_id, "package_zip_zip_members", ["README.md", "pkg/module.py"], member_names)
+
+    summary["checks"] = len(results)
     return results, summary
 
 

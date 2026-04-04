@@ -111,6 +111,7 @@
 | B40 | P1 | Meta | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | DONE | 已將 `run_chain_checks.py`、`run_meta_quality.py`、`run_ml_smoke.py`、`run_quick_gate.py`、`tools/validate/main.py` 收斂為 `with PeakTracedMemoryTracker() as tracker:`，並新增 static guard，直接阻擋手動 `__enter__` / `__exit__` 導致 early return / runtime error 路徑漏掉 `__exit__` | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` |
 | B41 | P1 | 文件 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | DONE | 已移除 `apps/local_regression.py` / `apps/validate_consistency.py` 的殘留文件指引，並新增 formal guard，直接阻擋文件再出現已移除入口或「手動刪除」式 app 測試入口清理說明 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
 | B42 | P1 | Meta | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | DONE | 已補 thin wrapper export contract，直接阻擋 `apps/portfolio_sim.py`、`apps/vip_scanner.py` 出現 lazy export 重複、`__all__` 漏列或 lazy symbol 無法解析，避免對外 façade 可 `getattr` 但 public export contract 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
+| B43 | P1 | I/O | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | DONE | 已補 `package_zip` runtime contract，直接釘死 root 既有舊 ZIP 不分 branch label 都必須移入 `arch/`，且新 ZIP 僅可包含 tracked/untracked 非忽略檔，不得夾帶 `__pycache__/` 或 `*.pyc` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -264,6 +265,7 @@
 | D116 | `validate_peak_traced_memory_tracker_context_management_case` | 已補 `PeakTracedMemoryTracker` lifecycle guard，直接阻擋手動 `__enter__` / `__exit__` 與缺少 `with PeakTracedMemoryTracker() as tracker:` 的正式步驟腳本 |
 | D118 | `validate_no_legacy_app_entry_doc_references_case` | 已補文件殘留 legacy app 測試入口 / 手動刪檔指引 guard，直接阻擋 `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 再出現已移除入口或手動刪檔說明 |
 | D119 | `validate_app_thin_wrapper_export_contract_case` | 已補 thin wrapper lazy export contract，直接阻擋 `LAZY_EXPORTS` 重複、`__all__` 漏列與 lazy symbol 無法解析 |
+| D120 | `validate_package_zip_runtime_contract_case` | 已補 `apps/package_zip.py` runtime contract，直接釘死 root 舊 ZIP 必須全數歸檔到 `arch/`，且新 ZIP 不得夾帶 `__pycache__/` 與 `*.pyc` |
 
 ## E. 未完成缺口摘要
 
@@ -333,6 +335,7 @@
 | Meta | B40 | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-03 |
 | 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-04 |
 | Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
+| I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -417,6 +420,7 @@
 | D116 | `validate_peak_traced_memory_tracker_context_management_case` | B40 | 2026-04-03 |
 | D118 | `validate_no_legacy_app_entry_doc_references_case` | B41 | 2026-04-04 |
 | D119 | `validate_app_thin_wrapper_export_contract_case` | B42 | 2026-04-04 |
+| D120 | `validate_package_zip_runtime_contract_case` | B43 | 2026-04-04 |
 | D14 | `validate_model_io_schema_case` | C01 | 2026-04-02 |
 | D16 | `validate_ranking_scoring_sanity_case` | C03 | 2026-04-02 |
 | D109 | `validate_optimizer_objective_export_contract_case` | C06 | 2026-04-03 |
@@ -609,6 +613,8 @@
 | 2026-04-04 | B41 | 移除 legacy app 測試入口文件殘留與手動刪檔指引後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-04 | D119 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
 | 2026-04-04 | B42 | 補上 app thin wrapper public export contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-04 | D120 | 新增 package_zip runtime contract 並驗證 | NEW -> DONE | `validate_package_zip_runtime_contract_case` |
+| 2026-04-04 | B43 | 補上 package_zip 正式入口 runtime contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
 | 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
 | 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |

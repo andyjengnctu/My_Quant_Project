@@ -77,7 +77,7 @@ def _archive_existing_root_zips(branch_label: str) -> int:
     archive_dir.mkdir(exist_ok=True)
     moved_count = 0
 
-    for zip_path in sorted(PROJECT_ROOT.glob(f"{branch_label}_*.zip")):
+    for zip_path in sorted(PROJECT_ROOT.glob("*.zip")):
         if not zip_path.is_file():
             continue
         shutil.move(str(zip_path), archive_dir / zip_path.name)
