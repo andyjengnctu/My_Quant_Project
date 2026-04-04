@@ -1,4 +1,3 @@
-| 2026-04-04 | T132 | 新增 scanner live capital contract 並驗證 | NEW -> DONE | `validate_scanner_live_capital_contract_case` |
 # Test Suite 收斂清單
 
 目的：整理 `apps/test_suite.py` 與其本地動態測試組成步驟的覆蓋範圍、缺口、優先順序與建議落點，供後續逐項收斂。
@@ -34,7 +33,7 @@
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `T` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Txx` / 狀態變更，必須同一次 patch 更新完畢。
 6. 摘要表只保留最小必要欄位：`T` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
-7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先完成同日區塊內依 ID 重排後再交付；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
+7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先完成同日區塊內依 ID 重排後再交付；任何 `G` 列只能寫在 `## G. 逐項收斂紀錄` 表格內，檔案開頭第一個非空行固定為 `# Test Suite 收斂清單`；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -505,3 +504,4 @@
 | 2026-04-04 | T131 | 新增 execution-only fixed-capital parity contract 並驗證 | NEW -> DONE | `validate_execution_only_fixed_capital_contract_case` |
 | 2026-04-04 | T131 | 檢出 execution-only fixed-capital parity contract 僅覆蓋虧損側，改回 PARTIAL | DONE -> PARTIAL | 尚未釘死獲利後不得再放大倉位 |
 | 2026-04-04 | T131 | 擴充獲利後不得再放大倉位的 execution-only contract 並收斂完成 | PARTIAL -> DONE | `validate_execution_only_fixed_capital_contract_case` |
+| 2026-04-04 | T132 | 新增 scanner live capital contract 並驗證 | NEW -> DONE | `validate_scanner_live_capital_contract_case` |
