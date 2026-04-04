@@ -298,7 +298,7 @@ def validate_ranking_scoring_sanity_case(base_params):
     hist_high = calc_buy_sort_value("HIST_WIN_X_TRADES", 0.5, 10000, 0.45, 9)
     add_check(results, "strategy_score", case_id, "buy_sort_hist_win_x_trades_monotonic", True, hist_high > hist_low)
 
-    with patch("core.config.SCORE_CALC_METHOD", "RoMD"), patch("core.config.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
         score_high_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
         score_worse_mdd = calc_portfolio_score(sys_ret=10.0, sys_mdd=-30.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
@@ -306,7 +306,7 @@ def validate_ranking_scoring_sanity_case(base_params):
     add_check(results, "strategy_score", case_id, "portfolio_score_mdd_monotonic", True, score_high_return > score_worse_mdd)
     add_check(results, "strategy_score", case_id, "portfolio_score_romd_finite", True, math.isfinite(score_high_return))
 
-    with patch("core.config.SCORE_CALC_METHOD", "LOG_R2"), patch("core.config.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=20.0)
         score_high_quality = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=20.0)
     add_check(results, "strategy_score", case_id, "portfolio_score_log_r2_quality_monotonic", True, score_high_quality > score_low_quality)
@@ -358,24 +358,24 @@ def validate_score_numerator_option_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    with patch("core.config.SCORE_CALC_METHOD", "RoMD"), patch("core.config.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         annual_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_annual = 18.0 / (abs(-20.0) + 0.0001)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_formula", expected_annual, annual_score)
 
-    with patch("core.config.SCORE_CALC_METHOD", "RoMD"), patch("core.config.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         total_score = calc_portfolio_score(sys_ret=12.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=18.0)
     expected_total = 12.0 / (abs(-20.0) + 0.0001)
     add_check(results, "strategy_score", case_id, "total_return_numerator_formula", expected_total, total_score)
     add_check(results, "strategy_score", case_id, "numerator_switch_changes_score_when_returns_differ", True, annual_score != total_score)
 
-    with patch("core.config.SCORE_CALC_METHOD", "LOG_R2"), patch("core.config.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "LOG_R2"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "TOTAL_RETURN"):
         low_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=40.0, r_sq=0.4, annual_return_pct=40.0)
         high_total_score = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=60.0, r_sq=0.9, annual_return_pct=40.0)
     add_check(results, "strategy_score", case_id, "log_r2_total_return_quality_monotonic", True, high_total_score > low_total_score)
 
     annual_missing = None
-    with patch("core.config.SCORE_CALC_METHOD", "RoMD"), patch("core.config.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
+    with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         annual_missing = calc_portfolio_score(sys_ret=9.0, sys_mdd=-15.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=None)
     expected_fallback = 9.0 / (abs(-15.0) + 0.0001)
     add_check(results, "strategy_score", case_id, "annual_return_numerator_falls_back_to_total_return_when_missing", expected_fallback, annual_missing)
