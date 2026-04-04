@@ -2,6 +2,11 @@
 
 目的：整理 `apps/test_suite.py` 與其本地動態測試組成步驟的覆蓋範圍、缺口、優先順序與建議落點，供後續逐項收斂。
 
+文件分工：
+- 本檔只維護測試清單、覆蓋狀態、測試入口映射與收斂紀錄。
+- 流程、權責、前置順序與禁止事項一律以 `doc/PROJECT_SETTINGS.md` 為準。
+- 如兩份文件描述看似重疊，應以 `PROJECT_SETTINGS.md` 的原則性規則解讀本檔，不得把本檔當成第二份流程規格。
+
 範圍：
 - 納入 `PROJECT_SETTINGS.md` 中的長期規則。
 - 納入未明列於專案設定、但對正確性、穩定性、可重現性與可維護性必要的測試項目。
@@ -19,14 +24,12 @@
 - `P2`：品質與工具鏈補強。
 
 收斂原則：
-1. 先補長期固定測試，再補可隨策略升級調整的測試。
-2. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要。
-3. 若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-4. 優先補 synthetic / unit / contract test；避免讓 GPT 端重跑本地完整動態流程。
-5. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
-6. GPT 端完整檢查流程、sufficiency review、`TODO` / `PARTIAL` / `DONE` 的處理原則，以及正式步驟執行條件，一律以 `doc/PROJECT_SETTINGS.md` 的「## B. 標準測試流程」為單一真理來源；本清單不再重複改寫同一套規則，以避免不同步。
-7. `F2` 每列只記一個 `Dxx` 與一個測試入口；補充摘要改寫於 `D` 或表格外文字。
-8. `G` 僅記錄實際狀態變更；純補充說明改寫為表格外文字。
+1. 本檔主責維護主表、覆蓋狀態、對應測試入口與收斂紀錄；流程、權責、前置順序與禁止事項一律引用 `doc/PROJECT_SETTINGS.md`，不得在本檔重寫成第二份流程規格。
+2. 先補長期固定測試，再補可隨策略升級調整的測試；優先補 synthetic / unit / contract test，避免讓 GPT 端重跑本地完整動態流程。
+3. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
+4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+5. 主表狀態為唯一真理來源；`F1` / `F2` / `G` 僅為同步索引。任何 `Bxx` / `Dxx` / 狀態變更，必須同一次 patch 同步更新相關區塊。
+6. `F2` 每列只記一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator、script 或完成摘要。`G` 僅記錄實際狀態變更；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -300,6 +303,8 @@
 
 說明：本節只作為目前所有 `DONE` 項目的快速索引；不區分原本既有或本輪新增。主維護來源仍是本檔前文各表格與收斂紀錄，不另作第二份主清單。
 
+維護規則：依本檔前述「收斂原則」維護；交付前至少核對一次「主表 `DONE` IDs == `F1` `DONE` IDs」。
+
 ### F1. 目前所有 `DONE` 的主表項目摘要
 
 | 類型 | ID | 項目 | 對應測試入口 | 完成日期 |
@@ -348,6 +353,7 @@
 | I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | Meta | B44 | `quick_gate` 不得移除裸 `except` static guard | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | I/O | B45 | `quick_gate` 不得移除 output path / outputs root / log path guard | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
+| 錯誤處理 | B46 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要

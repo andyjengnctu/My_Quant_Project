@@ -16,9 +16,11 @@
 5. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 6. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
 7. 檢查到問題就直接在本輪提供修改。
-8. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md`狀態，並確與其它認檔案間的關連性。
-9. 維護 `doc/TEST_SUITE_CHECKLIST.md` 時，`F2` 每列只可記錄一個 `Dxx` 與一個測試入口；不得在同列混寫多個 validator、script 或完成摘要，`G` 只可記錄實際狀態變更；純補充說明必須改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
-10. 違反本節任一前置順序、禁止事項或邊界限制，均視為違規。
+8. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`F1` / `F2` / `G` 僅為同步索引；各區詳細維護格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
+9. 維護 `doc/TEST_SUITE_CHECKLIST.md` 時，不得讓 checklist 自行擴張為第二份流程規格；流程、權責、前置順序與禁止事項以本檔為準，coverage 狀態、測試映射、收斂紀錄與欄位格式以 checklist 為準。
+10. 文件分工必須遵守：`doc/PROJECT_SETTINGS.md` 只保留原則、權責、前置順序、禁止事項與單一真理來源；`doc/TEST_SUITE_CHECKLIST.md` 只保留測試清單、覆蓋狀態、測試映射、收斂紀錄與欄位細則。
+11. 除必要短引用外，同一要求不得在兩份文件各自完整重寫；規則只能有一份原文，另一份文件只能引用，不得改寫成第二份規格。
+12. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
 
 ## C. 回覆、交付與輸出
 
