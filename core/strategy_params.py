@@ -1,10 +1,10 @@
-"""共用策略參數契約：聚合 breakout 專屬參數、selection policy、execution policy 與 runtime。"""
+"""共用策略參數契約：聚合 breakout 專屬參數、training policy selection gate、execution policy 與 runtime。"""
 
 from dataclasses import MISSING, dataclass, fields
 from typing import Any
 
 from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS, RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_SPECS
-from config.selection_policy import SELECTION_POLICY_PARAM_SPECS
+from config.training_policy import SELECTION_POLICY_PARAM_SPECS
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS, validate_breakout_param_ranges
 
 

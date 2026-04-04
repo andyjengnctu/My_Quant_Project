@@ -8,11 +8,8 @@ from config.execution_policy import (  # noqa: F401
     build_execution_policy_snapshot,
     build_runtime_param_snapshot,
 )
-from config.selection_policy import (  # noqa: F401
-    SELECTION_POLICY_PARAM_SPECS,
-    build_selection_policy_snapshot,
-)
 from config.training_policy import (  # noqa: F401
+    SELECTION_POLICY_PARAM_SPECS,
     MAX_PORTFOLIO_MDD_PCT,
     MIN_ANNUAL_TRADES,
     MIN_BUY_FILL_RATE,
@@ -25,6 +22,7 @@ from config.training_policy import (  # noqa: F401
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+    build_selection_policy_snapshot,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
 )

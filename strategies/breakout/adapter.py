@@ -1,7 +1,7 @@
 """breakout 策略參數轉接層。"""
 
 from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS
-from config.selection_policy import SELECTION_POLICY_PARAM_SPECS
+from config.training_policy import SELECTION_POLICY_PARAM_SPECS
 from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
