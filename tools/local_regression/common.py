@@ -552,12 +552,20 @@ def _build_dataset_fingerprint(dataset_dir: Path, members: List[str]) -> Dict[st
     }
 
 
-def ensure_reduced_dataset() -> Dict[str, Any]:
-    actual_members = _current_dataset_csv_members()
+def _validate_reduced_dataset_contract(actual_members: List[str]) -> None:
     if not actual_members:
         raise FileNotFoundError(
             f"找不到 reduced dataset；請確認 {REDUCED_DATASET_DIR} 存在，且內含至少一個 CSV 檔案。"
         )
+
+    unique_members = sorted(set(actual_members))
+    if len(unique_members) != len(actual_members):
+        raise LocalRegressionError("reduced dataset CSV 成員不可重複")
+
+
+def ensure_reduced_dataset() -> Dict[str, Any]:
+    actual_members = _current_dataset_csv_members()
+    _validate_reduced_dataset_contract(actual_members)
 
     return {
         "dataset_dir": str(REDUCED_DATASET_DIR),

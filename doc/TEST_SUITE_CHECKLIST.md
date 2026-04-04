@@ -133,6 +133,7 @@
 | B50 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | DONE | 已新增 strategy minimum viability case，直接驗 scanner、optimizer、strategy dashboard、scanner summary 與 yearly return report 在策略輸入下可正常執行 | `tools/validate/synthetic_strategy_cases.py`, `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
 | B51 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | DONE | 已新增 strategy reporting schema compatibility case，直接驗 best_params export payload keys、scanner normalized payload keys 與 yearly return report columns 維持既有 schema | `tools/validate/synthetic_strategy_cases.py`, `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
 | B52 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | DONE | 已新增 optimizer objective / export contract case，直接驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序與 export 成敗 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py` |
+| B53 | P1 | I/O | reduced dataset 契約必須依目前目錄快照動態推導，不得綁死固定成員或固定筆數 | DONE | 已將 reduced dataset contract 改為直接根據目前資料夾中的 CSV members / content 動態計算 `csv_count` 與 fingerprint；formal guard 只要求資料夾非空且 members 不重複，避免之後調整 reduced dataset 又必須回頭改程式常數 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `data/tw_stock_data_vip_reduced/` |
 
 ## E. 未完成缺口摘要
 
@@ -291,6 +292,7 @@
 | T126 | `validate_strategy_repeatability_case` | B48 |
 | T127 | `validate_strategy_minimum_viability_case` | B50 |
 | T128 | `validate_strategy_reporting_schema_compatibility_case` | B51 |
+| T129 | `validate_reduced_dataset_dynamic_contract_case` | B53 |
 
 ## G. 逐項收斂紀錄
 
@@ -477,3 +479,5 @@
 | 2026-04-04 | T126 | 新增 strategy-layer repeatability formal case 並驗證 | NEW -> DONE | `validate_strategy_repeatability_case` |
 | 2026-04-04 | T127 | 新增 strategy minimum viability formal smoke 並驗證 | NEW -> DONE | `validate_strategy_minimum_viability_case` |
 | 2026-04-04 | T128 | 新增 strategy reporting / artifact schema compatibility formal case 並驗證 | NEW -> DONE | `validate_strategy_reporting_schema_compatibility_case` |
+| 2026-04-04 | B53 | 將 reduced dataset contract 改為目錄快照動態推導，移除固定成員 / 固定筆數依賴後收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-04 | T129 | 將 reduced dataset contract 改為動態快照驗證並完成同步 | NEW -> DONE | `validate_reduced_dataset_dynamic_contract_case` |

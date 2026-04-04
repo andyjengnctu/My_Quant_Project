@@ -54,7 +54,7 @@ project/
 │  └─ ToDo.md                         # 待辦事項與後續整理筆記
 ├─ data/
 │  ├─ tw_stock_data_vip/              # 專案內保留的資料佔位與名單檔
-│  └─ tw_stock_data_vip_reduced/      # reduced 測試資料；local regression / validate 直接使用
+│  └─ tw_stock_data_vip_reduced/      # reduced 測試資料快照；local regression / validate 直接使用，members / fingerprint 由目錄現況動態決定
 ├─ models/
 │  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄
 │  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄

@@ -384,7 +384,7 @@ def validate_quick_gate_output_path_guard_contract_case(_base_params):
         fail_run_dir.mkdir(parents=True, exist_ok=True)
 
         def _run_probe(run_dir: Path, *, outputs_ok: bool):
-            with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=run_dir),                  patch.object(run_quick_gate_module, "load_manifest", return_value=manifest),                  patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}),                  patch.object(run_quick_gate_module, "run_static_checks", return_value=[]),                  patch.object(run_quick_gate_module, "check_output_path_contract", return_value=[run_quick_gate_module.summarize_result("output_path_contract::valid_category_resolves_under_outputs", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_outputs_root_layout", return_value=[run_quick_gate_module.summarize_result("outputs_root_layout::root_has_only_category_dirs", outputs_ok, detail="probe")]),                  patch.object(run_quick_gate_module, "check_dataset_profile_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_log_path_contract", return_value=[run_quick_gate_module.summarize_result("log_path_contract::append_issue_log_outputs_root_file_rejected", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_local_regression_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_help", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_generic_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_error_paths", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_runtime_error_paths", return_value=[]),                  patch("builtins.print"):
+            with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=run_dir),                  patch.object(run_quick_gate_module, "load_manifest", return_value=manifest),                  patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 10}),                  patch.object(run_quick_gate_module, "run_static_checks", return_value=[]),                  patch.object(run_quick_gate_module, "check_output_path_contract", return_value=[run_quick_gate_module.summarize_result("output_path_contract::valid_category_resolves_under_outputs", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_outputs_root_layout", return_value=[run_quick_gate_module.summarize_result("outputs_root_layout::root_has_only_category_dirs", outputs_ok, detail="probe")]),                  patch.object(run_quick_gate_module, "check_dataset_profile_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_log_path_contract", return_value=[run_quick_gate_module.summarize_result("log_path_contract::append_issue_log_outputs_root_file_rejected", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_local_regression_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_help", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_generic_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_error_paths", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_runtime_error_paths", return_value=[]),                  patch("builtins.print"):
                 rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
             payload = json.loads((run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
             return rc, payload
@@ -431,7 +431,7 @@ def validate_local_regression_summary_contract_case(_base_params):
             "duration_sec": 1.234,
             "dataset_dir": "data/tw_stock_data_vip_reduced",
             "source": "existing",
-            "csv_count": 24,
+            "csv_count": 10,
             "csv_total_bytes": 2400,
             "csv_members_sha256": "a" * 64,
             "csv_content_sha256": "b" * 64,
@@ -442,7 +442,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         dataset_pass_json = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
         dataset_pass_text = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
         add_check(results, "output_contract", case_id, "dataset_prepare_pass_required_keys", [], sorted(REQUIRED_DATASET_PREP_SUMMARY_KEYS - set(dataset_pass_json.keys())))
-        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and "csv_count   : 24" in dataset_pass_text and "members_sha : " in dataset_pass_text and "content_sha : " in dataset_pass_text)
+        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and f"csv_count   : {dataset_pass_json.get("csv_count")}" in dataset_pass_text and "members_sha : " in dataset_pass_text and "content_sha : " in dataset_pass_text)
 
         dataset_fail = run_all_module._write_dataset_prepare_summary(run_dir, {
             "status": "FAIL",
@@ -457,9 +457,9 @@ def validate_local_regression_summary_contract_case(_base_params):
         chain_payload = {
             "status": "PASS",
             "dataset": "reduced",
-            "dataset_info": {"csv_count": 24},
-            "ticker_count": 24,
-            "csv_count": 24,
+            "dataset_info": {"csv_count": 10},
+            "ticker_count": 10,
+            "csv_count": 10,
             "duplicate_issue_count": 0,
             "skipped_ticker_count": 1,
             "detail_count": 2,
@@ -481,7 +481,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         ml_smoke_payload = {
             "status": "PASS",
             "dataset": "reduced",
-            "dataset_info": {"csv_count": 24},
+            "dataset_info": {"csv_count": 10},
             "db_path": "outputs/ml_optimizer/demo.db",
             "db_trial_count": 1,
             "qualified_trial_count": 1,
@@ -538,7 +538,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         master_payload = {
             "overall_status": "FAIL",
             "dataset": "reduced",
-            "dataset_info": {"csv_count": 24},
+            "dataset_info": {"csv_count": 10},
             "timestamp": "2026-04-02T00:00:00+08:00",
             "git_commit": "abc123",
             "scripts": [{"name": "quick_gate", "status": "PASS"}],
@@ -556,7 +556,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         quick_gate_payload = {
             "status": "PASS",
             "dataset": "reduced",
-            "dataset_info": {"csv_count": 24},
+            "dataset_info": {"csv_count": 10},
             "step_count": 3,
             "failed_count": 0,
             "failed_steps": [],
@@ -595,7 +595,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         runtime_stdout = io.StringIO()
         with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=runtime_run_dir):
             with patch.object(run_quick_gate_module, "load_manifest", return_value={**local_common.MANIFEST_DEFAULTS, "dataset": "reduced"}):
-                with patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 24}):
+                with patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 10}):
                     with patch.object(run_quick_gate_module, "run_static_checks", side_effect=RuntimeError("synthetic quick gate crash")):
                         with patch("builtins.print"):
                             with redirect_stdout(runtime_stdout):
@@ -943,6 +943,52 @@ def validate_dataset_fingerprint_contract_case(_base_params):
     return results, summary
 
 
+def validate_reduced_dataset_dynamic_contract_case(_base_params):
+    case_id = "REDUCED_DATASET_DYNAMIC_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dataset_info = local_common.ensure_reduced_dataset()
+    actual_members = local_common._current_dataset_csv_members()
+    add_check(results, "output_contract", case_id, "reduced_dataset_live_csv_count_matches_members", len(actual_members), int(dataset_info.get("csv_count", 0)))
+    add_check(results, "output_contract", case_id, "reduced_dataset_live_total_bytes_positive", True, int(dataset_info.get("csv_total_bytes", 0)) > 0)
+
+    with tempfile.TemporaryDirectory(prefix="reduced_dataset_dynamic_contract_") as temp_dir:
+        temp_dataset_dir = Path(temp_dir) / "tw_stock_data_vip_reduced"
+        temp_dataset_dir.mkdir(parents=True, exist_ok=True)
+        synthetic_members = {
+            "1101.csv": "Date,Open,High,Low,Close,Volume\n2024-01-02,10,11,9,10.5,1000\n",
+            "2330.csv": "Date,Open,High,Low,Close,Volume\n2024-01-02,20,21,19,20.5,2000\n",
+            "ETF/00631L.csv": "Date,Open,High,Low,Close,Volume\n2024-01-02,30,31,29,30.5,3000\n",
+        }
+        for rel_path, payload in synthetic_members.items():
+            file_path = temp_dataset_dir / rel_path
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(payload, encoding="utf-8")
+
+        original_dataset_dir = local_common.REDUCED_DATASET_DIR
+        try:
+            local_common.REDUCED_DATASET_DIR = temp_dataset_dir
+            dynamic_members = local_common._current_dataset_csv_members()
+            dynamic_info = local_common.ensure_reduced_dataset()
+            expected_dynamic_fingerprint = local_common._build_dataset_fingerprint(temp_dataset_dir, dynamic_members)
+        finally:
+            local_common.REDUCED_DATASET_DIR = original_dataset_dir
+
+    add_check(results, "output_contract", case_id, "reduced_dataset_contract_accepts_different_member_set", sorted(synthetic_members.keys()), dynamic_members)
+    add_check(results, "output_contract", case_id, "reduced_dataset_contract_uses_runtime_member_count", len(synthetic_members), int(dynamic_info.get("csv_count", 0)))
+    add_check(results, "output_contract", case_id, "reduced_dataset_contract_uses_runtime_fingerprint", expected_dynamic_fingerprint, {
+        "csv_total_bytes": dynamic_info.get("csv_total_bytes"),
+        "csv_members_sha256": dynamic_info.get("csv_members_sha256"),
+        "csv_content_sha256": dynamic_info.get("csv_content_sha256"),
+        "fingerprint_algorithm": dynamic_info.get("fingerprint_algorithm"),
+    })
+
+    summary["live_csv_count"] = int(dataset_info.get("csv_count", 0))
+    summary["dynamic_csv_count"] = int(dynamic_info.get("csv_count", 0))
+    summary["dynamic_members"] = dynamic_members
+    return results, summary
+
 
 def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
     case_id = "RUN_ALL_DATASET_PREPARE_PASS_MAIN_CONTRACT"
@@ -962,7 +1008,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
         dataset_info = {
             "dataset_dir": str(local_common.REDUCED_DATASET_DIR),
             "source": "repo_data_dir",
-            "csv_count": 24,
+            "csv_count": 10,
             "reused_existing": True,
             "csv_total_bytes": 4096,
             "csv_members_sha256": "a" * 64,

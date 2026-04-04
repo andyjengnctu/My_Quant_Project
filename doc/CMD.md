@@ -157,6 +157,8 @@ outputs/local_regression/
 local regression 與 validate 的 reduced 測試資料來源固定為：
 - `<repo>/data/tw_stock_data_vip_reduced`
 
+reduced dataset 直接以 `<repo>/data/tw_stock_data_vip_reduced` 目前實際存在的 CSV 快照為準；formal pipeline 只要求資料夾非空，並對當前 members / content 產生 fingerprint，不再把成員名單或筆數寫死在程式中。
+
 不再支援 `data.zip`、`V16_PROJECT_DATA_ZIP` 或 `/mnt/data/data.zip` 回退來源。
 打包給 ChatGPT 前，請先確認該資料夾已隨專案一併納入 ZIP。
 
