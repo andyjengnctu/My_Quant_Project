@@ -9,12 +9,12 @@
 
 ## B. 標準測試流程
 
-1. `apps/test_suite.py` 為所有已實作測試的單一正式入口；`tools/local_regression/formal_pipeline.py` 為單一真理來源。
-2. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但必須被`apps/test_suite.py`涵蓋的缺口。
-3. 缺口包含已定義在專案設定中規則、也包含未定義在專案設定中但應考慮的規則。
-4. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
-5. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
-6. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
+1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋的任何項目；
+2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
+3. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但必須被`apps/test_suite.py`涵蓋的缺口。
+4. 缺口包含已定義在專案設定中規則、也包含未定義在專案設定中但應考慮的規則。
+5. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
+6. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 7. 檢查到問題就直接在本輪提供修改。
 8. 修改問題後，也提出避免 GPT再發生類似問題的作法，透過 `/doc/PROJECT_SETTINGS.md` 或 `/doc/TEST_SUITE_CHECKLIST.md`來強制。
 9. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`T` / `G` 僅為同步索引；主表追蹤 ID 與建議測試項追蹤 ID 的實際格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
