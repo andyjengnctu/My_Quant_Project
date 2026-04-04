@@ -101,7 +101,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；訓練結束後若記憶庫已有及格 trial，會同步匯出 best_params.json。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；只有完成指定訓練次數或輸入 0 走匯出模式時，才會更新 best_params.json。")
         return 0
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
     from tools.optimizer.prep import load_all_raw_data
@@ -112,6 +112,7 @@ def main(argv=None, environ=None):
         export_best_params_if_requested,
         maybe_print_history_best,
         print_resolved_trial_count,
+        resolve_training_session_export_policy,
         prompt_existing_db_policy,
         resolve_trial_count_or_exit,
     )
@@ -233,24 +234,37 @@ def main(argv=None, environ=None):
             print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
+        training_interrupted = False
         try:
             study.optimize(session.objective, n_trials=session.n_trials, n_jobs=1, callbacks=[session.monitoring_callback])
         except KeyboardInterrupt:
+            training_interrupted = True
             print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
 
         print()
         session.profile_recorder.print_summary()
         session.print_optimizer_prep_summary()
-        best_trial = get_best_completed_trial_or_none(study)
-        if best_trial is not None and is_qualified_trial_value(best_trial.value):
-            export_status = export_best_params_if_requested(
-                study,
-                best_params_path=BEST_PARAMS_PATH,
-                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
-                colors=COLORS,
+        should_export, export_policy = resolve_training_session_export_policy(
+            requested_n_trials=session.n_trials,
+            completed_session_trials=session.current_session_trial,
+            interrupted=training_interrupted,
+        )
+        if should_export:
+            best_trial = get_best_completed_trial_or_none(study)
+            if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                export_status = export_best_params_if_requested(
+                    study,
+                    best_params_path=BEST_PARAMS_PATH,
+                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                    colors=COLORS,
+                )
+                if export_status != 0:
+                    return 1
+        elif export_policy == "interrupted_before_target":
+            print(
+                f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，"
+                f"依規則不自動覆寫 {BEST_PARAMS_PATH}。{C_RESET}"
             )
-            if export_status != 0:
-                return 1
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

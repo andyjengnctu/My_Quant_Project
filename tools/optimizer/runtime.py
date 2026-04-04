@@ -172,6 +172,18 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
     return 1
 
 
+def resolve_training_session_export_policy(*, requested_n_trials, completed_session_trials, interrupted):
+    requested_trials = int(requested_n_trials)
+    completed_trials = int(completed_session_trials)
+    if requested_trials <= 0:
+        return True, "export_only"
+    if completed_trials >= requested_trials:
+        return True, "target_reached"
+    if interrupted:
+        return False, "interrupted_before_target"
+    return False, "target_not_reached"
+
+
 def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
     try:
         session.n_trials, trial_source = resolve_optimizer_trial_count(environ)

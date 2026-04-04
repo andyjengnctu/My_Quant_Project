@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import math
 from pathlib import Path
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -896,4 +897,157 @@ def validate_optimizer_objective_export_contract_case(_base_params):
 
     summary["success_export_key_count"] = len(exported_payload)
     summary["registry_contract_checks"] = len(results)
+    return results, summary
+
+
+
+def validate_optimizer_interrupt_export_contract_case(_base_params):
+    from tools.optimizer.runtime import resolve_training_session_export_policy
+
+    case_id = "OPTIMIZER_INTERRUPT_EXPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    export_only_allowed, export_only_reason = resolve_training_session_export_policy(
+        requested_n_trials=0,
+        completed_session_trials=0,
+        interrupted=False,
+    )
+    add_check(results, "strategy_contract", case_id, "export_policy_allows_export_only_mode", True, export_only_allowed)
+    add_check(results, "strategy_contract", case_id, "export_policy_export_only_reason", "export_only", export_only_reason)
+
+    target_reached_allowed, target_reached_reason = resolve_training_session_export_policy(
+        requested_n_trials=5,
+        completed_session_trials=5,
+        interrupted=True,
+    )
+    add_check(results, "strategy_contract", case_id, "export_policy_allows_export_when_target_reached", True, target_reached_allowed)
+    add_check(results, "strategy_contract", case_id, "export_policy_target_reached_reason", "target_reached", target_reached_reason)
+
+    interrupted_allowed, interrupted_reason = resolve_training_session_export_policy(
+        requested_n_trials=5,
+        completed_session_trials=2,
+        interrupted=True,
+    )
+    add_check(results, "strategy_contract", case_id, "export_policy_blocks_interrupted_partial_session", False, interrupted_allowed)
+    add_check(results, "strategy_contract", case_id, "export_policy_interrupted_reason", "interrupted_before_target", interrupted_reason)
+
+    optimizer_main = importlib.import_module("tools.optimizer.main")
+
+    class _FakeMainProfileRecorder:
+        def __init__(self):
+            self.enabled = False
+            self.csv_path = ""
+
+        def init_output_files(self):
+            return None
+
+        def print_summary(self):
+            return None
+
+    class _FakeMainSession:
+        def __init__(self):
+            self.n_trials = 0
+            self.current_session_trial = 0
+            self.profile_recorder = _FakeMainProfileRecorder()
+
+        def load_raw_data(self, *args, **kwargs):
+            return None
+
+        def objective(self, trial):
+            raise AssertionError("optimizer main interrupt contract 不應直接執行 objective")
+
+        def monitoring_callback(self, study, trial):
+            return None
+
+        def print_optimizer_prep_summary(self):
+            return None
+
+    qualified_trial = SimpleNamespace(
+        number=7,
+        params={"high_len": 65, "atr_len": 13},
+        user_attrs={"fixed_tp_percent": 0.27},
+        value=88.123,
+    )
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        dataset_dir = tmp_root / "dataset"
+        dataset_dir.mkdir()
+        csv_path = dataset_dir / "2330.csv"
+        csv_path.write_text("Date,Open,High,Low,Close,Volume\n2026-01-02,1,1,1,1,1\n", encoding="utf-8")
+        db_file = tmp_root / "portfolio_ai.db"
+        db_file.write_text("stub", encoding="utf-8")
+        best_params_path = tmp_root / "best_params.json"
+        best_params_path.write_text(json.dumps({"marker": "keep"}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        fake_session = _FakeMainSession()
+        fake_export_calls = []
+
+        class _InterruptingStudy:
+            def __init__(self, session):
+                self.trials = [qualified_trial]
+                self._session = session
+
+            @property
+            def best_trial(self):
+                return qualified_trial
+
+            def optimize(self, objective, n_trials, n_jobs=1, callbacks=None):
+                self._session.current_session_trial = 2
+                raise KeyboardInterrupt()
+
+        def _fake_build_optimizer_session():
+            return fake_session
+
+        def _fake_resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
+            session.n_trials = 5
+            return None, "TEST"
+
+        def _fake_create_optimizer_study(_db_name, *, seed=None):
+            return _InterruptingStudy(fake_session)
+
+        def _fake_export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors):
+            fake_export_calls.append(best_params_path)
+            Path(best_params_path).write_text(json.dumps({"marker": "overwritten"}, ensure_ascii=False, indent=2), encoding="utf-8")
+            return 0
+
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(optimizer_main, "OUTPUT_DIR", str(tmp_root / "outputs")))
+            stack.enter_context(patch.object(optimizer_main, "MODELS_DIR", str(tmp_root / "models")))
+            stack.enter_context(patch.object(optimizer_main, "BEST_PARAMS_PATH", str(best_params_path)))
+            stack.enter_context(patch.object(optimizer_main, "ensure_runtime_dirs", return_value=None))
+            stack.enter_context(patch.object(optimizer_main, "configure_optuna_logging", return_value=None))
+            stack.enter_context(patch.object(optimizer_main, "build_optimizer_session", side_effect=_fake_build_optimizer_session))
+            stack.enter_context(patch("core.dataset_profiles.resolve_dataset_profile_from_cli_env", return_value=("full", "TEST")))
+            stack.enter_context(patch("core.dataset_profiles.get_dataset_dir", return_value=str(dataset_dir)))
+            stack.enter_context(patch("core.dataset_profiles.get_dataset_profile_label", return_value="完整資料集"))
+            stack.enter_context(patch("core.data_utils.discover_unique_csv_inputs", return_value=([str(csv_path)], None)))
+            stack.enter_context(patch("tools.optimizer.study_utils.build_optimizer_db_file_path", return_value=str(db_file)))
+            stack.enter_context(patch("tools.optimizer.study_utils.resolve_optimizer_seed", return_value=(None, "ENV:UNSET")))
+            stack.enter_context(patch("tools.optimizer.runtime.resolve_trial_count_or_exit", side_effect=_fake_resolve_trial_count_or_exit))
+            stack.enter_context(patch("tools.optimizer.runtime.ensure_optimizer_db_usable", return_value=None))
+            stack.enter_context(patch("tools.optimizer.runtime.prompt_existing_db_policy", return_value=None))
+            stack.enter_context(patch("tools.optimizer.runtime.create_optimizer_study", side_effect=_fake_create_optimizer_study))
+            stack.enter_context(patch("tools.optimizer.runtime.maybe_print_history_best", return_value=None))
+            stack.enter_context(patch("tools.optimizer.runtime.print_resolved_trial_count", return_value=None))
+            stack.enter_context(patch("tools.optimizer.runtime.export_best_params_if_requested", side_effect=_fake_export_best_params_if_requested))
+            stack.enter_context(redirect_stdout(stdout_buffer))
+            stack.enter_context(redirect_stderr(stderr_buffer))
+            rc = optimizer_main.main(["tools/optimizer/main.py", "--dataset", "full"], environ={})
+
+        persisted_payload = json.loads(best_params_path.read_text(encoding="utf-8"))
+
+    stdout_text = stdout_buffer.getvalue()
+    stderr_text = stderr_buffer.getvalue()
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_returns_zero", 0, rc)
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_does_not_call_export", 0, len(fake_export_calls))
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_preserves_existing_best_params_json", "keep", persisted_payload.get("marker"))
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_stderr_empty", "", stderr_text)
+
+    summary["checks"] = len(results)
     return results, summary

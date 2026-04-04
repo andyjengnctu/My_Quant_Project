@@ -27,7 +27,7 @@ set V16_OPTIMIZER_SEED=20260401
 python apps/ml_optimizer.py --dataset full            # 正式入口
 # apps/ml_optimizer.py 為薄入口，從 tools.optimizer 套件 façade 匯入 main
 # tools/optimizer/__init__.py 統一匯出 optimizer 公開介面；main.py 負責 CLI/啟動，session.py 提供 session façade，prep.py / objective.py 為 façade，實作分散於 raw_cache.py / trial_inputs.py / objective_profiles.py / objective_filters.py / objective_runner.py / callbacks.py / runtime.py
-- `apps/ml_optimizer.py` 在訓練結束後，若記憶庫已有及格 trial，會同步匯出 `models/best_params.json`；輸入 0 則只做提取匯出。
+- `apps/ml_optimizer.py` 僅在完成指定訓練次數，或輸入 0 走提取匯出模式時，才會更新 `models/best_params.json`；若使用者中斷且未達指定次數，禁止自動覆寫。
 - 若要固定 optimizer 搜尋路徑，可設 `V16_OPTIMIZER_SEED=<seed>`。
 
 # 設定 / 參數架構
