@@ -273,6 +273,7 @@ def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
 
     candidate_case = build_synthetic_half_tp_full_year_case(base_params)
     candidate_case["params"].initial_capital = 50.0
+    candidate_case["params"].scanner_live_capital = 50.0
     candidate_case["params"].fixed_risk = 1.0
     candidate_case["frames"][candidate_case["primary_ticker"]] = candidate_case["frames"][candidate_case["primary_ticker"]].iloc[:271].copy()
 
