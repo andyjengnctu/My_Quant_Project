@@ -70,10 +70,8 @@ def _load_checklist_tables() -> Dict[str, List[List[str]]]:
     return {
         "B1": extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"),
         "B2": extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
-        "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
-        "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
-        "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
-        "F": extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要"),
+        "E": extract_markdown_table_rows(text, "E. 未完成缺口摘要"),
+        "F": extract_markdown_table_rows(text, "F. 已完成建議測試映射"),
         "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
@@ -93,6 +91,21 @@ def _ids_from_table(rows: List[List[str]], idx: int = 1) -> List[str]:
     for cols in rows:
         if len(cols) > idx:
             values.append(cols[idx])
+    return values
+
+
+def _ids_from_unfinished_summary(rows: List[List[str]], *, status: str | None = None, prefix: str | None = None) -> List[str]:
+    values: List[str] = []
+    for cols in rows:
+        if len(cols) < 2:
+            continue
+        item_id = cols[0].strip()
+        row_status = cols[1].strip()
+        if status is not None and row_status != status:
+            continue
+        if prefix is not None and not item_id.startswith(prefix):
+            continue
+        values.append(item_id)
     return values
 
 
@@ -187,9 +200,10 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     todo_ids = sorted(key for key, value in main_statuses.items() if value == "TODO")
     done_ids = sorted(key for key, value in main_statuses.items() if value == "DONE")
 
-    e1_ids = sorted(_ids_from_table(tables["E1"]))
-    e2_ids = sorted(_ids_from_table(tables["E2"]))
-    e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
+    e_rows = tables["E"]
+    e1_ids = sorted(row[0].strip() for row in e_rows if len(row) > 1 and row[1].strip() == "PARTIAL" and not row[0].strip().startswith("D"))
+    e2_ids = sorted(row[0].strip() for row in e_rows if len(row) > 1 and row[1].strip() == "TODO" and not row[0].strip().startswith("D"))
+    e3_ids = sorted(_ids_from_unfinished_summary(e_rows, prefix="D"))
     f_rows = tables["F"]
     f_ids_raw = _ids_from_table(f_rows, idx=0)
     f_ids = _sorted_unique(f_ids_raw)
@@ -375,6 +389,24 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     )
 
 
+    legacy_e_headings = {
+        heading: (heading in CHECKLIST_PATH.read_text(encoding="utf-8"))
+        for heading in (
+            "### E1. 目前所有 `PARTIAL` 的主表項目摘要",
+            "### E2. 目前所有 `TODO` 的主表項目摘要",
+            "### E3. 目前所有未完成的建議測試項目摘要",
+        )
+    }
+    results.append(
+        summarize_result(
+            "checklist_has_no_legacy_e_subsections",
+            not any(legacy_e_headings.values()),
+            detail=f"legacy_e_subsections={legacy_e_headings}",
+            extra={"legacy_e_subsections": legacy_e_headings},
+        )
+    )
+
+
     results.append(
         summarize_result(
             "checklist_done_d_summary_matches_convergence_done_records",
@@ -425,13 +457,13 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    unfinished_d_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] != "DONE")
+    unfinished_d_ids = sorted(_ids_from_unfinished_summary(tables["E"], prefix="D"))
     results.append(
         summarize_result(
-            "checklist_unfinished_d_summary_nonempty_when_main_has_gaps",
-            (len(partial_ids) + len(todo_ids) == 0) or bool(unfinished_d_ids),
-            detail=f"unfinished_d={unfinished_d_ids}",
-            extra={"unfinished_d_ids": unfinished_d_ids},
+            "checklist_unfinished_summary_nonempty_when_main_has_gaps",
+            (len(partial_ids) + len(todo_ids) == 0) or bool(e_rows),
+            detail=f"unfinished_rows={len(e_rows)} | unfinished_d={unfinished_d_ids}",
+            extra={"unfinished_row_count": len(e_rows), "unfinished_d_ids": unfinished_d_ids},
         )
     )
 

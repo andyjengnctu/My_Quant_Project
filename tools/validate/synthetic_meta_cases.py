@@ -81,7 +81,7 @@ def _load_main_table_catalog():
 
 def _load_done_d_rows():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    rows = extract_markdown_table_rows(text, "F. 目前所有 `DONE` 的建議測試項目摘要")
+    rows = extract_markdown_table_rows(text, "F. 已完成建議測試映射")
     parsed = []
     for cols in rows:
         if len(cols) < 3:
@@ -448,7 +448,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     try:
         mutated_text = _replace_markdown_table_row(
             original_text,
-            heading="F. 目前所有 `DONE` 的建議測試項目摘要",
+            heading="F. 已完成建議測試映射",
             row_id="D111",
             id_col_idx=0,
             update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2]],
@@ -489,7 +489,7 @@ def validate_checklist_no_legacy_f1_section_case(_base_params):
         add_check(results, "meta_checklist", case_id, "baseline_has_no_legacy_f1_section", True, False)
         return results, summary
 
-    insertion_target = "### F. 目前所有 `DONE` 的建議測試項目摘要"
+    insertion_target = "## F. 已完成建議測試映射"
     if insertion_target not in original_text:
         add_check(results, "meta_checklist", case_id, "target_f_section_exists_for_mutation", True, False)
         return results, summary
