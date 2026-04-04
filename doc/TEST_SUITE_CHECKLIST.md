@@ -123,7 +123,7 @@
 | B44 | P1 | Meta | `quick_gate` 不得移除裸 `except` static guard | DONE | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 必須保留 `bare_except_scan`，且遇到裸 `except` 時必須回報 FAIL 與命中文件 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B46 | P1 | 錯誤處理 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | DONE | 已補 dataset prepare fallback summary write traceability 與 console tail read-error traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗必須回寫 `fallback_write_errors` / stderr，且 `gather_recent_console_tail()` 讀檔失敗不得靜默略過 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
-| B55 | P1 | 契約 | consistency / execution-only 驗證路徑必須強制 fixed-capital，單股與單檔投組比較不得受複利污染 | DONE | 已補 direct synthetic contract，直接釘死 execution-only params 必須關閉 compounding，且 single backtest / 單檔 portfolio timeline / portfolio_sim prepared 在固定資金且虧損後不得超過剩餘資金再放大倉位，三者總報酬與 final equity 必須一致 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/real_case_runners.py`, `tools/validate/scanner_expectations.py`, `core/config.py` |
+| B55 | P1 | 契約 | consistency / execution-only 驗證路徑必須強制 fixed-capital，單股與單檔投組比較不得受複利污染 | DONE | 已補 direct synthetic contract，直接釘死 execution-only params 必須關閉 compounding，且 single backtest / 單檔 portfolio timeline / portfolio_sim prepared 在固定資金於虧損後與獲利後都不得再放大倉位；實際 entry budget 與 candidate sizing 兩條路徑都必須維持 fixed-capital，三者總報酬與 final equity 必須一致 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/real_case_runners.py`, `tools/validate/scanner_expectations.py`, `core/config.py`, `core/portfolio_entries.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -470,6 +470,8 @@
 | 2026-04-04 | B53 | 將 reduced dataset contract 改為目錄快照動態推導，移除固定成員 / 固定筆數依賴後收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` |
 | 2026-04-04 | B54 | 補上單股固定資金 contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_history_cases.py` |
 | 2026-04-04 | B55 | 補 execution-only fixed-capital parity contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-04 | B55 | 檢出 execution-only fixed-capital contract 未覆蓋獲利後 entry budget，主表改回 PARTIAL | DONE -> PARTIAL | portfolio 實際下單仍可能以 available_cash 恢復複利 |
+| 2026-04-04 | B55 | 補齊 gain-side entry budget contract 與 portfolio fixed-cap 路徑後收斂為 DONE | PARTIAL -> DONE | `core/config.py`, `core/portfolio_entries.py`, `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | T113 | 新增 run_all CLI error usage contract 並驗證 | NEW -> DONE | `validate_run_all_cli_error_usage_contract_case` |
 | 2026-04-04 | T114 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
 | 2026-04-04 | T115 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
@@ -489,3 +491,5 @@
 | 2026-04-04 | T129 | 將 reduced dataset contract 改為動態快照驗證並完成同步 | NEW -> DONE | `validate_reduced_dataset_dynamic_contract_case` |
 | 2026-04-04 | T130 | 新增單股固定資金 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` |
 | 2026-04-04 | T131 | 新增 execution-only fixed-capital parity contract 並驗證 | NEW -> DONE | `validate_execution_only_fixed_capital_contract_case` |
+| 2026-04-04 | T131 | 檢出 execution-only fixed-capital parity contract 僅覆蓋虧損側，改回 PARTIAL | DONE -> PARTIAL | 尚未釘死獲利後不得再放大倉位 |
+| 2026-04-04 | T131 | 擴充獲利後不得再放大倉位的 execution-only contract 並收斂完成 | PARTIAL -> DONE | `validate_execution_only_fixed_capital_contract_case` |

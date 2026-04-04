@@ -1,4 +1,4 @@
-from core.config import BUY_SORT_METHOD
+from core.config import BUY_SORT_METHOD, resolve_portfolio_entry_budget
 from core.trade_plans import (
     build_cash_capped_entry_plan,
     execute_pre_market_entry_plan,
@@ -29,6 +29,12 @@ def execute_reserved_entries_for_day(
         chosen_idx = 0
         chosen_entry_plan = None
 
+        effective_entry_budget = resolve_portfolio_entry_budget(
+            available_cash,
+            params.initial_capital,
+            params,
+        )
+
         if BUY_SORT_METHOD == 'PROJ_COST':
             chosen_key = None
             for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
@@ -38,7 +44,7 @@ def execute_reserved_entries_for_day(
                         'init_sl': probe_cand['init_sl'],
                         'init_trail': probe_cand['init_trail'],
                     },
-                    available_cash,
+                    effective_entry_budget,
                     params,
                 )
                 if probe_entry_plan is None:
@@ -61,7 +67,7 @@ def execute_reserved_entries_for_day(
                     'init_sl': cand['init_sl'],
                     'init_trail': cand['init_trail'],
                 },
-                available_cash,
+                effective_entry_budget,
                 params,
             )
             if chosen_entry_plan is None:
