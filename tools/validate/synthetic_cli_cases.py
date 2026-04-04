@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import importlib
 from unittest.mock import patch
@@ -11,6 +11,13 @@ from .checks import add_check
 def _capture_stdout(func, *args, **kwargs):
     buf = StringIO()
     with redirect_stdout(buf):
+        rc = func(*args, **kwargs)
+    return rc, buf.getvalue()
+
+
+def _capture_stderr(func, *args, **kwargs):
+    buf = StringIO()
+    with redirect_stderr(buf):
         rc = func(*args, **kwargs)
     return rc, buf.getvalue()
 
@@ -195,6 +202,25 @@ def validate_local_regression_cli_contract_case(_base_params):
         _assert_value_error(results, "cli_contract", case_id, f"{metric_prefix}_positional_arg_rejected", lambda main_func=main_func, program=program: main_func([program, "extra"]), "不支援的位置參數")
 
     summary["no_arg_case_count"] = len(no_arg_cases)
+    return results, summary
+
+
+def validate_run_all_cli_error_usage_contract_case(_base_params):
+    case_id = "RUN_ALL_CLI_ERROR_USAGE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    from tools.local_regression import run_all
+
+    rc, stderr_text = _capture_stderr(run_all.main, ["tools/local_regression/run_all.py", "--bad"])
+    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_main_rc", 2, rc)
+    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_error_usage_mentions_meta_quality", True, "meta_quality" in stderr_text)
+    add_check(results, "cli_contract", case_id, "run_all_invalid_flag_error_usage_mentions_only", True, "--only" in stderr_text)
+
+    rc, stderr_text = _capture_stderr(run_all.main, ["tools/local_regression/run_all.py", "--only"])
+    add_check(results, "cli_contract", case_id, "run_all_missing_only_value_rc", 2, rc)
+    add_check(results, "cli_contract", case_id, "run_all_missing_only_value_usage_mentions_meta_quality", True, "meta_quality" in stderr_text)
+
     return results, summary
 
 

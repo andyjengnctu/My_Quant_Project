@@ -113,6 +113,7 @@ from .synthetic_cli_cases import (
     validate_dataset_cli_contract_case,
     validate_extended_tool_cli_contract_case,
     validate_local_regression_cli_contract_case,
+    validate_run_all_cli_error_usage_contract_case,
 )
 from .synthetic_strategy_cases import (
     validate_model_io_schema_case,
@@ -242,6 +243,7 @@ def get_synthetic_validator_entries():
         _entry(validate_load_clean_df_data_quality_case, layer="data_quality", cost_class="fast", impacted_modules=("tools/validate/real_case_io.py", "core/data_utils.py")),
         _entry(validate_dataset_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/validate/cli.py",)),
         _entry(validate_local_regression_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py", "tools/local_regression/run_quick_gate.py")),
+        _entry(validate_run_all_cli_error_usage_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
         _entry(validate_extended_tool_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/optimizer/main.py", "tools/scanner/scan_runner.py")),
         _entry(validate_model_io_schema_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/study_utils.py", "tools/scanner/stock_processor.py")),
         _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py")),

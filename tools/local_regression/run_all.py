@@ -1124,7 +1124,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ValueError as exc:
         print(f"參數錯誤: {exc}", file=sys.stderr)
         program_name = resolve_cli_program_name(args, "tools/local_regression/run_all.py")
-        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke]", file=sys.stderr)
+        print(f"用法: python {program_name} [--only quick_gate,consistency,chain_checks,ml_smoke,meta_quality]", file=sys.stderr)
         return 2
 
     result = execute_all(selected_steps=parsed.get("only_steps"))
