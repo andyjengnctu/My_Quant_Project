@@ -337,6 +337,7 @@
 | D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 |
 | D126 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
 | D127 | `validate_console_tail_read_error_traceability_case` | B46 |
+| D128 | `validate_checklist_g_ordering_case` | B26 |
 
 ## G. 逐項收斂紀錄
 
@@ -515,3 +516,4 @@
 | 2026-04-04 | D125 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-04 | D126 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
 | 2026-04-04 | D127 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
+| 2026-04-04 | D128 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
