@@ -1,7 +1,6 @@
 # 忽略大型完整資料集；reduced dataset 需納入版本控制與 git archive
 /data/tw_stock_data_vip/
 *.csv
-!/data/tw_stock_data_vip_reduced/*.csv
 
 # 忽略 AI 記憶資料庫
 *.db
