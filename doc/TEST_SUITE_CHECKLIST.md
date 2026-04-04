@@ -96,7 +96,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard，以及 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 紀錄失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 紀錄失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及 legacy `D` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -129,157 +129,10 @@
 | C05 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | 驗欄位存在與語意；不驗具體績效數值 | `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
 | C06 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | 驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序與 export 成敗；不驗固定分數 | `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py` |
 
-## D. 建議先補的測試項目
-
-### D1. 長期固定測試：先收斂
-
-| ID | 建議測試名稱 | 目標 |
-|---|---|---|
-| D01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | 已完成；直接釘死不得當沖、買入當日不可賣出 |
-| D02 | `validate_synthetic_intraday_reprice_forbidden_case` | 已完成；直接釘死盤中不得改單 |
-| D03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | 已完成；直接釘死未成交不得同日換股 |
-| D04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | 已完成；直接釘死 stop/tp 只能作用於已持有部位 |
-| D05 | `validate_synthetic_fee_tax_net_equity_case` | 已完成；將 cash / final_equity / equity_curve / trade pnl 逐欄位對帳 |
-
-### D2. 長期固定測試：接續補強
-
-| ID | 建議測試名稱 | 目標 |
-|---|---|---|
-| D06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | 已完成；補強半倉與 completed trade 口徑 |
-| D07 | `validate_synthetic_missed_sell_accounting_case` | 已完成；補強 missed sell、trade log、stats 一致 |
-| D08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | 已完成；補強候選 / 掛單 / 成交 / miss buy 分層 |
-| D09 | `validate_synthetic_portfolio_history_filter_only_case` | 已完成；補強 history filter 僅用於投組層 / scanner |
-| D10 | `validate_synthetic_lookahead_prev_day_only_case` | 已完成；補強盤前只能讀前一日資料 |
-| D11 | `tests_unit_price_utils.py` | 已完成；釘死 tick、費率、稅金、sizing、half sell qty 邊界 |
-| D12 | `tests_unit_history_filters.py` | 已完成；釘死 EV、win rate、trade count 邊界 |
-| D13 | `tests_unit_portfolio_stats.py` | 已完成；釘死年化、MDD、R²、空序列邊界 |
-
-### D3. 可隨策略升級調整：最低維護線
-
-| ID | 建議項目 | 目標 |
-|---|---|---|
-| D14 | model input / output schema checks | 已完成；釘死 optimizer best_params / scanner result 的輸入輸出 schema、型別與缺值處理 |
-| D15 | `tools/local_regression/run_ml_smoke.py` | 已完成；已補 optimizer fixed-seed 雙跑與 best-params digest 一致性 |
-| D92 | `validate_scanner_worker_repeatability_case` | 已補 scanner worker repeatability，確認同資料同參數下 worker 級輸出穩定一致 |
-| D93 | `validate_scan_runner_repeatability_case` | 已補 `scan_runner` 入口重跑一致性，確認 scanner 正式入口摘要穩定一致 |
-| D16 | ranking / scoring output sanity checks | 已完成；釘死 buy_sort / portfolio score 單調性、有限值與 scanner sort_value 可比較性 |
-| D109 | `validate_optimizer_objective_export_contract_case` | 已補 optimizer objective / export contract，釘死 `INVALID_TRIAL_VALUE`、`fail_reason`、`profile_row`、`tp_percent` 還原優先序與 `best_params` export 成敗 |
-| D17 | `tools/validate/synthetic_reporting_cases.py` | 已完成；已補 console/Excel/portfolio export/test_suite 摘要的 reporting schema 相容性，並補齊 FAIL / manifest-blocked / partial-selected-steps 摘要路徑 |
-
-### D4. 品質補強
-
-| ID | 建議項目 | 目標 |
-|---|---|---|
-| D18 | contract tests for CSV / XLSX / JSON outputs | 已補 validate summary / optimizer profile / issue report 與正式入口關鍵輸出的 schema contract；本輪正式收斂範圍已完成 |
-| D28 | `validate_artifact_lifecycle_contract_case` | 已補 bundle/archive/root-copy/retention lifecycle、PASS/FAIL bundle selection、artifacts manifest 與 rerun 覆寫內容契約 |
-| D102 | `validate_dataset_fingerprint_contract_case` | 已補 reduced dataset member/content fingerprint 與 dataset prepare summary contract |
-| D103 | `validate_atomic_write_contract_case` | 已補 atomic write replace-failure recovery contract，要求舊內容保留且 temp 檔清除 |
-| D104 | `tools/local_regression/common.py` | 已補 artifacts manifest `sha256` 生成與對照實檔內容契約 |
-| D105 | `validate_test_suite_orchestrator_coverage_targets_case` | 已補 test suite orchestrator modules coverage target completeness / importability guard，並將 `tools/validate/preflight_env.py` 一併納入 completeness / importability 檢查 |
-| D110 | `validate_formal_step_entry_coverage_targets_case` | 已補 formal step entry wrappers coverage target completeness / importability guard，直接阻擋 `run_quick_gate.py` / `tools/validate/cli.py` 漏出 `COVERAGE_TARGETS` |
-| D106 | `validate_atomic_write_retry_contract_case` | 已補 atomic write transient retry contract，要求暫時性 `PermissionError` / share violation 重試後可成功寫入 |
-| D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | 已補 atomic write cleanup failure contract，要求 temp 檔清理失敗時仍保留原始 replace 例外並附註 cleanup 錯誤 |
-| D123 | `validate_validate_summary_atomic_write_contract_case` | 已補 `write_local_regression_summary()` 正式路徑 atomic write contract，要求 `validate_consistency_summary.json` replace 失敗時保留舊內容且清乾淨 temp 檔 |
-| D124 | `validate_quick_gate_bare_except_guard_contract_case` | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 不得移除 `bare_except_scan`，且裸 `except` 必須命中 FAIL |
-| D125 | `validate_quick_gate_output_path_guard_contract_case` | 已補 `quick_gate` output path / outputs root / log path guard contract，直接釘死正式入口 summary 必須保留關鍵步驟，且 guard FAIL 時需傳遞到 `failed_steps` |
-| D126 | `validate_dataset_prepare_fallback_write_traceability_case` | 已補 dataset prepare fallback summary write traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗不得靜默吞掉，必須回寫 `fallback_write_errors`，且兩個 fallback 檔都寫不出時需輸出 stderr 訊息 |
-| D127 | `validate_console_tail_read_error_traceability_case` | 已補 console tail read-error traceability contract，直接釘死 `gather_recent_console_tail()` 讀不到 log 時不得靜默略過，必須把讀檔錯誤寫回 tail 內容 |
-| D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | 已補 `run_all.main()` dataset prepare PASS 主路徑 contract，直接驗證正式入口可保留 dataset fingerprint 並完成 master summary |
-| D30 | `validate_params_io_error_path_case` | 已補壞 JSON、缺必要欄位、未知欄位、缺檔時的 fail-fast 與錯誤訊息定位 |
-| D31 | `validate_module_loader_error_path_case` | 已補 syntax error、缺必要屬性與 checked path/reason 彙整的錯誤路徑 |
-| D32 | `validate_preflight_error_path_case` | 已補 requirements 檔缺失、非法 steps、import failure detail 的錯誤路徑 |
-| D46 | `validate_downloader_market_date_fallback_case` | 已補 FinMind / YFinance 皆失敗時的 market-date fallback、issue log 與 weekday 回退口徑 |
-| D47 | `validate_downloader_sync_error_path_case` | 已補 downloader sync 對空資料 / RequestException 的錯誤聚合、ticker 可定位與 issue log path 回傳 |
-| D48 | `validate_downloader_main_error_path_case` | 已補 downloader main 在全失敗時的 RuntimeError 摘要、計數與 issue log path 輸出 |
-| D49 | `validate_local_regression_summary_contract_case` | 已補 local regression summaries（含 quick gate readonly compile、runtime FAIL summary 與 console artifact）的 schema / summary contract |
-| D60 | `validate_synthetic_setup_index_prev_day_only_case` | 已補 setup index prev-day-only synthetic case，釘死 setup index 不得偷看當日資料 |
-| D61 | `validate_downloader_universe_fetch_error_path_case` | 已補 universe fetch 全失敗 fatal error path、錯誤摘要與 issue log 可定位性 |
-| D62 | `validate_downloader_universe_screening_init_error_path_case` | 已補 universe screening 初始化失敗 fatal error path 與錯誤訊息定位 |
-| D33 | `validate_sanitize_ohlcv_expected_behavior_case` | 已補髒資料清洗 expected behavior：負成交量修正、零量保留、重複日期去重、亂序排序與 OHLC/NaN 壞列清除 |
-| D34 | `validate_sanitize_ohlcv_failfast_case` | 已補缺少日期欄、缺必要欄位、全列無效、清洗後列數不足的 fail-fast |
-| D35 | `validate_load_clean_df_data_quality_case` | 已補 `real_case_io.load_clean_df()` 與資料清洗整合案例，確認 sanitize stats 與清洗後排序/列數一致 |
-| D36 | `validate_dataset_cli_contract_case` | 已補 dataset wrapper CLI 契約：help、預設 passthrough、`--dataset` 值傳遞、未知參數與位置參數拒絕 |
-| D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化，並納入 `apps/package_zip.py` / `apps/smart_downloader.py` 等 no-arg 正式入口的 help 與未知參數 / 位置參數拒絕 |
-| D117 | `validate_run_all_cli_error_usage_contract_case` | 已補 `run_all.py` 參數錯誤 stderr usage 契約，直接釘死 `--only` 用法列必須同步列出 `meta_quality` |
-| D45 | `validate_extended_tool_cli_contract_case` | 已補剩餘直接入口 CLI：`tools/optimizer/main.py`、`tools/portfolio_sim/main.py`、`tools/scanner/scan_runner.py`、`tools/validate/main.py`、`tools/debug/trade_log.py`、`apps/test_suite.py` 的 help 與參數拒絕契約 |
-| D19 | `tools/local_regression/run_chain_checks.py` | 已完成；已補 chain snapshot 雙跑 digest 與 rerun payload 穩定性 |
-| D94 | `validate_optimizer_raw_cache_rerun_consistency_case` | 已補 raw cache rerun / mutation isolation，確認 rerun 不得污染既有快取結果 |
-| D95 | `validate_run_all_repeatability_case` | 已補 `run_all.py` 同 run dir rerun summary / bundle repeatability，確認正式入口重跑結果穩定一致 |
-| D96 | `validate_no_top_level_import_cycles_case` | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） |
-| D41 | `tools/local_regression/run_chain_checks.py` scanner reduced snapshot rerun digest | 已補 scanner reduced snapshot 雙跑 digest，確認 scanner 候選 / 狀態 / issue line 在同資料同參數下穩定一致 |
-| D20 | coverage report baseline | 已補 `run_meta_quality.py` 產出 synthetic coverage suite 的 line / branch baseline、key target presence/hit 與 manifest 化 minimum threshold gate，並已同步到 `apps/test_suite.py` 摘要顯示 |
-| D21 | performance baseline checks | 已補 `run_meta_quality.py` 讀取同輪 step summaries 與 optimizer profile summary，正式檢查 reduced suite duration / total duration / optimizer 平均 trial wall time，並新增 traced peak memory regression gate；各 step summary 的 `duration_sec` 已補齊，budget 依實測 reduced baseline 校正；chain checks 同輪 prepared context / scanner snapshot / cached single-backtest stats 已去重，replay counts 併入第一次 timeline 主流程；`portfolio_sim` 驗證改直接共用 `validate_one_ticker()` 已產生的 prepared df / standalone logs，不再重讀 CSV、重新 sanitize / prepare；單檔 portfolio context 也改共用 `fast_data / sorted_dates / start_year`；`scanner` / `debug_trade_log` 驗證也已補 prepared-context 等價契約；real-case `scanner_ref_stats` 改直接吃 `clean_df` fast path；同輪 `validate_consistency` 已同步寫出 synthetic coverage artifacts，`run_meta_quality.py` 可直接重用，避免再跑一次 synthetic suite |
-| D63 | `validate_meta_quality_performance_memory_contract_case` | 已補 meta quality performance memory contract，直接釘死 step peak memory / max peak memory / meta quality peak memory 欄位與 budget gate |
-| D64 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | 已補 `apps/test_suite.py` meta quality traced peak memory 摘要顯示契約 |
-| D65 | `validate_portfolio_sim_prepared_tool_contract_case` | 已補 `portfolio_sim` 單檔工具驗證 prepared-context 路徑與既有 temp-dir 路徑等價契約，避免加速後統計口徑漂移 |
-| D66 | `validate_scanner_prepared_tool_contract_case` | 已補 `vip_scanner` prepared-context / precomputed-stats 路徑與既有 file-path 路徑等價契約，避免加速後候選狀態與排序口徑漂移 |
-| D67 | `validate_debug_trade_log_prepared_tool_contract_case` | 已補 `debug_trade_log` prepared-context 路徑與既有 raw-df 路徑等價契約，避免加速後明細列內容與逐筆損益 sequence 漂移 |
-| D68 | `validate_scanner_reference_clean_df_contract_case` | 已補 real-case `scanner_ref_stats` clean-df fast path 與既有 file-path 路徑等價契約，避免加速後 scanner 參考 stats 口徑漂移 |
-| D69 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | 已補 `run_meta_quality.py` 重用同輪 `validate_consistency` coverage artifacts 契約，避免同一輪再重跑一次 synthetic coverage suite |
-| D70 | `validate_registry_checklist_entry_consistency_case` imported / defined validator completeness guard | 已補 imported / defined `validate_*` cases 與 synthetic registry 完整一致 formal guard |
-| D108 | `validate_synthetic_registry_metadata_contract_case` | 已補 synthetic registry metadata contract，要求每個 validator 具備合法 `layer` / `cost_class` / `impacted_modules`，且 metadata 名稱需對齊 validator |
-| D71 | `run_meta_quality.py` checklist main / `F2` / `G` sync guard | 已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard |
-| D72 | `run_meta_quality.py` checklist `DONE` summary omission blocker | 已補 checklist `DONE` 摘要缺漏自動偵測與阻擋 |
-| D111 | `validate_checklist_g_single_note_entry_delimiter_case` | 已補 `G` 備註欄 delimiter-agnostic single-entry guard，直接阻擋 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口 |
-| D112 | `validate_checklist_f2_single_entry_delimiter_case` | 已補 `F2` 測試入口 delimiter-agnostic single-entry guard，直接阻擋 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口 |
-| D113 | `validate_checklist_g_transition_format_case` | 已補 `G` transition format guard，直接阻擋缺少 `->`、非法狀態值或非實際狀態轉移格式 |
-| D114 | `validate_checklist_done_d_detail_resolved_case` | 已補 DONE 的 D 區細項 resolved-detail guard，直接阻擋已收斂項目仍保留未完成語彙 |
-| D115 | `validate_formal_step_implementation_coverage_targets_case` | 已補 split formal-step implementation coverage target completeness / importability guard，直接阻擋 `tools/validate/main.py` 漏出 `COVERAGE_TARGETS` |
-| D73 | `validate_no_reverse_app_layer_dependencies_case` | 已補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，避免 formal helper / synthetic reporting 再度耦合 app 入口 |
-| D22 | registry / checklist / main-entry consistency checks | 已完成；已補 imported / defined validate case、synthetic 正式註冊清單完整一致，以及 registry 反向對照 `F2` DONE validator 摘要完整性的 formal guard，並保留單一正式入口與 checklist 對照驗證 |
-| D29 | formal non-synthetic entry consistency checks | 已完成；確認 `run_all.py` / `preflight_env.py` / `apps/test_suite.py` / `PROJECT_SETTINGS.md` 的正式步驟一致 |
-| D26 | `validate_cmd_document_contract_case` | 釘死 `doc/CMD.md` 的 Python 指令、步驟名與腳本存在性契約 |
-| D27 | `validate_display_reporting_sanity_case` | 已補 scanner header / start banner / summary、strategy dashboard 與 `core/display.py` re-export 顯示契約 |
-| D42 | `validate_issue_excel_report_schema_case` | 已補 validate issue Excel 輸出檔的 sheet / header / ticker text format schema |
-| D43 | `validate_portfolio_export_report_artifacts_case` | 已補 portfolio report Excel / HTML 輸出檔 schema 與 artifact 路徑契約 |
-| D50 | `validate_test_suite_summary_failure_reporting_case` | 已補 `apps/test_suite.py` 腳本失敗時的 failure reason 與 rerun command 摘要契約 |
-| D51 | `validate_test_suite_summary_manifest_failure_reporting_case` | 已補 manifest failed 時 preflight / dataset / regression steps blocked 摘要契約 |
-| D52 | `validate_test_suite_summary_optional_dataset_skip_case` | 已補 partial selected-steps 結果下 dataset prepare not_required 與 not_selected 摘要契約 |
-| D53 | `validate_test_suite_summary_preflight_failure_reporting_case` | 已補 preflight fail 時 blocked steps、bundle 空值與步驟名稱顯示摘要契約 |
-| D54 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | 已補 dataset prepare fail 時 blocked regression steps 與錯誤細節摘要契約 |
-| D55 | `validate_test_suite_summary_unreadable_payload_reporting_case` | 已補 step summary unreadable 時 `summary_unreadable` / `error_type` 顯示摘要契約 |
-| D56 | `validate_run_all_preflight_early_failure_dataset_contract_case` | 已補 `run_all.py` preflight / dataset_prepare 早退時的 contract：除 `not_run_step_names` 與正式 schema 外，`master_summary.json` 的 `payload_failures` 也必須與正常路徑維持一致語意，且合法 FAIL payload 不得被誤標為 `summary_unreadable`，避免早退 bundle 只補殼不補失敗細節 |
-| D74 | `validate_run_all_manifest_failure_master_summary_contract_case` | 已補 `run_all.py` manifest failed 時 `master_summary.json` 仍須維持正式 schema，並以 blocked placeholder 補齊 preflight / dataset_prepare / payload_failures 契約 |
-| D57 | `validate_test_suite_summary_checklist_status_sync_case` | 已補 `apps/test_suite.py` meta quality 摘要需直接使用 checklist 的 `DONE / PARTIAL / TODO / N/A` 狀態語彙，並顯示 partial / todo / done ID 預覽 |
-| D58 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | 已補 `apps/test_suite.py` meta quality 摘要顯示 coverage line / branch、minimum threshold、missing / zero-covered targets 與 checklist guard 狀態 |
-| D23 | known-bad fault injection checks | 已完成；對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為並驗證既有測試會 fail |
-| D24 | independent oracle / golden numeric cases | 已完成；以獨立 oracle 對照 net sell、position size、history EV、annual return / sim years |
-| D25 | checklist sufficiency review | 已完成；已補主表 / `F2` / `G` 收斂紀錄完整同步 formal guard，並阻擋 `DONE` 摘要缺漏、convergence 狀態失同步、`F2` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式，以及已標記 `DONE` 的 D 區細項仍保留未完成描述；另已補 split formal-step implementation coverage target completeness guard，避免 `cli.py` 還在但 `tools/validate/main.py` 漏出 coverage baseline，並將 `tools/validate/preflight_env.py` 納入 orchestrator coverage completeness guard |
-| D59 | `validate_single_formal_test_entry_contract_case` | 已補 `apps/test_suite.py` 單一正式入口契約，確認無 legacy app test entry 與可疑替代測試入口檔名 |
-| D75 | `validate_synthetic_same_bar_stop_priority_case` | 已補同 K 棒停利/停損取最壞停損 synthetic case，直接釘死同棒雙觸發時必須以停損結算 |
-| D76 | `validate_synthetic_half_tp_full_year_case` | 已補半倉停利與 full-year yearly return synthetic case，確認半倉列與年度報酬列同步存在 |
-| D77 | `validate_synthetic_extended_miss_buy_case` | 已補 extended miss buy synthetic case，確認 extended candidate / missed buy / scanner status 一致 |
-| D78 | `validate_synthetic_competing_candidates_case` | 已補同日競爭候選排序 synthetic case，確認 tie-break 後只允許單一中選標的成交 |
-| D79 | `validate_synthetic_same_day_sell_block_case` | 已補當日賣出後不得同日再買 synthetic case，確認再投入必須延後到次日 |
-| D80 | `validate_synthetic_rotation_t_plus_one_case` | 已補 rotation T+1 synthetic case，確認汰弱賣出後僅能於次日再評估買進 |
-| D81 | `validate_synthetic_missed_buy_no_replacement_case` | 已補 missed buy 後不得盤中改掛替代標的 synthetic case |
-| D82 | `validate_synthetic_unexecutable_half_tp_case` | 已補不可執行半倉停利 synthetic case，確認 trade log / portfolio rows 均不得產生假半倉列 |
-| D83 | `validate_synthetic_history_ev_threshold_case` | 已補 history EV threshold equality synthetic case，確認 EV 等於門檻時仍依規格視為合格 |
-| D84 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | 已補單股回測不得被自身 history filter 擋下的 direct synthetic case |
-| D85 | `validate_synthetic_pit_same_day_exit_excluded_case` | 已補 PIT same-day exit excluded synthetic case，確認 exit_date 當天不得偷看同日剛結束交易 |
-| D86 | `validate_synthetic_pit_multiple_same_day_exits_case` | 已補 PIT 多筆同日 exit synthetic case，確認同日所有已平倉交易皆不得納入當日 PIT 統計 |
-| D87 | `validate_synthetic_proj_cost_cash_capped_case` | 已補 projected-cost / cash-capped order synthetic case，確認排序估計成本不得繞過實際可用現金上限 |
-| D88 | `validate_synthetic_param_guardrail_case` | 已補 strategy param guardrail synthetic case，確認非法參數值 fail-fast，且 runtime worker 參數受界限約束 |
-| D89 | `validate_validate_console_summary_reporting_case` | 已補 validate console summary reporting contract，確認 counts / path / fail preview 顯示穩定 |
-| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | 已補 non-candidate setup 不得 seed / revive extended candidate synthetic case，並完成 formal import / registry 接線，確認被 history filter 拒絕的 setup 不得在次日 retroactively 變成延續候選 |
-| D90 | `validate_portfolio_yearly_report_schema_case` | 已補 portfolio yearly report schema contract，確認年度報酬表欄位與空資料 schema 穩定 |
-| D91 | `validate_test_suite_summary_reporting_case` | 已補 test suite PASS summary reporting contract，確認 bundle / 步驟摘要 / 重點結果 / retention 顯示穩定 |
-
-### D5. coverage 治理補強
-
-| ID | 建議項目 | 目標 |
-|---|---|---|
-| D97 | `validate_core_trading_modules_in_coverage_targets_case` | 已補核心交易模組 coverage target completeness guard，直接阻擋核心交易模組未被納入 `COVERAGE_TARGETS` |
-| D98 | `validate_critical_file_coverage_minimum_gate_case` | 已補 `critical files` 的 per-file line / branch minimum coverage guard，直接阻擋 only-overall gate 漏檢 |
-| D99 | `validate_coverage_threshold_floor_case` | 已補 overall coverage threshold floor guard，直接阻擋 coverage minimum threshold 低於正式基線，並要求 branch floor 不得回退 |
-| D100 | `validate_entry_path_critical_coverage_gate_case` | 已補 entry path critical coverage gate，將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並直接阻擋漏列 |
-| D101 | `validate_critical_coverage_threshold_floor_case` | 已補 critical per-file threshold stage-2 floor guard，直接阻擋 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 低於正式基線，並要求 critical branch floor 不得回退 |
-| D116 | `validate_peak_traced_memory_tracker_context_management_case` | 已補 `PeakTracedMemoryTracker` lifecycle guard，直接阻擋手動 `__enter__` / `__exit__` 與缺少 `with PeakTracedMemoryTracker() as tracker:` 的正式步驟腳本 |
-| D118 | `validate_no_legacy_app_entry_doc_references_case` | 已補文件殘留 legacy app 測試入口 / 手動刪檔指引 guard，直接阻擋 `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 再出現已移除入口或手動刪檔說明 |
-| D119 | `validate_app_thin_wrapper_export_contract_case` | 已補 thin wrapper lazy export contract，直接阻擋 `LAZY_EXPORTS` 重複、`__all__` 漏列與 lazy symbol 無法解析 |
-| D120 | `validate_package_zip_runtime_contract_case` | 已補 `apps/package_zip.py` runtime contract，直接釘死 root 舊 ZIP 必須全數歸檔到 `arch/`，且新 ZIP 不得夾帶 `__pycache__/` 與 `*.pyc` |
-
 ## E. 未完成缺口摘要
+
+使用方式：本節僅在同輪無法一次清空時暫存未完成缺口；若本輪已清空，維持空表即可，不再另設 `D` 區 backlog。
+
 
 說明：本節只作為目前所有未完成項目的快速索引，方便優先查看 `PARTIAL` 與 `TODO`；主維護來源仍是本檔前文各表格，不另作第二份主清單。
 
@@ -388,7 +241,7 @@
 | D111 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 | 2026-04-03 |
 | D112 | `validate_checklist_f2_single_entry_delimiter_case` | B26 | 2026-04-03 |
 | D113 | `validate_checklist_g_transition_format_case` | B26 | 2026-04-03 |
-| D114 | `validate_checklist_done_d_detail_resolved_case` | B26 | 2026-04-03 |
+| D114 | `validate_checklist_no_legacy_d_section_case` | B26 | 2026-04-03 |
 | D115 | `validate_formal_step_implementation_coverage_targets_case` | B39 | 2026-04-03 |
 | D73 | `validate_no_reverse_app_layer_dependencies_case` | B23 | 2026-04-03 |
 | D27 | `validate_display_reporting_sanity_case` | B21 | 2026-04-02 |
@@ -664,7 +517,7 @@
 | 2026-04-03 | D111 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
 | 2026-04-03 | D112 | 新增 `F2` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
 | 2026-04-03 | D113 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
-| 2026-04-03 | D114 | 新增 DONE 的 D 區細項 resolved-detail guard 並驗證 | NEW -> DONE | `validate_checklist_done_d_detail_resolved_case` |
+| 2026-04-03 | D114 | 新增 checklist legacy `D` 區移除 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_d_section_case` |
 | 2026-04-03 | D115 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
 | 2026-04-03 | B38 | 將 formal pipeline step entry wrappers 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |
 | 2026-04-03 | B39 | 將 split formal-step implementation modules 納入 coverage targets，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/meta_quality_targets.py` |

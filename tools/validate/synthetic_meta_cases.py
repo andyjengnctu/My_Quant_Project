@@ -461,47 +461,47 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     return results, summary
 
 
-def validate_checklist_done_d_detail_resolved_case(_base_params):
+def validate_checklist_no_legacy_d_section_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
-    case_id = "META_CHECKLIST_DONE_D_DETAIL_RESOLVED"
+    case_id = "META_CHECKLIST_NO_LEGACY_D_SECTION"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="D5. coverage 治理補強",
-            row_id="D97",
-            id_col_idx=0,
-            update_cols=lambda cols: [
-                cols[0],
-                cols[1],
-                "應直接阻擋核心交易模組未被納入 `COVERAGE_TARGETS` 的 coverage 治理缺口",
-            ],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_done_d_row_exists_for_mutation", True, False)
+    if "## D. 建議先補的測試項目" in original_text:
+        add_check(results, "meta_checklist", case_id, "baseline_has_no_legacy_d_section", True, False)
         return results, summary
 
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_done_d_detail_") as temp_dir:
+    mutated_block = (
+        "## D. 建議先補的測試項目\n\n"
+        "| ID | 測試 / 工具 | 說明 |\n"
+        "|---|---|---|\n"
+        "| D97 | `validate_core_trading_modules_in_coverage_targets_case` | legacy backlog section should not return |\n\n"
+    )
+    insertion_target = "## E. 未完成缺口摘要"
+    if insertion_target not in original_text:
+        add_check(results, "meta_checklist", case_id, "target_e_section_exists_for_mutation", True, False)
+        return results, summary
+    mutated_text = original_text.replace(insertion_target, mutated_block + insertion_target, 1)
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_legacy_d_section_") as temp_dir:
         mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
         mutated_path.write_text(mutated_text, encoding="utf-8")
         with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    detail_result = result_by_name.get("checklist_done_d_rows_use_resolved_detail_text", {})
-    unresolved_rows = detail_result.get("unresolved_detail_rows")
-    if unresolved_rows is None:
-        unresolved_rows = detail_result.get("extra", {}).get("unresolved_detail_rows", [])
+    legacy_result = result_by_name.get("checklist_has_no_legacy_d_section", {})
+    legacy_present = legacy_result.get("legacy_d_section_present")
+    if legacy_present is None:
+        legacy_present = legacy_result.get("extra", {}).get("legacy_d_section_present")
 
-    add_check(results, "meta_checklist", case_id, "mutated_done_d_detail_guard_fails", "FAIL", detail_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_done_d_detail_reports_target_row", True, any(row.get("id") == "D97" for row in unresolved_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_legacy_d_section_guard_fails", "FAIL", legacy_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_legacy_d_section_reports_presence", True, bool(legacy_present))
 
-    summary["guard_status"] = detail_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in unresolved_rows]
+    summary["guard_status"] = legacy_result.get("status")
+    summary["legacy_d_section_present"] = bool(legacy_present)
     return results, summary
 
 
