@@ -114,6 +114,20 @@ def _latest_statuses_from_convergence_rows(rows: List[List[str]]) -> Dict[str, s
     return statuses
 
 
+def _tracking_id_sort_key(item_id: str) -> tuple[str, int, str]:
+    normalized = str(item_id or "").strip()
+    match = re.fullmatch(r"([A-Za-z]+)(\d+)(.*)", normalized)
+    if not match:
+        return (normalized, -1, "")
+    return (match.group(1), int(match.group(2)), match.group(3))
+
+
+def _convergence_row_sort_key(row: List[str]) -> tuple[str, tuple[str, int, str]]:
+    date_value = row[0].strip() if len(row) > 0 else ""
+    item_id = row[1].strip() if len(row) > 1 else ""
+    return (date_value, _tracking_id_sort_key(item_id))
+
+
 def _extract_checklist_note_entries(note: str) -> List[str]:
     note_entries: Set[str] = set()
     for raw_token in re.findall(r"`([^`]+)`", note):
@@ -319,6 +333,36 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_g_note_rows,
             detail=f"invalid={invalid_g_note_rows}",
             extra={"invalid_note_rows": invalid_g_note_rows},
+        )
+    )
+
+    invalid_g_order_rows = []
+    previous_sort_key = None
+    previous_row = None
+    for row in tables["G"]:
+        current_key = _convergence_row_sort_key(row)
+        if previous_sort_key is not None and current_key < previous_sort_key:
+            invalid_g_order_rows.append(
+                {
+                    "previous": {
+                        "date": previous_row[0].strip() if previous_row and len(previous_row) > 0 else "",
+                        "id": previous_row[1].strip() if previous_row and len(previous_row) > 1 else "",
+                    },
+                    "current": {
+                        "date": row[0].strip() if len(row) > 0 else "",
+                        "id": row[1].strip() if len(row) > 1 else "",
+                    },
+                }
+            )
+            break
+        previous_sort_key = current_key
+        previous_row = row
+    results.append(
+        summarize_result(
+            "checklist_g_rows_sorted_by_date_then_id",
+            not invalid_g_order_rows,
+            detail=f"invalid={invalid_g_order_rows}",
+            extra={"invalid_order_rows": invalid_g_order_rows},
         )
     )
     results.append(

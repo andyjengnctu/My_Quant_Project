@@ -567,6 +567,46 @@ def validate_checklist_g_transition_format_case(_base_params):
     return results, summary
 
 
+def validate_checklist_g_ordering_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_ORDERING"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="D01",
+            id_col_idx=1,
+            update_cols=lambda cols: ["2026-04-05"] + cols[1:],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_order_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_order_result = result_by_name.get("checklist_g_rows_sorted_by_date_then_id", {})
+    invalid_rows = g_order_result.get("invalid_order_rows")
+    if invalid_rows is None:
+        invalid_rows = g_order_result.get("extra", {}).get("invalid_order_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_order_guard_fails", "FAIL", g_order_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_order_reports_invalid_pair", True, bool(invalid_rows))
+
+    summary["guard_status"] = g_order_result.get("status")
+    summary["invalid_order_rows"] = invalid_rows
+    return results, summary
+
+
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
     results = []
