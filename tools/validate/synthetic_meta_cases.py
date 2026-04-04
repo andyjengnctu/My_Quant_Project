@@ -19,6 +19,7 @@ from .meta_contracts import (
     load_defined_validate_names_from_synthetic_case_modules,
     load_imported_validate_names_from_synthetic_main_entry,
     load_synthetic_registry_entries_from_source,
+    summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
     summarize_single_formal_test_entry_contract,
@@ -254,6 +255,20 @@ def validate_single_formal_test_entry_contract_case(_base_params):
     summary["app_py_files"] = contract["app_py_files"]
     summary["legacy_entry_paths"] = contract["legacy_entry_paths"]
     summary["suspicious_app_entries"] = contract["suspicious_app_entries"]
+    return results, summary
+
+
+def validate_no_legacy_app_entry_doc_references_case(_base_params):
+    case_id = "META_NO_LEGACY_APP_ENTRY_DOC_REFERENCES"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    contract = summarize_legacy_app_entry_doc_reference_contract(PROJECT_ROOT)
+    add_check(results, "meta_entry_contract", case_id, "cmd_and_architecture_have_no_legacy_app_entry_references", [], contract["legacy_doc_reference_lines"])
+    add_check(results, "meta_entry_contract", case_id, "docs_have_no_manual_delete_guidance_for_app_entries", [], contract["manual_delete_guidance_lines"])
+
+    summary["legacy_doc_reference_lines"] = contract["legacy_doc_reference_lines"]
+    summary["manual_delete_guidance_lines"] = contract["manual_delete_guidance_lines"]
     return results, summary
 
 

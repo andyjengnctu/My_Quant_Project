@@ -171,9 +171,9 @@ local regression 與 validate 的 reduced 測試資料來源固定為：
 打包給 ChatGPT 前，請先確認該資料夾已隨專案一併納入 ZIP。
 
 
-### apps 清理
+### apps 入口
 
-若你已改用 `apps/test_suite.py`，可手動刪除舊的 `apps/local_regression.py` 與 `apps/validate_consistency.py`，避免 `apps/` 內出現多個測試入口造成干擾。
+正式測試入口已收斂為 `apps/test_suite.py`；`apps/` 不再保留舊的 regression / consistency 測試入口。
 
 
 ## Test suite bundle

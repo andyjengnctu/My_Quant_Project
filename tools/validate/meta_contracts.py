@@ -10,6 +10,7 @@ PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT = "`tools/local_regression/formal_pipeline
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/test_suite.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口"
 LEGACY_APP_ENTRY_PATHS = ("apps/local_regression.py", "apps/validate_consistency.py")
+LEGACY_DOC_GUIDANCE_FILES = ("doc/CMD.md", "doc/ARCHITECTURE.md")
 SUSPICIOUS_APP_ENTRY_PATTERN = re.compile(r"(?:test|validate|regression|consistency)", re.IGNORECASE)
 
 
@@ -379,4 +380,24 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
         "project_settings_declares_registry_source": PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT in project_settings_text,
         "cmd_declares_single_entry": CMD_SINGLE_ENTRY_TEXT in cmd_text,
         "architecture_declares_single_entry": ARCHITECTURE_SINGLE_ENTRY_TEXT in architecture_text,
+    }
+
+
+
+def summarize_legacy_app_entry_doc_reference_contract(project_root: Path) -> Dict[str, Any]:
+    legacy_doc_reference_lines: List[str] = []
+    manual_delete_guidance_lines: List[str] = []
+
+    for rel_path in LEGACY_DOC_GUIDANCE_FILES:
+        path = project_root / rel_path
+        for lineno, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            stripped = raw_line.strip()
+            if any(legacy_path in stripped for legacy_path in LEGACY_APP_ENTRY_PATHS):
+                legacy_doc_reference_lines.append(f"{rel_path}:{lineno}:{stripped}")
+            if "手動刪除" in stripped and ("apps/" in stripped or "刪檔" in stripped):
+                manual_delete_guidance_lines.append(f"{rel_path}:{lineno}:{stripped}")
+
+    return {
+        "legacy_doc_reference_lines": legacy_doc_reference_lines,
+        "manual_delete_guidance_lines": manual_delete_guidance_lines,
     }

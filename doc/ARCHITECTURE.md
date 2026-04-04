@@ -217,7 +217,7 @@ tools/validate/
 - `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口，且必須串接所有已實作測試；正式步驟順序由 `tools/local_regression/formal_pipeline.py` 提供；先跑完整 regression，再依失敗摘要決定是否用 `run_all.py --only ...` 展開。
 - `tools/validate/cli.py` 保留 validate standalone CLI；一致性驗證不再需要佔用 `apps/` 入口位置。
 - `core/test_suite_reporting.py` 集中 `apps/test_suite.py` 結果摘要格式與 step label 單一口徑，供 formal entry、meta quality coverage probe 與 synthetic reporting contract 共用，避免 `tools/` 反向依賴 `apps/`。
-- 若工作樹仍保留舊的 `apps/local_regression.py` / `apps/validate_consistency.py`，可在切換到 `apps/test_suite.py` 後手動刪除，以減少 `apps/` 視覺干擾。
+- 正式測試入口已收斂為 `apps/test_suite.py`；`apps/` 不再保留舊的 regression / consistency 測試入口。
 
 
 ## Test suite bundle

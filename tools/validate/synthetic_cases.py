@@ -52,6 +52,7 @@ from .synthetic_meta_cases import (
     validate_formal_step_entry_coverage_targets_case,
     validate_formal_step_implementation_coverage_targets_case,
     validate_known_bad_fault_injection_case,
+    validate_no_legacy_app_entry_doc_references_case,
     validate_no_reverse_app_layer_dependencies_case,
     validate_no_top_level_import_cycles_case,
     validate_peak_traced_memory_tracker_context_management_case,
