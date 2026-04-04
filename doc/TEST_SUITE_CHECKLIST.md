@@ -81,6 +81,7 @@
 | B08 | P0 | 停利/停損只能對已持有部位預先設定 | DONE | 已新增 zero-qty position direct assertion，確認無持倉時 stop/tp / indicator sell 不得產生任何 exit event | `tools/validate/synthetic_take_profit_cases.py` |
 | B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | DONE | 已新增 candidate / filled / missed-buy 三層直接案例，並補 non-candidate setup 不得 seed / revive extended candidate，釘死狀態不得混用 | `tools/validate/synthetic_flow_cases.py` |
 | B10 | P1 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | DONE | 已新增 cross-tool case，直接對照單股回測仍成交、scanner 端仍拒絕非 candidate | `tools/validate/synthetic_history_cases.py` |
+| B54 | P1 | 單股回測不得使用複利 sizing；固定以 `initial_capital` 驗證策略適用性 | DONE | 已新增 direct synthetic case，直接釘死即使 `use_compounding=True`，單股回測連續獲利後後續 sizing 與 `asset_growth/score` 仍必須維持 fixed-capital 口徑，避免 scanner / debug / strategy validation 被單檔複利污染 | `tools/validate/synthetic_history_cases.py`, `core/backtest_core.py`, `core/backtest_finalize.py`, `tools/debug/backtest.py` |
 
 ### B2. 未明列於專案設定，但正式 test suite 應納入
 
@@ -293,6 +294,7 @@
 | T127 | `validate_strategy_minimum_viability_case` | B50 |
 | T128 | `validate_strategy_reporting_schema_compatibility_case` | B51 |
 | T129 | `validate_reduced_dataset_dynamic_contract_case` | B53 |
+| T130 | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` | B54 |
 
 ## G. 逐項收斂紀錄
 
@@ -460,6 +462,7 @@
 | 2026-04-04 | B44 | 補上 quick_gate bare-except static guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B45 | 補上 quick_gate output path / outputs root / log path guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B46 | 補上 formal pipeline fallback / console tail traceability contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-04 | B54 | 補上單股固定資金 contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_history_cases.py` |
 | 2026-04-04 | B48 | 補 strategy-layer repeatability formal case 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-04 | B50 | 補 strategy minimum viability formal smoke 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-04 | B51 | 補 strategy reporting / artifact schema compatibility formal case 後收斂為 DONE | TODO -> DONE | `tools/validate/synthetic_strategy_cases.py` |
@@ -475,6 +478,7 @@
 | 2026-04-04 | T121 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-04 | T122 | 新增 dataset prepare fallback write traceability contract 並驗證 | NEW -> DONE | `validate_dataset_prepare_fallback_write_traceability_case` |
 | 2026-04-04 | T123 | 新增 console tail read-error traceability contract 並驗證 | NEW -> DONE | `validate_console_tail_read_error_traceability_case` |
+| 2026-04-04 | T130 | 新增單股固定資金 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_single_backtest_uses_fixed_initial_capital_case` |
 | 2026-04-04 | T124 | 新增 checklist `G` 日期 / ID 排序 guard 並驗證 | NEW -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-04 | T125 | 新增 legacy F1 回流 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_f1_section_case` |
 | 2026-04-04 | T126 | 新增 strategy-layer repeatability formal case 並驗證 | NEW -> DONE | `validate_strategy_repeatability_case` |

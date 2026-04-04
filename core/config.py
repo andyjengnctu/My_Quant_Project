@@ -42,6 +42,14 @@ RUNTIME_PARAM_DEFAULTS = {
 }
 
 
+def resolve_single_backtest_sizing_capital(params):
+    return float(params.initial_capital)
+
+
+def resolve_portfolio_sizing_equity(current_equity, initial_capital, params):
+    return current_equity if getattr(params, 'use_compounding', True) else initial_capital
+
+
 # # (AI註: 單一真理來源 - 直接建立 dataclass、JSON 載入、optimizer 固定覆寫都共用同一套數值 guardrail)
 def validate_strategy_param_ranges(param_values):
     def ensure(field_name, condition, rule_text):

@@ -9,6 +9,7 @@ from .synthetic_param_cases import (
     validate_synthetic_pit_same_day_exit_excluded_case,
     validate_synthetic_portfolio_history_filter_only_case,
     validate_synthetic_proj_cost_cash_capped_case,
+    validate_synthetic_single_backtest_uses_fixed_initial_capital_case,
     validate_synthetic_single_backtest_not_gated_by_own_history_case,
 )
 from .synthetic_history_cases import (
@@ -192,6 +193,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_pit_same_day_exit_excluded_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_pit_multiple_same_day_exits_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_single_backtest_not_gated_by_own_history_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_single_backtest_uses_fixed_initial_capital_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "core/backtest_core.py", "core/backtest_finalize.py", "tools/debug/backtest.py")),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "tools/optimizer/objective_profiles.py")),
         _entry(validate_price_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py",)),
         _entry(validate_history_filters_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/history_filters.py",)),

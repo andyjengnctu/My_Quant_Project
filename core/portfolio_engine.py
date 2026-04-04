@@ -1,6 +1,6 @@
 import pandas as pd
 import time
-from core.config import EV_CALC_METHOD
+from core.config import EV_CALC_METHOD, resolve_portfolio_sizing_equity
 from core.portfolio_fast_data import (
     build_normal_setup_index,
     build_trade_stats_index,
@@ -98,7 +98,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             year_first_sim_date[today.year] = pd.Timestamp(today)
 
         available_cash = cash
-        sizing_equity = current_equity if getattr(params, 'use_compounding', True) else initial_capital
+        sizing_equity = resolve_portfolio_sizing_equity(current_equity, initial_capital, params)
 
         sold_today = set()
 

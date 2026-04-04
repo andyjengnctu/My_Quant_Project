@@ -1,5 +1,6 @@
 import numpy as np
 
+from core.config import resolve_single_backtest_sizing_capital
 from core.signal_utils import generate_signals
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
@@ -61,7 +62,7 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
             )
             current_capital += pnl_realized
 
-        sizing_cap = current_capital if getattr(params, 'use_compounding', True) else params.initial_capital
+        sizing_cap = resolve_single_backtest_sizing_capital(params)
         position, active_extended_signal = process_debug_entry_for_day(
             position=position,
             pos_qty_start_of_bar=pos_qty_start_of_bar,

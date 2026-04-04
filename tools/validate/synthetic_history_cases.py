@@ -236,6 +236,60 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
     return results, summary
 
 
+def validate_synthetic_single_backtest_uses_fixed_initial_capital_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.initial_capital = 1000.0
+    params.fixed_risk = 0.1
+    params.buy_fee = 0.0
+    params.sell_fee = 0.0
+    params.tax_rate = 0.0
+    params.min_fee = 0.0
+    params.atr_buy_tol = 0.0
+    params.atr_times_init = 1.0
+    params.atr_times_trail = 1.0
+    params.use_compounding = True
+
+    case_id = "SYNTH_SINGLE_BACKTEST_FIXED_INITIAL_CAPITAL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 110.0, 100.0, 110.0, 100.0],
+            "High": [100.0, 100.0, 110.0, 100.0, 110.0, 100.0],
+            "Low": [100.0, 100.0, 110.0, 100.0, 110.0, 100.0],
+            "Close": [100.0, 100.0, 110.0, 100.0, 110.0, 100.0],
+            "Volume": [1000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        },
+        index=pd.to_datetime([
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-06",
+        ]),
+    )
+    precomputed_signals = (
+        np.array([10.0, 10.0, 10.0, 10.0, 10.0, 10.0], dtype=np.float64),
+        np.array([True, False, True, False, False, True], dtype=bool),
+        np.array([False, True, False, True, False, False], dtype=bool),
+        np.array([100.0, np.nan, 100.0, np.nan, np.nan, 100.0], dtype=np.float64),
+    )
+
+    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
+
+    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
+    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "asset_growth_uses_fixed_initial_capital_even_when_flag_true", 20.0, float(stats["asset_growth"]))
+    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "score_uses_non_compounded_trade_sequence", 10.0, float(stats["score"]))
+    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "final_setup_today_survives_after_fixed_capital_replays", True, bool(stats["is_setup_today"]))
+
+    summary["trade_count"] = int(stats["trade_count"])
+    summary["asset_growth"] = float(stats["asset_growth"])
+    summary["score"] = float(stats["score"])
+    return results, summary
+
+
 
 def validate_synthetic_portfolio_history_filter_only_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)

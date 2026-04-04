@@ -4,6 +4,7 @@ from core.price_utils import (
     adjust_long_stop_price,
     calc_net_sell_price,
 )
+from core.config import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     evaluate_history_candidate_metrics,
@@ -146,7 +147,7 @@ def build_backtest_stats(
 
     extended_candidate_today = None
     if (not had_open_position_at_end) and active_extended_signal is not None:
-        sizing_cap = current_capital if getattr(params, 'use_compounding', True) else params.initial_capital
+        sizing_cap = resolve_single_backtest_sizing_capital(params)
         extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, close_last, sizing_cap, params)
 
     return {
