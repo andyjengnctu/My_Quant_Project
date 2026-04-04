@@ -689,4 +689,5 @@
 - 2026-04-03：D56 補 `validate_run_all_preflight_early_failure_dataset_contract_case` 的 `payload_failures` 語意一致性與 `summary_unreadable` 誤判防呆。
 - 2026-04-03：D22 補 registry 反向對照 `F2` DONE validator 摘要完整性 guard，避免已註冊 validator 漏記於 checklist。
 - 2026-04-04：D118 修補後發現 `validate_no_legacy_app_entry_doc_references_case` 已 import 但漏註冊於 synthetic main entry；本輪已補回 `tools/validate/synthetic_cases.py` 註冊，屬既有 D22 / B23 guard 命中，無主表狀態變更。
+- 2026-04-04：嚴格檢查補記：`tools/validate/synthetic_reporting_cases.py` 與 `tools/validate/synthetic_contract_cases.py` 的 meta quality fixture / 斷言原先仍沿用舊的 overall coverage threshold `50 / 45`；本輪已同步改為正式基線 `55 / 50`，避免 reporting / contract case 與 `meta_quality_targets.py`、manifest、checklist 主表脫鉤；主表狀態無變更。
 

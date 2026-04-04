@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from core.display_common import _strip_ansi
 from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_STEP_ORDER
+from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR
 from tools.portfolio_sim import reporting as portfolio_reporting
 from tools.validate.reporting import print_console_summary
 
@@ -155,8 +156,8 @@ def _base_test_suite_result_payload():
                     },
                     "line_percent_covered": 58.23,
                     "branch_percent_covered": 50.00,
-                    "line_min_percent": 50,
-                    "branch_min_percent": 45,
+                    "line_min_percent": int(COVERAGE_LINE_MIN_FLOOR),
+                    "branch_min_percent": int(COVERAGE_BRANCH_MIN_FLOOR),
                     "missing_targets": [],
                     "zero_covered_targets": [],
                 },
@@ -403,9 +404,9 @@ def validate_test_suite_summary_optional_dataset_skip_case(_base_params):
                     "status": "DONE",
                     "totals": {"percent_covered": 51.23, "covered_lines": 5123, "num_statements": 9000, "covered_branches": 980, "num_branches": 2100},
                     "line_percent_covered": 56.92,
-                    "branch_percent_covered": 46.67,
-                    "line_min_percent": 50,
-                    "branch_min_percent": 45,
+                    "branch_percent_covered": 50.67,
+                    "line_min_percent": int(COVERAGE_LINE_MIN_FLOOR),
+                    "branch_min_percent": int(COVERAGE_BRANCH_MIN_FLOOR),
                     "missing_targets": [],
                     "zero_covered_targets": [],
                 },
@@ -464,8 +465,8 @@ def validate_test_suite_summary_meta_quality_guardrail_reporting_case(_base_para
             "totals": {"percent_covered": 47.80, "covered_lines": 4300, "num_statements": 9000, "covered_branches": 820, "num_branches": 2100},
             "line_percent_covered": 47.78,
             "branch_percent_covered": 39.05,
-            "line_min_percent": 50,
-            "branch_min_percent": 45,
+            "line_min_percent": int(COVERAGE_LINE_MIN_FLOOR),
+            "branch_min_percent": int(COVERAGE_BRANCH_MIN_FLOOR),
             "missing_targets": ["tools/local_regression/run_all.py"],
             "zero_covered_targets": ["apps/test_suite.py"],
         },
@@ -473,7 +474,7 @@ def validate_test_suite_summary_meta_quality_guardrail_reporting_case(_base_para
     }
 
     summary_text = _capture_test_suite_summary(result_payload)
-    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_thresholds", True, "line_min=50" in summary_text and "branch_min=45" in summary_text and "missing_cov=tools/local_regression/run_all.py" in summary_text and "zero_cov=apps/test_suite.py" in summary_text)
+    add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_thresholds", True, f"line_min={int(COVERAGE_LINE_MIN_FLOOR)}" in summary_text and f"branch_min={int(COVERAGE_BRANCH_MIN_FLOOR)}" in summary_text and "missing_cov=tools/local_regression/run_all.py" in summary_text and "zero_cov=apps/test_suite.py" in summary_text)
     add_check(results, "reporting_schema", case_id, "test_suite_meta_quality_guardrail_reports_checklist_status", True, "checklist_status=TODO" in summary_text and "partial=B22" in summary_text and "todo=B26" in summary_text)
 
     summary["meta_quality_guardrail_lines"] = len([line for line in summary_text.splitlines() if line.strip()])
@@ -590,9 +591,9 @@ def validate_test_suite_summary_meta_quality_memory_reporting_case(_base_params)
         "fail_count": 0,
         "coverage": {
             "line_percent_covered": 55.0,
-            "branch_percent_covered": 45.0,
-            "line_min_percent": 50.0,
-            "branch_min_percent": 45.0,
+            "branch_percent_covered": 50.0,
+            "line_min_percent": float(COVERAGE_LINE_MIN_FLOOR),
+            "branch_min_percent": float(COVERAGE_BRANCH_MIN_FLOOR),
             "missing_targets": [],
             "zero_covered_targets": [],
             "totals": {},

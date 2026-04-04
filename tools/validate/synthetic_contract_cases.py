@@ -18,6 +18,7 @@ from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
 from tools.local_regression import run_meta_quality as run_meta_quality_module
 from tools.local_regression import run_quick_gate as run_quick_gate_module
+from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
@@ -417,11 +418,11 @@ def validate_local_regression_summary_contract_case(_base_params):
             "coverage": {
                 "ok": True,
                 "status": "DONE",
-                "totals": {"percent_covered": 50.0, "line_percent_covered": 55.0, "branch_percent_covered": 45.0, "line_min_percent": 50.0, "branch_min_percent": 45.0},
+                "totals": {"percent_covered": 52.5, "line_percent_covered": 55.0, "branch_percent_covered": 50.0, "line_min_percent": float(COVERAGE_LINE_MIN_FLOOR), "branch_min_percent": float(COVERAGE_BRANCH_MIN_FLOOR)},
                 "line_percent_covered": 55.0,
-                "branch_percent_covered": 45.0,
-                "line_min_percent": 50.0,
-                "branch_min_percent": 45.0,
+                "branch_percent_covered": 50.0,
+                "line_min_percent": float(COVERAGE_LINE_MIN_FLOOR),
+                "branch_min_percent": float(COVERAGE_BRANCH_MIN_FLOOR),
                 "missing_targets": [],
                 "zero_covered_targets": [],
             },
