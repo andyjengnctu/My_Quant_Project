@@ -1,7 +1,8 @@
 import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
-from core.config import V16StrategyParams, resolve_single_backtest_sizing_capital
+from core.capital_policy import resolve_single_backtest_sizing_capital
+from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from core.signal_utils import generate_signals

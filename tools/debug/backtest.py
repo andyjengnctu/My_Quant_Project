@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.config import resolve_single_backtest_sizing_capital
+from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.signal_utils import generate_signals
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step

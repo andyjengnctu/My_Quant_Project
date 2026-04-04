@@ -3,6 +3,8 @@ import math
 import numpy as np
 import pandas as pd
 
+from core.capital_policy import resolve_scanner_live_capital
+
 
 def tv_round(number):
     return math.floor(number + 0.5)
@@ -153,8 +155,6 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
 
 # # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
 def calc_reference_candidate_qty(bPrice, stopPrice, params):
-    from core.config import resolve_scanner_live_capital
-
     return calc_position_size(bPrice, stopPrice, resolve_scanner_live_capital(params), params.fixed_risk, params)
 
 

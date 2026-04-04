@@ -15,10 +15,15 @@ project/
 │  ├─ package_zip.py                  # 專案打包正式入口
 │  ├─ test_suite.py                   # 一鍵測試正式入口（reduced）
 │  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）
+├─ config/
+│  ├─ __init__.py                     # 純設定資料套件
+│  └─ runtime_defaults.py             # 全域戰略開關、threshold 與 runtime 預設值
 ├─ core/
 │  ├─ __init__.py                     # 套件初始化檔
 │  ├─ buy_sort.py                 # 買入候選排序邏輯
-│  ├─ config.py                   # dataclass、參數預設、參數驗證、共用設定
+│  ├─ config.py                   # 相容 façade；穩定匯出設定常數、參數契約與資金規則
+│  ├─ strategy_params.py          # dataclass、參數驗證、runtime 參數正規化與 JSON 契約
+│  ├─ capital_policy.py           # 單股/投組/scanner 的資金與 sizing 規則
 │  ├─ backtest_core.py                     # 單股策略核心：K棒推進與單股回測總控
 │  ├─ price_utils.py              # 跳價/成交價/成本/股數/漲跌停與賣出阻塞判斷單一口徑
 │  ├─ signal_utils.py             # 單股技術指標與訊號生成

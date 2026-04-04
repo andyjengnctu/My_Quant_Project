@@ -1,6 +1,7 @@
 import pandas as pd
 import time
-from core.config import EV_CALC_METHOD, resolve_portfolio_sizing_equity
+from core.capital_policy import resolve_portfolio_sizing_equity
+from core.config import EV_CALC_METHOD
 from core.portfolio_fast_data import (
     build_normal_setup_index,
     build_trade_stats_index,

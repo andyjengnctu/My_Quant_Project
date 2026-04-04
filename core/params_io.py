@@ -2,14 +2,13 @@ import json
 import os
 from dataclasses import fields
 
-from core.config import (
-    RUNTIME_PARAM_DEFAULTS,
-    RUNTIME_PARAM_TYPES,
+from core.strategy_params import (
     V16StrategyParams,
     normalize_runtime_param_value,
     strategy_params_to_dict,
     validate_strategy_param_ranges,
 )
+from config.runtime_defaults import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
 from core.log_utils import format_exception_summary
 
 

@@ -30,6 +30,12 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 - `apps/ml_optimizer.py` 在訓練結束後，若記憶庫已有及格 trial，會同步匯出 `models/best_params.json`；輸入 0 則只做提取匯出。
 - 若要固定 optimizer 搜尋路徑，可設 `V16_OPTIMIZER_SEED=<seed>`。
 
+# 設定 / 參數架構
+# config/runtime_defaults.py：純設定資料（全域戰略開關、threshold、runtime 預設值）
+# core/strategy_params.py：V16StrategyParams、guardrail、runtime 參數正規化與 JSON 契約
+# core/capital_policy.py：單股/投組/scanner 共用資金與 sizing 規則
+# core/config.py：相容 façade；保留既有匯入路徑
+
 # validate 架構
 python tools/validate/cli.py --dataset reduced        # validate standalone CLI
 # tools/validate/cli.py 為薄入口；總控在 tools/validate/main.py

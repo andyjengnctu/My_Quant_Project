@@ -1,4 +1,5 @@
 from core.buy_sort import get_buy_sort_title
+from core.capital_policy import resolve_scanner_live_capital
 from core.config import (
     BUY_SORT_METHOD,
     EV_CALC_METHOD,
@@ -10,7 +11,6 @@ from core.config import (
     MIN_MONTHLY_WIN_RATE,
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
-    resolve_scanner_live_capital,
 )
 from core.display_common import C_RESET, C_YELLOW, get_p
 

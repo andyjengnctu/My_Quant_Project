@@ -4,7 +4,7 @@ from core.price_utils import (
     adjust_long_stop_price,
     calc_net_sell_price,
 )
-from core.config import resolve_single_backtest_sizing_capital
+from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     evaluate_history_candidate_metrics,

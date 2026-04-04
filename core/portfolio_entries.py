@@ -1,4 +1,5 @@
-from core.config import BUY_SORT_METHOD, resolve_portfolio_entry_budget
+from core.capital_policy import resolve_portfolio_entry_budget
+from core.config import BUY_SORT_METHOD
 from core.trade_plans import (
     build_cash_capped_entry_plan,
     execute_pre_market_entry_plan,
