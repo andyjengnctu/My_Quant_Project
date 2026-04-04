@@ -151,6 +151,7 @@ def validate_local_regression_cli_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    app_package_zip = importlib.import_module("apps.package_zip")
     app_smart_downloader = importlib.import_module("apps.smart_downloader")
     export_requirements_lock = importlib.import_module("requirements.export_requirements_lock")
     downloader_main_module = importlib.import_module("tools.downloader.main")
@@ -185,6 +186,7 @@ def validate_local_regression_cli_contract_case(_base_params):
     _assert_value_error(results, "cli_contract", case_id, "preflight_invalid_step_rejected", lambda: preflight_env._normalize_local_regression_steps(["bad"]), "只接受")
 
     no_arg_cases = [
+        ("apps/package_zip.py", app_package_zip.main),
         ("requirements/export_requirements_lock.py", export_requirements_lock.main),
         ("tools/local_regression/run_chain_checks.py", run_chain_checks.main),
         ("tools/local_regression/run_ml_smoke.py", run_ml_smoke.main),

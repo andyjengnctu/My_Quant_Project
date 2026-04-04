@@ -187,7 +187,7 @@
 | D34 | `validate_sanitize_ohlcv_failfast_case` | 已補缺少日期欄、缺必要欄位、全列無效、清洗後列數不足的 fail-fast |
 | D35 | `validate_load_clean_df_data_quality_case` | 已補 `real_case_io.load_clean_df()` 與資料清洗整合案例，確認 sanitize stats 與清洗後排序/列數一致 |
 | D36 | `validate_dataset_cli_contract_case` | 已補 dataset wrapper CLI 契約：help、預設 passthrough、`--dataset` 值傳遞、未知參數與位置參數拒絕 |
-| D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化、help 與未知參數 / 位置參數拒絕 |
+| D37 | `validate_local_regression_cli_contract_case` | 已補 run_all / preflight / no-arg CLI 契約：`--only` / `--steps` 正規化，並納入 `apps/package_zip.py` / `apps/smart_downloader.py` 等 no-arg 正式入口的 help 與未知參數 / 位置參數拒絕 |
 | D117 | `validate_run_all_cli_error_usage_contract_case` | 已補 `run_all.py` 參數錯誤 stderr usage 契約，直接釘死 `--only` 用法列必須同步列出 `meta_quality` |
 | D45 | `validate_extended_tool_cli_contract_case` | 已補剩餘直接入口 CLI：`tools/optimizer/main.py`、`tools/portfolio_sim/main.py`、`tools/scanner/scan_runner.py`、`tools/validate/main.py`、`tools/debug/trade_log.py`、`apps/test_suite.py` 的 help 與參數拒絕契約 |
 | D19 | `tools/local_regression/run_chain_checks.py` | 已完成；已補 chain snapshot 雙跑 digest 與 rerun payload 穩定性 |
@@ -666,6 +666,7 @@
 
 ### G1. 補充註記（不記狀態變更）
 
+- 2026-04-04：D37 補納 `apps/package_zip.py` no-arg CLI 契約，並同步把 `apps/package_zip.py --help` 加回 quick gate `HELP_TARGETS`，避免 `doc/CMD.md` 新增正式指令後與 B16 / B20 覆蓋失同步。
 - 2026-04-01：D25 先補 `run_meta_quality.py` formal check 的主表 / 未完成摘要 / 已完成摘要一致性校驗，後續於 2026-04-02 收斂為 `PARTIAL -> DONE`。
 - 2026-04-02：D49 補 `validate_local_regression_summary_contract_case` 的 cfile staging 與 runtime FAIL summary / console artifact 檢查。
 - 2026-04-03：B23 補 `tools/local_regression/formal_pipeline.py` 單一真理來源對齊，以及 `core/` / `tools/` 不得反向 import `apps/` guard。

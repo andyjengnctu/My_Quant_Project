@@ -25,6 +25,7 @@ from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, MANIFEST
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
+    ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
     ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
     ([sys.executable, "apps/smart_downloader.py", "--help"], "python apps/smart_downloader.py"),
     ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),
@@ -45,6 +46,7 @@ HELP_TARGETS = [
     ([sys.executable, "tools/validate/preflight_env.py", "--help"], "python tools/validate/preflight_env.py"),
 ]
 NO_ARG_CLI_TARGETS = [
+    "apps/package_zip.py",
     "requirements/export_requirements_lock.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
