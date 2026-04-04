@@ -16,6 +16,9 @@ from core.runtime_utils import get_taipei_now, parse_no_arg_cli, run_cli_entrypo
 HELP_DESCRIPTION = "清除 Python 快取、歸檔舊 ZIP，並將目前 working tree 的 tracked/untracked 非忽略檔打成乾淨 ZIP。"
 EXCLUDED_DIR_NAMES = {"__pycache__", "arch"}
 EXCLUDED_SUFFIXES = {".pyc"}
+EXCLUDED_CSV_DIR_PREFIXES = {
+    PurePosixPath("data/tw_stock_data_vip_reduced"),
+}
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -89,7 +92,23 @@ def _archive_existing_root_zips() -> int:
 def _should_skip(relative_path: Path) -> bool:
     if any(part in EXCLUDED_DIR_NAMES for part in relative_path.parts):
         return True
-    return relative_path.suffix.lower() in EXCLUDED_SUFFIXES
+
+    suffix = relative_path.suffix.lower()
+    if suffix in EXCLUDED_SUFFIXES:
+        return True
+
+    if suffix != ".csv":
+        return False
+
+    relative_posix = PurePosixPath(*relative_path.parts)
+    for excluded_prefix in EXCLUDED_CSV_DIR_PREFIXES:
+        try:
+            relative_posix.relative_to(excluded_prefix)
+            return True
+        except ValueError:
+            continue
+
+    return False
 
 
 def _collect_package_paths() -> list[Path]:
