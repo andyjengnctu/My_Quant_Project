@@ -3,8 +3,10 @@ import tempfile
 
 import pandas as pd
 
+from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import execute_reserved_entries_for_day
-from core.portfolio_fast_data import pack_prepared_stock_data
+from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
+from core.trade_plans import create_signal_tracking_state
 
 from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -177,6 +179,90 @@ def _run_entry_layer_outcome_case(params, *, low_on_entry_day, volume_on_entry_d
         "cash": cash,
         "total_missed_buys": total_missed_buys,
     }
+
+
+
+
+def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.min_history_trades = 1
+    params.min_history_ev = 0.0
+    params.min_history_win_rate = 0.0
+
+    case_id = "SYNTH_NON_CANDIDATE_SETUP_NO_EXTENDED_SEED"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 99.8, 99.6],
+            "High": [101.0, 100.0, 99.8],
+            "Low": [99.0, 99.2, 99.1],
+            "Close": [100.0, 99.7, 99.5],
+            "Volume": [1000.0, 1000.0, 1000.0],
+            "ATR": [1.0, 1.0, 1.0],
+            "buy_limit": [100.0, 100.0, 100.0],
+            "is_setup": [True, False, False],
+            "ind_sell_signal": [False, False, False],
+        },
+        index=dates,
+    )
+
+    ticker = "9811"
+    all_dfs_fast = {ticker: pack_prepared_stock_data(df)}
+    normal_setup_index = build_normal_setup_index(all_dfs_fast)
+    pit_stats_index = {
+        ticker: build_trade_stats_index(
+            [
+                {
+                    "exit_date": pd.Timestamp("2024-01-02"),
+                    "pnl": 1.0,
+                    "r_mult": 1.0,
+                }
+            ]
+        )
+    }
+    active_extended_signals = {
+        ticker: create_signal_tracking_state(100.0, 1.0, params)
+    }
+
+    day2_candidates, day2_orderable, day2_normal_setup_tickers = build_daily_candidates(
+        normal_setup_index=normal_setup_index,
+        active_extended_signals=active_extended_signals,
+        portfolio={},
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        pit_stats_index=pit_stats_index,
+        today=dates[1],
+        sizing_equity=1_000_000.0,
+        params=params,
+    )
+
+    day3_candidates, day3_orderable, day3_normal_setup_tickers = build_daily_candidates(
+        normal_setup_index=normal_setup_index,
+        active_extended_signals=active_extended_signals,
+        portfolio={},
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        pit_stats_index=pit_stats_index,
+        today=dates[2],
+        sizing_equity=1_000_000.0,
+        params=params,
+    )
+
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_has_normal_setup_today", [ticker], sorted(day2_normal_setup_tickers))
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_candidates_blocked_by_history_filter", 0, len(day2_candidates))
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_orderable_blocked_by_history_filter", 0, len(day2_orderable))
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day2_failed_setup_clears_active_extended_signal", False, ticker in active_extended_signals)
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_has_no_new_normal_setup", [], sorted(day3_normal_setup_tickers))
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_candidates_not_revived_by_stale_signal", 0, len(day3_candidates))
+    add_check(results, "synthetic_non_candidate_setup_no_extended_seed", case_id, "day3_orderable_not_revived_by_stale_signal", 0, len(day3_orderable))
+
+    summary["day2_candidate_count"] = len(day2_candidates)
+    summary["day2_active_signal_retained"] = ticker in active_extended_signals
+    summary["day3_candidate_count"] = len(day3_candidates)
+    return results, summary
 
 
 def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):

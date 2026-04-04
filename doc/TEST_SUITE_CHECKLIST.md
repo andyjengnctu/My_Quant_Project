@@ -72,7 +72,7 @@
 | B06 | P0 | 不得當沖；買入當日不可賣出；當日賣出回收資金不得當日再投入 | DONE | 已新增買入當日不可賣出的直接 case；同日賣出後不得再投入則由既有 same-day sell block / rotation T+1 case 覆蓋 | `tools/validate/synthetic_flow_cases.py` |
 | B07 | P0 | 未成交不得同日盤中自動改掛其他股票 | DONE | 已新增直接 failed fill 後不得同日換股 case | `tools/validate/synthetic_flow_cases.py` |
 | B08 | P0 | 停利/停損只能對已持有部位預先設定 | DONE | 已新增 zero-qty position direct assertion，確認無持倉時 stop/tp / indicator sell 不得產生任何 exit event | `tools/validate/synthetic_take_profit_cases.py` |
-| B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | DONE | 已新增 candidate / filled / missed-buy 三層直接案例，釘死狀態不得混用 | `tools/validate/synthetic_flow_cases.py` |
+| B09 | P1 | 候選、掛單、成交、miss buy、歷史績效統計必須分層定義 | DONE | 已新增 candidate / filled / missed-buy 三層直接案例，並補 non-candidate setup 不得 seed / revive extended candidate，釘死狀態不得混用 | `tools/validate/synthetic_flow_cases.py` |
 | B10 | P1 | 單股回測不得用自身歷史績效 filter 作為買入閘門；history filter 僅用於投組層/scanner | DONE | 已新增 cross-tool case，直接對照單股回測仍成交、scanner 端仍拒絕非 candidate | `tools/validate/synthetic_history_cases.py` |
 
 ### B2. 未明列於專案設定，但正式 test suite 應納入
@@ -250,6 +250,7 @@
 | D87 | `validate_synthetic_proj_cost_cash_capped_case` | 已補 projected-cost / cash-capped order synthetic case，確認排序估計成本不得繞過實際可用現金上限 |
 | D88 | `validate_synthetic_param_guardrail_case` | 已補 strategy param guardrail synthetic case，確認非法參數值 fail-fast，且 runtime worker 參數受界限約束 |
 | D89 | `validate_validate_console_summary_reporting_case` | 已補 validate console summary reporting contract，確認 counts / path / fail preview 顯示穩定 |
+| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | 已補 non-candidate setup 不得 seed / revive extended candidate synthetic case，並完成 formal import / registry 接線，確認被 history filter 拒絕的 setup 不得在次日 retroactively 變成延續候選 |
 | D90 | `validate_portfolio_yearly_report_schema_case` | 已補 portfolio yearly report schema contract，確認年度報酬表欄位與空資料 schema 穩定 |
 | D91 | `validate_test_suite_summary_reporting_case` | 已補 test suite PASS summary reporting contract，確認 bundle / 步驟摘要 / 重點結果 / retention 顯示穩定 |
 
@@ -456,6 +457,7 @@
 | D87 | `validate_synthetic_proj_cost_cash_capped_case` | B09 | 2026-04-01 |
 | D88 | `validate_synthetic_param_guardrail_case` | B15 | 2026-04-02 |
 | D89 | `validate_validate_console_summary_reporting_case` | B21 | 2026-04-02 |
+| D121 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 | 2026-04-04 |
 | D90 | `validate_portfolio_yearly_report_schema_case` | B21 | 2026-04-02 |
 | D91 | `validate_test_suite_summary_reporting_case` | B21 | 2026-04-02 |
 
@@ -614,6 +616,7 @@
 | 2026-04-04 | D119 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
 | 2026-04-04 | B42 | 補上 app thin wrapper public export contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-04 | D120 | 新增 package_zip runtime contract 並驗證 | NEW -> DONE | `validate_package_zip_runtime_contract_case` |
+| 2026-04-04 | D121 | 新增 non-candidate setup 不得 seed / revive extended candidate synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` |
 | 2026-04-04 | B43 | 補上 package_zip 正式入口 runtime contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
 | 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |

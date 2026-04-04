@@ -77,13 +77,12 @@ def _collect_normal_candidates(
         if ticker in portfolio or ticker in sold_today:
             continue
 
+        # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；若當日 history filter 不合格，禁止沿用舊 setup 續掛)
+        active_extended_signals.pop(ticker, None)
+
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
-
-        signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params)
-        if signal_state is not None:
-            active_extended_signals[ticker] = signal_state
 
         is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params
@@ -94,6 +93,10 @@ def _collect_normal_candidates(
         candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params)
         if candidate_plan is None:
             continue
+
+        signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params)
+        if signal_state is not None:
+            active_extended_signals[ticker] = signal_state
 
         candidate_row = _make_candidate_row(
             ticker=ticker,
