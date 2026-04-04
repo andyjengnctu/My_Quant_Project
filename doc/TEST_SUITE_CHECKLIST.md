@@ -33,7 +33,7 @@
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `T` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Txx` / 狀態變更，必須同一次 patch 更新完畢。
 6. 摘要表只保留最小必要欄位：`T` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
-7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 ID 升冪整理；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先完成同日區塊內依 ID 重排後再交付；任何 `G` 列只能寫在 `## G. 逐項收斂紀錄` 表格內，檔案開頭第一個非空行固定為 `# Test Suite 收斂清單`；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
+7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 tracking ID 排序鍵整理：先比字首 namespace（如 `B` 在 `T` 前），再比數字段遞增，最後才比尾碼；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先完成同日區塊內重排後再交付；任何 `G` 列只能寫在 `## G. 逐項收斂紀錄` 表格內，檔案開頭第一個非空行固定為 `# Test Suite 收斂清單`；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列。
 
 ## A. 分層原則
 
@@ -516,6 +516,6 @@
 | 2026-04-04 | T133 | 新增 optimizer interrupt export contract 並驗證 | NEW -> DONE | `validate_optimizer_interrupt_export_contract_case` |
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
 | 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
-| 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | B59 | 補關鍵 helper single-source-of-truth static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
