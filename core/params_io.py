@@ -4,6 +4,7 @@ from dataclasses import fields
 
 from core.config import (
     RUNTIME_PARAM_DEFAULTS,
+    RUNTIME_PARAM_TYPES,
     V16StrategyParams,
     normalize_runtime_param_value,
     strategy_params_to_dict,
@@ -15,7 +16,6 @@ from core.log_utils import format_exception_summary
 PARAM_FIELDS = tuple(fields(V16StrategyParams))
 PARAM_FIELD_TYPES = {field.name: field.type for field in PARAM_FIELDS}
 PARAM_FIELD_NAMES = tuple(field.name for field in PARAM_FIELDS)
-RUNTIME_PARAM_TYPES = {field_name: int for field_name in RUNTIME_PARAM_DEFAULTS}
 RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
 
 

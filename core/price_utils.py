@@ -151,9 +151,11 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     return 0
 
 
-# # (AI註: scanner / consistency tool 的候選顯示統一用 initial_capital 估算，避免被單股回測複利資本污染)
+# # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
 def calc_reference_candidate_qty(bPrice, stopPrice, params):
-    return calc_position_size(bPrice, stopPrice, params.initial_capital, params.fixed_risk, params)
+    from core.config import resolve_scanner_live_capital
+
+    return calc_position_size(bPrice, stopPrice, resolve_scanner_live_capital(params), params.fixed_risk, params)
 
 
 # # (AI註: 單一真理來源 - 半倉停利可執行股數統一由此計算，避免核心/掃描/除錯工具各自判斷)

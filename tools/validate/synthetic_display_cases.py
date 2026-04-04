@@ -41,6 +41,7 @@ def validate_display_reporting_sanity_case(_base_params):
         "min_history_trades": 11,
         "min_history_win_rate": 0.56,
         "min_history_ev": 0.78,
+        "scanner_live_capital": 2_000_000.0,
     }
 
     scanner_text = _capture_output(lambda: print_scanner_header(params))
@@ -48,6 +49,7 @@ def validate_display_reporting_sanity_case(_base_params):
     add_check(results, "display_reporting", case_id, "scanner_contains_training_params", True, "突破 123日 | ATR 17日 | 掛單 +1.2倍 | 初始 -2.3倍 | 追蹤 -3.4倍 | 半倉 45%" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_filter_params", True, "布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (短7>長21)" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_history_thresholds", True, "交易 >= 11 次 | 勝率 >= 56% | 期望值 >= 0.78R" in scanner_text)
+    add_check(results, "display_reporting", case_id, "scanner_contains_live_capital", True, "Scanner資金: live capital = 2,000,000" in scanner_text)
 
     dashboard_text = _capture_output(
         lambda: print_strategy_dashboard(

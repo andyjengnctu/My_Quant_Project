@@ -23,6 +23,8 @@ from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
 from core.portfolio_fast_data import prep_stock_data_and_trades
+from core.price_utils import calc_reference_candidate_qty, calc_entry_price
+from tools.scanner.stock_processor import build_scanner_response_from_stats
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -1486,6 +1488,53 @@ def validate_single_ticker_compounding_parity_contract_case(base_params):
         summary[f"single_asset_growth_{scenario['name']}"] = float(single_stats["asset_growth"])
         summary[f"portfolio_total_return_{scenario['name']}"] = float(portfolio_stats["total_return"])
         summary[f"portfolio_sim_total_return_{scenario['name']}"] = float(portfolio_sim_stats["total_return"])
+    return results, summary
+
+
+def validate_scanner_live_capital_contract_case(base_params):
+    case_id = "SCANNER_LIVE_CAPITAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    params.initial_capital = 1_000_000.0
+    params.fixed_risk = 0.01
+    params.buy_fee = 0.0
+    params.sell_fee = 0.0
+    params.tax_rate = 0.0
+    params.min_fee = 0.0
+    params.scanner_live_capital = 2_000_000.0
+
+    buy_limit = 100.0
+    stop_loss = 90.0
+    projected_qty = calc_reference_candidate_qty(buy_limit, stop_loss, params)
+    projected_cost = calc_entry_price(buy_limit, projected_qty, params) * projected_qty
+
+    scanner_result = build_scanner_response_from_stats(
+        ticker="2330",
+        stats={
+            "is_candidate": True,
+            "is_setup_today": True,
+            "buy_limit": buy_limit,
+            "stop_loss": stop_loss,
+            "expected_value": 1.25,
+            "trade_count": 8,
+            "win_rate": 62.5,
+            "max_drawdown": 9.5,
+            "extended_candidate_today": None,
+        },
+        params=params,
+        sanitize_stats={},
+    )
+
+    add_check(results, "output_contract", case_id, "scanner_live_capital_qty", 2000, projected_qty)
+    add_check(results, "output_contract", case_id, "scanner_live_capital_proj_cost", 200000.0, projected_cost)
+    add_check(results, "output_contract", case_id, "scanner_result_status", "buy", None if scanner_result is None else scanner_result[0])
+    add_check(results, "output_contract", case_id, "scanner_result_proj_cost_uses_scanner_live_capital", 200000.0, None if scanner_result is None else float(scanner_result[1]))
+    add_check(results, "output_contract", case_id, "scanner_result_message_mentions_scanner_live_capital_cost", True, False if scanner_result is None else "參考投入:200,000" in scanner_result[4])
+
+    summary["projected_qty"] = projected_qty
+    summary["projected_cost"] = projected_cost
     return results, summary
 
 

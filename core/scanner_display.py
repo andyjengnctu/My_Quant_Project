@@ -10,6 +10,7 @@ from core.config import (
     MIN_MONTHLY_WIN_RATE,
     MIN_TRADE_WIN_RATE,
     SCORE_CALC_METHOD,
+    resolve_scanner_live_capital,
 )
 from core.display_common import C_RESET, C_YELLOW, get_p
 
@@ -44,6 +45,10 @@ def print_scanner_header(params):
         f"交易 >= {get_p(params, 'min_history_trades', 0)} 次 | "
         f"勝率 >= {get_p(params, 'min_history_win_rate', 0.30) * 100:.0f}% | "
         f"期望值 >= {get_p(params, 'min_history_ev', 0.0):.2f}R"
+    )
+    print(
+        f"   ➤ Scanner資金: "
+        f"live capital = {resolve_scanner_live_capital(params):,.0f}"
     )
     print(
         f"   ➤ 共用硬門檻: "

@@ -36,10 +36,20 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40    # 權益曲線最小 R² 門檻，要求整
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
 
 
-RUNTIME_PARAM_DEFAULTS = {
-    'optimizer_max_workers': None,
-    'scanner_max_workers': None,
+RUNTIME_PARAM_SPECS = {
+    'optimizer_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},
+    'scanner_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},
+    'scanner_live_capital': {'type': float, 'default': 2_000_000.0, 'allow_none': False, 'min_value': 0.0},
 }
+
+RUNTIME_PARAM_DEFAULTS = {field_name: spec['default'] for field_name, spec in RUNTIME_PARAM_SPECS.items()}
+RUNTIME_PARAM_TYPES = {field_name: spec['type'] for field_name, spec in RUNTIME_PARAM_SPECS.items()}
+
+
+def _get_runtime_param_raw_value(params, field_name):
+    if isinstance(params, dict):
+        return params.get(field_name, RUNTIME_PARAM_DEFAULTS[field_name])
+    return getattr(params, field_name, RUNTIME_PARAM_DEFAULTS[field_name])
 
 
 def _resolve_compounding_capital(value, fallback_value):
@@ -58,6 +68,11 @@ def resolve_portfolio_sizing_equity(current_equity, initial_capital, params):
 
 def resolve_portfolio_entry_budget(available_cash, initial_capital, params):
     return _resolve_compounding_capital(available_cash, initial_capital)
+
+
+def resolve_scanner_live_capital(params):
+    raw_value = _get_runtime_param_raw_value(params, 'scanner_live_capital')
+    return normalize_runtime_param_value('scanner_live_capital', raw_value)
 
 
 # # (AI註: 單一真理來源 - 直接建立 dataclass、JSON 載入、optimizer 固定覆寫都共用同一套數值 guardrail)
@@ -92,13 +107,32 @@ def validate_strategy_param_ranges(param_values):
 
 # # (AI註: runtime 工具參數獨立驗證，但仍集中在 config 這個單一真理來源)
 def normalize_runtime_param_value(field_name: str, raw_value: Any):
+    spec = RUNTIME_PARAM_SPECS[field_name]
+    expected_type = spec['type']
+    allow_none = spec['allow_none']
+    min_value = spec['min_value']
+
     if raw_value is None:
-        return None
-    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
-        raise ValueError(f"參數 {field_name} 需要 int 或 None，收到 {raw_value!r}")
-    if raw_value < 1:
-        raise ValueError(f"參數 {field_name} 驗證失敗: 需 >= 1，收到 {raw_value!r}")
-    return raw_value
+        if allow_none:
+            return None
+        raise ValueError(f"參數 {field_name} 不可為 None")
+
+    if expected_type is int:
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(f"參數 {field_name} 需要 int 或 None，收到 {raw_value!r}")
+        if raw_value < min_value:
+            raise ValueError(f"參數 {field_name} 驗證失敗: 需 >= {min_value:g}，收到 {raw_value!r}")
+        return raw_value
+
+    if expected_type is float:
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            raise ValueError(f"參數 {field_name} 需要 float，收到 {raw_value!r}")
+        normalized = float(raw_value)
+        if normalized <= min_value:
+            raise ValueError(f"參數 {field_name} 驗證失敗: 需 > {min_value:g}，收到 {raw_value!r}")
+        return normalized
+
+    raise TypeError(f"未知 runtime 參數型別: {field_name} -> {expected_type!r}")
 
 
 # # (AI註: dataclass 直接建構 / 直接 setattr 也必須走同一套型別 guardrail，避免錯型別延後到策略流程才爆炸)

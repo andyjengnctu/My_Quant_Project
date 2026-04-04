@@ -34,14 +34,16 @@ def validate_synthetic_param_guardrail_case(base_params):
         ("use_bb_string_type_rejected", {**case["base_payload"], "use_bb": "abc"}, "use_bb"),
     ]
 
-    runtime_valid_payload = {**case["base_payload"], "optimizer_max_workers": 3, "scanner_max_workers": 4}
+    runtime_valid_payload = {**case["base_payload"], "optimizer_max_workers": 3, "scanner_max_workers": 4, "scanner_live_capital": 2_500_000.0}
     runtime_params = build_params_from_mapping(runtime_valid_payload)
     add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_optimizer_max_workers_loads", 3, getattr(runtime_params, "optimizer_max_workers", None))
     add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_scanner_max_workers_loads", 4, getattr(runtime_params, "scanner_max_workers", None))
+    add_check(results, "synthetic_param_guardrail", case["case_id"], "runtime_scanner_live_capital_loads", 2_500_000.0, getattr(runtime_params, "scanner_live_capital", None))
 
     runtime_invalid_cases = [
         ("optimizer_max_workers_zero_rejected", {**case["base_payload"], "optimizer_max_workers": 0}, "optimizer_max_workers"),
         ("scanner_max_workers_zero_rejected", {**case["base_payload"], "scanner_max_workers": 0}, "scanner_max_workers"),
+        ("scanner_live_capital_zero_rejected", {**case["base_payload"], "scanner_live_capital": 0}, "scanner_live_capital"),
     ]
 
     for metric_name, payload, expected_field in invalid_cases + runtime_invalid_cases:
@@ -96,6 +98,21 @@ def validate_synthetic_param_guardrail_case(base_params):
     except ValueError as e:
         add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_attr_guardrail", True, "optimizer_max_workers" in str(e))
 
+    runtime_capital_params = V16StrategyParams()
+    try:
+        runtime_capital_params.scanner_live_capital = 0
+        add_fail_result(
+            results,
+            "synthetic_param_guardrail",
+            case["case_id"],
+            "direct_runtime_scanner_live_capital_guardrail",
+            "ValueError containing scanner_live_capital",
+            "setattr_ok",
+            "scanner live capital 直接改欄位也不應繞過 guardrail。"
+        )
+    except ValueError as e:
+        add_check(results, "synthetic_param_guardrail", case["case_id"], "direct_runtime_scanner_live_capital_guardrail", True, "scanner_live_capital" in str(e))
+
     invalid_direct_setattr_cases = [
         ("direct_setattr_use_bb_string_rejected", "use_bb", "abc", "use_bb"),
         ("direct_setattr_high_len_string_rejected", "high_len", "10", "high_len"),
@@ -135,5 +152,5 @@ def validate_synthetic_param_guardrail_case(base_params):
     default_params_arg = run_v16_backtest.__defaults__[0] if run_v16_backtest.__defaults__ else None
     add_check(results, "synthetic_param_guardrail", case["case_id"], "run_v16_backtest_default_params_is_none", True, default_params_arg is None)
 
-    summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + len(invalid_direct_setattr_cases) + 4
+    summary["guardrail_cases"] = (len(invalid_cases) * 2) + len(runtime_invalid_cases) + len(invalid_direct_setattr_cases) + 5
     return results, summary

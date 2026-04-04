@@ -124,6 +124,7 @@
 | B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B46 | P1 | 錯誤處理 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | DONE | 已補 dataset prepare fallback summary write traceability 與 console tail read-error traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗必須回寫 `fallback_write_errors` / stderr，且 `gather_recent_console_tail()` 讀檔失敗不得靜默略過 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B55 | P1 | 契約 | consistency / 單檔 parity 驗證路徑必須維持複利資金，單股、單檔投組與 portfolio_sim 不得再強制切回 fixed-capital | DONE | 已補 direct synthetic contract，直接釘死 consistency parity params 必須保留 compounding，且 single backtest / 單檔 portfolio timeline / portfolio_sim prepared 在虧損後與獲利後都必須一致反映複利資金，candidate sizing 與實際 entry budget 兩條路徑不得分叉 | `tools/validate/synthetic_contract_cases.py`, `tools/validate/real_case_runners.py`, `tools/validate/scanner_expectations.py`, `core/config.py`, `core/portfolio_entries.py` |
+| B56 | P1 | 契約 | scanner 參考投入 / 掛單股數必須使用 `scanner_live_capital`，不得再回退到 `initial_capital` 或回測複利資金 | DONE | 已補 direct synthetic contract，直接釘死 scanner projected qty / proj_cost / 顯示訊息都必須跟 `scanner_live_capital` 一致，且 `initial_capital` 與 scanner 資金來源不得混用 | `tools/validate/synthetic_contract_cases.py`, `core/config.py`, `core/price_utils.py`, `tools/scanner/stock_processor.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -297,6 +298,7 @@
 | T129 | `validate_reduced_dataset_dynamic_contract_case` | B53 |
 | T130 | `validate_synthetic_single_backtest_uses_compounding_capital_case` | B54 |
 | T131 | `validate_single_ticker_compounding_parity_contract_case` | B55 |
+| T132 | `validate_scanner_live_capital_contract_case` | B56 |
 
 ## G. 逐項收斂紀錄
 
@@ -476,6 +478,7 @@
 | 2026-04-04 | B55 | 補 execution-only fixed-capital parity contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B55 | 檢出 execution-only fixed-capital contract 未覆蓋獲利後 entry budget，主表改回 PARTIAL | DONE -> PARTIAL | portfolio 實際下單仍可能以 available_cash 恢復複利 |
 | 2026-04-04 | B55 | 補齊 gain-side entry budget contract 與 portfolio fixed-cap 路徑後收斂為 DONE | PARTIAL -> DONE | `core/portfolio_entries.py` |
+| 2026-04-04 | B56 | 新增 scanner live capital contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | T113 | 新增 run_all CLI error usage contract 並驗證 | NEW -> DONE | `validate_run_all_cli_error_usage_contract_case` |
 | 2026-04-04 | T114 | 新增 legacy app 測試入口文件殘留 guard 並驗證 | NEW -> DONE | `validate_no_legacy_app_entry_doc_references_case` |
 | 2026-04-04 | T115 | 新增 app thin wrapper lazy export contract 並驗證 | NEW -> DONE | `validate_app_thin_wrapper_export_contract_case` |
