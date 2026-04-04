@@ -112,6 +112,8 @@
 | B41 | P1 | 文件 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | DONE | 已移除 `apps/local_regression.py` / `apps/validate_consistency.py` 的殘留文件指引，並新增 formal guard，直接阻擋文件再出現已移除入口或「手動刪除」式 app 測試入口清理說明 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
 | B42 | P1 | Meta | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | DONE | 已補 thin wrapper export contract，直接阻擋 `apps/portfolio_sim.py`、`apps/vip_scanner.py` 出現 lazy export 重複、`__all__` 漏列或 lazy symbol 無法解析，避免對外 façade 可 `getattr` 但 public export contract 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B43 | P1 | I/O | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | DONE | 已補 `package_zip` runtime contract，直接釘死 root 既有舊 ZIP 不分 branch label 都必須移入 `arch/`，且新 ZIP 僅可包含 tracked/untracked 非忽略檔，不得夾帶 `__pycache__/` 或 `*.pyc` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
+| B44 | P1 | Meta | `quick_gate` 不得移除裸 `except` static guard | DONE | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 必須保留 `bare_except_scan`，且遇到裸 `except` 時必須回報 FAIL 與命中文件 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
+| B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ## C. 可隨策略升級調整的測試清單
 
@@ -175,6 +177,8 @@
 | D106 | `validate_atomic_write_retry_contract_case` | 已補 atomic write transient retry contract，要求暫時性 `PermissionError` / share violation 重試後可成功寫入 |
 | D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | 已補 atomic write cleanup failure contract，要求 temp 檔清理失敗時仍保留原始 replace 例外並附註 cleanup 錯誤 |
 | D123 | `validate_validate_summary_atomic_write_contract_case` | 已補 `write_local_regression_summary()` 正式路徑 atomic write contract，要求 `validate_consistency_summary.json` replace 失敗時保留舊內容且清乾淨 temp 檔 |
+| D124 | `validate_quick_gate_bare_except_guard_contract_case` | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 不得移除 `bare_except_scan`，且裸 `except` 必須命中 FAIL |
+| D125 | `validate_quick_gate_output_path_guard_contract_case` | 已補 `quick_gate` output path / outputs root / log path guard contract，直接釘死正式入口 summary 必須保留關鍵步驟，且 guard FAIL 時需傳遞到 `failed_steps` |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | 已補 `run_all.main()` dataset prepare PASS 主路徑 contract，直接驗證正式入口可保留 dataset fingerprint 並完成 master summary |
 | D30 | `validate_params_io_error_path_case` | 已補壞 JSON、缺必要欄位、未知欄位、缺檔時的 fail-fast 與錯誤訊息定位 |
 | D31 | `validate_module_loader_error_path_case` | 已補 syntax error、缺必要屬性與 checked path/reason 彙整的錯誤路徑 |
@@ -339,6 +343,8 @@
 | 文件 | B41 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` | 2026-04-04 |
 | Meta | B42 | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | I/O | B43 | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
+| Meta | B44 | `quick_gate` 不得移除裸 `except` static guard | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
+| I/O | B45 | `quick_gate` 不得移除 output path / outputs root / log path guard | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` | 2026-04-04 |
 | Meta | B25 | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | `tools/validate/synthetic_unit_cases.py` | 2026-04-01 |
 
 ### F2. 目前所有 `DONE` 的建議測試項目摘要
@@ -445,6 +451,8 @@
 | D106 | `validate_atomic_write_retry_contract_case` | B34 | 2026-04-03 |
 | D122 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 | 2026-04-04 |
 | D123 | `validate_validate_summary_atomic_write_contract_case` | B34 | 2026-04-04 |
+| D124 | `validate_quick_gate_bare_except_guard_contract_case` | B44 | 2026-04-04 |
+| D125 | `validate_quick_gate_output_path_guard_contract_case` | B45 | 2026-04-04 |
 | D107 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 | 2026-04-03 |
 | D75 | `validate_synthetic_same_bar_stop_priority_case` | B02 | 2026-04-01 |
 | D76 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 | 2026-04-01 |
@@ -624,6 +632,10 @@
 | 2026-04-04 | D122 | 新增 atomic write cleanup failure contract 並驗證 | NEW -> DONE | `validate_atomic_write_cleanup_error_preserves_root_exception_case` |
 | 2026-04-04 | D123 | 新增 validate summary 正式路徑 atomic write contract 並驗證 | NEW -> DONE | `validate_validate_summary_atomic_write_contract_case` |
 | 2026-04-04 | B43 | 補上 package_zip 正式入口 runtime contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
+| 2026-04-04 | D124 | 新增 quick_gate bare-except guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_bare_except_guard_contract_case` |
+| 2026-04-04 | D125 | 新增 quick_gate output path / outputs root / log path guard contract 並驗證 | NEW -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
+| 2026-04-04 | B44 | 補上 quick_gate bare-except static guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-04 | B45 | 補上 quick_gate output path / outputs root / log path guard contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-03 | D101 | 新增 critical per-file threshold stage-2 floor 建議測試並驗證 | NEW -> DONE | `validate_critical_coverage_threshold_floor_case` |
 | 2026-04-03 | D102 | 新增 reduced dataset fingerprint contract 並驗證 | NEW -> DONE | `validate_dataset_fingerprint_contract_case` |
 | 2026-04-03 | D103 | 新增 atomic write replace-failure recovery contract 並驗證 | NEW -> DONE | `validate_atomic_write_contract_case` |
