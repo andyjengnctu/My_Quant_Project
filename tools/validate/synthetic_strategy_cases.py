@@ -337,9 +337,9 @@ def validate_ranking_scoring_sanity_case(base_params):
             "tools.scanner.stock_processor.run_v16_backtest", return_value=buy_stats
         ):
             buy_result = normalize_scanner_result(process_single_stock(str(file_path), "2330", params))
-        from tools.scanner.stock_processor import BUY_SORT_METHOD as ACTIVE_BUY_SORT_METHOD
+        from core.config import get_buy_sort_method
         expected_sort = calc_buy_sort_value(
-            ACTIVE_BUY_SORT_METHOD,
+            get_buy_sort_method(),
             buy_stats["expected_value"],
             buy_result["proj_cost"],
             buy_stats["win_rate"] / 100.0,
