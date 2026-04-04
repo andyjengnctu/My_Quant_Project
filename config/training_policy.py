@@ -20,7 +20,7 @@ SCORE_CALC_METHOD = 'RoMD'
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
 SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響 console/report 顯示，預設 1000.0)
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
 # 停利比例固定開關
 # None = 由 optimizer 搜尋 tp_percent
@@ -30,21 +30,21 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
-MIN_ANNUAL_TRADES = 5.0  # 最小年化交易次數門檻，預設 5.0
-MIN_BUY_FILL_RATE = 70.0  # 最小保留後買進成交率門檻，預設 70.0
-MIN_TRADE_WIN_RATE = 30.0  # 最小完整交易勝率門檻，預設 35.0
+MIN_ANNUAL_TRADES = 5.0  # 最小年化交易次數門檻
+MIN_BUY_FILL_RATE = 70.0  # 最小保留後買進成交率門檻
+MIN_TRADE_WIN_RATE = 30.0  # 最小完整交易勝率門檻
 # 績效風險
-MIN_FULL_YEAR_RETURN_PCT = -30.0  # 完整年度最差報酬率下限，預設 -30.0
-MAX_PORTFOLIO_MDD_PCT = 45.0  # 投組最大回撤上限，預設 45.0
+MIN_FULL_YEAR_RETURN_PCT = -30.0  # 完整年度最差報酬率下限
+MAX_PORTFOLIO_MDD_PCT = 45.0  # 投組最大回撤上限
 # 穩定度
-MIN_MONTHLY_WIN_RATE = 35.0  # 最小月勝率門檻，預設 35.0
-MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻，預設 0.40
+MIN_MONTHLY_WIN_RATE = 35.0  # 最小月勝率門檻
+MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻
 
 # 共用訓練參數 (單股歷史績效門檻)
 SELECTION_POLICY_PARAM_SPECS = {
-    "min_history_trades": {"type": int, "default": 0, "min_value": 0},  # 歷史績效最少交易次數門檻，預設 0
-    "min_history_ev": {"type": float, "default": 0.0},  # 歷史績效最小期望值門檻，預設 0.0
-    "min_history_win_rate": {"type": float, "default": 0.30, "min_value": 0.0, "max_value": 1.0},  # 歷史績效最小勝率門檻，預設 0.30
+    "min_history_trades": {"type": int, "default": 0, "min_value": 0},  # 歷史績效最少交易次數門檻
+    "min_history_ev": {"type": float, "default": 0.0},  # 歷史績效最小期望值門檻
+    "min_history_win_rate": {"type": float, "default": 0.30, "min_value": 0.0, "max_value": 1.0},  # 歷史績效最小勝率門檻
 }
 
 
