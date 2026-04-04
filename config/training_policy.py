@@ -5,20 +5,20 @@
 EV_CALC_METHOD = 'A' 
 
 # 買入優先序切換開關
-# 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'EV' = 優先買入期望值最高的標的 (單筆質量極大化)
+# 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
 BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'  
 
 # 系統評分 (Score) 算法切換
-# 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
+# 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
 SCORE_CALC_METHOD = 'RoMD'  
 
 # 系統評分分子切換
-# 'ANNUAL_RETURN' = 分子使用年化報酬率
 # 'TOTAL_RETURN' = 分子使用總報酬率
-SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'  
+# 'ANNUAL_RETURN' = 分子使用年化報酬率
+SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響 console/report 顯示，預設 1000.0)
 
@@ -26,7 +26,7 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響
 # None = 由 optimizer 搜尋 tp_percent
 # 0.0 = 固定關閉停利
 # 其他數值 = 固定停利比例
-OPTIMIZER_FIXED_TP_PERCENT = None  # 
+OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
