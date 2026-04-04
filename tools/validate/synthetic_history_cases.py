@@ -236,7 +236,7 @@ def validate_synthetic_single_backtest_not_gated_by_own_history_case(base_params
     return results, summary
 
 
-def validate_synthetic_single_backtest_uses_fixed_initial_capital_case(base_params):
+def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     params.initial_capital = 1000.0
     params.fixed_risk = 0.1
@@ -249,7 +249,7 @@ def validate_synthetic_single_backtest_uses_fixed_initial_capital_case(base_para
     params.atr_times_trail = 1.0
     params.use_compounding = True
 
-    case_id = "SYNTH_SINGLE_BACKTEST_FIXED_INITIAL_CAPITAL"
+    case_id = "SYNTH_SINGLE_BACKTEST_COMPOUNDING_CAPITAL"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -279,10 +279,10 @@ def validate_synthetic_single_backtest_uses_fixed_initial_capital_case(base_para
 
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
 
-    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
-    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "asset_growth_uses_fixed_initial_capital_even_when_flag_true", 20.0, float(stats["asset_growth"]))
-    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "score_uses_non_compounded_trade_sequence", 10.0, float(stats["score"]))
-    add_check(results, "synthetic_single_backtest_fixed_initial_capital", case_id, "final_setup_today_survives_after_fixed_capital_replays", True, bool(stats["is_setup_today"]))
+    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "trade_count_after_two_round_trips", 2, int(stats["trade_count"]))
+    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "asset_growth_uses_compounding_capital_when_flag_true", 21.0, float(stats["asset_growth"]))
+    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "score_uses_compounded_trade_sequence", 10.5, float(stats["score"]))
+    add_check(results, "synthetic_single_backtest_compounding_capital", case_id, "final_setup_today_survives_after_compounding_replays", True, bool(stats["is_setup_today"]))
 
     summary["trade_count"] = int(stats["trade_count"])
     summary["asset_growth"] = float(stats["asset_growth"])

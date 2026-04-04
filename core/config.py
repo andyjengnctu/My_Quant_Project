@@ -42,26 +42,22 @@ RUNTIME_PARAM_DEFAULTS = {
 }
 
 
+def _resolve_compounding_capital(value, fallback_value):
+    if value is None:
+        return max(0.0, float(fallback_value))
+    return max(0.0, float(value))
+
+
 def resolve_single_backtest_sizing_capital(params, current_capital=None):
-    initial_capital = float(params.initial_capital)
-    if current_capital is None:
-        return initial_capital
-    return max(0.0, min(float(current_capital), initial_capital))
-
-
-def _resolve_effective_portfolio_capital(value, initial_capital, params):
-    effective_value = max(0.0, float(value))
-    if getattr(params, 'use_compounding', True):
-        return effective_value
-    return min(effective_value, float(initial_capital))
+    return _resolve_compounding_capital(current_capital, params.initial_capital)
 
 
 def resolve_portfolio_sizing_equity(current_equity, initial_capital, params):
-    return _resolve_effective_portfolio_capital(current_equity, initial_capital, params)
+    return _resolve_compounding_capital(current_equity, initial_capital)
 
 
 def resolve_portfolio_entry_budget(available_cash, initial_capital, params):
-    return _resolve_effective_portfolio_capital(available_cash, initial_capital, params)
+    return _resolve_compounding_capital(available_cash, initial_capital)
 
 
 # # (AI註: 單一真理來源 - 直接建立 dataclass、JSON 載入、optimizer 固定覆寫都共用同一套數值 guardrail)

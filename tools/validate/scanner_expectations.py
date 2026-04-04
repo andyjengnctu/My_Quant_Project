@@ -11,10 +11,8 @@ from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from .check_result_utils import is_insufficient_data_error, make_consistency_params
 
 
-def build_execution_only_params(params):
-    execution_params = make_consistency_params(params)
-    execution_params.use_compounding = False
-    return execution_params
+def build_consistency_parity_params(params):
+    return make_consistency_params(params)
 
 
 def make_synthetic_validation_params(base_params, *, tp_percent=None):

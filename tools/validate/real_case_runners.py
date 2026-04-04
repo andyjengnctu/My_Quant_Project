@@ -6,7 +6,7 @@ from core.portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, p
 from tools.validate.checks import (
     add_fail_result,
     add_skip_result,
-    build_execution_only_params,
+    build_consistency_parity_params,
     build_scanner_validation_params,
     extract_yearly_profile_fields,
     make_consistency_params,
@@ -47,8 +47,6 @@ def build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs):
 
 
 def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, *, portfolio_context=None):
-    execution_params = build_execution_only_params(params)
-
     context = portfolio_context or build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
     fast_data = context["fast_data"]
     sorted_dates = context["sorted_dates"]
@@ -60,7 +58,7 @@ def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, 
         all_standalone_logs=context["all_standalone_logs"],
         sorted_dates=sorted_dates,
         start_year=start_year,
-        params=execution_params,
+        params=params,
         max_positions=1,
         enable_rotation=False,
         benchmark_ticker=ticker,
@@ -152,13 +150,13 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
 
     single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
     scanner_ref_stats = run_scanner_reference_check_on_clean_df(ticker, df, scanner_params)
-    execution_params = build_execution_only_params(params)
+    parity_params = build_consistency_parity_params(params)
     portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
-    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, execution_params, portfolio_context=portfolio_context)
+    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, parity_params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
         ticker,
         file_path,
-        execution_params,
+        parity_params,
         prepared_df=prep_df,
         standalone_logs=standalone_logs,
         packed_fast_data=portfolio_context["fast_data"],

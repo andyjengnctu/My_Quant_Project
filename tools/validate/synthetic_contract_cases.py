@@ -1360,10 +1360,10 @@ def validate_scanner_prepared_tool_contract_case(base_params):
     return results, summary
 
 
-def validate_execution_only_fixed_capital_contract_case(base_params):
+def validate_single_ticker_compounding_parity_contract_case(base_params):
     from core.backtest_core import run_v16_backtest
     from tools.validate.real_case_runners import build_single_ticker_portfolio_context, run_single_ticker_portfolio_check
-    from tools.validate.scanner_expectations import build_execution_only_params
+    from tools.validate.scanner_expectations import build_consistency_parity_params
 
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     params.initial_capital = 1000.0
@@ -1377,7 +1377,7 @@ def validate_execution_only_fixed_capital_contract_case(base_params):
     params.atr_times_trail = 1.0
     params.use_compounding = True
 
-    case_id = "OUTPUT_EXECUTION_ONLY_FIXED_CAPITAL"
+    case_id = "OUTPUT_SINGLE_TICKER_COMPOUNDING_PARITY"
     ticker = case_id
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -1412,8 +1412,8 @@ def validate_execution_only_fixed_capital_contract_case(base_params):
         },
         {
             "name": "after_gain",
-            "expected_final_eq": 1000.0,
-            "expected_total_return": 0.0,
+            "expected_final_eq": 990.0,
+            "expected_total_return": -1.0,
             "df": pd.DataFrame(
                 {
                     "Open": [100.0, 100.0, 110.0, 100.0, 100.0, 90.0],
@@ -1453,19 +1453,19 @@ def validate_execution_only_fixed_capital_contract_case(base_params):
         prepared_df["ind_sell_signal"] = scenario["precomputed_signals"][2]
         prepared_df["buy_limit"] = scenario["precomputed_signals"][3]
 
-        execution_params = build_execution_only_params(params)
+        parity_params = build_consistency_parity_params(params)
         portfolio_context = build_single_ticker_portfolio_context(ticker, prepared_df, standalone_logs)
         portfolio_stats = run_single_ticker_portfolio_check(
             ticker,
             prepared_df,
             standalone_logs,
-            execution_params,
+            parity_params,
             portfolio_context=portfolio_context,
         )
         portfolio_sim_stats = run_portfolio_sim_tool_check(
             ticker,
             f"{ticker}.csv",
-            execution_params,
+            parity_params,
             prepared_df=prepared_df,
             standalone_logs=standalone_logs,
             packed_fast_data=portfolio_context["fast_data"],
@@ -1473,11 +1473,11 @@ def validate_execution_only_fixed_capital_contract_case(base_params):
             start_year=portfolio_context["start_year"],
         )
 
-        metric_prefix = f"execution_only_{scenario['name']}"
-        add_check(results, "output_contract", case_id, f"{metric_prefix}_params_disable_compounding", False, bool(execution_params.use_compounding))
+        metric_prefix = f"single_ticker_compounding_{scenario['name']}"
+        add_check(results, "output_contract", case_id, f"{metric_prefix}_params_keep_compounding_enabled", True, bool(parity_params.use_compounding))
         add_check(results, "output_contract", case_id, f"{metric_prefix}_single_backtest_trade_count", 2, int(single_stats["trade_count"]))
-        add_check(results, "output_contract", case_id, f"{metric_prefix}_single_backtest_final_equity_uses_fixed_capital", scenario["expected_final_eq"], params.initial_capital * (1.0 + float(single_stats["asset_growth"]) / 100.0))
-        add_check(results, "output_contract", case_id, f"{metric_prefix}_single_backtest_total_return_uses_fixed_capital", scenario["expected_total_return"], float(single_stats["asset_growth"]))
+        add_check(results, "output_contract", case_id, f"{metric_prefix}_single_backtest_final_equity_uses_compounding", scenario["expected_final_eq"], params.initial_capital * (1.0 + float(single_stats["asset_growth"]) / 100.0))
+        add_check(results, "output_contract", case_id, f"{metric_prefix}_single_backtest_total_return_uses_compounding", scenario["expected_total_return"], float(single_stats["asset_growth"]))
         add_check(results, "output_contract", case_id, f"{metric_prefix}_portfolio_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_stats["total_return"]))
         add_check(results, "output_contract", case_id, f"{metric_prefix}_portfolio_final_equity_matches_single_backtest", scenario["expected_final_eq"], float(portfolio_stats["final_eq"]))
         add_check(results, "output_contract", case_id, f"{metric_prefix}_portfolio_sim_total_return_matches_single_backtest", float(single_stats["asset_growth"]), float(portfolio_sim_stats["total_return"]))

@@ -17,7 +17,7 @@ from .portfolio_payloads import (
     summarize_portfolio_trade_output,
 )
 from .scanner_expectations import (
-    build_execution_only_params,
+    build_consistency_parity_params,
     build_expected_scanner_payload,
     build_scanner_validation_params,
     derive_expected_scanner_status,
@@ -42,7 +42,7 @@ __all__ = [
     "extract_yearly_profile_fields",
     "normalize_yearly_return_rows",
     "summarize_portfolio_trade_output",
-    "build_execution_only_params",
+    "build_consistency_parity_params",
     "build_expected_scanner_payload",
     "build_scanner_validation_params",
     "derive_expected_scanner_status",

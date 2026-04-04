@@ -9,7 +9,7 @@ from .synthetic_param_cases import (
     validate_synthetic_pit_same_day_exit_excluded_case,
     validate_synthetic_portfolio_history_filter_only_case,
     validate_synthetic_proj_cost_cash_capped_case,
-    validate_synthetic_single_backtest_uses_fixed_initial_capital_case,
+    validate_synthetic_single_backtest_uses_compounding_capital_case,
     validate_synthetic_single_backtest_not_gated_by_own_history_case,
 )
 from .synthetic_history_cases import (
@@ -106,7 +106,7 @@ from .synthetic_contract_cases import (
     validate_scanner_reference_clean_df_contract_case,
     validate_dataset_prepare_fallback_write_traceability_case,
     validate_console_tail_read_error_traceability_case,
-    validate_execution_only_fixed_capital_contract_case,
+    validate_single_ticker_compounding_parity_contract_case,
 )
 from .synthetic_error_cases import (
     validate_downloader_main_error_path_case,
@@ -194,7 +194,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_pit_same_day_exit_excluded_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_pit_multiple_same_day_exits_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/history_filters.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_single_backtest_not_gated_by_own_history_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "tools/scanner/stock_processor.py")),
-        _entry(validate_synthetic_single_backtest_uses_fixed_initial_capital_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "core/backtest_core.py", "core/backtest_finalize.py", "tools/debug/backtest.py")),
+        _entry(validate_synthetic_single_backtest_uses_compounding_capital_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "core/backtest_core.py", "core/backtest_finalize.py", "tools/debug/backtest.py")),
         _entry(validate_synthetic_param_guardrail_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/config.py", "tools/optimizer/objective_profiles.py")),
         _entry(validate_price_utils_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py",)),
         _entry(validate_history_filters_unit_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/history_filters.py",)),
@@ -261,7 +261,7 @@ def get_synthetic_validator_entries():
         _entry(validate_quick_gate_output_path_guard_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_quick_gate.py", "core/output_paths.py", "core/log_utils.py")),
         _entry(validate_dataset_prepare_fallback_write_traceability_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/run_all.py",)),
         _entry(validate_console_tail_read_error_traceability_case, layer="output_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py",)),
-        _entry(validate_execution_only_fixed_capital_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("core/config.py", "core/backtest_core.py", "core/portfolio_engine.py", "tools/validate/real_case_runners.py")),
+        _entry(validate_single_ticker_compounding_parity_contract_case, layer="output_contract", cost_class="fast", impacted_modules=("core/config.py", "core/backtest_core.py", "core/portfolio_engine.py", "tools/validate/real_case_runners.py")),
         _entry(validate_params_io_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("core/params_io.py",)),
         _entry(validate_module_loader_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/validate/module_loader.py",)),
         _entry(validate_preflight_error_path_case, layer="error_path", cost_class="fast", impacted_modules=("tools/validate/preflight_env.py",)),
