@@ -15,11 +15,12 @@
 4. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
 5. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 6. `apps/test_suite.py` 僅限在本地端執行，GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目。
-7. 檢查到問題就直接在本輪提供修改，並提供避免再出現類似問題的作法。
-8. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`T` / `G` 僅為同步索引；主表追蹤 ID 與建議測試項追蹤 ID 的實際格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
-9. 文件分工固定：PROJECT_SETTINGS.md 管原則與權責，TEST_SUITE_CHECKLIST.md 管測試清單、狀態、映射、收斂紀錄與欄位細則。除必要短引用外，同一要求只能保留一份原文。
-10. checklist 只保留可機械比對的必要資訊；摘要區只保留最小必要索引，時間軸與完成日期只記於收斂紀錄，不得保留無關敘事。追蹤 ID 必須穩定；若更名，必須同輪同步更新 checklist、parser、guard 與正式入口摘要。
-11. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
+7. 檢查到問題就直接在本輪提供修改。
+8. 修改問題後，也提出避免 GPT再發生類似問題的作法，透過 `/doc/PROJECT_SETTINGS.md` 或 `/doc/TEST_SUITE_CHECKLIST.md`來強制。
+9. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`T` / `G` 僅為同步索引；主表追蹤 ID 與建議測試項追蹤 ID 的實際格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
+10. 文件分工固定：PROJECT_SETTINGS.md 管原則與權責，TEST_SUITE_CHECKLIST.md 管測試清單、狀態、映射、收斂紀錄與欄位細則。除必要短引用外，同一要求只能保留一份原文。
+11. checklist 只保留可機械比對的必要資訊；摘要區只保留最小必要索引，時間軸與完成日期只記於收斂紀錄，不得保留無關敘事。追蹤 ID 必須穩定；若更名，必須同輪同步更新 checklist、parser、guard 與正式入口摘要。
+12. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
 
 ## C. 回覆、交付與輸出
 
