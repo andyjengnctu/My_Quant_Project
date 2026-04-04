@@ -1066,6 +1066,61 @@ def validate_atomic_write_cleanup_error_preserves_root_exception_case(_base_para
     return results, summary
 
 
+def validate_validate_summary_atomic_write_contract_case(_base_params):
+    case_id = "VALIDATE_SUMMARY_ATOMIC_WRITE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="validate_summary_atomic_contract_") as temp_dir:
+        run_dir = Path(temp_dir) / "run_dir"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = run_dir / "validate_consistency_summary.json"
+        original_payload = {"status": "OLD", "elapsed_time_sec": 1.0}
+        local_common.write_json(summary_path, original_payload)
+
+        prev_run_dir = os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV)
+        os.environ[LOCAL_REGRESSION_RUN_DIR_ENV] = str(run_dir)
+        raised_exc = None
+        try:
+            df_results = pd.DataFrame([{"ticker": "1101", "status": "PASS"}])
+            df_failed = pd.DataFrame(columns=["ticker", "module", "metric", "passed", "expected", "actual", "note"])
+            with patch.object(local_common.os, "replace", side_effect=OSError("simulated validate summary replace failure")):
+                try:
+                    write_local_regression_summary(
+                        dataset_profile_key="reduced",
+                        dataset_source="direct",
+                        data_dir="data/tw_stock_data_vip_reduced",
+                        csv_path="outputs/validate_consistency/consistency_full_scan.csv",
+                        xlsx_path="",
+                        elapsed_time=3.21,
+                        selected_tickers=["1101"],
+                        df_results=df_results,
+                        df_failed=df_failed,
+                        output_dir="outputs/validate_consistency",
+                        real_data_coverage_ok=True,
+                        peak_traced_memory_mb=9.87,
+                    )
+                except OSError as exc:
+                    raised_exc = exc
+                else:
+                    raise AssertionError("write_local_regression_summary should propagate atomic replace failure")
+        finally:
+            if prev_run_dir is None:
+                os.environ.pop(LOCAL_REGRESSION_RUN_DIR_ENV, None)
+            else:
+                os.environ[LOCAL_REGRESSION_RUN_DIR_ENV] = prev_run_dir
+
+        persisted_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        remaining_temp_files = sorted(path.name for path in run_dir.glob(f".{summary_path.name}.*.tmp"))
+
+    add_check(results, "output_contract", case_id, "validate_summary_atomic_write_raises_on_replace_failure", "OSError", type(raised_exc).__name__)
+    add_check(results, "output_contract", case_id, "validate_summary_atomic_write_preserves_previous_payload", original_payload, persisted_payload)
+    add_check(results, "output_contract", case_id, "validate_summary_atomic_write_cleans_temp_files_after_failure", [], remaining_temp_files)
+
+    summary["cleanup_temp_files"] = len(remaining_temp_files)
+    return results, summary
+
+
 def validate_meta_quality_performance_memory_contract_case(_base_params):
     case_id = "META_QUALITY_PERFORMANCE_MEMORY_CONTRACT"
     results = []

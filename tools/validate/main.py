@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 import sys
 import time
 
@@ -22,6 +23,7 @@ from core.log_utils import format_exception_summary
 from core.params_io import load_params_from_json
 from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
@@ -152,9 +154,7 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
             except Exception as exc:  # pragma: no cover - defensive artifact reporting
                 run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
 
-        with open(run_info_file, "w", encoding="utf-8") as f:
-            json.dump(run_info, f, ensure_ascii=False, indent=2, sort_keys=True)
-            f.write("\n")
+        write_json(Path(run_info_file), run_info)
 
     if raised_exc is not None:
         raise raised_exc
@@ -181,7 +181,6 @@ def main(argv=None, environ=None):
             is_insufficient_data_error,
         )
         from tools.validate.real_cases import run_real_ticker_scan
-        from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
         from tools.validate.reporting import print_console_summary, write_issue_excel_report, write_local_regression_summary
         from tools.validate.synthetic_cases import run_synthetic_consistency_suite
         from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS

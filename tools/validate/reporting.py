@@ -1,9 +1,9 @@
-import json
 import os
+from pathlib import Path
 
 import pandas as pd
 
-from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
 
 
 def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, timestamp, *, output_dir, normalize_ticker):
@@ -161,7 +161,5 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
     }
     os.makedirs(run_dir, exist_ok=True)
     summary_path = os.path.join(run_dir, "validate_consistency_summary.json")
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
+    write_json(Path(summary_path), summary)
 
