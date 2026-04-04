@@ -37,7 +37,7 @@ def run_daily_scanner(data_dir, params):
     print(f"{C_GREEN}✅ 成功載入 AI 聖杯參數大腦！{C_RESET}")
 
     print_scanner_header(params)
-    print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額僅以 initial_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
+    print(f"{C_YELLOW}ℹ️ 本掃描器的投入金額以 scanner_live_capital 作為參考估算，非帳戶級真實可下單金額。{C_RESET}")
     print(f"{C_CYAN}--------------------------------------------------------------------------------{C_RESET}")
 
     count_scanned = 0

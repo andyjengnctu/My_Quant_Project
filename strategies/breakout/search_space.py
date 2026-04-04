@@ -1,23 +1,24 @@
-from strategies.breakout.schema import BREAKOUT_PARAM_SPECS, V16StrategyParams
+from strategies.breakout.adapter import build_breakout_strategy_params
+from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
 
 BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
-    "use_bb": {"kind": "categorical", "choices": [True, False]},
-    "use_kc": {"kind": "categorical", "choices": [True, False]},
-    "use_vol": {"kind": "categorical", "choices": [True, False]},
-    "atr_len": {"kind": "int", "low": 3, "high": 25},
-    "atr_times_init": {"kind": "float", "low": 1.0, "high": 3.5, "step": 0.1},
-    "atr_times_trail": {"kind": "float", "low": 2.0, "high": 4.5, "step": 0.1},
-    "atr_buy_tol": {"kind": "float", "low": 0.1, "high": 3.5, "step": 0.1},
-    "bb_len": {"kind": "int", "low": 10, "high": 30, "step": 1, "enabled_by": "use_bb"},
-    "bb_mult": {"kind": "float", "low": 1.0, "high": 2.5, "step": 0.1, "enabled_by": "use_bb"},
-    "kc_len": {"kind": "int", "low": 3, "high": 30, "step": 1, "enabled_by": "use_kc"},
-    "kc_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_kc"},
-    "vol_short_len": {"kind": "int", "low": 1, "high": 10, "enabled_by": "use_vol"},
-    "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},
-    "min_history_trades": {"kind": "int", "low": 0, "high": 5},
-    "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1},
-    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.6, "step": 0.01},
+    "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
+    "use_kc": {"kind": "categorical", "choices": [True, False]},  # (AI註: 肯特納通道濾網開關搜尋)
+    "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
+    "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
+    "atr_times_init": {"kind": "float", "low": 1.0, "high": 3.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
+    "atr_times_trail": {"kind": "float", "low": 2.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 2.0~4.5)
+    "atr_buy_tol": {"kind": "float", "low": 0.1, "high": 3.5, "step": 0.1},  # (AI註: 買點容忍 ATR 倍數搜尋，預設區間 0.1~3.5)
+    "bb_len": {"kind": "int", "low": 10, "high": 30, "step": 1, "enabled_by": "use_bb"},  # (AI註: 布林通道長度搜尋，僅 use_bb=True 啟用)
+    "bb_mult": {"kind": "float", "low": 1.0, "high": 2.5, "step": 0.1, "enabled_by": "use_bb"},  # (AI註: 布林通道倍數搜尋，僅 use_bb=True 啟用)
+    "kc_len": {"kind": "int", "low": 3, "high": 30, "step": 1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道長度搜尋，僅 use_kc=True 啟用)
+    "kc_mult": {"kind": "float", "low": 1.0, "high": 3.0, "step": 0.1, "enabled_by": "use_kc"},  # (AI註: 肯特納通道倍數搜尋，僅 use_kc=True 啟用)
+    "vol_short_len": {"kind": "int", "low": 1, "high": 10, "enabled_by": "use_vol"},  # (AI註: 短期量能窗長搜尋，僅 use_vol=True 啟用)
+    "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},  # (AI註: 長期量能窗長搜尋，僅 use_vol=True 啟用且下限跟隨 vol_short_len)
+    "min_history_trades": {"kind": "int", "low": 0, "high": 5},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
+    "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設區間 -1.0~0.5)
+    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.6, "step": 0.01},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
 }
 
 
@@ -35,7 +36,7 @@ def build_trial_params(session, trial):
         vol_short_len = BREAKOUT_PARAM_SPECS["vol_short_len"]["default"]
         vol_long_len = BREAKOUT_PARAM_SPECS["vol_long_len"]["default"]
 
-    return V16StrategyParams(
+    return build_breakout_strategy_params(
         atr_len=trial.suggest_int("atr_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"]),
         atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
         atr_times_trail=trial.suggest_float("atr_times_trail", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["step"]),

@@ -10,14 +10,13 @@ SCORE_CALC_METHOD = 'RoMD'
 # 'TOTAL_RETURN'  = 分子使用總報酬率
 SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'
 
-# Optimizer 投組績效門檻
-MIN_FULL_YEAR_RETURN_PCT = -30.0
-MIN_ANNUAL_TRADES = 5.0
-MIN_BUY_FILL_RATE = 70.0
-MIN_TRADE_WIN_RATE = 35.0
-MAX_PORTFOLIO_MDD_PCT = 45.0
-MIN_MONTHLY_WIN_RATE = 35.0
-MIN_EQUITY_CURVE_R_SQUARED = 0.40
+MIN_FULL_YEAR_RETURN_PCT = -30.0  # 完整年度最差報酬率下限，預設 -30.0
+MIN_ANNUAL_TRADES = 5.0  # 最小年化交易次數門檻，預設 5.0
+MIN_BUY_FILL_RATE = 70.0  # 最小保留後買進成交率門檻，預設 70.0
+MIN_TRADE_WIN_RATE = 35.0  # 最小完整交易勝率門檻，預設 35.0
+MAX_PORTFOLIO_MDD_PCT = 45.0  # 投組最大回撤上限，預設 45.0
+MIN_MONTHLY_WIN_RATE = 35.0  # 最小月勝率門檻，預設 35.0
+MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻，預設 0.40
 
 
 def build_training_threshold_snapshot():

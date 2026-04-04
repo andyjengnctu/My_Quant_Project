@@ -1,5 +1,9 @@
 """相容 façade：保留既有匯入路徑，實際 source of truth 已拆分。"""
 
+from config.execution_policy import (  # noqa: F401
+    EXECUTION_POLICY_PARAM_SPECS,
+    build_execution_policy_snapshot,
+)
 from config.runtime_defaults import (  # noqa: F401
     BUY_SORT_METHOD,
     EV_CALC_METHOD,
@@ -7,6 +11,10 @@ from config.runtime_defaults import (  # noqa: F401
     RUNTIME_PARAM_SPECS,
     RUNTIME_PARAM_TYPES,
     SYSTEM_SCORE_DISPLAY_MULTIPLIER,
+)
+from config.selection_policy import (  # noqa: F401
+    SELECTION_POLICY_PARAM_SPECS,
+    build_selection_policy_snapshot,
 )
 from config.training_policy import (  # noqa: F401
     MAX_PORTFOLIO_MDD_PCT,
@@ -28,7 +36,7 @@ from core.capital_policy import (  # noqa: F401
     resolve_single_backtest_sizing_capital,
 )
 from core.strategy_params import (  # noqa: F401
-    BREAKOUT_PARAM_SPECS,
+    STRATEGY_PARAM_SPECS,
     V16StrategyParams,
     build_runtime_param_raw_value,
     normalize_runtime_param_value,
@@ -36,3 +44,4 @@ from core.strategy_params import (  # noqa: F401
     strategy_params_to_dict,
     validate_strategy_param_ranges,
 )
+from strategies.breakout.schema import BREAKOUT_PARAM_SPECS  # noqa: F401

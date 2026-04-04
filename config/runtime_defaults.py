@@ -1,8 +1,5 @@
 # 純設定資料：全域戰略開關、顯示倍率與 runtime 預設值；score/threshold 已移至 training_policy。
 
-# ==========================================
-# 🌟 全域戰略切換開關 (System-Wide Strategy Switches)
-# ==========================================
 # 1. 期望值 (EV) 算法切換
 # 'A' = 嚴格 R_Multiple 期望值 (Mean R)
 # 'B' = 傳統實際盈虧期望值 (Win% * Payoff - Loss%)
@@ -15,15 +12,12 @@ EV_CALC_METHOD = 'A'
 BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'
 
 # 3. score / threshold 類全域訓練政策已集中至 config/training_policy.py
-# ==========================================
-
-# # (AI註: 僅影響顯示，不改實際排序與優化邏輯)
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 
 
 RUNTIME_PARAM_SPECS = {
-    'optimizer_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},
-    'scanner_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},
-    'scanner_live_capital': {'type': float, 'default': 2_000_000.0, 'allow_none': False, 'min_value': 0.0},
+    'optimizer_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},  # (AI註: optimizer worker 數上限，預設 None)
+    'scanner_max_workers': {'type': int, 'default': None, 'allow_none': True, 'min_value': 1},  # (AI註: scanner worker 數上限，預設 None)
+    'scanner_live_capital': {'type': float, 'default': 2_000_000.0, 'allow_none': False, 'min_value': 0.0},  # (AI註: scanner 參考投入本金，預設 2,000,000.0)
 }
 
 RUNTIME_PARAM_DEFAULTS = {field_name: spec['default'] for field_name, spec in RUNTIME_PARAM_SPECS.items()}
