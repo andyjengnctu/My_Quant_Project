@@ -32,6 +32,7 @@ def finalize_debug_analysis(
     colors,
     export_excel=True,
     export_chart=True,
+    return_chart_payload=False,
     verbose=True,
     price_df=None,
     chart_context=None,
@@ -52,7 +53,7 @@ def finalize_debug_analysis(
     excel_path = None
     chart_path = None
     chart_payload = None
-    if export_excel or export_chart:
+    if export_excel or export_chart or return_chart_payload:
         os.makedirs(output_dir, exist_ok=True)
 
     if export_excel:
@@ -61,15 +62,18 @@ def finalize_debug_analysis(
         if verbose:
             print(f"{colors['green']}📁 交易明細已成功匯出至：{excel_path}{colors['reset']}")
 
-    if export_chart:
+    if export_chart or return_chart_payload:
         if price_df is None or chart_context is None:
-            raise ValueError("export_chart=True 時，必須提供 price_df 與 chart_context。")
+            raise ValueError("export_chart=True 或 return_chart_payload=True 時，必須提供 price_df 與 chart_context。")
         chart_payload = build_debug_chart_payload(price_df, chart_context)
+
+    if export_chart:
         chart_path = export_debug_chart_html(
             price_df,
             ticker=ticker,
             output_dir=output_dir,
             chart_context=chart_context,
+            chart_payload=chart_payload,
         )
         if verbose:
             print(f"{colors['green']}📈 K 線交易檢視已成功匯出至：{chart_path}{colors['reset']}")

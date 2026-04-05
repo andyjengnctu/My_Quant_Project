@@ -28,7 +28,7 @@ def _resolve_active_tp_half(position):
     return position.get('tp_half', np.nan)
 
 
-def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True, export_chart=True, verbose=True, precomputed_signals=None):
+def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None):
     """以正式核心邏輯為準，輸出可讀交易明細與 K 線圖 artifact。"""
     h = df['High'].to_numpy(dtype=np.float64, copy=False)
     l = df['Low'].to_numpy(dtype=np.float64, copy=False)
@@ -47,7 +47,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     active_extended_signal = None
     current_capital = params.initial_capital
     trade_logs = []
-    chart_context = create_debug_chart_context(df) if export_chart else None
+    chart_context = create_debug_chart_context(df) if (export_chart or return_chart_payload) else None
 
     for j in range(1, len(c)):
         if np.isnan(atr_main[j - 1]):
@@ -120,6 +120,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         colors=colors,
         export_excel=export_excel,
         export_chart=export_chart,
+        return_chart_payload=return_chart_payload,
         verbose=verbose,
         price_df=df,
         chart_context=chart_context,

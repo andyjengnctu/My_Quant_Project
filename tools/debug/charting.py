@@ -755,7 +755,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
     return connection_ids
 
 
-def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context):
+def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, chart_payload=None):
     try:
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
@@ -765,7 +765,8 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, f"Debug_TradeChart_{ticker}.html")
 
-    chart_payload = build_debug_chart_payload(price_df, chart_context)
+    if chart_payload is None:
+        chart_payload = build_debug_chart_payload(price_df, chart_context)
     dates = chart_payload["dates"]
     x_start_idx = chart_payload["default_view"]["start_idx"]
     x_end_idx = chart_payload["default_view"]["end_idx"]

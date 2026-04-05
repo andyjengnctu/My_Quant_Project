@@ -1619,6 +1619,42 @@ def validate_scanner_reference_clean_df_contract_case(base_params):
     return results, summary
 
 
+def validate_debug_chart_payload_without_html_export_contract_case(base_params):
+    case_id = "DEBUG_CHART_PAYLOAD_WITHOUT_HTML_EXPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+    min_rows_needed = get_required_min_rows(case["params"])
+    clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    with tempfile.TemporaryDirectory(prefix="debug_chart_payload_contract_") as temp_dir:
+        analysis_result = debug_module.run_debug_analysis(
+            clean_df.copy(),
+            ticker,
+            case["params"],
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            output_dir=temp_dir,
+        )
+
+    chart_payload = analysis_result.get("chart_payload")
+    add_check(results, "output_contract", case_id, "debug_chart_payload_available_without_html_export", True, chart_payload is not None)
+    add_check(results, "output_contract", case_id, "debug_chart_path_omitted_without_html_export", None, analysis_result.get("chart_path"))
+    add_check(results, "output_contract", case_id, "debug_chart_payload_total_bars_matches_clean_df", len(clean_df), 0 if chart_payload is None else len(chart_payload.get("x", [])))
+
+    if chart_payload is not None:
+        add_check(results, "output_contract", case_id, "debug_chart_payload_default_view_nonempty_without_html_export", True, int(chart_payload["default_view"]["end_idx"]) >= int(chart_payload["default_view"]["start_idx"]))
+
+    summary["ticker"] = ticker
+    return results, summary
+
+
 def validate_gui_embedded_chart_contract_case(base_params):
     case_id = "GUI_EMBEDDED_CHART_VIEWPORT_CONTRACT"
     results = []
@@ -1642,7 +1678,8 @@ def validate_gui_embedded_chart_contract_case(base_params):
             ticker,
             case["params"],
             export_excel=False,
-            export_chart=True,
+            export_chart=False,
+            return_chart_payload=True,
             verbose=False,
             output_dir=temp_dir,
         )

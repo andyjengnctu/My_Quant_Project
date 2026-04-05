@@ -102,7 +102,7 @@ def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFIL
     }
 
 
-def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True, verbose=True, precomputed_signals=None, output_dir=None):
+def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None, output_dir=None):
     from tools.debug.backtest import run_debug_analysis as _run_debug_analysis
 
     return _run_debug_analysis(
@@ -113,6 +113,7 @@ def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True,
         colors=COLOR_MAP,
         export_excel=export_excel,
         export_chart=export_chart,
+        return_chart_payload=return_chart_payload,
         verbose=verbose,
         precomputed_signals=precomputed_signals,
     )
@@ -152,6 +153,7 @@ def run_debug_ticker_analysis(
     params=None,
     export_excel=True,
     export_chart=True,
+    return_chart_payload=False,
     verbose=False,
     output_dir=None,
 ):
@@ -163,6 +165,7 @@ def run_debug_ticker_analysis(
         resolved_params,
         export_excel=export_excel,
         export_chart=export_chart,
+        return_chart_payload=return_chart_payload,
         verbose=verbose,
         output_dir=output_dir,
     )
