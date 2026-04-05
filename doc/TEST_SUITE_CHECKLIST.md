@@ -684,6 +684,6 @@
 | 2026-04-05 | T169 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_tab_and_htmlless_contract_case` |
 | 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
 | 2026-04-06 | B93 | 新增 GUI mouse-navigation validator anti-overfit contract，釘死 synthetic validator 不得再綁死已移除的 `_chart_hint_var` / footer hint 細節 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
 | 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |
