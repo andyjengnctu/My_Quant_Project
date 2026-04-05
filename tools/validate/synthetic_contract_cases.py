@@ -2056,6 +2056,26 @@ def validate_gui_scanner_console_and_latest_contract_case(_base_params):
     return results, summary
 
 
+def validate_gui_sidebar_latest_preview_contract_case(_base_params):
+    case_id = "GUI_SIDEBAR_LATEST_PREVIEW_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "gui_panel_removes_execute_button", False, 'text="執行回測"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_enter", True, 'ticker_entry.bind("<Return>"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_candidate_select", True, 'self.after_idle(self._run_analysis)' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_declares_right_sidebar_signal_chip", True, '_signal_chip' in inspector_source and '歷史績效表' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_declares_selected_date_value_block", True, '選取日線值' in inspector_source and '_selected_tp_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "charting_declares_future_preview_contract", True, 'future_preview' in charting_source and '_render_future_preview_lines' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source)
+    add_check(results, "output_contract", case_id, "backtest_uses_future_preview_for_latest_signal", True, 'set_chart_future_preview(' in backtest_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []

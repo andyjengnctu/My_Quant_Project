@@ -157,6 +157,7 @@
 | B86 | P1 | GUI | GUI 單股 K 線圖必須消除重複買訊資訊框、將買訊/歷績門檻狀態晶片固定於右下角、滑鼠拖曳平移採 pixel-anchor 避免左右平移時上下跳動，並以 explicit dark widget styles 真正套用 deep-dark 佈景；同時背景網格需維持低對比、賣出虧損資訊框必須半透明 | DONE | 已補 direct contract，直接釘死 panel 必須顯式套用 `Workbench.*` dark styles、mouse pan 必須使用 pixel-anchor、status chip layout 必須是 `right_bottom`、買進 trade label 不得再與買訊框重複渲染，並用 synthetic figure 驗證僅保留賣出績效框與淡化 grid alpha | `tools/gui/workbench.py`, `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B87 | P1 | GUI | GUI workbench deep-dark theme 供 palette/style 使用的 theme token 必須完整宣告；`configure_workbench_theme()` 不得引用未定義 accent 常數而在啟動入口直接 NameError | DONE | 已補 direct contract，直接釘死 `WORKBENCH_ACCENT` 必須存在且為 hex 色碼，避免 `apps/gui.py` 於 theme 初始化階段即失敗 | `tools/gui/workbench.py`, `tools/validate/synthetic_contract_cases.py` |
 | B88 | P1 | GUI | GUI 單股工作台必須固定使用完整資料集、提供候選股掃描下拉選單 / Console 分頁 / 一鍵回到最新 K 線，且 latest-bar 買訊預覽、右側狀態晶片與滑鼠互動不得與單股圖表契約分叉 | DONE | 已補 direct contract，直接釘死 panel 不得再顯示資料集選項，必須提供 scanner button、candidate combobox、Console tab、latest button，scanner runner 必須回傳 candidate rows，chart helper 必須提供 `scroll_chart_to_latest()` 與右側留白契約 | `tools/gui/single_stock_inspector.py`, `tools/scanner/scan_runner.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
+| B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 歷史績效符合 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後至少半個版面右側留白，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -366,6 +367,7 @@
 | T165 | `validate_gui_chart_overlay_layout_and_pan_contract_case` | B86 |
 | T166 | `validate_workbench_theme_accent_symbol_contract_case` | B87 |
 | T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
+| T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
 
 ## G. 逐項收斂紀錄
 
@@ -619,6 +621,7 @@
 | 2026-04-05 | B86 | 新增 GUI overlay layout / dark widget styles / pixel-anchor mouse pan contract，釘死右下 status chip、買訊不重複框、淡化 grid 與滑鼠拖曳不跳動 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B87 | 新增 GUI workbench theme accent token contract，釘死 dark theme palette/style 不得引用未宣告 accent 常數而在 GUI 啟動入口直接 NameError | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B88 | 新增 GUI scanner / Console / latest-view contract，釘死完整資料集固定化、候選股下拉與 latest-bar 預覽不得分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B89 | 新增 GUI 右側 sidebar / Enter 回測 / latest next-day preview contract，釘死狀態摘要與預掛線預覽不得再分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -667,3 +670,4 @@
 | 2026-04-05 | T165 | 新增 GUI overlay layout / dark widget styles / pixel-anchor mouse pan contract 並驗證 | NEW -> DONE | `validate_gui_chart_overlay_layout_and_pan_contract_case` |
 | 2026-04-05 | T166 | 新增 GUI workbench theme accent token contract 並驗證 | NEW -> DONE | `validate_workbench_theme_accent_symbol_contract_case` |
 | 2026-04-05 | T167 | 新增 GUI scanner / Console / latest-view contract 並驗證 | NEW -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
+| 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |

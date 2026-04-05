@@ -7,7 +7,7 @@ import pandas as pd
 
 
 CHART_SIGNAL_BOX_ALPHA = 0.44
-CHART_RIGHT_PADDING_BARS = 8
+CHART_RIGHT_PADDING_BARS = 24
 CHART_DEFAULT_LOOKBACK_MONTHS = 18
 CHART_DEFAULT_LOOKBACK_FALLBACK_BARS = 380
 CHART_FOCUS_PADDING_BARS = 15
@@ -20,7 +20,7 @@ MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 172
 MATPLOTLIB_VOLUME_ALPHA = 0.32
 MATPLOTLIB_DARK_BG = "#02050a"
-MATPLOTLIB_GRID_COLOR = "#0c1a2a"
+MATPLOTLIB_GRID_COLOR = "#14304a"
 MATPLOTLIB_TEXT_COLOR = "#fbfdff"
 MATPLOTLIB_MUTED_TEXT_COLOR = "#e4edf6"
 MATPLOTLIB_UP_COLOR = "#ff5b6e"
@@ -73,6 +73,7 @@ MATPLOTLIB_STATUS_CHIP_MUTED_FACE = (0.20, 0.27, 0.35, 0.92)
 MATPLOTLIB_STATUS_CHIP_FONT_SIZE = 15
 MATPLOTLIB_SUMMARY_FONT_SIZE = 14
 MATPLOTLIB_SIGNAL_FONT_SIZE = 13
+MATPLOTLIB_SIDEBAR_FONT_SIZE = 16
 MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE = 22
 MATPLOTLIB_BUY_FILL_FACE = (0.08, 0.28, 0.86, 0.38)
 MATPLOTLIB_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, 0.40)
@@ -120,6 +121,7 @@ def create_debug_chart_context(df):
         "signal_annotations": [],
         "summary_box": None,
         "status_box": None,
+        "future_preview": {},
     }
 
 
@@ -239,6 +241,17 @@ def set_chart_status_box(chart_context, *, status_lines, ok=True):
     chart_context["status_box"] = {
         "lines": [str(line) for line in status_lines if str(line).strip()],
         "ok": bool(ok),
+    }
+
+
+def set_chart_future_preview(chart_context, *, limit_price=np.nan, stop_price=np.nan, tp_half_price=np.nan, entry_price=np.nan):
+    if chart_context is None:
+        return
+    chart_context["future_preview"] = {
+        "limit_price": np.nan if pd.isna(limit_price) else float(limit_price),
+        "stop_price": np.nan if pd.isna(stop_price) else float(stop_price),
+        "tp_half_price": np.nan if pd.isna(tp_half_price) else float(tp_half_price),
+        "entry_price": np.nan if pd.isna(entry_price) else float(entry_price),
     }
 
 
@@ -379,6 +392,7 @@ def build_debug_chart_payload(price_df, chart_context):
         "focus_positions": focus_positions,
         "summary_box": list((chart_context or {}).get("summary_box") or []),
         "status_box": dict((chart_context or {}).get("status_box") or {}),
+        "future_preview": dict((chart_context or {}).get("future_preview") or {}),
     }
     payload["default_view"] = compute_default_view_window(dates, total_bars, focus_positions)
     payload["gui_render_window"] = compute_gui_render_window(payload)
@@ -425,6 +439,7 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["focus_positions"] = [int(pos) for pos in focus_positions if 0 <= int(pos) < total_bars]
     normalized["summary_box"] = list(normalized.get("summary_box") or [])
     normalized["status_box"] = dict(normalized.get("status_box") or {})
+    normalized["future_preview"] = dict(normalized.get("future_preview") or {})
 
     default_view = dict(normalized.get("default_view") or {})
     if not default_view:
@@ -492,10 +507,11 @@ def _clamp_chart_xlim(left, right, *, total_points, min_visible_bars=MATPLOTLIB_
     if total_points <= 0:
         return -0.5, 0.5
     min_left = -0.5
-    max_right = float(total_points) - 0.5 + float(CHART_RIGHT_PADDING_BARS)
-    full_width = max_right - min_left
     min_width = max(float(min_visible_bars), 4.0)
     width = max(float(right) - float(left), min_width)
+    extra_right_padding = max(float(CHART_RIGHT_PADDING_BARS), width * 0.55)
+    max_right = float(total_points) - 0.5 + extra_right_padding
+    full_width = max_right - min_left
     width = min(width, full_width)
     center = (float(left) + float(right)) / 2.0
     clamped_left = center - width / 2.0
@@ -547,26 +563,44 @@ def _apply_axis_text_font(axis, font_properties):
         label.set_fontproperties(font_properties)
 
 
+def _build_hover_snapshot(chart_payload, index):
+    idx = int(np.clip(int(index), 0, len(chart_payload["x"]) - 1))
+    line_values = {
+        "limit_price": float(chart_payload["limit_line"][idx]) if np.isfinite(chart_payload["limit_line"][idx]) else None,
+        "entry_price": float(chart_payload["entry_line"][idx]) if np.isfinite(chart_payload["entry_line"][idx]) else None,
+        "stop_price": float(chart_payload["stop_line"][idx]) if np.isfinite(chart_payload["stop_line"][idx]) else None,
+        "tp_price": float(chart_payload["tp_line"][idx]) if np.isfinite(chart_payload["tp_line"][idx]) else None,
+    }
+    return {
+        "index": idx,
+        "date_label": chart_payload["date_labels"][idx],
+        "open": float(chart_payload["open"][idx]),
+        "high": float(chart_payload["high"][idx]),
+        "low": float(chart_payload["low"][idx]),
+        "close": float(chart_payload["close"][idx]),
+        "volume": float(chart_payload["volume"][idx]),
+        **line_values,
+    }
+
+
 def _build_hover_text(chart_payload, index):
-    idx = int(index)
-    if idx < 0 or idx >= len(chart_payload["x"]):
-        return ""
+    snapshot = _build_hover_snapshot(chart_payload, index)
     parts = [
-        chart_payload["date_labels"][idx],
-        f"開 {chart_payload['open'][idx]:.2f}",
-        f"高 {chart_payload['high'][idx]:.2f}",
-        f"低 {chart_payload['low'][idx]:.2f}",
-        f"收 {chart_payload['close'][idx]:.2f}",
-        f"量 {chart_payload['volume'][idx] / 1_000_000:.2f}M",
+        snapshot["date_label"],
+        f"開 {snapshot['open']:.2f}",
+        f"高 {snapshot['high']:.2f}",
+        f"低 {snapshot['low']:.2f}",
+        f"收 {snapshot['close']:.2f}",
+        f"量 {snapshot['volume'] / 1_000_000:.2f}M",
     ]
-    if np.isfinite(chart_payload["limit_line"][idx]):
-        parts.append(f"限價 {chart_payload['limit_line'][idx]:.2f}")
-    if np.isfinite(chart_payload["entry_line"][idx]):
-        parts.append(f"成交 {chart_payload['entry_line'][idx]:.2f}")
-    if np.isfinite(chart_payload["stop_line"][idx]):
-        parts.append(f"停損 {chart_payload['stop_line'][idx]:.2f}")
-    if np.isfinite(chart_payload["tp_line"][idx]):
-        parts.append(f"停利 {chart_payload['tp_line'][idx]:.2f}")
+    if snapshot["limit_price"] is not None:
+        parts.append(f"限價 {snapshot['limit_price']:.2f}")
+    if snapshot["entry_price"] is not None:
+        parts.append(f"成交 {snapshot['entry_price']:.2f}")
+    if snapshot["stop_price"] is not None:
+        parts.append(f"停損 {snapshot['stop_price']:.2f}")
+    if snapshot["tp_price"] is not None:
+        parts.append(f"停利 {snapshot['tp_price']:.2f}")
     return "   ".join(parts)
 
 
@@ -777,6 +811,28 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=Non
     return rendered
 
 
+def _render_future_preview_lines(axis_price, chart_payload):
+    preview = dict(chart_payload.get("future_preview") or {})
+    if not preview:
+        return []
+    last_x = float(len(chart_payload["x"]) - 1)
+    x_start = last_x + 0.55
+    x_end = last_x + 1.55
+    rendered = []
+    preview_specs = (
+        ("tp_half_price", MATPLOTLIB_TP_COLOR, 1.9, "solid"),
+        ("limit_price", MATPLOTLIB_LIMIT_COLOR, 1.6, (0, (4, 2))),
+        ("entry_price", MATPLOTLIB_ENTRY_COLOR, 1.8, "solid"),
+        ("stop_price", MATPLOTLIB_STOP_COLOR, 2.0, "solid"),
+    )
+    for key, color, linewidth, linestyle in preview_specs:
+        value = preview.get(key)
+        if value is None or pd.isna(value):
+            continue
+        rendered.append(axis_price.hlines(float(value), x_start, x_end, colors=color, linewidth=linewidth, linestyles=linestyle, zorder=4))
+    return rendered
+
+
 def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False):
     chart_payload = normalize_chart_payload_contract(chart_payload)
     try:
@@ -802,7 +858,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_volume = None
     figure.subplots_adjust(left=0.040, right=0.986, top=0.94, bottom=0.075)
     axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
-    axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.20, linewidth=0.70)
+    axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.12, linewidth=0.68)
     axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
     axis_price.spines["top"].set_visible(False)
     axis_price.spines["right"].set_visible(False)
@@ -865,6 +921,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             zorder=5,
             label=trace_name,
         )
+    future_preview_artists = _render_future_preview_lines(axis_price, chart_payload)
     axis_price.set_title(f"{ticker} 單股回測 K 線交易檢視", fontsize=18, color=MATPLOTLIB_TEXT_COLOR, loc="left", pad=10, fontweight="bold" if title_font is None else None, fontproperties=title_font)
     axis_price.set_ylabel("價格", color=MATPLOTLIB_TEXT_COLOR, fontsize=12 if label_font is None else None, fontproperties=label_font)
     volume_collection = None
@@ -993,7 +1050,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "dynamic_candle_width_enabled": True,
         "buy_trade_label_boxes_enabled": False,
         "mouse_drag_pan_mode": "pixel_anchor",
-        "grid_alpha": 0.20,
+        "grid_alpha": 0.12,
     }
     figure._stock_chart_navigation_state = {
         "axis_price": axis_price,
@@ -1010,6 +1067,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "status_chip_artists": status_chip_artists,
         "signal_artists": rendered_signal_annotations,
         "trade_label_artists": rendered_trade_labels,
+        "future_preview_artists": future_preview_artists,
+        "external_hover_callback": None,
         "body_up_collection": body_up_collection,
         "body_down_collection": body_down_collection,
         "wick_collection": wick_collection,
@@ -1028,7 +1087,7 @@ def scroll_chart_to_latest(figure, *, redraw=True):
     total_points = int(state["total_points"])
     default_view = chart_payload.get("default_view") or {"start_idx": 0, "end_idx": max(0, total_points - 1)}
     window_width = max(float(default_view.get("end_idx", total_points - 1)) - float(default_view.get("start_idx", 0)) + 2.0, float(MATPLOTLIB_MIN_VISIBLE_BARS))
-    target_right = float(total_points) - 0.5 + float(CHART_RIGHT_PADDING_BARS)
+    target_right = float(total_points) - 0.5 + max(float(CHART_RIGHT_PADDING_BARS), window_width * 0.55)
     target_left = target_right - window_width
     next_left, next_right = _clamp_chart_xlim(target_left, target_right, total_points=total_points)
     axis_price.set_xlim(next_left, next_right, emit=False)
@@ -1047,6 +1106,9 @@ def scroll_chart_to_latest(figure, *, redraw=True):
     if crosshair_hline is not None:
         close_price = float(chart_payload["close"][latest_index])
         crosshair_hline.set_ydata([close_price, close_price])
+    external_hover_callback = state.get("external_hover_callback")
+    if callable(external_hover_callback):
+        external_hover_callback(_build_hover_snapshot(chart_payload, latest_index))
     if redraw and figure.canvas is not None:
         figure.canvas.draw_idle()
     return True
@@ -1082,6 +1144,9 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         crosshair_vline.set_xdata([nearest_idx, nearest_idx])
         close_price = float(chart_payload["close"][nearest_idx])
         crosshair_hline.set_ydata([close_price, close_price])
+        external_hover_callback = state.get("external_hover_callback")
+        if callable(external_hover_callback):
+            external_hover_callback(_build_hover_snapshot(chart_payload, nearest_idx))
         if redraw and figure.canvas is not None:
             figure.canvas.draw_idle()
 

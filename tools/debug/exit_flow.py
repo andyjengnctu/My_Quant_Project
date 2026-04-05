@@ -74,6 +74,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
+                'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
 
@@ -113,6 +114,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
+                'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
     elif 'MISSED_SELL' in events:

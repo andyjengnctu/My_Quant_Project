@@ -26,6 +26,11 @@ WORKBENCH_NOTEBOOK_STYLE = "Workbench.TNotebook"
 WORKBENCH_TREE_STYLE = "Workbench.Treeview"
 WORKBENCH_VSCROLL_STYLE = "Workbench.Vertical.TScrollbar"
 WORKBENCH_HSCROLL_STYLE = "Workbench.Horizontal.TScrollbar"
+WORKBENCH_SIDEBAR_SIGNAL_STYLE = "Workbench.SidebarSignal.TLabel"
+WORKBENCH_SIDEBAR_GATE_STYLE = "Workbench.SidebarGate.TLabel"
+WORKBENCH_SIDEBAR_HEADER_STYLE = "Workbench.SidebarHeader.TLabel"
+WORKBENCH_SIDEBAR_SUMMARY_STYLE = "Workbench.SidebarSummary.TLabel"
+WORKBENCH_SIDEBAR_VALUE_STYLE = "Workbench.SidebarValue.TLabel"
 
 
 PANEL_SPECS = (
@@ -104,6 +109,11 @@ def configure_workbench_theme(root):
     style.map(WORKBENCH_TREE_STYLE, background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
     style.configure(WORKBENCH_VSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
     style.configure(WORKBENCH_HSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_SIDEBAR_SIGNAL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
+    style.configure(WORKBENCH_SIDEBAR_GATE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
+    style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 16, "bold"))
+    style.configure(WORKBENCH_SIDEBAR_SUMMARY_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 15), anchor="nw")
+    style.configure(WORKBENCH_SIDEBAR_VALUE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 15))
 
 def _maximize_root_window(root):
     try:

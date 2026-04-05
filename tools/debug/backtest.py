@@ -1,6 +1,7 @@
 import bisect
 
 import numpy as np
+import pandas as pd
 
 from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
@@ -15,6 +16,7 @@ from tools.debug.charting import (
     record_signal_annotation,
     set_chart_status_box,
     set_chart_summary_box,
+    set_chart_future_preview,
 )
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
@@ -41,6 +43,14 @@ def _resolve_active_tp_half(position):
     return position.get('tp_half', np.nan)
 
 
+def _resolve_chart_tp_line(position):
+    if position.get('qty', 0) <= 0:
+        return np.nan
+    if position.get('_debug_tp_preview_done', False):
+        return np.nan
+    return position.get('tp_half', np.nan)
+
+
 def _compute_payoff_ratio_from_trade_index(stats_index, cutoff):
     if cutoff <= 0:
         return 0.0
@@ -56,7 +66,7 @@ def _compute_payoff_ratio_from_trade_index(stats_index, cutoff):
     return 99.9 if avg_win_r > 0 else 0.0
 
 
-def _build_pit_history_snapshot(stats_index, current_date, params, current_capital):
+def _build_pit_history_snapshot(stats_index, current_date, params, current_capital, overall_max_drawdown=0.0):
     cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date) if stats_index['exit_dates'] else 0
     trade_count = 0
     win_rate = 0.0
@@ -86,6 +96,7 @@ def _build_pit_history_snapshot(stats_index, current_date, params, current_capit
         'payoff_ratio': float(payoff_ratio),
         'is_candidate': bool(is_candidate),
         'asset_growth_pct': float(asset_growth_pct),
+        'max_drawdown': float(overall_max_drawdown),
     }
 
 
@@ -129,6 +140,7 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         f"風報比: {history_snapshot['payoff_ratio']:.2f}",
         f"勝率: {history_snapshot['win_rate']:.1f}%",
         f"EV: {history_snapshot['expected_value']:.2f} R",
+        f"最大回撤: {history_snapshot.get('max_drawdown', 0.0):.2f}%",
     ]
     record_signal_annotation(
         chart_context,
@@ -137,7 +149,7 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         anchor_price=signal_low,
         title='賣訊',
         detail_lines=detail_lines,
-        meta={'profit_pct': float(signal_trade_pct)},
+        meta={'profit_pct': float(signal_trade_pct), 'max_drawdown': float(history_snapshot.get('max_drawdown', 0.0))},
     )
 
 
@@ -197,7 +209,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             continue
         pos_qty_start_of_bar = position['qty']
         signal_date = dates[j - 1]
-        signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital)
+        signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params)
@@ -262,12 +274,15 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 chart_context,
                 current_date=dates[j],
                 stop_price=position.get('sl', np.nan),
-                tp_half_price=_resolve_active_tp_half(position),
+                tp_half_price=_resolve_chart_tp_line(position),
                 limit_price=position.get('limit_price', np.nan),
                 entry_price=position.get('pure_buy_price', np.nan),
             )
+            tp_half_value = position.get('tp_half', np.nan)
+            if position.get('qty', 0) > 0 and not pd.isna(tp_half_value) and h[j] >= tp_half_value:
+                position['_debug_tp_preview_done'] = True
     if len(c) > 0:
-        latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital)
+        latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             latest_entry_plan_preview = build_normal_entry_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
@@ -281,9 +296,8 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             )
             if latest_entry_plan_preview is not None and latest_history_snapshot.get('is_candidate', False):
                 preview_tp = latest_entry_plan_preview['limit_price'] + (latest_entry_plan_preview['limit_price'] - latest_entry_plan_preview['init_sl'])
-                record_active_levels(
+                set_chart_future_preview(
                     chart_context,
-                    current_date=dates[-1],
                     stop_price=latest_entry_plan_preview['init_sl'],
                     tp_half_price=preview_tp,
                     limit_price=latest_entry_plan_preview['limit_price'],
