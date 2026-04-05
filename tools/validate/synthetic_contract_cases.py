@@ -2021,6 +2021,20 @@ def validate_record_signal_annotation_meta_contract_case(_base_params):
     return results, summary
 
 
+def validate_workbench_theme_accent_symbol_contract_case(_base_params):
+    case_id = "GUI_WORKBENCH_THEME_ACCENT_SYMBOL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    import tools.gui.workbench as workbench_module
+
+    workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "workbench_declares_accent_constant", True, hasattr(workbench_module, "WORKBENCH_ACCENT"))
+    add_check(results, "output_contract", case_id, "workbench_accent_constant_is_hex_string", True, isinstance(getattr(workbench_module, "WORKBENCH_ACCENT", None), str) and str(getattr(workbench_module, "WORKBENCH_ACCENT", "")).startswith("#"))
+    add_check(results, "output_contract", case_id, "workbench_theme_references_declared_accent_constant", True, "WORKBENCH_ACCENT" in workbench_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []
