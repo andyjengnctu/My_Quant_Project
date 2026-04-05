@@ -43,7 +43,7 @@ MIN_EQUITY_CURVE_R_SQUARED = 0.40  # 權益曲線最小 R 平方門檻
 # 共用訓練參數 (單股歷史績效門檻)
 SELECTION_POLICY_PARAM_SPECS = {
     "min_history_trades": {"type": int, "default": 0, "min_value": 0},  # 歷史績效最少交易次數門檻
-    "min_history_ev": {"type": float, "default": 0.0},  # 歷史績效最小期望值門檻
+    "min_history_ev": {"type": float, "default": -1.0},  # 歷史績效最小期望值門檻
     "min_history_win_rate": {"type": float, "default": 0.30, "min_value": 0.0, "max_value": 1.0},  # 歷史績效最小勝率門檻
 }
 
