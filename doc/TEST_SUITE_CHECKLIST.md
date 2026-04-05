@@ -151,6 +151,7 @@
 | B80 | P1 | GUI | GUI 單股回測 K 線圖必須預設最近 18 個月視窗、採台股紅漲綠跌與深色背景，並在同一 shared chart contract 下提供即時 hover 值、買訊/賣訊半透明註記、停損/停利/限價/成交線、右側全歷史摘要、右下狀態框，且信號標記時間點必須符合盤前掛單 / 次日成交交易原則 | DONE | 已補 direct contract，直接釘死 GUI inline path 預設不得預先輸出 HTML、chart contract 必須宣告最近 18 個月預設視窗 / hover 值顯示 / 台股色系 / 摘要框 / 狀態框 / signal annotation，並以小型 synthetic frame 驗證買訊與賣訊標記發生在訊號日、實際買進與賣出 marker 發生在次一根 K 棒，避免圖面提示時間點與正式交易規則分叉 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
 | B81 | P1 | 契約 | chart helper 必須接受缺少 `limit_line` / `entry_line` / `tp_line` / `stop_line` / `summary_box` / `status_box` 等 optional overlay keys 的最小 chart payload，並在建立 GUI figure / hover / autoscale 前自動補齊預設值；不得因 synthetic / legacy payload 缺少可選欄位而在 consistency runtime 以 `KeyError` 假失敗 | DONE | 已補 direct contract，直接以缺少 optional overlay keys 的最小 payload 呼叫 shared chart normalizer 與 matplotlib figure builder，釘死 helper 必須自動補齊 overlay 線陣列與摘要欄位預設值，避免 synthetic validator 或 legacy caller 因 payload schema 省略可選欄位而在 chart 路徑炸出 `KeyError` | `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B82 | P1 | GUI | GUI 工作台必須整體套用 deep-dark 佈景，並以 shared chart contract 支援左右鍵逐根移動時間軸、拖曳平移時避免價格軸上下晃動、成交量 overlay 保持可互動效能、左下狀態 chip、以及 zoom 後 K 棒與量柱寬度等比例調整 | DONE | 已補 direct contract，直接釘死 workbench spec 必須宣告 `ui_theme=deep_dark`、chart helper 必須提供 keyboard pan / left-bottom status chips / dynamic candle width contract，並以 stub canvas 綁定 navigation binder 驗證左右鍵移動與 toolbar-free 互動旗標 | `tools/gui/workbench.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
+| B83 | P2 | 契約 | synthetic GUI chart validator 使用的 matplotlib canvas stub 必須滿足 figure cleanup 所需的最小 mouse-grab 介面；至少需提供 `grab_mouse()` / `release_mouse()`，不得在 formal suite runtime 因 stub 缺口而於 `figure.clear()` / artist cleanup 階段以 `AttributeError` 假失敗 | DONE | 已補 direct contract，直接釘死 shared `_build_matplotlib_canvas_stub()` 必須宣告 `grab_mouse()` / `release_mouse()` 並在 release 後清空 grabbed axis；同步讓 GUI keyboard-pan validator 共用該 stub，避免 synthetic contract 自己的 canvas 測試替身比 matplotlib figure cleanup 契約更弱而造成 consistency 假失敗 | `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -354,6 +355,7 @@
 | T159 | `validate_gui_chart_recent_view_signal_overlay_contract_case` | B80 |
 | T160 | `validate_chart_payload_optional_overlay_keys_contract_case` | B81 |
 | T161 | `validate_gui_dark_theme_and_keyboard_pan_contract_case` | B82 |
+| T162 | `validate_gui_navigation_canvas_stub_cleanup_contract_case` | B83 |
 
 ## G. 逐項收斂紀錄
 
@@ -601,6 +603,7 @@
 | 2026-04-05 | B78 | 新增 debug chart payload 無需 HTML export contract，釘死 `export_chart=False` 也可回傳 payload 以避免 synthetic suite 額外載入 plotly 造成記憶體回歸 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B79 | 新增 quick gate synthetic registry symbol-resolution static contract，釘死 `_entry(validate_...)` 不得引用未 import / 未定義 symbol，避免 consistency import 階段才以 `NameError` 爆炸 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-05 | B80 | 新增 GUI 近期視窗 / 台股色系 / hover 值 / signal overlay / timing contract，釘死圖面提示與盤前掛單規則不得分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B83 | 新增 synthetic GUI canvas stub cleanup contract，釘死 stub 必須提供 `grab_mouse()` / `release_mouse()`，避免 figure cleanup 於 formal suite runtime 因替身介面不足假失敗 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -643,3 +646,4 @@
 | 2026-04-05 | T159 | 新增 GUI 近期視窗 / signal overlay / timing contract 並驗證 | NEW -> DONE | `validate_gui_chart_recent_view_signal_overlay_contract_case` |
 | 2026-04-05 | T160 | 新增 chart payload optional overlay keys contract 並驗證 | NEW -> DONE | `validate_chart_payload_optional_overlay_keys_contract_case` |
 | 2026-04-05 | T161 | 新增 GUI deep-dark theme / keyboard pan / dynamic candle width contract 並驗證 | NEW -> DONE | `validate_gui_dark_theme_and_keyboard_pan_contract_case` |
+| 2026-04-05 | T162 | 新增 synthetic GUI canvas stub cleanup contract 並驗證 | NEW -> DONE | `validate_gui_navigation_canvas_stub_cleanup_contract_case` |

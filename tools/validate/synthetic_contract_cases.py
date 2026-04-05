@@ -1832,6 +1832,55 @@ def validate_gui_mouse_navigation_contract_case(_base_params):
     return results, summary
 
 
+def _build_matplotlib_canvas_stub():
+    class _CanvasWidget:
+        def __init__(self):
+            self.config_calls = []
+        def configure(self, **kwargs):
+            self.config_calls.append(kwargs)
+        def focus_set(self):
+            return None
+
+    class _CanvasStub:
+        def __init__(self):
+            self._widget = _CanvasWidget()
+            self._connections = {}
+            self._grabbed_axis = None
+            self.release_calls = []
+        def mpl_connect(self, name, callback):
+            self._connections[name] = callback
+            return len(self._connections)
+        def get_tk_widget(self):
+            return self._widget
+        def draw_idle(self):
+            return None
+        def grab_mouse(self, axis):
+            self._grabbed_axis = axis
+        def release_mouse(self, axis):
+            self.release_calls.append(axis)
+            if self._grabbed_axis is axis:
+                self._grabbed_axis = None
+
+    return _CanvasStub()
+
+
+def validate_gui_navigation_canvas_stub_cleanup_contract_case(_base_params):
+    case_id = "GUI_NAVIGATION_CANVAS_STUB_CLEANUP_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    canvas = _build_matplotlib_canvas_stub()
+    add_check(results, "output_contract", case_id, "canvas_stub_declares_grab_mouse", True, callable(getattr(canvas, "grab_mouse", None)))
+    add_check(results, "output_contract", case_id, "canvas_stub_declares_release_mouse", True, callable(getattr(canvas, "release_mouse", None)))
+
+    sentinel_axis = object()
+    canvas.grab_mouse(sentinel_axis)
+    canvas.release_mouse(sentinel_axis)
+    add_check(results, "output_contract", case_id, "canvas_stub_release_mouse_clears_grabbed_axis", None, canvas._grabbed_axis)
+    add_check(results, "output_contract", case_id, "canvas_stub_release_mouse_records_axis", 1, len(canvas.release_calls))
+    return results, summary
+
+
 def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
     case_id = "GUI_DARK_THEME_AND_KEYBOARD_PAN_CONTRACT"
     results = []
@@ -1870,25 +1919,7 @@ def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
     }
     figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=True)
 
-    class _CanvasWidget:
-        def __init__(self):
-            self.config_calls = []
-        def configure(self, **kwargs):
-            self.config_calls.append(kwargs)
-        def focus_set(self):
-            return None
-    class _CanvasStub:
-        def __init__(self):
-            self._widget = _CanvasWidget()
-            self._connections = {}
-        def mpl_connect(self, name, callback):
-            self._connections[name] = callback
-            return len(self._connections)
-        def get_tk_widget(self):
-            return self._widget
-        def draw_idle(self):
-            return None
-    canvas = _CanvasStub()
+    canvas = _build_matplotlib_canvas_stub()
     figure.canvas = canvas
     bind_matplotlib_chart_navigation(figure, canvas)
     contract = getattr(figure, "_stock_chart_contract", {})
