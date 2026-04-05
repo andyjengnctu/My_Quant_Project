@@ -36,6 +36,9 @@ from tools.debug.charting import (
     create_debug_chart_context,
     create_matplotlib_debug_chart_figure,
     get_matplotlib_cjk_font_candidates,
+    record_signal_annotation,
+    set_chart_status_box,
+    set_chart_summary_box,
 )
 from tools.debug.entry_flow import _record_entry_plan_marker
 
@@ -1832,6 +1835,101 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     figure.clear()
 
     summary["panel_id"] = panel_spec.get("panel_id")
+    return results, summary
+
+
+def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
+    case_id = "GUI_CHART_RECENT_VIEW_SIGNAL_OVERLAY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "gui_inline_chart_skips_html_export_by_default", True, "export_chart=False" in inspector_source and "return_chart_payload=True" in inspector_source)
+
+    large_dates = pd.date_range("2018-01-01", periods=1800, freq="B")
+    large_frame = pd.DataFrame(
+        {
+            "Open": np.linspace(50.0, 150.0, len(large_dates)),
+            "High": np.linspace(51.0, 151.0, len(large_dates)),
+            "Low": np.linspace(49.0, 149.0, len(large_dates)),
+            "Close": np.linspace(50.5, 150.5, len(large_dates)),
+            "Volume": np.linspace(5000.0, 25000.0, len(large_dates)),
+        },
+        index=large_dates,
+    )
+    large_chart_context = create_debug_chart_context(large_frame)
+    record_signal_annotation(
+        large_chart_context,
+        current_date=large_dates[-15],
+        signal_type="buy",
+        anchor_price=float(large_frame.iloc[-15]["Low"]),
+        title="買訊",
+        detail_lines=["限價: 120.00", "停損: 115.00", "股數: 1,000"],
+    )
+    set_chart_summary_box(large_chart_context, summary_lines=["資產成長: 10.0%", "交易次數: 5"])
+    set_chart_status_box(large_chart_context, status_lines=["賣訊: 否", "Candidate: 是", "歷績門檻: 合格"], ok=True)
+    chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
+    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    default_view = contract.get("default_view", {})
+
+    add_check(results, "output_contract", case_id, "gui_chart_default_recent_view_ends_at_last_bar", len(chart_payload["x"]) - 1, int(default_view.get("end_idx", -1)))
+    add_check(results, "output_contract", case_id, "gui_chart_default_recent_view_narrower_than_full_history", True, int(default_view.get("start_idx", 0)) > 0)
+    add_check(results, "output_contract", case_id, "gui_chart_contract_default_lookback_months", 18, contract.get("default_lookback_months"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_hover_value_display_enabled", True, contract.get("hover_value_display_enabled"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_twse_up_color", "#ff5b6e", contract.get("twse_up_color"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_twse_down_color", "#18b26b", contract.get("twse_down_color"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_summary_box_present", True, contract.get("summary_box_present"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_status_box_present", True, contract.get("status_box_present"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_signal_annotation_present", True, contract.get("signal_annotation_count", 0) >= 1)
+    figure.clear()
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    params = case["params"]
+    signal_dates = pd.date_range("2024-01-01", periods=6, freq="D")
+    signal_frame = pd.DataFrame(
+        {
+            "Open": [10.0, 10.2, 10.8, 11.2, 10.7, 10.5],
+            "High": [10.4, 10.8, 11.3, 11.4, 10.9, 10.7],
+            "Low": [9.8, 10.0, 10.1, 10.9, 10.2, 10.0],
+            "Close": [10.1, 10.7, 11.2, 11.0, 10.4, 10.3],
+            "Volume": [1000, 1200, 1500, 1400, 1300, 1600],
+        },
+        index=signal_dates,
+    )
+    precomputed_signals = (
+        np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64),
+        np.array([False, True, False, False, False, False], dtype=bool),
+        np.array([False, False, False, True, False, False], dtype=bool),
+        np.array([np.nan, 10.9, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
+    )
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    with tempfile.TemporaryDirectory(prefix="gui_chart_signal_overlay_contract_") as temp_dir:
+        analysis_result = debug_module.run_debug_analysis(
+            signal_frame.copy(),
+            "2330",
+            params,
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            precomputed_signals=precomputed_signals,
+            output_dir=temp_dir,
+        )
+    payload = analysis_result.get("chart_payload") or {}
+    signal_annotations = payload.get("signal_annotations", [])
+    buy_signal_dates = [item["date"].strftime("%Y-%m-%d") for item in signal_annotations if item.get("signal_type") == "buy"]
+    sell_signal_dates = [item["date"].strftime("%Y-%m-%d") for item in signal_annotations if item.get("signal_type") == "sell"]
+    marker_groups = payload.get("marker_groups", {})
+    buy_trade_dates = [item["date"].strftime("%Y-%m-%d") for item in marker_groups.get("買進", [])]
+    sell_trade_dates = [item["date"].strftime("%Y-%m-%d") for item in marker_groups.get("指標賣出", [])]
+
+    add_check(results, "output_contract", case_id, "gui_chart_buy_signal_annotation_precedes_execution_by_one_bar", signal_dates[1].strftime("%Y-%m-%d"), buy_signal_dates[0] if buy_signal_dates else "")
+    add_check(results, "output_contract", case_id, "gui_chart_buy_execution_occurs_on_next_bar", signal_dates[2].strftime("%Y-%m-%d"), buy_trade_dates[0] if buy_trade_dates else "")
+    add_check(results, "output_contract", case_id, "gui_chart_sell_signal_annotation_precedes_execution_by_one_bar", signal_dates[3].strftime("%Y-%m-%d"), sell_signal_dates[0] if sell_signal_dates else "")
+    add_check(results, "output_contract", case_id, "gui_chart_sell_execution_occurs_on_next_bar", signal_dates[4].strftime("%Y-%m-%d"), sell_trade_dates[0] if sell_trade_dates else "")
+
+    summary["signal_annotation_count"] = len(signal_annotations)
     return results, summary
 
 

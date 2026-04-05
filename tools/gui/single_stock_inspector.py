@@ -44,7 +44,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
-        self._chart_hint_var = tk.StringVar(value="滑鼠滾輪縮放；按住左鍵拖曳平移時間軸。")
+        self._chart_hint_var = tk.StringVar(value="預設顯示最近 18 個月；滑鼠滾輪縮放、按住左鍵拖曳平移，左上即時顯示滑鼠所在 K 棒數值。")
         self._dataset_var = tk.StringVar(value=DEFAULT_DATASET_PROFILE)
         self._ticker_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
@@ -161,7 +161,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 ticker,
                 dataset_profile_key=dataset_key,
                 export_excel=True,
-                export_chart=True,
+                export_chart=False,
+                return_chart_payload=True,
                 verbose=False,
             )
         except Exception as exc:
@@ -269,9 +270,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._chart_figure = figure
         self._notebook.select(0)
         if self._show_volume_var.get():
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前顯示成交量。滑鼠滾輪可直接縮放，按住左鍵可直接平移時間軸。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設從最近 18 個月開始，左上即時顯示滑鼠所在 K 棒數值，成交量為同圖 overlay。")
         else:
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前隱藏成交量以保留大圖版面。滑鼠滾輪可直接縮放，按住左鍵可直接平移時間軸。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設顯示最近 18 個月，左上即時顯示滑鼠所在 K 棒數值，隱藏成交量以保留大圖版面。")
 
     def _clear_embedded_chart(self):
         if self._chart_canvas is not None:
@@ -285,6 +286,26 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._chart_placeholder.pack(fill="both", expand=True)
 
     def _open_chart(self):
+        if self._result is None:
+            messagebox.showinfo("股票工具工作台", "請先執行回測。")
+            return
+        if not self._result.get("chart_path"):
+            ticker = self._result.get("ticker")
+            dataset_key = self._result.get("dataset_profile_key", DEFAULT_DATASET_PROFILE)
+            try:
+                export_result = run_debug_ticker_analysis(
+                    ticker,
+                    dataset_profile_key=dataset_key,
+                    export_excel=False,
+                    export_chart=True,
+                    return_chart_payload=False,
+                    verbose=False,
+                )
+            except Exception as exc:
+                messagebox.showerror("股票工具工作台", f"建立 HTML K 線圖失敗：{type(exc).__name__}: {exc}")
+                return
+            self._result["chart_path"] = export_result.get("chart_path")
+            self._summary_vars["chart_path"].set(self._result.get("chart_path") or "-")
         self._open_result_path("chart_path")
 
     def _open_excel(self):

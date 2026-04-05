@@ -78,7 +78,7 @@ python tools/debug/trade_log.py
 python apps/gui.py
 ```
 
-`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤：K 線圖分頁預設佔主要版面、GUI 開啟即預設最大化、成交量預設隱藏且可切換為疊加於同一圖面的下緣 overlay（高度低於 1/4），執行摘要與交易明細為獨立分頁，並採 toolbar-free 互動：滑鼠滾輪直接縮放、左鍵直接拖曳時間軸；內嵌 K 線保留完整歷史可平移/縮放，仍保留 Excel 與 HTML artifact 輸出。
+`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤：K 線圖分頁預設佔主要版面、GUI 開啟即預設最大化，內嵌圖預設顯示最近 18 個月且可平移/縮放到完整歷史，色系採台股紅漲綠跌與深色背景，左上 hover 區會即時顯示滑鼠所在 K 棒的 OHLCV/限價/成交/停損/停利；買訊/賣訊以半透明註記顯示掛單或歷績資訊，右側為全歷史摘要、右下為當前賣訊 / 候選 / 歷績門檻狀態；成交量預設隱藏且可切換為疊加於同一圖面的下緣 overlay（高度低於 1/4），執行摘要與交易明細為獨立分頁，並採 toolbar-free 互動：滑鼠滾輪直接縮放、左鍵直接拖曳時間軸；GUI 預設不預先輸出 HTML，點擊按鈕時才 lazy export HTML artifact，仍保留 Excel 與 HTML 輸出。
 
 
 # portfolio engine 架構

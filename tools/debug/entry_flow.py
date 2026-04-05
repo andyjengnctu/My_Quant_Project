@@ -87,6 +87,7 @@ def process_debug_entry_for_day(
         )
         if entry_result['filled']:
             position = entry_result['position']
+            position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
             append_debug_trade_row(
@@ -170,6 +171,7 @@ def process_debug_entry_for_day(
         )
         if entry_result['filled']:
             position = entry_result['position']
+            position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
             append_debug_trade_row(

@@ -1,8 +1,20 @@
+import bisect
+
 import numpy as np
 
+from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
+from core.entry_plans import build_normal_entry_plan
+from core.history_filters import evaluate_history_candidate_metrics
+from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
-from tools.debug.charting import create_debug_chart_context, record_active_levels
+from tools.debug.charting import (
+    create_debug_chart_context,
+    record_active_levels,
+    record_signal_annotation,
+    set_chart_status_box,
+    set_chart_summary_box,
+)
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
 from tools.debug.reporting import finalize_debug_analysis
@@ -28,6 +40,127 @@ def _resolve_active_tp_half(position):
     return position.get('tp_half', np.nan)
 
 
+def _compute_payoff_ratio_from_trade_index(stats_index, cutoff):
+    if cutoff <= 0:
+        return 0.0
+    trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
+    win_count = int(stats_index['cum_win_count'][cutoff - 1])
+    loss_count = max(0, trade_count - win_count)
+    win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
+    loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
+    avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
+    avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
+    if avg_loss_r > 0:
+        return avg_win_r / avg_loss_r
+    return 99.9 if avg_win_r > 0 else 0.0
+
+
+def _build_pit_history_snapshot(stats_index, current_date, params, current_capital):
+    cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date) if stats_index['exit_dates'] else 0
+    trade_count = 0
+    win_rate = 0.0
+    expected_value = 0.0
+    payoff_ratio = 0.0
+    is_candidate = False
+    if cutoff > 0:
+        trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
+        win_count = int(stats_index['cum_win_count'][cutoff - 1])
+        total_r_sum = float(stats_index['cum_total_r_sum'][cutoff - 1])
+        win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
+        loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
+        is_candidate, expected_value, win_rate, _ = evaluate_history_candidate_metrics(
+            trade_count,
+            win_count,
+            total_r_sum,
+            win_r_sum,
+            loss_r_sum,
+            params,
+        )
+        payoff_ratio = _compute_payoff_ratio_from_trade_index(stats_index, cutoff)
+    asset_growth_pct = ((float(current_capital) - float(params.initial_capital)) / float(params.initial_capital) * 100.0) if float(params.initial_capital) > 0 else 0.0
+    return {
+        'trade_count': trade_count,
+        'win_rate': float(win_rate) * 100.0,
+        'expected_value': float(expected_value),
+        'payoff_ratio': float(payoff_ratio),
+        'is_candidate': bool(is_candidate),
+        'asset_growth_pct': float(asset_growth_pct),
+    }
+
+
+def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot):
+    if chart_context is None:
+        return
+    if entry_plan is None:
+        detail_lines = [
+            f"歷績門檻: {'合格' if history_snapshot['is_candidate'] else '未達'}",
+            '本次資金不足，無法掛單',
+        ]
+    else:
+        tp_line = entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])
+        detail_lines = [
+            f"限價: {entry_plan['limit_price']:.2f}",
+            f"停損: {entry_plan['init_sl']:.2f}",
+            f"停利: {tp_line:.2f}",
+            f"股數: {int(entry_plan['qty']):,}",
+            f"歷績門檻: {'合格' if history_snapshot['is_candidate'] else '未達'}",
+            f"EV: {history_snapshot['expected_value']:.2f} R | 勝率: {history_snapshot['win_rate']:.1f}%",
+        ]
+    record_signal_annotation(
+        chart_context,
+        current_date=signal_date,
+        signal_type='buy',
+        anchor_price=signal_low,
+        title='買訊',
+        detail_lines=detail_lines,
+    )
+
+
+def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, position, history_snapshot):
+    if chart_context is None or position.get('qty', 0) <= 0:
+        return
+    detail_lines = [
+        f"股數: {int(position['qty']):,}",
+        f"資產成長: {history_snapshot['asset_growth_pct']:.1f}%",
+        f"勝率: {history_snapshot['win_rate']:.1f}% | 風報比: {history_snapshot['payoff_ratio']:.2f}",
+        f"期望值: {history_snapshot['expected_value']:.2f} R | 交易: {history_snapshot['trade_count']}",
+    ]
+    record_signal_annotation(
+        chart_context,
+        current_date=signal_date,
+        signal_type='sell',
+        anchor_price=signal_low,
+        title='賣訊',
+        detail_lines=detail_lines,
+    )
+
+
+def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
+    if chart_context is None or stats_dict is None:
+        return
+    summary_lines = [
+        f"資產成長: {stats_dict.get('asset_growth', 0.0):.1f}%",
+        f"交易次數: {int(stats_dict.get('trade_count', 0) or 0)}",
+        f"錯失買點: {int(stats_dict.get('missed_buys', 0) or 0)}次",
+        f"單筆報酬: {stats_dict.get('score', 0.0):.2f}%",
+        '',
+        f"勝率: {stats_dict.get('win_rate', 0.0):.2f}%",
+        f"風報比: {stats_dict.get('payoff_ratio', 0.0):.2f}",
+        f"期望值: {stats_dict.get('expected_value', 0.0):.2f} R",
+        f"最大回撤: {stats_dict.get('max_drawdown', 0.0):.2f}%",
+    ]
+    set_chart_summary_box(chart_context, summary_lines=summary_lines)
+    has_raw_buy_signal = bool(stats_dict.get('is_setup_today')) or stats_dict.get('extended_candidate_today') is not None
+    sell_signal_today = bool(sell_condition[-1]) if len(sell_condition) > 0 else False
+    history_gate_ok = bool(stats_dict.get('is_candidate', False))
+    status_lines = [
+        f"賣訊: {'是' if sell_signal_today else '否'}",
+        f"候選: {'是' if has_raw_buy_signal else '否'}",
+        f"歷績門檻: {'合格' if history_gate_ok else '未達'}",
+    ]
+    set_chart_status_box(chart_context, status_lines=status_lines, ok=history_gate_ok)
+
+
 def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None):
     """以正式核心邏輯為準，輸出可讀交易明細與 K 線圖 artifact。"""
     h = df['High'].to_numpy(dtype=np.float64, copy=False)
@@ -36,25 +169,42 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     o = df['Open'].to_numpy(dtype=np.float64, copy=False)
     v = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     dates = df.index
-
     if precomputed_signals is None:
         precomputed_signals = _extract_precomputed_signals(df)
     if precomputed_signals is None:
         precomputed_signals = generate_signals(df, params)
     atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals
-
+    stats_dict, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals)
+    stats_index = build_trade_stats_index(standalone_logs)
     position = {'qty': 0}
     active_extended_signal = None
     current_capital = params.initial_capital
     trade_logs = []
     chart_context = create_debug_chart_context(df) if (export_chart or return_chart_payload) else None
-
     for j in range(1, len(c)):
         if np.isnan(atr_main[j - 1]):
             continue
-
         pos_qty_start_of_bar = position['qty']
-
+        signal_date = dates[j - 1]
+        signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital)
+        if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
+            sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
+            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params)
+            _record_buy_signal_annotation(
+                chart_context=chart_context,
+                signal_date=signal_date,
+                signal_low=l[j - 1],
+                entry_plan=entry_plan_preview,
+                history_snapshot=signal_history_snapshot,
+            )
+        if chart_context is not None and pos_qty_start_of_bar > 0 and sell_condition[j - 1]:
+            _record_sell_signal_annotation(
+                chart_context=chart_context,
+                signal_date=signal_date,
+                signal_low=l[j - 1],
+                position=position,
+                history_snapshot=signal_history_snapshot,
+            )
         if pos_qty_start_of_bar > 0:
             position, pnl_realized = process_debug_position_step(
                 position=position,
@@ -72,7 +222,6 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 chart_context=chart_context,
             )
             current_capital += pnl_realized
-
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
         position, active_extended_signal = process_debug_entry_for_day(
             position=position,
@@ -93,15 +242,15 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             trade_logs=trade_logs,
             chart_context=chart_context,
         )
-
         if chart_context is not None and position['qty'] > 0:
             record_active_levels(
                 chart_context,
                 current_date=dates[j],
                 stop_price=position.get('sl', np.nan),
                 tp_half_price=_resolve_active_tp_half(position),
+                limit_price=position.get('limit_price', np.nan),
+                entry_price=position.get('pure_buy_price', np.nan),
             )
-
     if position['qty'] > 0:
         position['close_price'] = c[-1]
         append_debug_forced_closeout(
@@ -112,7 +261,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             trade_logs=trade_logs,
             chart_context=chart_context,
         )
-
+    _apply_chart_sidebars(chart_context=chart_context, stats_dict=stats_dict, sell_condition=sell_condition)
     return finalize_debug_analysis(
         trade_logs=trade_logs,
         ticker=ticker,
@@ -125,7 +274,6 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         price_df=df,
         chart_context=chart_context,
     )
-
 
 
 def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True, verbose=True, precomputed_signals=None):
