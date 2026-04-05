@@ -163,6 +163,7 @@
 | B92 | P1 | GUI | GUI 單股頁必須將停利/停損/限價/成交線值整合到右側彩色 sidebar、移除左上重複 legend、價量時間軸在滑鼠拖曳時保持同步；投組頁不得只包 console，必須提供 GUI 進度、內嵌圖表與結果分頁 | DONE | 已補 direct contract，直接釘死單股控制列不得保留 `執行參數` 標題、右側必須宣告彩色線值 label、chart helper 不得再顯示左上 legend 且滑鼠平移時需同步 volume xlim；投組頁必須提供 Progressbar、內嵌 chart、交易明細 / 年度報酬 / Console 分頁，並以 GUI console 承接 runtime 進度輸出 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B93 | P2 | Meta | GUI synthetic validator 不得綁死已移除的 local widget 變數名或過期版面細節；`validate_gui_mouse_navigation_contract_case` 必須只驗 toolbar-free / mouse-binder 等行為契約，不得再把 `_chart_hint_var` 或過期 footer hint metric 視為必要條件 | DONE | 已補 direct meta contract，直接釘死 GUI mouse-navigation validator 不得再引用 `_chart_hint_var` 或 `gui_chart_hint_moved_to_footer` 這類已移除實作細節，避免單純版面重構就讓 consistency / coverage synthetic suite 假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B94 | P1 | GUI | GUI 單股頁必須移除圖面頂部 hover 資訊列並把 OHLCV 移到右側 sidebar、縮減右側資訊字級；投組頁必須提供 `結果彙整 / 年度報酬% / 交易明細 / Console` 分頁、左圖右表 summary 版型、實際進度回報與滑鼠時間軸資訊，且 GUI 對比表需與 console strategy dashboard 共用單一來源 | DONE | 已補 direct contract，直接釘死單股 GUI 必須關閉 chart 內建 hover overlay 並啟用 compact top padding、右側 sidebar 必須顯示 OHLCV；投組 GUI 必須宣告 `結果彙整` 與 `年度報酬%` 分頁、使用 determinate progress + runtime callback、曲線 hover 顯示日期/投組/大盤資訊，且結果表必須改由 shared `build_strategy_dashboard_sections()` 產生，避免 GUI 與 console dashboard 再次分叉 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/portfolio_sim/simulation_runner.py`, `core/portfolio_engine.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
+| B95 | P1 | GUI | GUI 投組結果頁右側對比表必須保留正負值語意著色，不得因改用單一前景色 widget 而退化成單色；至少需區分正值、負值、MDD caution 與 Alpha 的少跌/多跌語意 | DONE | 已補 direct contract，直接釘死投組右側對比表不得再使用單一前景色 `Treeview`，必須改由可逐段著色的 summary text renderer 呈現，並保留正值/負值/MDD caution/少跌多跌語意色彩，避免 GUI 與原 dashboard 視覺語意退化成單色 | `tools/gui/portfolio_backtest_panel.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -378,6 +379,7 @@
 | T171 | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` | B92 |
 | T172 | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` | B93 |
 | T173 | `validate_gui_compact_header_and_portfolio_summary_contract_case` | B94 |
+| T174 | `validate_gui_portfolio_summary_semantic_color_contract_case` | B95 |
 
 ## G. 逐項收斂紀錄
 
@@ -688,6 +690,8 @@
 | 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B93 | 新增 GUI mouse-navigation validator anti-overfit contract，釘死 synthetic validator 不得再綁死已移除的 `_chart_hint_var` / footer hint 細節 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-06 | B94 | 新增 GUI compact-header / OHLCV sidebar / portfolio summary-tab real-progress contract，釘死單股圖頂部 hover 列與投組結果頁分頁不得再回退 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B95 | 新增 GUI 投組 summary semantic-color contract，釘死右側對比表不得因單一前景色 widget 而退化成單色 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
 | 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |
 | 2026-04-06 | T173 | 新增 GUI compact-header / portfolio summary-tab real-progress contract 並驗證 | NEW -> DONE | `validate_gui_compact_header_and_portfolio_summary_contract_case` |
+| 2026-04-06 | T174 | 新增 GUI 投組 summary semantic-color contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_summary_semantic_color_contract_case` |

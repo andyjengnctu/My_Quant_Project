@@ -2138,6 +2138,20 @@ def validate_gui_compact_header_and_portfolio_summary_contract_case(_base_params
     return results, summary
 
 
+def validate_gui_portfolio_summary_semantic_color_contract_case(_base_params):
+    case_id = "GUI_PORTFOLIO_SUMMARY_SEMANTIC_COLOR_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "portfolio_summary_uses_text_widget_instead_of_single_foreground_treeview", True, 'self._summary_text = tk.Text(' in portfolio_panel_source and 'self._summary_tree = ttk.Treeview' not in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_declares_semantic_color_tags", True, 'SUMMARY_POSITIVE_TAG' in portfolio_panel_source and 'SUMMARY_NEGATIVE_TAG' in portfolio_panel_source and 'SUMMARY_CAUTION_TAG' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_builds_metric_rows_by_segment", True, '_build_summary_metric_segments' in portfolio_panel_source and '_append_summary_segments' in portfolio_panel_source and '_summary_value_tag' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_preserves_mdd_caution_color_contract", True, 'item == "最大回撤 (MDD)"' in portfolio_panel_source and 'column == "system"' in portfolio_panel_source and 'return SUMMARY_CAUTION_TAG' in portfolio_panel_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []

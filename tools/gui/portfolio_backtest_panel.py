@@ -14,6 +14,7 @@ from tkinter import messagebox, ttk
 import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
+from core.display_common import _pad_display
 from core.strategy_dashboard import build_strategy_dashboard_sections
 from tools.debug.charting import get_matplotlib_cjk_font_candidates
 from tools.portfolio_sim.reporting import DASHBOARD_HTML_PATH, OUTPUT_DIR, REPORT_XLSX_PATH, export_portfolio_reports, print_yearly_return_report
@@ -28,7 +29,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PORTFOLIO_PROGRESS_LOAD_WEIGHT = 0.35
 PORTFOLIO_PROGRESS_SIM_WEIGHT = 0.60
 PORTFOLIO_PROGRESS_EXPORT_WEIGHT = 0.05
-PORTFOLIO_COMPARISON_COLUMNS = ("section", "item", "system", "benchmark", "alpha")
+SUMMARY_BORDER_TAG = "summary_border"
+SUMMARY_HEADER_TAG = "summary_header"
+SUMMARY_NEUTRAL_TAG = "summary_neutral"
+SUMMARY_POSITIVE_TAG = "summary_positive"
+SUMMARY_NEGATIVE_TAG = "summary_negative"
+SUMMARY_CAUTION_TAG = "summary_caution"
+SUMMARY_MUTED_TAG = "summary_muted"
+SUMMARY_ITEM_WIDTH = 16
+SUMMARY_VALUE_WIDTH = 16
 
 
 class _ThreadSafeConsoleWriter(io.TextIOBase):
@@ -136,21 +145,33 @@ class PortfolioBacktestPanel(ttk.Frame):
         compare_section.rowconfigure(1, weight=1)
         summary_pane.add(compare_section, weight=4)
         ttk.Label(compare_section, text="對比表", style="Workbench.SidebarHeader.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        self._summary_tree = ttk.Treeview(compare_section, columns=PORTFOLIO_COMPARISON_COLUMNS, show="headings", style="Workbench.Treeview")
-        self._summary_tree.grid(row=1, column=0, sticky="nsew")
-        for column, title, width, anchor in (
-            ("section", "區塊", 120, "center"),
-            ("item", "項目", 150, "w"),
-            ("system", "系統 / 內容", 430, "w"),
-            ("benchmark", "大盤", 120, "center"),
-            ("alpha", "差異", 130, "center"),
-        ):
-            self._summary_tree.heading(column, text=title)
-            self._summary_tree.column(column, width=width, anchor=anchor)
-        summary_y = ttk.Scrollbar(compare_section, orient="vertical", command=self._summary_tree.yview, style="Workbench.Vertical.TScrollbar")
+        self._summary_text = tk.Text(
+            compare_section,
+            wrap="none",
+            bg="#040a12",
+            fg="#f7fbff",
+            insertbackground="#f7fbff",
+            relief="flat",
+            bd=0,
+            padx=8,
+            pady=8,
+            font=("Consolas", 10),
+        )
+        self._summary_text.grid(row=1, column=0, sticky="nsew")
+        self._summary_text.configure(state="disabled")
+        self._summary_text.tag_configure(SUMMARY_BORDER_TAG, foreground="#9aa9bd")
+        self._summary_text.tag_configure(SUMMARY_HEADER_TAG, foreground="#f7fbff", font=("Consolas", 10, "bold"))
+        self._summary_text.tag_configure(SUMMARY_NEUTRAL_TAG, foreground="#f7fbff")
+        self._summary_text.tag_configure(SUMMARY_POSITIVE_TAG, foreground="#1fe08f")
+        self._summary_text.tag_configure(SUMMARY_NEGATIVE_TAG, foreground="#ff6b78")
+        self._summary_text.tag_configure(SUMMARY_CAUTION_TAG, foreground="#ffd84d")
+        self._summary_text.tag_configure(SUMMARY_MUTED_TAG, foreground="#9aa9bd")
+        summary_y = ttk.Scrollbar(compare_section, orient="vertical", command=self._summary_text.yview, style="Workbench.Vertical.TScrollbar")
         summary_y.grid(row=1, column=1, sticky="ns")
-        self._summary_tree.configure(yscrollcommand=summary_y.set)
-        ttk.Button(compare_section, text="開啟投組儀表板", command=lambda: self._open_path(DASHBOARD_HTML_PATH), style="Workbench.TButton").grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        summary_x = ttk.Scrollbar(compare_section, orient="horizontal", command=self._summary_text.xview, style="Workbench.Horizontal.TScrollbar")
+        summary_x.grid(row=2, column=0, sticky="ew")
+        self._summary_text.configure(yscrollcommand=summary_y.set, xscrollcommand=summary_x.set)
+        ttk.Button(compare_section, text="開啟投組儀表板", command=lambda: self._open_path(DASHBOARD_HTML_PATH), style="Workbench.TButton").grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         yearly_tab = ttk.Frame(notebook, padding=8, style="Workbench.TFrame")
         yearly_tab.rowconfigure(0, weight=1)
@@ -265,12 +286,63 @@ class PortfolioBacktestPanel(ttk.Frame):
         for row in normalized.to_dict("records"):
             tree.insert("", "end", values=[row.get(column, "") for column in columns])
 
+    def _clear_summary_text(self):
+        self._summary_text.configure(state="normal")
+        self._summary_text.delete("1.0", "end")
+        self._summary_text.configure(state="disabled")
+
+    def _append_summary_segments(self, segments):
+        self._summary_text.configure(state="normal")
+        for text, tag in segments:
+            self._summary_text.insert("end", str(text), tag)
+        self._summary_text.configure(state="disabled")
+
+    def _append_summary_plain_line(self, text, tag=SUMMARY_NEUTRAL_TAG):
+        self._append_summary_segments([(f"{text}\n", tag)])
+
+    def _summary_value_tag(self, value, *, item, column):
+        text = str(value or "").strip()
+        if not text or text == "-":
+            return SUMMARY_MUTED_TAG
+        if item == "最大回撤 (MDD)":
+            if column == "system":
+                return SUMMARY_CAUTION_TAG
+            if column == "alpha":
+                if text.startswith("少跌"):
+                    return SUMMARY_POSITIVE_TAG
+                if text.startswith("多跌"):
+                    return SUMMARY_NEGATIVE_TAG
+        if column == "benchmark":
+            return SUMMARY_NEUTRAL_TAG
+        if text.startswith("+"):
+            return SUMMARY_POSITIVE_TAG
+        if text.startswith("-"):
+            return SUMMARY_NEGATIVE_TAG
+        return SUMMARY_NEUTRAL_TAG
+
+    def _build_summary_metric_segments(self, item, system, benchmark, alpha, *, header=False):
+        row_tag = SUMMARY_HEADER_TAG if header else SUMMARY_NEUTRAL_TAG
+        value_tag_system = row_tag if header else self._summary_value_tag(system, item=item, column="system")
+        value_tag_benchmark = row_tag if header else self._summary_value_tag(benchmark, item=item, column="benchmark")
+        value_tag_alpha = row_tag if header else self._summary_value_tag(alpha, item=item, column="alpha")
+        return [
+            ("| ", SUMMARY_BORDER_TAG),
+            (_pad_display(item, SUMMARY_ITEM_WIDTH), row_tag),
+            (" | ", SUMMARY_BORDER_TAG),
+            (_pad_display(system, SUMMARY_VALUE_WIDTH), value_tag_system),
+            (" | ", SUMMARY_BORDER_TAG),
+            (_pad_display(benchmark, SUMMARY_VALUE_WIDTH), value_tag_benchmark),
+            (" | ", SUMMARY_BORDER_TAG),
+            (_pad_display(alpha, SUMMARY_VALUE_WIDTH), value_tag_alpha),
+            (" |\n", SUMMARY_BORDER_TAG),
+        ]
+
     def _render_summary_placeholder(self, message):
-        self._summary_tree.delete(*self._summary_tree.get_children())
-        self._summary_tree.insert("", "end", values=("結果彙整", "狀態", str(message), "", ""))
+        self._clear_summary_text()
+        self._append_summary_plain_line(str(message), tag=SUMMARY_MUTED_TAG)
 
     def _render_summary_table(self, *, result_tuple, params, benchmark_ticker, max_positions, enable_rotation):
-        self._summary_tree.delete(*self._summary_tree.get_children())
+        self._clear_summary_text()
         (
             _df_eq, _df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff,
             final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed,
@@ -311,15 +383,38 @@ class PortfolioBacktestPanel(ttk.Frame):
             bm_min_full_year_return_pct=pf_profile.get("bm_min_full_year_return_pct", 0.0),
         )
 
-        self._summary_tree.insert("", "end", values=("結果彙整", "全域戰略", sections["global_strategy_line"], "", ""))
-        for idx, line in enumerate(sections["overview_lines"], start=1):
-            self._summary_tree.insert("", "end", values=("結果彙整", f"總覽 {idx}", line, "", ""))
+        border_line = "-" * 80
+        self._append_summary_plain_line(sections["global_strategy_line"], tag=SUMMARY_HEADER_TAG)
+        for line in sections["overview_lines"]:
+            self._append_summary_plain_line(line)
+        self._append_summary_plain_line(border_line, tag=SUMMARY_BORDER_TAG)
+        self._append_summary_segments(
+            self._build_summary_metric_segments(
+                "指標項目",
+                "V16 尊爵系統",
+                f"同期大盤 ({sections['benchmark_ticker']})",
+                "差異 (Alpha)",
+                header=True,
+            )
+        )
         for row in sections["metric_rows"]:
-            self._summary_tree.insert("", "end", values=("績效與風險", row["item"], row["system"], row["benchmark"], row["alpha"]))
+            self._append_summary_segments(
+                self._build_summary_metric_segments(
+                    row["item"],
+                    row["system"],
+                    row["benchmark"],
+                    row["alpha"],
+                )
+            )
+        self._append_summary_plain_line(border_line, tag=SUMMARY_BORDER_TAG)
+        self._append_summary_plain_line("【訓練參數】", tag=SUMMARY_HEADER_TAG)
         for row in sections["training_rows"]:
-            self._summary_tree.insert("", "end", values=("訓練參數", row["item"], row["value"], "", ""))
+            self._append_summary_plain_line(f"{row['item']} : {row['value']}")
+        self._append_summary_plain_line(border_line, tag=SUMMARY_BORDER_TAG)
+        self._append_summary_plain_line("【共用硬門檻】", tag=SUMMARY_HEADER_TAG)
         for row in sections["threshold_rows"]:
-            self._summary_tree.insert("", "end", values=("共用硬門檻", row["item"], row["value"], "", ""))
+            self._append_summary_plain_line(f"{row['item']} : {row['value']}")
+        self._summary_text.see("1.0")
 
     def _resolve_matplotlib_font_family(self):
         try:
