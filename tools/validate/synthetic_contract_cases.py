@@ -1983,6 +1983,44 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     return results, summary
 
 
+def validate_record_signal_annotation_meta_contract_case(_base_params):
+    case_id = "DEBUG_RECORD_SIGNAL_ANNOTATION_META_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.date_range("2024-01-01", periods=3, freq="D")
+    frame = pd.DataFrame(
+        {
+            "Open": [10.0, 10.2, 10.4],
+            "High": [10.4, 10.5, 10.8],
+            "Low": [9.8, 10.0, 10.1],
+            "Close": [10.1, 10.3, 10.6],
+            "Volume": [1000.0, 1200.0, 1500.0],
+        },
+        index=dates,
+    )
+    chart_context = create_debug_chart_context(frame)
+    meta_payload = {"profit_pct": 3.25, "source": "synthetic"}
+    record_signal_annotation(
+        chart_context,
+        current_date=dates[1],
+        signal_type="sell",
+        anchor_price=float(frame.iloc[1]["Low"]),
+        title="賣訊",
+        detail_lines=["本次績效: +3.25%"],
+        meta=meta_payload,
+    )
+    chart_payload = build_debug_chart_payload(frame, chart_context)
+    normalized_annotations = chart_payload.get("signal_annotations", [])
+    first_annotation = normalized_annotations[0] if normalized_annotations else {}
+
+    add_check(results, "output_contract", case_id, "record_signal_annotation_accepts_meta_keyword", 1, len(chart_context["signal_annotations"]))
+    add_check(results, "output_contract", case_id, "signal_annotation_meta_retained_in_chart_context", meta_payload, chart_context["signal_annotations"][0].get("meta") if chart_context["signal_annotations"] else None)
+    add_check(results, "output_contract", case_id, "signal_annotation_meta_retained_in_chart_payload", meta_payload, first_annotation.get("meta"))
+    add_check(results, "output_contract", case_id, "signal_annotation_profit_pct_available_for_sell_face_resolution", 3.25, (first_annotation.get("meta") or {}).get("profit_pct"))
+    return results, summary
+
+
 def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
     case_id = "GUI_CHART_RECENT_VIEW_SIGNAL_OVERLAY_CONTRACT"
     results = []

@@ -199,7 +199,7 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
     )
 
 
-def record_signal_annotation(chart_context, *, current_date, signal_type, anchor_price, title, detail_lines, note=""):
+def record_signal_annotation(chart_context, *, current_date, signal_type, anchor_price, title, detail_lines, note="", meta=None):
     if chart_context is None or pd.isna(anchor_price):
         return
     normalized_signal_type = str(signal_type).strip().lower()
@@ -214,6 +214,7 @@ def record_signal_annotation(chart_context, *, current_date, signal_type, anchor
             "title": str(title),
             "detail_text": detail_text,
             "note": str(note or ""),
+            "meta": dict(meta or {}),
         }
     )
 
