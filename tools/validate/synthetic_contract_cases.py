@@ -31,7 +31,7 @@ from tools.scanner.stock_processor import build_scanner_response_from_stats
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
 from .synthetic_frame_utils import write_synthetic_csv_bundle
-from .module_loader import normalize_project_relative_path
+from .module_loader import build_project_absolute_path, normalize_project_relative_path
 from .tool_adapters import (
     run_debug_trade_log_check,
     run_portfolio_sim_tool_check,
@@ -1717,13 +1717,26 @@ def validate_tool_module_path_normalization_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    project_root_forward = local_common.PROJECT_ROOT.replace("\\", "/")
-    abs_debug_path = f"{project_root_forward}/tools/debug/trade_log.py"
-    backslash_debug_path = abs_debug_path.replace("/", "\\")
+    abs_debug_path = build_project_absolute_path("tools", "debug", "trade_log.py")
+    backslash_debug_path = str(abs_debug_path).replace("/", "\\")
 
     add_check(results, "output_contract", case_id, "normalize_module_path_from_absolute", "tools/debug/trade_log.py", normalize_project_relative_path(abs_debug_path))
     add_check(results, "output_contract", case_id, "normalize_module_path_from_backslash_absolute", "tools/debug/trade_log.py", normalize_project_relative_path(backslash_debug_path))
     add_check(results, "output_contract", case_id, "normalize_module_path_relative_passthrough", "apps/gui.py", normalize_project_relative_path("apps/gui.py"))
+    return results, summary
+
+
+
+def validate_module_path_normalizer_accepts_path_objects_case(_base_params):
+    case_id = "OUTPUT_TOOL_MODULE_PATH_NORMALIZER_ACCEPTS_PATH_OBJECTS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    debug_path = build_project_absolute_path("tools", "debug", "trade_log.py")
+    gui_path = build_project_absolute_path("apps", "gui.py")
+
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_debug", "tools/debug/trade_log.py", normalize_project_relative_path(debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_gui", "apps/gui.py", normalize_project_relative_path(gui_path))
     return results, summary
 
 

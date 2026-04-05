@@ -1,10 +1,19 @@
 import importlib.util
 import os
+from pathlib import Path
 
 import pandas as pd
 
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _normalize_path_separators(path):
+    return str(path or '').strip().replace("\\", "/")
+
+
+def build_project_absolute_path(*parts):
+    return PROJECT_ROOT.joinpath(*parts)
 
 
 def normalize_project_relative_path(path):
@@ -12,13 +21,13 @@ def normalize_project_relative_path(path):
     if not raw_path:
         return ''
 
-    normalized = raw_path.replace("\\", "/")
-    project_root_norm = PROJECT_ROOT.replace("\\", "/")
+    normalized = _normalize_path_separators(raw_path)
+    project_root_norm = _normalize_path_separators(PROJECT_ROOT)
 
     if normalized.startswith(project_root_norm + '/'):
         return normalized[len(project_root_norm) + 1 :]
 
-    absolute_norm = os.path.abspath(normalized).replace("\\", "/")
+    absolute_norm = _normalize_path_separators(os.path.abspath(raw_path))
     if absolute_norm.startswith(project_root_norm + '/'):
         return absolute_norm[len(project_root_norm) + 1 :]
 
@@ -55,7 +64,7 @@ def load_module_from_candidates(cache_key, candidate_files, required_attrs):
     rejected_paths = []
 
     for file_name in candidate_files:
-        module_path = os.path.join(PROJECT_ROOT, file_name)
+        module_path = build_project_absolute_path(file_name)
         display_module_path = normalize_project_relative_path(module_path)
         checked_paths.append(display_module_path)
 
