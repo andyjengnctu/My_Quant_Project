@@ -196,7 +196,7 @@
 
 使用方式：本節只保留 `DONE` 的建議測試項目最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。主表狀態、測試入口細節與缺口摘要仍以主表為準，時間軸僅寫在 `G`。
 
-維護規則：`T` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。若同一檔案承載多個 contract，`建議測試名稱` 不得僅重複填同一 file path，必須改用唯一 contract 名稱或 file path + contract label；若該列不是 `validate_*` 名稱，則首個 token 必須仍為可辨識的 script path 或 `run_*` 入口名稱。交付前至少核對一次「所有已註冊 validator / script 類型的 `Txx` 已同步列入 `T`，且 `T` 與 `G` 的最新狀態一致」。
+維護規則：`T` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。若同一檔案承載多個 contract，`建議測試名稱` 不得僅重複填同一 file path，必須改用唯一 contract 名稱或 file path + contract label；若該列不是 `validate_*` 名稱，則首個可機械辨識 token 必須仍為可辨識的 script path 或 `run_*` 入口名稱，且 file path + contract label 形式必須將 file path 單獨作為可獨立解析的 token（例如僅將 file path 包在一組 backticks 內，後接純文字 label）。交付前至少核對一次「所有已註冊 validator / script 類型的 `Txx` 已同步列入 `T`，且 `T` 與 `G` 的最新狀態一致」。
 
 ### T. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -371,7 +371,7 @@
 | T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
 | T169 | `validate_gui_portfolio_tab_and_htmlless_contract_case` | B90 |
-| T170 | `tools/local_regression/run_quick_gate.py registry-completeness-static-contract` | B91 |
+| T170 | `tools/local_regression/run_quick_gate.py` registry-completeness-static-contract | B91 |
 
 ## G. 逐項收斂紀錄
 
