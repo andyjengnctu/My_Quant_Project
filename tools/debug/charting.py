@@ -354,6 +354,58 @@ def build_debug_chart_payload(price_df, chart_context):
     return payload
 
 
+def normalize_chart_payload_contract(chart_payload):
+    if chart_payload is None:
+        raise ValueError("chart_payload 不可為空。")
+    normalized = dict(chart_payload)
+    x_positions = np.asarray(normalized.get("x", []), dtype=np.float32)
+    if x_positions.size == 0:
+        raise ValueError("chart_payload 不可為空。")
+    total_bars = int(x_positions.size)
+    normalized["x"] = x_positions
+
+    dates = normalized.get("dates")
+    if dates is None or len(dates) != total_bars:
+        dates = pd.date_range("1970-01-01", periods=total_bars, freq="D")
+    else:
+        dates = pd.DatetimeIndex(pd.to_datetime(dates))
+    normalized["dates"] = dates
+
+    date_labels = list(normalized.get("date_labels") or [])
+    if len(date_labels) != total_bars:
+        date_labels = [pd.Timestamp(dt).strftime("%Y-%m-%d") for dt in dates]
+    normalized["date_labels"] = date_labels
+
+    for key in ("open", "high", "low", "close"):
+        normalized[key] = np.asarray(normalized[key], dtype=np.float32)
+    normalized["volume"] = np.asarray(normalized.get("volume", np.zeros(total_bars, dtype=np.float32)), dtype=np.float32)
+
+    up_mask = normalized.get("up_mask")
+    if up_mask is None or len(up_mask) != total_bars:
+        up_mask = normalized["close"] >= normalized["open"]
+    normalized["up_mask"] = np.asarray(up_mask, dtype=bool)
+
+    for key in ("stop_line", "tp_line", "limit_line", "entry_line"):
+        normalized[key] = _normalize_line_array(normalized.get(key), total_bars)
+
+    normalized["marker_groups"] = {str(name): list(markers) for name, markers in dict(normalized.get("marker_groups") or {}).items()}
+    normalized["signal_annotations"] = list(normalized.get("signal_annotations") or [])
+    focus_positions = normalized.get("focus_positions") or []
+    normalized["focus_positions"] = [int(pos) for pos in focus_positions if 0 <= int(pos) < total_bars]
+    normalized["summary_box"] = list(normalized.get("summary_box") or [])
+    normalized["status_box"] = dict(normalized.get("status_box") or {})
+
+    default_view = dict(normalized.get("default_view") or {})
+    if not default_view:
+        default_view = compute_default_view_window(dates, total_bars, normalized["focus_positions"])
+    start_idx = int(default_view.get("start_idx", 0))
+    end_idx = int(default_view.get("end_idx", total_bars - 1))
+    start_idx, end_idx = _expand_window_to_min_bars(start_idx, end_idx, total_bars=total_bars, min_window_bars=min(CHART_MIN_WINDOW_BARS, total_bars))
+    normalized["default_view"] = {"start_idx": int(start_idx), "end_idx": int(end_idx)}
+    normalized["gui_render_window"] = dict(normalized.get("gui_render_window") or compute_gui_render_window(normalized))
+    return normalized
+
+
 def _slice_visible_window(array, start_idx, end_idx):
     return np.asarray(array[start_idx : end_idx + 1])
 
@@ -557,6 +609,7 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=Non
 
 
 def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False):
+    chart_payload = normalize_chart_payload_contract(chart_payload)
     try:
         from matplotlib.figure import Figure
         from matplotlib import rcParams
@@ -885,6 +938,7 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
     output_path = os.path.join(output_dir, f"Debug_TradeChart_{ticker}.html")
     if chart_payload is None:
         chart_payload = build_debug_chart_payload(price_df, chart_context)
+    chart_payload = normalize_chart_payload_contract(chart_payload)
     dates = chart_payload["dates"]
     x_start_idx = chart_payload["default_view"]["start_idx"]
     x_end_idx = chart_payload["default_view"]["end_idx"]

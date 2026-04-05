@@ -32,6 +32,7 @@ from tools.scanner.stock_processor import build_scanner_response_from_stats
 from tools.debug.charting import (
     bind_matplotlib_chart_navigation,
     build_debug_chart_payload,
+    normalize_chart_payload_contract,
     compute_visible_value_ranges,
     create_debug_chart_context,
     create_matplotlib_debug_chart_figure,
@@ -1755,6 +1756,40 @@ def validate_gui_embedded_chart_contract_case(base_params):
     large_figure.clear()
 
     summary["default_view"] = {"start_idx": start_idx, "end_idx": end_idx}
+    return results, summary
+
+
+def validate_chart_payload_optional_overlay_keys_contract_case(_base_params):
+    case_id = "CHART_PAYLOAD_OPTIONAL_OVERLAY_KEYS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    minimal_payload = {
+        "dates": pd.date_range("2024-01-01", periods=8, freq="D"),
+        "date_labels": [f"2024-01-{day:02d}" for day in range(1, 9)],
+        "x": np.arange(8, dtype=np.float64),
+        "open": np.array([10, 11, 12, 11, 13, 14, 13, 15], dtype=np.float64),
+        "high": np.array([11, 12, 13, 12, 14, 15, 14, 16], dtype=np.float64),
+        "low": np.array([9, 10, 11, 10, 12, 13, 12, 14], dtype=np.float64),
+        "close": np.array([10.5, 11.5, 11.8, 11.2, 13.4, 14.2, 13.1, 15.3], dtype=np.float64),
+        "volume": np.array([100, 120, 130, 110, 150, 160, 140, 180], dtype=np.float64),
+        "up_mask": np.array([True, True, False, True, True, True, False, True], dtype=bool),
+        "marker_groups": {},
+        "focus_positions": [2, 5],
+        "default_view": {"start_idx": 1, "end_idx": 6},
+    }
+    normalized_payload = normalize_chart_payload_contract(minimal_payload)
+    add_check(results, "output_contract", case_id, "chart_payload_optional_limit_line_filled", 8, int(len(normalized_payload.get("limit_line", []))))
+    add_check(results, "output_contract", case_id, "chart_payload_optional_entry_line_filled", 8, int(len(normalized_payload.get("entry_line", []))))
+    add_check(results, "output_contract", case_id, "chart_payload_optional_tp_line_filled", 8, int(len(normalized_payload.get("tp_line", []))))
+    add_check(results, "output_contract", case_id, "chart_payload_optional_stop_line_filled", 8, int(len(normalized_payload.get("stop_line", []))))
+    add_check(results, "output_contract", case_id, "chart_payload_optional_summary_box_defaulted", [], normalized_payload.get("summary_box"))
+    add_check(results, "output_contract", case_id, "chart_payload_optional_status_box_defaulted", {}, normalized_payload.get("status_box"))
+
+    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "chart_payload_optional_overlay_keys_figure_builds_successfully", True, contract.get("total_bar_count", 0) == len(minimal_payload["x"]))
+    figure.clear()
     return results, summary
 
 
