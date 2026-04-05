@@ -164,7 +164,7 @@
 | B93 | P2 | Meta | GUI synthetic validator 不得綁死已移除的 local widget 變數名或過期版面細節；`validate_gui_mouse_navigation_contract_case` 必須只驗 toolbar-free / mouse-binder 等行為契約，不得再把 `_chart_hint_var` 或過期 footer hint metric 視為必要條件 | DONE | 已補 direct meta contract，直接釘死 GUI mouse-navigation validator 不得再引用 `_chart_hint_var` 或 `gui_chart_hint_moved_to_footer` 這類已移除實作細節，避免單純版面重構就讓 consistency / coverage synthetic suite 假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B94 | P1 | GUI | GUI 單股頁必須移除圖面頂部 hover 資訊列並把 OHLCV 移到右側 sidebar、縮減右側資訊字級；投組頁必須提供 `結果彙整 / 年度報酬% / 交易明細 / Console` 分頁、左圖右表 summary 版型、實際進度回報與滑鼠時間軸資訊，且 GUI 對比表需與 console strategy dashboard 共用單一來源 | DONE | 已補 direct contract，直接釘死單股 GUI 必須關閉 chart 內建 hover overlay 並啟用 compact top padding、右側 sidebar 必須顯示 OHLCV；投組 GUI 必須宣告 `結果彙整` 與 `年度報酬%` 分頁、使用 determinate progress + runtime callback、曲線 hover 顯示日期/投組/大盤資訊，且結果表必須改由 shared `build_strategy_dashboard_sections()` 產生，避免 GUI 與 console dashboard 再次分叉 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/portfolio_sim/simulation_runner.py`, `core/portfolio_engine.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
 | B95 | P1 | GUI | GUI 投組結果頁右側對比表必須保留正負值語意著色，不得因單一前景色 widget 或不穩定 tag renderer 而退化成單色；至少需區分正值、負值、MDD caution 與 Alpha 的少跌/多跌語意 | DONE | 已補 direct contract，直接釘死投組右側對比表不得再使用單一前景色 `Treeview` 或 `tk.Text` tag renderer，必須維持逐段語意著色，避免 GUI 與原 dashboard 視覺語意退化成單色 | `tools/gui/portfolio_backtest_panel.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
-| B96 | P1 | GUI | GUI 投組結果頁右側對比表語意著色 renderer 必須使用平台穩定的 canvas-native text / cell renderer，不得再依賴 `tk.Text` tag、embedded widget palette inheritance、或 child `Label` 前景色；需保留 scroll 與跨平台多色顯示 | DONE | 已補 direct contract，直接釘死投組 summary 必須改用 `Canvas.create_text()` 原生文字段落 renderer、逐段量測寬度並同步 scrollregion；不得再把彩色段落委託給 `Frame + Label` 內嵌 widget，避免 Windows/Tk palette/theme 把顏色壓回黑白 | `tools/gui/portfolio_backtest_panel.py`, `tools/validate/synthetic_contract_cases.py` |
+| B96 | P1 | GUI | GUI 投組結果頁右側對比表語意著色 renderer 必須使用不受 Tk palette/theme 前景色覆寫的穩定路徑；不得再依賴 `tk.Text` tag、`Canvas.create_text()`、embedded widget palette inheritance、或 child `Label` 前景色；需保留 scroll 與跨平台多色顯示 | DONE | 已補 direct contract，直接釘死投組 summary 必須先量測分段文字再 rasterize 成彩色影像，並由 scrollable canvas 顯示；不得再把彩色段落交給任何 Tk 文字前景色路徑，避免 Windows/Tk palette/theme 再次把顏色壓回黑白 | `tools/gui/portfolio_backtest_panel.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -695,7 +695,9 @@
 | 2026-04-06 | B95 | 新增 GUI 投組 summary semantic-color contract，釘死右側對比表不得因單一前景色 widget 或不穩定 tag renderer 而退化成單色 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B96 | 新增 GUI 投組 summary platform-renderer contract，釘死右側對比表不得再依賴 `tk.Text` tag/state 行為 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B96 | 檢出 `Canvas + Frame + Label` 仍會受 palette/theme 影響退化成黑白，原 platform-renderer contract 不足 | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 改以 canvas-native text renderer 與更強 static contract 重新收斂 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B96 | 改驗 canvas-native text renderer / no-embedded-widget contract 後重新收斂 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B96 | 檢出 `Canvas.create_text()` 在使用者環境仍會退化成黑白，既有 platform-renderer contract 仍不足 | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B96 | 改以 rasterized summary image renderer 與更強 static contract 重新收斂 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
 | 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |
 | 2026-04-06 | T173 | 新增 GUI compact-header / portfolio summary-tab real-progress contract 並驗證 | NEW -> DONE | `validate_gui_compact_header_and_portfolio_summary_contract_case` |
@@ -703,3 +705,5 @@
 | 2026-04-06 | T175 | 新增 GUI 投組 summary platform-renderer contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
 | 2026-04-06 | T175 | 檢出舊 platform-renderer validator 綁死 `Frame + Label` renderer，無法攔截 palette/theme 造成的黑白退化 | DONE -> PARTIAL | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
 | 2026-04-06 | T175 | 改驗 canvas-native text renderer / no-embedded-widget contract 後重新收斂 | PARTIAL -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
+| 2026-04-06 | T175 | 檢出 canvas-native text validator 仍無法攔截使用者環境的黑白退化 | DONE -> PARTIAL | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
+| 2026-04-06 | T175 | 改驗 rasterized summary image / no-Tk-text-foreground-path contract 後重新收斂 | PARTIAL -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
