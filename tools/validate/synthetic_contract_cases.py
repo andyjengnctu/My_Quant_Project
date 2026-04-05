@@ -30,6 +30,7 @@ from core.portfolio_fast_data import prep_stock_data_and_trades
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
 from tools.scanner.stock_processor import build_scanner_response_from_stats
 from tools.debug.charting import (
+    bind_matplotlib_chart_navigation,
     build_debug_chart_payload,
     compute_visible_value_ranges,
     create_matplotlib_debug_chart_figure,

@@ -241,6 +241,14 @@ def _parsed_module_declares_numpy_alias_import(parsed_module: ast.AST) -> bool:
     return False
 
 
+def _parsed_module_declares_specific_from_import(parsed_module: ast.AST, *, module_name: str, imported_name: str) -> bool:
+    for node in getattr(parsed_module, "body", []):
+        if isinstance(node, ast.ImportFrom) and node.module == module_name:
+            if any(alias.name == imported_name for alias in node.names):
+                return True
+    return False
+
+
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -985,6 +993,48 @@ def make_array():
     summary["string_literal_only_detected_as_usage"] = _parsed_module_uses_numpy_alias(parsed_string_only)
     summary["actual_ast_usage_detected"] = _parsed_module_uses_numpy_alias(parsed_actual_usage)
     return results, summary
+
+def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    uses_binder_symbol = any(
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "bind_matplotlib_chart_navigation"
+        for node in ast.walk(parsed)
+    )
+    has_explicit_import = _parsed_module_declares_specific_from_import(
+        parsed,
+        module_name="tools.debug.charting",
+        imported_name="bind_matplotlib_chart_navigation",
+    )
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_uses_chart_navigation_binder_symbol",
+        True,
+        uses_binder_symbol,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_imports_chart_navigation_binder",
+        True,
+        has_explicit_import,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["uses_binder_symbol"] = uses_binder_symbol
+    summary["has_explicit_import"] = has_explicit_import
+    return results, summary
+
 
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
     case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"
