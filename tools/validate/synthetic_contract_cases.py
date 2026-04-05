@@ -2145,23 +2145,23 @@ def validate_gui_portfolio_summary_semantic_color_contract_case(_base_params):
 
     portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "portfolio_summary_uses_text_widget_instead_of_single_foreground_treeview", True, 'self._summary_text = tk.Text(' in portfolio_panel_source and 'self._summary_tree = ttk.Treeview' not in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_avoids_single_foreground_treeview_and_text_tag_renderer", True, 'self._summary_tree = ttk.Treeview' not in portfolio_panel_source and 'self._summary_text = tk.Text(' not in portfolio_panel_source)
     add_check(results, "output_contract", case_id, "portfolio_summary_declares_semantic_color_tags", True, 'SUMMARY_POSITIVE_TAG' in portfolio_panel_source and 'SUMMARY_NEGATIVE_TAG' in portfolio_panel_source and 'SUMMARY_CAUTION_TAG' in portfolio_panel_source)
     add_check(results, "output_contract", case_id, "portfolio_summary_builds_metric_rows_by_segment", True, '_build_summary_metric_segments' in portfolio_panel_source and '_append_summary_segments' in portfolio_panel_source and '_summary_value_tag' in portfolio_panel_source)
     add_check(results, "output_contract", case_id, "portfolio_summary_preserves_mdd_caution_color_contract", True, 'item == "最大回撤 (MDD)"' in portfolio_panel_source and 'column == "system"' in portfolio_panel_source and 'return SUMMARY_CAUTION_TAG' in portfolio_panel_source)
     return results, summary
 
 
-def validate_gui_portfolio_summary_readonly_text_contract_case(_base_params):
-    case_id = "GUI_PORTFOLIO_SUMMARY_READONLY_TEXT_CONTRACT"
+def validate_gui_portfolio_summary_platform_renderer_contract_case(_base_params):
+    case_id = "GUI_PORTFOLIO_SUMMARY_PLATFORM_RENDERER_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "portfolio_summary_avoids_disabled_text_state_that_flattens_semantic_colors", True, 'self._summary_text.configure(state="disabled")' not in portfolio_panel_source and 'self._summary_text.configure(state="normal")' not in portfolio_panel_source)
-    add_check(results, "output_contract", case_id, "portfolio_summary_configures_readonly_text_bindings", True, '_configure_readonly_text_widget(self._summary_text)' in portfolio_panel_source and 'def _configure_readonly_text_widget(self, widget):' in portfolio_panel_source)
-    add_check(results, "output_contract", case_id, "portfolio_summary_blocks_mutation_but_keeps_navigation_copy_contract", True, 'def _handle_readonly_text_keypress(self, event):' in portfolio_panel_source and 'keysym.lower() in {"c", "insert"}' in portfolio_panel_source and 'widget.bind("<<Paste>>", self._block_text_mutation, add="+")' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_uses_canvas_with_embedded_frame_renderer", True, 'self._summary_canvas = tk.Canvas(' in portfolio_panel_source and 'self._summary_body = tk.Frame(self._summary_canvas' in portfolio_panel_source and 'create_window((0, 0), window=self._summary_body' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_renders_each_segment_with_labels", True, 'tk.Label(' in portfolio_panel_source and 'def _summary_tag_style(tag):' in portfolio_panel_source and 'def _append_summary_segments(self, segments):' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_syncs_canvas_scrollregion_to_content", True, 'def _sync_summary_canvas_geometry(self):' in portfolio_panel_source and 'self._summary_canvas.configure(scrollregion=bbox)' in portfolio_panel_source and 'self._summary_canvas.itemconfigure(self._summary_window_id, width=target_width)' in portfolio_panel_source)
     return results, summary
 
 

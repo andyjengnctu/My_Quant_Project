@@ -29,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PORTFOLIO_PROGRESS_LOAD_WEIGHT = 0.35
 PORTFOLIO_PROGRESS_SIM_WEIGHT = 0.60
 PORTFOLIO_PROGRESS_EXPORT_WEIGHT = 0.05
+SUMMARY_BG = "#040a12"
 SUMMARY_BORDER_TAG = "summary_border"
 SUMMARY_HEADER_TAG = "summary_header"
 SUMMARY_NEUTRAL_TAG = "summary_neutral"
@@ -36,6 +37,8 @@ SUMMARY_POSITIVE_TAG = "summary_positive"
 SUMMARY_NEGATIVE_TAG = "summary_negative"
 SUMMARY_CAUTION_TAG = "summary_caution"
 SUMMARY_MUTED_TAG = "summary_muted"
+SUMMARY_FONT = ("Consolas", 10)
+SUMMARY_HEADER_FONT = ("Consolas", 10, "bold")
 SUMMARY_ITEM_WIDTH = 16
 SUMMARY_VALUE_WIDTH = 16
 
@@ -145,32 +148,25 @@ class PortfolioBacktestPanel(ttk.Frame):
         compare_section.rowconfigure(1, weight=1)
         summary_pane.add(compare_section, weight=4)
         ttk.Label(compare_section, text="對比表", style="Workbench.SidebarHeader.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
-        self._summary_text = tk.Text(
+        self._summary_canvas = tk.Canvas(
             compare_section,
-            wrap="none",
-            bg="#040a12",
-            fg="#f7fbff",
-            insertbackground="#f7fbff",
-            relief="flat",
+            bg=SUMMARY_BG,
+            highlightthickness=0,
             bd=0,
-            padx=8,
-            pady=8,
-            font=("Consolas", 10),
+            relief="flat",
+            xscrollincrement=1,
+            yscrollincrement=1,
         )
-        self._summary_text.grid(row=1, column=0, sticky="nsew")
-        self._summary_text.tag_configure(SUMMARY_BORDER_TAG, foreground="#9aa9bd")
-        self._summary_text.tag_configure(SUMMARY_HEADER_TAG, foreground="#f7fbff", font=("Consolas", 10, "bold"))
-        self._summary_text.tag_configure(SUMMARY_NEUTRAL_TAG, foreground="#f7fbff")
-        self._summary_text.tag_configure(SUMMARY_POSITIVE_TAG, foreground="#1fe08f")
-        self._summary_text.tag_configure(SUMMARY_NEGATIVE_TAG, foreground="#ff6b78")
-        self._summary_text.tag_configure(SUMMARY_CAUTION_TAG, foreground="#ffd84d")
-        self._summary_text.tag_configure(SUMMARY_MUTED_TAG, foreground="#9aa9bd")
-        summary_y = ttk.Scrollbar(compare_section, orient="vertical", command=self._summary_text.yview, style="Workbench.Vertical.TScrollbar")
+        self._summary_canvas.grid(row=1, column=0, sticky="nsew")
+        self._summary_body = tk.Frame(self._summary_canvas, bg=SUMMARY_BG, highlightthickness=0, bd=0)
+        self._summary_window_id = self._summary_canvas.create_window((0, 0), window=self._summary_body, anchor="nw")
+        self._summary_body.bind("<Configure>", self._handle_summary_body_configure, add="+")
+        self._summary_canvas.bind("<Configure>", self._handle_summary_canvas_configure, add="+")
+        summary_y = ttk.Scrollbar(compare_section, orient="vertical", command=self._summary_canvas.yview, style="Workbench.Vertical.TScrollbar")
         summary_y.grid(row=1, column=1, sticky="ns")
-        summary_x = ttk.Scrollbar(compare_section, orient="horizontal", command=self._summary_text.xview, style="Workbench.Horizontal.TScrollbar")
+        summary_x = ttk.Scrollbar(compare_section, orient="horizontal", command=self._summary_canvas.xview, style="Workbench.Horizontal.TScrollbar")
         summary_x.grid(row=2, column=0, sticky="ew")
-        self._summary_text.configure(yscrollcommand=summary_y.set, xscrollcommand=summary_x.set)
-        self._configure_readonly_text_widget(self._summary_text)
+        self._summary_canvas.configure(yscrollcommand=summary_y.set, xscrollcommand=summary_x.set)
         ttk.Button(compare_section, text="開啟投組儀表板", command=lambda: self._open_path(DASHBOARD_HTML_PATH), style="Workbench.TButton").grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         yearly_tab = ttk.Frame(notebook, padding=8, style="Workbench.TFrame")
@@ -286,55 +282,70 @@ class PortfolioBacktestPanel(ttk.Frame):
         for row in normalized.to_dict("records"):
             tree.insert("", "end", values=[row.get(column, "") for column in columns])
 
-    @staticmethod
-    def _block_text_mutation(_event=None):
-        return "break"
+    def _handle_summary_body_configure(self, _event=None):
+        self._sync_summary_canvas_geometry()
+
+    def _handle_summary_canvas_configure(self, _event=None):
+        self._sync_summary_canvas_geometry()
+
+    def _sync_summary_canvas_geometry(self):
+        canvas_width = max(int(self._summary_canvas.winfo_width() or 0) - 2, 0)
+        content_width = int(self._summary_body.winfo_reqwidth() or 0)
+        target_width = max(canvas_width, content_width)
+        if target_width > 0:
+            self._summary_canvas.itemconfigure(self._summary_window_id, width=target_width)
+        bbox = self._summary_canvas.bbox("all")
+        if bbox is not None:
+            self._summary_canvas.configure(scrollregion=bbox)
 
     @staticmethod
-    def _is_readonly_navigation_key(event):
-        keysym = str(getattr(event, "keysym", "") or "")
-        state = int(getattr(event, "state", 0) or 0)
-        if not keysym:
-            return False
-        if state & 0x4 and keysym.lower() in {"c", "insert"}:
-            return True
-        return keysym in {
-            "Left",
-            "Right",
-            "Up",
-            "Down",
-            "Prior",
-            "Next",
-            "Home",
-            "End",
-            "Shift_L",
-            "Shift_R",
-            "Control_L",
-            "Control_R",
-        }
+    def _summary_tag_style(tag):
+        if tag == SUMMARY_HEADER_TAG:
+            return "#f7fbff", SUMMARY_HEADER_FONT
+        if tag == SUMMARY_POSITIVE_TAG:
+            return "#1fe08f", SUMMARY_FONT
+        if tag == SUMMARY_NEGATIVE_TAG:
+            return "#ff6b78", SUMMARY_FONT
+        if tag == SUMMARY_CAUTION_TAG:
+            return "#ffd84d", SUMMARY_FONT
+        if tag in {SUMMARY_BORDER_TAG, SUMMARY_MUTED_TAG}:
+            return "#9aa9bd", SUMMARY_FONT
+        return "#f7fbff", SUMMARY_FONT
 
-    def _handle_readonly_text_keypress(self, event):
-        if self._is_readonly_navigation_key(event):
-            return None
-        return self._block_text_mutation(event)
-
-    def _configure_readonly_text_widget(self, widget):
-        widget.configure(insertwidth=0, cursor="arrow")
-        widget.bind("<Key>", self._handle_readonly_text_keypress, add="+")
-        widget.bind("<<Cut>>", self._block_text_mutation, add="+")
-        widget.bind("<<Paste>>", self._block_text_mutation, add="+")
-        widget.bind("<<Clear>>", self._block_text_mutation, add="+")
-        widget.bind("<Button-2>", self._block_text_mutation, add="+")
-
-    def _clear_summary_text(self):
-        self._summary_text.delete("1.0", "end")
+    def _clear_summary_rows(self):
+        for child in self._summary_body.winfo_children():
+            child.destroy()
 
     def _append_summary_segments(self, segments):
+        row = tk.Frame(self._summary_body, bg=SUMMARY_BG, highlightthickness=0, bd=0)
+        row.pack(anchor="w", fill="x", padx=8)
         for text, tag in segments:
-            self._summary_text.insert("end", str(text), tag)
+            color, font = self._summary_tag_style(tag)
+            tk.Label(
+                row,
+                text=str(text),
+                bg=SUMMARY_BG,
+                fg=color,
+                font=font,
+                anchor="w",
+                justify="left",
+                padx=0,
+                pady=0,
+            ).pack(side="left", anchor="w")
 
     def _append_summary_plain_line(self, text, tag=SUMMARY_NEUTRAL_TAG):
-        self._append_summary_segments([(f"{text}\n", tag)])
+        color, font = self._summary_tag_style(tag)
+        tk.Label(
+            self._summary_body,
+            text=str(text),
+            bg=SUMMARY_BG,
+            fg=color,
+            font=font,
+            anchor="w",
+            justify="left",
+            padx=8,
+            pady=0,
+        ).pack(anchor="w", fill="x")
 
     def _summary_value_tag(self, value, *, item, column):
         text = str(value or "").strip()
@@ -370,15 +381,18 @@ class PortfolioBacktestPanel(ttk.Frame):
             (_pad_display(benchmark, SUMMARY_VALUE_WIDTH), value_tag_benchmark),
             (" | ", SUMMARY_BORDER_TAG),
             (_pad_display(alpha, SUMMARY_VALUE_WIDTH), value_tag_alpha),
-            (" |\n", SUMMARY_BORDER_TAG),
+            (" |", SUMMARY_BORDER_TAG),
         ]
 
     def _render_summary_placeholder(self, message):
-        self._clear_summary_text()
+        self._clear_summary_rows()
         self._append_summary_plain_line(str(message), tag=SUMMARY_MUTED_TAG)
+        self._sync_summary_canvas_geometry()
+        self._summary_canvas.yview_moveto(0.0)
+        self._summary_canvas.xview_moveto(0.0)
 
     def _render_summary_table(self, *, result_tuple, params, benchmark_ticker, max_positions, enable_rotation):
-        self._clear_summary_text()
+        self._clear_summary_rows()
         (
             _df_eq, _df_tr, tot_ret, mdd, trade_count, win_rate, pf_ev, pf_payoff,
             final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed,
@@ -450,7 +464,9 @@ class PortfolioBacktestPanel(ttk.Frame):
         self._append_summary_plain_line("【共用硬門檻】", tag=SUMMARY_HEADER_TAG)
         for row in sections["threshold_rows"]:
             self._append_summary_plain_line(f"{row['item']} : {row['value']}")
-        self._summary_text.see("1.0")
+        self._sync_summary_canvas_geometry()
+        self._summary_canvas.yview_moveto(0.0)
+        self._summary_canvas.xview_moveto(0.0)
 
     def _resolve_matplotlib_font_family(self):
         try:
