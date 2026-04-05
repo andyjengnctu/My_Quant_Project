@@ -528,4 +528,6 @@
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
 | 2026-04-05 | T138 | 新增 policy/config coverage-target contract 並驗證 | NEW -> DONE | `validate_policy_contract_modules_in_coverage_targets_case` |
 | 2026-04-05 | T139 | 新增 `G` 的 `NEW` 只能出現在首次收斂紀錄的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
+| 2026-04-05 | T139 | 檢出 synthetic mutation target 指到首筆合法歷史列，guard 驗證暫時失真 | DONE -> PARTIAL | `validate_checklist_g_new_transition_first_occurrence_case` |
+| 2026-04-05 | T139 | 改為鎖定同 ID 非首次出現列後，guard synthetic validator 重新收斂 | PARTIAL -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T140 | 新增 `G` 備註欄 validator reference existence guard 並驗證 | NEW -> DONE | `validate_checklist_g_note_validate_reference_exists_case` |

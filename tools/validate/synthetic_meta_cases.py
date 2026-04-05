@@ -151,10 +151,11 @@ def _extract_cmd_python_commands():
     return commands
 
 
-def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_idx: int, update_cols):
+def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_idx: int, update_cols, match_index: int = 0):
     original_had_trailing_newline = text.endswith("\n")
     lines = text.splitlines()
     in_target_section = False
+    matched_count = 0
     for line_idx, raw_line in enumerate(lines):
         stripped = raw_line.strip()
         if stripped.startswith("## ") or stripped.startswith("### "):
@@ -168,15 +169,16 @@ def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_
         cols = [part.strip() for part in raw_line.split("|")[1:-1]]
         if len(cols) <= id_col_idx or cols[id_col_idx] != row_id:
             continue
+        if matched_count != match_index:
+            matched_count += 1
+            continue
         updated_cols = update_cols(list(cols))
         lines[line_idx] = "| " + " | ".join(updated_cols) + " |"
         updated_text = "\n".join(lines)
         if original_had_trailing_newline:
             updated_text += "\n"
         return updated_text
-    raise ValueError(f"找不到 checklist heading={heading}, row_id={row_id}")
-
-
+    raise ValueError(f"找不到 checklist heading={heading}, row_id={row_id}, match_index={match_index}")
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -656,6 +658,13 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    g_rows = extract_markdown_table_rows(original_text, "G. 逐項收斂紀錄")
+    b26_occurrence_count = sum(1 for cols in g_rows if len(cols) > 1 and cols[1].strip() == "B26")
+    target_match_index = 1 if b26_occurrence_count >= 2 else None
+    add_check(results, "meta_checklist", case_id, "target_g_row_has_nonfirst_occurrence_for_mutation", True, target_match_index is not None)
+    if target_match_index is None:
+        return results, summary
+
     try:
         mutated_text = _replace_markdown_table_row(
             original_text,
@@ -663,6 +672,7 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
             row_id="B26",
             id_col_idx=1,
             update_cols=lambda cols: cols[:3] + ["NEW -> DONE"] + cols[4:],
+            match_index=target_match_index,
         )
     except ValueError:
         add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
@@ -683,11 +693,11 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
     add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_guard_fails", "FAIL", g_new_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_reports_target_row", True, any(row.get("id") == "B26" for row in invalid_rows))
 
+    summary["b26_occurrence_count"] = b26_occurrence_count
     summary["guard_status"] = g_new_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    summary["target_match_index"] = target_match_index
     return results, summary
-
-
 def validate_checklist_g_note_validate_reference_exists_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
