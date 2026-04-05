@@ -134,6 +134,7 @@
 | B63 | P1 | Meta | synthetic meta validators 讀取 `summarize_result` 額外欄位時，必須相容 flattened top-level payload；不得直接依賴巢狀 `result["extra"]` schema | DONE | 已補 shared summary-value accessor 與 static contract，直接釘死 `tools/validate/synthetic_meta_cases.py` 不得再用直接 `.get("extra", {}).get(...)` 讀取 meta summary 欄位，避免 formal synthetic suite 因 payload schema 讀法錯誤出現假失敗 | `tools/local_regression/common.py`, `tools/validate/synthetic_meta_cases.py` |
 | B64 | P1 | Meta | checklist 各摘要表（`E1` / `E2` / `E3` / `T`）必須固定依 tracking ID 升冪排序，避免同步表雖內容正確但順序漂移而破壞機械比對 | DONE | 已補 direct checklist contract，直接釘死 `E1` / `E2` / `E3` / `T` 不能只做集合相等；若任何摘要表 row order 逆序，formal guard 必須 fail 並指出對應表名與前後 ID | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B65 | P1 | CLI | `apps/package_zip.py` 必須支援外部參數一鍵執行 commit → zip → test_suite，且 ZIP 檔名必須反映 commit 後 HEAD | DONE | 已補 orchestration contract，直接釘死 `--commit-message` 會先 `git add -A` + `git commit -m ...`、zip 產物必須使用 commit 後 HEAD short sha，且 `--run-test-suite` 必須在打包後才執行 `apps/test_suite.py` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
+| B66 | P1 | GUI | `apps/gui.py` 必須作為單一 GUI 啟用入口，且 workbench panel registry / 單股回測後端 / Excel+HTML artifact 契約必須穩定 | DONE | 已補 GUI workbench contract，直接釘死 `apps/gui.py` 必須對應到 `tools.gui.main`、workbench 必須註冊單股回測檢視 panel，且 debug backend 必須同時產生 `Debug_TradeLog_<ticker>.xlsx` 與 `Debug_TradeChart_<ticker>.html` | `apps/gui.py`, `tools/gui/workbench.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -320,6 +321,7 @@
 | T142 | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` | B63 |
 | T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
 | T144 | `validate_package_zip_commit_test_suite_orchestration_case` | B65 |
+| T145 | `validate_gui_workbench_contract_case` | B66 |
 
 ## G. 逐項收斂紀錄
 
@@ -551,6 +553,7 @@
 | 2026-04-05 | B63 | 新增 synthetic meta summary-value accessor contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B65 | 新增 package_zip commit → zip → test_suite orchestration contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
+| 2026-04-05 | B66 | 新增 GUI workbench / debug artifact contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -575,3 +578,4 @@
 | 2026-04-05 | T142 | 新增 synthetic meta summary-value accessor static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` |
 | 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |
 | 2026-04-05 | T144 | 新增 package_zip commit → zip → test_suite orchestration contract 並驗證 | NEW -> DONE | `validate_package_zip_commit_test_suite_orchestration_case` |
+| 2026-04-05 | T145 | 新增 GUI workbench / debug artifact contract 並驗證 | NEW -> DONE | `validate_gui_workbench_contract_case` |

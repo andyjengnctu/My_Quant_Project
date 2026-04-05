@@ -7,7 +7,29 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.price_utils import calc_entry_price
+from tools.debug.charting import record_limit_order, record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
+
+
+def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_type, entry_result, note=""):
+    if chart_context is None:
+        return
+
+    status = "abandoned"
+    if entry_result['filled']:
+        status = "filled"
+    elif entry_result['count_as_missed_buy']:
+        status = "missed"
+
+    record_limit_order(
+        chart_context,
+        current_date=current_date,
+        limit_price=entry_plan['limit_price'],
+        qty=entry_plan['qty'],
+        entry_type=entry_type,
+        status=status,
+        note=note,
+    )
 
 
 def process_debug_entry_for_day(
@@ -28,6 +50,7 @@ def process_debug_entry_for_day(
     current_date,
     params,
     trade_logs,
+    chart_context=None,
 ):
     buy_triggered = False
     date_str = current_date.strftime('%Y-%m-%d')
@@ -49,6 +72,19 @@ def process_debug_entry_for_day(
             params=params,
             entry_type='normal',
         )
+        marker_note = ""
+        if entry_result['count_as_missed_buy']:
+            marker_note = f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
+        elif entry_result['is_worse_than_initial_stop']:
+            marker_note = "先達停損，放棄進場"
+        _record_entry_plan_marker(
+            chart_context,
+            current_date=current_date,
+            entry_plan=entry_plan,
+            entry_type='normal',
+            entry_result=entry_result,
+            note=marker_note,
+        )
         if entry_result['filled']:
             position = entry_result['position']
             buy_triggered = True
@@ -65,6 +101,13 @@ def process_debug_entry_for_day(
                 tp_half_price=get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
                 pnl=0.0,
+            )
+            record_trade_marker(
+                chart_context,
+                current_date=current_date,
+                action="買進",
+                price=entry_result['buy_price'],
+                qty=entry_plan['qty'],
             )
         elif entry_result['count_as_missed_buy']:
             reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
@@ -112,6 +155,19 @@ def process_debug_entry_for_day(
             params=params,
             entry_type='extended',
         )
+        marker_note = ""
+        if entry_result['count_as_missed_buy']:
+            marker_note = f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
+        elif entry_result['is_worse_than_initial_stop']:
+            marker_note = "延續候選先達停損，放棄進場"
+        _record_entry_plan_marker(
+            chart_context,
+            current_date=current_date,
+            entry_plan=entry_plan,
+            entry_type='extended',
+            entry_result=entry_result,
+            note=marker_note,
+        )
         if entry_result['filled']:
             position = entry_result['position']
             buy_triggered = True
@@ -128,6 +184,13 @@ def process_debug_entry_for_day(
                 tp_half_price=get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
                 pnl=0.0,
+            )
+            record_trade_marker(
+                chart_context,
+                current_date=current_date,
+                action="買進(延續候選)",
+                price=entry_result['buy_price'],
+                qty=entry_plan['qty'],
             )
         elif entry_result['count_as_missed_buy']:
             reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']

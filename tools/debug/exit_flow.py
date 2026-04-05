@@ -2,6 +2,7 @@ import numpy as np
 
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
+from tools.debug.charting import record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row
 
 
@@ -19,6 +20,7 @@ def process_debug_position_step(
     current_date,
     params,
     trade_logs,
+    chart_context=None,
 ):
     prev_qty = position['qty']
     prev_realized = position.get('realized_pnl', 0.0)
@@ -58,6 +60,13 @@ def process_debug_position_step(
             atr_prev=atr_prev,
             pnl=realized_delta,
         )
+        record_trade_marker(
+            chart_context,
+            current_date=current_date,
+            action="半倉停利",
+            price=exec_sell_price_half,
+            qty=sold_qty,
+        )
 
     if 'STOP' in events or 'IND_SELL' in events:
         half_qty = prev_qty - position['qty'] if 'TP_HALF' in events else 0
@@ -82,6 +91,13 @@ def process_debug_position_step(
             atr_prev=atr_prev,
             pnl=final_leg_pnl,
         )
+        record_trade_marker(
+            chart_context,
+            current_date=current_date,
+            action=action_str,
+            price=sell_price,
+            qty=final_exit_qty,
+        )
     elif 'MISSED_SELL' in events:
         sell_block_reason = next((event for event in events if event in {'NO_VOLUME', 'LOCKED_DOWN'}), None)
         reason_note = {
@@ -102,11 +118,20 @@ def process_debug_position_step(
             pnl=0.0,
             note=reason_note,
         )
+        marker_price = active_stop_after_update if not np.isnan(active_stop_after_update) else t_close
+        record_trade_marker(
+            chart_context,
+            current_date=current_date,
+            action="錯失賣出",
+            price=marker_price,
+            qty=prev_qty,
+            note=reason_note,
+        )
 
     return position, pnl_realized
 
 
-def append_debug_forced_closeout(*, position, current_date, atr_last, params, trade_logs):
+def append_debug_forced_closeout(*, position, current_date, atr_last, params, trade_logs, chart_context=None):
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
     final_leg_pnl = (sell_net_price - position['entry']) * position['qty']
@@ -122,4 +147,11 @@ def append_debug_forced_closeout(*, position, current_date, atr_last, params, tr
         tp_half_price=np.nan,
         atr_prev=atr_last,
         pnl=final_leg_pnl,
+    )
+    record_trade_marker(
+        chart_context,
+        current_date=current_date,
+        action="期末強制結算",
+        price=exec_sell_price,
+        qty=position['qty'],
     )

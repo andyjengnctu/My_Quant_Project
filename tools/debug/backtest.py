@@ -2,9 +2,10 @@ import numpy as np
 
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.signal_utils import generate_signals
+from tools.debug.charting import create_debug_chart_context, record_active_levels
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
-from tools.debug.reporting import finalize_debug_trade_logs
+from tools.debug.reporting import finalize_debug_analysis
 
 
 def _extract_precomputed_signals(df):
@@ -19,8 +20,16 @@ def _extract_precomputed_signals(df):
     )
 
 
-def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True, verbose=True, precomputed_signals=None):
-    """以正式核心邏輯為準，輸出可讀交易明細的除錯工具"""
+def _resolve_active_tp_half(position):
+    if position.get('qty', 0) <= 0:
+        return np.nan
+    if position.get('sold_half', False):
+        return np.nan
+    return position.get('tp_half', np.nan)
+
+
+def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True, export_chart=True, verbose=True, precomputed_signals=None):
+    """以正式核心邏輯為準，輸出可讀交易明細與 K 線圖 artifact。"""
     h = df['High'].to_numpy(dtype=np.float64, copy=False)
     l = df['Low'].to_numpy(dtype=np.float64, copy=False)
     c = df['Close'].to_numpy(dtype=np.float64, copy=False)
@@ -38,6 +47,7 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
     active_extended_signal = None
     current_capital = params.initial_capital
     trade_logs = []
+    chart_context = create_debug_chart_context(df) if export_chart else None
 
     for j in range(1, len(c)):
         if np.isnan(atr_main[j - 1]):
@@ -59,6 +69,7 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
                 current_date=dates[j],
                 params=params,
                 trade_logs=trade_logs,
+                chart_context=chart_context,
             )
             current_capital += pnl_realized
 
@@ -80,7 +91,16 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
             current_date=dates[j],
             params=params,
             trade_logs=trade_logs,
+            chart_context=chart_context,
         )
+
+        if chart_context is not None and position['qty'] > 0:
+            record_active_levels(
+                chart_context,
+                current_date=dates[j],
+                stop_price=position.get('sl', np.nan),
+                tp_half_price=_resolve_active_tp_half(position),
+            )
 
     if position['qty'] > 0:
         position['close_price'] = c[-1]
@@ -90,13 +110,33 @@ def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True
             atr_last=atr_main[-1] if len(atr_main) > 0 else np.nan,
             params=params,
             trade_logs=trade_logs,
+            chart_context=chart_context,
         )
 
-    return finalize_debug_trade_logs(
+    return finalize_debug_analysis(
         trade_logs=trade_logs,
         ticker=ticker,
         output_dir=output_dir,
         colors=colors,
         export_excel=export_excel,
+        export_chart=export_chart,
         verbose=verbose,
+        price_df=df,
+        chart_context=chart_context,
     )
+
+
+
+def run_debug_backtest(df, ticker, params, output_dir, colors, export_excel=True, verbose=True, precomputed_signals=None):
+    result = run_debug_analysis(
+        df=df,
+        ticker=ticker,
+        params=params,
+        output_dir=output_dir,
+        colors=colors,
+        export_excel=export_excel,
+        export_chart=False,
+        verbose=verbose,
+        precomputed_signals=precomputed_signals,
+    )
+    return result['trade_logs_df']

@@ -1,5 +1,6 @@
 import csv
 import io
+import importlib
 import json
 import os
 import sys
@@ -1602,6 +1603,66 @@ def validate_scanner_reference_clean_df_contract_case(base_params):
         add_check(results, "output_contract", case_id, f"scanner_reference_clean_df_{metric}", legacy_stats[metric], clean_df_stats[metric])
 
     add_check(results, "output_contract", case_id, "scanner_reference_clean_df_extended_candidate", legacy_stats.get("extended_candidate_today"), clean_df_stats.get("extended_candidate_today"))
+    return results, summary
+
+
+def validate_gui_workbench_contract_case(base_params):
+    case_id = "GUI_WORKBENCH_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    apps_gui = importlib.import_module("apps.gui")
+    tools_gui = importlib.import_module("tools.gui")
+    workbench_spec = tools_gui.build_workbench_spec()
+
+    add_check(results, "output_contract", case_id, "gui_app_thin_entry_main", apps_gui.main, tools_gui.main)
+    add_check(results, "output_contract", case_id, "gui_workbench_entry_module", "apps.gui", workbench_spec.get("entry_module"))
+    add_check(results, "output_contract", case_id, "gui_workbench_title", "股票工具工作台", workbench_spec.get("title"))
+
+    panel_specs = workbench_spec.get("panels", [])
+    panel_ids = [panel.get("panel_id") for panel in panel_specs]
+    add_check(results, "output_contract", case_id, "gui_workbench_panel_ids", ["single_stock_backtest_inspector"], panel_ids)
+    if panel_specs:
+        panel_spec = panel_specs[0]
+        add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
+        add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.debug.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path", "chart_path"], panel_spec.get("artifact_keys"))
+
+    with io.StringIO() as stdout_buffer:
+        with redirect_stdout(stdout_buffer):
+            exit_code = tools_gui.main(["apps/gui.py", "--help"])
+        help_output = stdout_buffer.getvalue()
+    add_check(results, "output_contract", case_id, "gui_help_exit_code", 0, exit_code)
+    add_check(results, "output_contract", case_id, "gui_help_mentions_entry", True, "apps/gui.py" in help_output)
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+    min_rows_needed = get_required_min_rows(case["params"])
+    clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    legacy_df = debug_module.run_debug_backtest(clean_df.copy(), ticker, case["params"], export_excel=False, verbose=False)
+    with tempfile.TemporaryDirectory(prefix="gui_workbench_contract_") as temp_dir:
+        analysis_result = debug_module.run_debug_analysis(
+            clean_df.copy(),
+            ticker,
+            case["params"],
+            export_excel=True,
+            export_chart=True,
+            verbose=False,
+            output_dir=temp_dir,
+        )
+        chart_exists = os.path.exists(analysis_result["chart_path"]) if analysis_result.get("chart_path") else False
+        excel_exists = os.path.exists(analysis_result["excel_path"]) if analysis_result.get("excel_path") else False
+        add_check(results, "output_contract", case_id, "gui_backend_trade_logs_payload", _normalize_nan_records(legacy_df), _normalize_nan_records(analysis_result["trade_logs_df"]))
+        add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_exists", True, chart_exists)
+        add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_exists", True, excel_exists)
+        add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_name", f"Debug_TradeChart_{ticker}.html", os.path.basename(analysis_result["chart_path"]))
+        add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_name", f"Debug_TradeLog_{ticker}.xlsx", os.path.basename(analysis_result["excel_path"]))
+
+    summary["workbench_title"] = workbench_spec.get("title")
+    summary["panel_ids"] = panel_ids
     return results, summary
 
 
