@@ -7,7 +7,7 @@ from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
 WORKBENCH_TITLE = "股票工具工作台"
-WORKBENCH_GEOMETRY = "1680x980"
+WORKBENCH_GEOMETRY = "1820x1120"
 
 
 PANEL_SPECS = (
@@ -48,11 +48,11 @@ class StockToolsWorkbench:
         self.root = tk.Tk()
         self.root.title(WORKBENCH_TITLE)
         self.root.geometry(WORKBENCH_GEOMETRY)
-        self.root.minsize(1400, 860)
+        self.root.minsize(1520, 920)
         self._build_ui()
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, padding=8)
+        container = ttk.Frame(self.root, padding=4)
         container.pack(fill="both", expand=True)
 
         notebook = ttk.Notebook(container)

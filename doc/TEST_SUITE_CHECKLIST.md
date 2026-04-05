@@ -143,6 +143,7 @@
 | B72 | P2 | Meta | synthetic validator 若使用 `np.` 等外部 alias，必須顯式宣告對應 import，不得依賴 transitive import 或未定義名稱，避免 coverage / consistency synthetic suite 因 `NameError` 假失敗 | DONE | 已補 static contract，直接掃描 `tools/validate/synthetic*_cases.py` 中使用 `np.` 的模組，釘死必須顯式 `import numpy as np`；並修正 `synthetic_contract_cases.py` 缺失 import 所造成的 coverage synthetic suite runtime regression | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B73 | P2 | Meta | 掃描 synthetic validator alias 使用情形時，必須以 AST 實際語意判定，不得用原始字串搜尋 `"np."` 誤判字串常值、註解或 validator 自述文字為真實 alias 使用，避免 meta validator 自己製造假失敗 | DONE | 已補 direct contract，直接釘死 numpy alias 使用掃描必須忽略僅出現在字串常值中的 `np.`，並仍可正確抓到實際 `np.array(...)` AST 使用；同步把 alias-import validator 改為 AST 判定，避免 `synthetic_meta_cases.py` 因自述字串誤被列為缺 import 模組 | `tools/validate/synthetic_meta_cases.py` |
 | B74 | P1 | GUI | GUI 單股回測工作台必須以 K 線圖分頁作為主檢視；成交量預設隱藏且切換後才佔版面，摘要/明細須獨立分頁，並透過中文字型 fallback 與 scoped render 維持可讀性與大資料量互動效能 | DONE | 已補 direct contract，直接釘死 GUI panel 必須使用 notebook 分頁承接 K 線圖/摘要/明細、成交量 toggle 預設關閉，且 chart helper 必須宣告 CJK font fallback 候選與大型 payload 的 scoped render window，避免全歷史 K 線拖慢 GUI | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
+| B75 | P1 | GUI | GUI 單股回測內嵌 K 線圖必須支援 toolbar-free 滑鼠互動：滾輪直接縮放、左鍵直接拖曳平移時間軸，且重新渲染成交量時不得殘留已銷毀 toolbar/widget 造成 Tk runtime error | DONE | 已補 direct contract，直接釘死 GUI panel 不得再依賴 `NavigationToolbar2Tk`、必須綁定 shared mouse navigation binder，並要求 chart helper 宣告 wheel-zoom / left-drag-pan / no-toolbar contract，避免縮放平移體驗分叉與 volume toggle 時殘留失效 widget | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -338,6 +339,7 @@
 | T151 | `validate_synthetic_case_numpy_alias_import_contract_case` | B72 |
 | T152 | `validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case` | B73 |
 | T153 | `validate_gui_chart_workspace_contract_case` | B74 |
+| T154 | `validate_gui_mouse_navigation_contract_case` | B75 |
 
 ## G. 逐項收斂紀錄
 
@@ -578,6 +580,7 @@
 | 2026-04-05 | B72 | 新增 synthetic validator 外部 alias 顯式 import contract，並修正 `synthetic_contract_cases.py` 缺失 `numpy as np` 導致的 coverage synthetic suite 假失敗 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B73 | 新增 synthetic alias 掃描 AST contract，避免以字串搜尋 `np.` 誤判 validator 自述內容為實際 numpy alias 使用 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B74 | 新增 GUI chart-first workspace contract，釘死成交量預設隱藏、摘要/明細分頁與 scoped render / 中文字型 fallback 要求 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B75 | 新增 GUI toolbar-free mouse navigation contract，釘死滾輪縮放、左鍵拖曳平移與 volume toggle 不得依賴已銷毀 toolbar widget | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -611,3 +614,4 @@
 | 2026-04-05 | T151 | 新增 synthetic validator 外部 alias 顯式 import contract 並驗證 | NEW -> DONE | `validate_synthetic_case_numpy_alias_import_contract_case` |
 | 2026-04-05 | T152 | 新增 synthetic alias 掃描忽略字串常值 contract 並驗證 | NEW -> DONE | `validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case` |
 | 2026-04-05 | T153 | 新增 GUI chart-first workspace / volume toggle / scoped render contract 並驗證 | NEW -> DONE | `validate_gui_chart_workspace_contract_case` |
+| 2026-04-05 | T154 | 新增 GUI toolbar-free mouse navigation / no-toolbar volume toggle contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_contract_case` |

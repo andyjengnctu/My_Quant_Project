@@ -9,15 +9,15 @@ CHART_FALLBACK_TAIL_BARS = 120
 CHART_MIN_WINDOW_BARS = 40
 CHART_PRICE_PADDING_RATIO = 0.03
 CHART_VOLUME_PADDING_RATIO = 0.10
-MATPLOTLIB_DEBUG_CHART_FIGSIZE = (15.6, 8.8)
+MATPLOTLIB_DEBUG_CHART_FIGSIZE = (17.8, 10.2)
 MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 96
 MATPLOTLIB_VOLUME_ALPHA = 0.65
 MATPLOTLIB_DARK_BG = "#0b0f14"
 MATPLOTLIB_GRID_COLOR = "#243447"
 MATPLOTLIB_TEXT_COLOR = "#e9ecef"
-MATPLOTLIB_GUI_RENDER_CONTEXT_BARS = 45
-MATPLOTLIB_GUI_MAX_RENDER_BARS = 220
+MATPLOTLIB_GUI_RENDER_CONTEXT_BARS = 36
+MATPLOTLIB_GUI_MAX_RENDER_BARS = 180
 MATPLOTLIB_CJK_FONT_CANDIDATES = (
     "Microsoft JhengHei",
     "Microsoft JhengHei UI",
@@ -26,9 +26,18 @@ MATPLOTLIB_CJK_FONT_CANDIDATES = (
     "PingFang TC",
     "Heiti TC",
     "Source Han Sans TW",
+    "Source Han Sans TC",
+    "Sarasa Gothic TC",
+    "WenQuanYi Zen Hei",
+    "WenQuanYi Micro Hei",
     "Arial Unicode MS",
     "SimHei",
+    "Noto Sans CJK JP",
 )
+
+MATPLOTLIB_MIN_VISIBLE_BARS = 12
+MATPLOTLIB_WHEEL_ZOOM_IN_FACTOR = 0.82
+MATPLOTLIB_WHEEL_ZOOM_OUT_FACTOR = 1.22
 
 
 ACTION_STYLE_MAP = {
@@ -385,6 +394,49 @@ def _slice_chart_payload(chart_payload, *, start_idx, end_idx):
     }
 
 
+def _clamp_chart_xlim(left, right, *, total_points, min_visible_bars=MATPLOTLIB_MIN_VISIBLE_BARS):
+    if total_points <= 0:
+        return -0.5, 0.5
+
+    min_left = -0.5
+    max_right = float(total_points) - 0.5
+    full_width = max_right - min_left
+    min_width = max(float(min_visible_bars), 4.0)
+    width = max(float(right) - float(left), min_width)
+    width = min(width, full_width)
+    center = (float(left) + float(right)) / 2.0
+    clamped_left = center - width / 2.0
+    clamped_right = center + width / 2.0
+
+    if clamped_left < min_left:
+        shift = min_left - clamped_left
+        clamped_left += shift
+        clamped_right += shift
+    if clamped_right > max_right:
+        shift = clamped_right - max_right
+        clamped_left -= shift
+        clamped_right -= shift
+
+    clamped_left = max(min_left, clamped_left)
+    clamped_right = min(max_right, clamped_right)
+    if clamped_right - clamped_left < min_width and full_width >= min_width:
+        clamped_right = min(max_right, clamped_left + min_width)
+        clamped_left = max(min_left, clamped_right - min_width)
+    return float(clamped_left), float(clamped_right)
+
+
+def _resolve_event_data_x(axis, event):
+    if getattr(event, "xdata", None) is not None and np.isfinite(event.xdata):
+        return float(event.xdata)
+    if getattr(event, "x", None) is None or getattr(event, "y", None) is None:
+        return None
+    transformed = axis.transData.inverted().transform((event.x, event.y))
+    if transformed is None:
+        return None
+    x_value = float(transformed[0])
+    return x_value if np.isfinite(x_value) else None
+
+
 def _resolve_matplotlib_font_family():
     try:
         from matplotlib import font_manager
@@ -432,17 +484,19 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     label_font = FontProperties(family=font_family, size=13) if font_family else None
     legend_font = FontProperties(family=font_family, size=10) if font_family else None
     rcParams["axes.unicode_minus"] = False
+    if font_family:
+        rcParams["font.sans-serif"] = [font_family, *MATPLOTLIB_CJK_FONT_CANDIDATES]
 
-    figure = Figure(figsize=MATPLOTLIB_DEBUG_CHART_FIGSIZE, dpi=100, facecolor=MATPLOTLIB_DARK_BG)
+    figure = Figure(figsize=MATPLOTLIB_DEBUG_CHART_FIGSIZE, dpi=96, facecolor=MATPLOTLIB_DARK_BG)
     if show_volume:
         axis_price = figure.add_subplot(2, 1, 1)
         axis_volume = figure.add_subplot(2, 1, 2, sharex=axis_price)
-        figure.subplots_adjust(left=0.055, right=0.992, top=0.94, bottom=0.10, hspace=0.04)
+        figure.subplots_adjust(left=0.048, right=0.995, top=0.955, bottom=0.072, hspace=0.04)
         axes = (axis_price, axis_volume)
     else:
         axis_price = figure.add_subplot(1, 1, 1)
         axis_volume = None
-        figure.subplots_adjust(left=0.055, right=0.992, top=0.94, bottom=0.10)
+        figure.subplots_adjust(left=0.048, right=0.995, top=0.955, bottom=0.072)
         axes = (axis_price,)
 
     for axis in axes:
@@ -572,7 +626,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     default_view = render_payload["default_view"]
     x_start = default_view["start_idx"] - 1
     x_end = default_view["end_idx"] + 1
-    ranges = compute_visible_value_ranges(render_payload, start_idx=default_view["start_idx"], end_idx=default_view["end_idx"])
+    x_start, x_end = _clamp_chart_xlim(x_start, x_end, total_points=len(render_payload["x"]))
+    ranges = compute_visible_value_ranges(render_payload, start_idx=x_start, end_idx=x_end)
     axis_price.set_xlim(x_start, x_end)
     axis_price.set_ylim(ranges["price_min"], ranges["price_max"])
     if axis_volume is not None:
@@ -586,7 +641,10 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         sync_state["updating"] = True
         try:
             left, right = axis_price.get_xlim()
-            visible_ranges = compute_visible_value_ranges(render_payload, start_idx=left, end_idx=right)
+            clamped_left, clamped_right = _clamp_chart_xlim(left, right, total_points=len(render_payload["x"]))
+            if abs(clamped_left - left) > 1e-9 or abs(clamped_right - right) > 1e-9:
+                axis_price.set_xlim(clamped_left, clamped_right, emit=False)
+            visible_ranges = compute_visible_value_ranges(render_payload, start_idx=clamped_left, end_idx=clamped_right)
             axis_price.set_ylim(visible_ranges["price_min"], visible_ranges["price_max"])
             if axis_volume is not None:
                 axis_volume.set_ylim(visible_ranges["volume_min"], visible_ranges["volume_max"])
@@ -608,8 +666,100 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "render_bar_count": int(len(render_payload["x"])),
         "total_bar_count": int(len(chart_payload["x"])),
         "default_view": render_payload["default_view"],
+        "mouse_wheel_zoom_enabled": False,
+        "mouse_left_drag_pan_enabled": False,
+        "toolbar_required": False,
+    }
+    figure._stock_chart_navigation_state = {
+        "axis_price": axis_price,
+        "axis_volume": axis_volume,
+        "render_payload": render_payload,
+        "total_points": int(len(render_payload["x"])),
+        "sync_visible_ranges": _sync_visible_ranges,
+        "connection_ids": {},
     }
     return figure
+
+
+def bind_matplotlib_chart_navigation(figure, canvas):
+    state = getattr(figure, "_stock_chart_navigation_state", None)
+    if state is None:
+        return {}
+
+    existing = state.get("connection_ids")
+    if existing:
+        return existing
+
+    axis_price = state["axis_price"]
+    axis_volume = state.get("axis_volume")
+    total_points = int(state["total_points"])
+    drag_state = {"active": False, "anchor_x": None, "orig_xlim": None}
+    canvas_widget = canvas.get_tk_widget()
+
+    def _allowed_axis(event):
+        return event.inaxes in {axis_price, axis_volume}
+
+    def _on_press(event):
+        if event.button != 1 or not _allowed_axis(event):
+            return
+        anchor_x = _resolve_event_data_x(axis_price, event)
+        if anchor_x is None:
+            return
+        drag_state["active"] = True
+        drag_state["anchor_x"] = anchor_x
+        drag_state["orig_xlim"] = axis_price.get_xlim()
+        canvas_widget.configure(cursor="fleur")
+
+    def _on_motion(event):
+        if not drag_state["active"]:
+            return
+        current_x = _resolve_event_data_x(axis_price, event)
+        if current_x is None:
+            return
+        origin_left, origin_right = drag_state["orig_xlim"]
+        delta = drag_state["anchor_x"] - current_x
+        next_left, next_right = _clamp_chart_xlim(origin_left + delta, origin_right + delta, total_points=total_points)
+        axis_price.set_xlim(next_left, next_right)
+        canvas.draw_idle()
+
+    def _on_release(event):
+        if event.button == 1 and drag_state["active"]:
+            drag_state["active"] = False
+            drag_state["anchor_x"] = None
+            drag_state["orig_xlim"] = None
+            canvas_widget.configure(cursor="")
+
+    def _on_scroll(event):
+        if not _allowed_axis(event):
+            return
+        left, right = axis_price.get_xlim()
+        current_width = max(float(right) - float(left), 1.0)
+        zoom_in = getattr(event, "button", None) == "up" or getattr(event, "step", 0) > 0
+        zoom_factor = MATPLOTLIB_WHEEL_ZOOM_IN_FACTOR if zoom_in else MATPLOTLIB_WHEEL_ZOOM_OUT_FACTOR
+        new_width = current_width * zoom_factor
+        new_width = min(max(new_width, float(MATPLOTLIB_MIN_VISIBLE_BARS)), max(float(total_points), float(MATPLOTLIB_MIN_VISIBLE_BARS)))
+        focus_x = _resolve_event_data_x(axis_price, event)
+        if focus_x is None:
+            focus_x = (left + right) / 2.0
+        focus_ratio = (focus_x - left) / current_width if current_width > 0 else 0.5
+        focus_ratio = min(max(focus_ratio, 0.0), 1.0)
+        next_left = focus_x - new_width * focus_ratio
+        next_right = next_left + new_width
+        next_left, next_right = _clamp_chart_xlim(next_left, next_right, total_points=total_points)
+        axis_price.set_xlim(next_left, next_right)
+        canvas.draw_idle()
+
+    connection_ids = {
+        "button_press_event": canvas.mpl_connect("button_press_event", _on_press),
+        "motion_notify_event": canvas.mpl_connect("motion_notify_event", _on_motion),
+        "button_release_event": canvas.mpl_connect("button_release_event", _on_release),
+        "scroll_event": canvas.mpl_connect("scroll_event", _on_scroll),
+    }
+    state["connection_ids"] = connection_ids
+    figure._stock_chart_contract["mouse_wheel_zoom_enabled"] = True
+    figure._stock_chart_contract["mouse_left_drag_pan_enabled"] = True
+    figure._stock_chart_contract["toolbar_required"] = False
+    return connection_ids
 
 
 def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context):

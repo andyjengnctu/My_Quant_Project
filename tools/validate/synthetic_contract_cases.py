@@ -1713,6 +1713,45 @@ def validate_gui_embedded_chart_contract_case(base_params):
     return results, summary
 
 
+def validate_gui_mouse_navigation_contract_case(_base_params):
+    case_id = "GUI_MOUSE_NAVIGATION_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "gui_chart_does_not_require_navigation_toolbar", True, "NavigationToolbar2Tk" not in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_binds_mouse_navigation", True, "bind_matplotlib_chart_navigation(figure, canvas)" in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_hint_moved_to_footer", True, 'ttk.Label(footer, textvariable=self._chart_hint_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "charting_declares_mouse_navigation_binder", True, "def bind_matplotlib_chart_navigation(figure, canvas):" in charting_source)
+    add_check(results, "output_contract", case_id, "charting_supports_wheel_zoom_event", True, '"scroll_event"' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_supports_left_drag_pan_event", True, '"motion_notify_event"' in charting_source and 'event.button != 1' in charting_source)
+
+    minimal_payload = {
+        "dates": pd.date_range("2024-01-01", periods=8, freq="D"),
+        "date_labels": [f"2024-01-{day:02d}" for day in range(1, 9)],
+        "x": np.arange(8, dtype=np.float64),
+        "open": np.array([10, 11, 12, 11, 13, 14, 13, 15], dtype=np.float64),
+        "high": np.array([11, 12, 13, 12, 14, 15, 14, 16], dtype=np.float64),
+        "low": np.array([9, 10, 11, 10, 12, 13, 12, 14], dtype=np.float64),
+        "close": np.array([10.5, 11.5, 11.8, 11.2, 13.4, 14.2, 13.1, 15.3], dtype=np.float64),
+        "volume": np.array([100, 120, 130, 110, 150, 160, 140, 180], dtype=np.float64),
+        "up_mask": np.array([True, True, False, True, True, True, False, True], dtype=bool),
+        "stop_line": np.full(8, np.nan, dtype=np.float64),
+        "tp_line": np.full(8, np.nan, dtype=np.float64),
+        "marker_groups": {},
+        "focus_positions": [2, 5],
+        "default_view": {"start_idx": 1, "end_idx": 6},
+    }
+    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "figure_contract_toolbar_not_required", False, contract.get("toolbar_required"))
+    add_check(results, "output_contract", case_id, "figure_contract_mouse_zoom_flag_default_false_until_canvas_bind", False, contract.get("mouse_wheel_zoom_enabled"))
+    add_check(results, "output_contract", case_id, "chart_navigation_binder_callable", True, callable(bind_matplotlib_chart_navigation))
+    return results, summary
+
+
 def validate_gui_chart_workspace_contract_case(_base_params):
     case_id = "GUI_CHART_WORKSPACE_CONTRACT"
     results = []

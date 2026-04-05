@@ -10,14 +10,13 @@ from tkinter import messagebox, ttk
 import pandas as pd
 
 from core.dataset_profiles import DATASET_PROFILE_REDUCED, DEFAULT_DATASET_PROFILE, get_dataset_profile_label
-from tools.debug.charting import create_matplotlib_debug_chart_figure
+from tools.debug.charting import bind_matplotlib_chart_navigation, create_matplotlib_debug_chart_figure
 from tools.debug.trade_log import run_debug_ticker_analysis
 
 try:
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 except ImportError:  # pragma: no cover - GUI runtime fallback
     FigureCanvasTkAgg = None
-    NavigationToolbar2Tk = None
 
 
 DATASET_OPTIONS = (
@@ -41,17 +40,16 @@ SUMMARY_FIELDS = (
 
 class SingleStockBacktestInspectorPanel(ttk.Frame):
     def __init__(self, master):
-        super().__init__(master, padding=8)
+        super().__init__(master, padding=4)
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
-        self._chart_hint_var = tk.StringVar(value="請先執行回測；K 線圖會直接顯示在此。")
+        self._chart_hint_var = tk.StringVar(value="滑鼠滾輪縮放；按住左鍵拖曳平移時間軸。")
         self._dataset_var = tk.StringVar(value=DEFAULT_DATASET_PROFILE)
         self._ticker_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
         self._columns = []
         self._chart_canvas = None
-        self._chart_toolbar = None
         self._chart_figure = None
         self._build_ui()
 
@@ -61,7 +59,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
     def _build_ui(self):
         controls = ttk.LabelFrame(self, text="執行參數", padding=8)
-        controls.pack(fill="x", pady=(0, 6))
+        controls.pack(fill="x", pady=(0, 4))
         controls.columnconfigure(10, weight=1)
 
         ttk.Label(controls, text="股票代號").grid(row=0, column=0, sticky="w")
@@ -95,26 +93,20 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Button(controls, text="開啟 Excel", command=self._open_excel).grid(row=0, column=7, padx=(0, 8), sticky="w")
         ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir).grid(row=0, column=8, sticky="w")
 
-        ttk.Label(self, textvariable=self._status_var).pack(anchor="w", pady=(0, 2))
-        ttk.Label(self, textvariable=self._chart_hint_var).pack(anchor="w", pady=(0, 6))
-
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
 
-        chart_tab = ttk.Frame(notebook, padding=4)
-        chart_tab.rowconfigure(1, weight=1)
+        chart_tab = ttk.Frame(notebook, padding=1)
+        chart_tab.rowconfigure(0, weight=1)
         chart_tab.columnconfigure(0, weight=1)
         notebook.add(chart_tab, text="K 線圖")
 
-        self._chart_toolbar_host = ttk.Frame(chart_tab)
-        self._chart_toolbar_host.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-
         self._chart_canvas_host = ttk.Frame(chart_tab)
-        self._chart_canvas_host.grid(row=1, column=0, sticky="nsew")
+        self._chart_canvas_host.grid(row=0, column=0, sticky="nsew")
         self._chart_placeholder = ttk.Label(
             self._chart_canvas_host,
-            textvariable=self._chart_hint_var,
+            text="請先執行回測；K 線圖會直接顯示在此。",
             anchor="center",
             justify="center",
         )
@@ -145,6 +137,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         x_scroll = ttk.Scrollbar(table_tab, orient="horizontal", command=self._tree.xview)
         x_scroll.grid(row=1, column=0, sticky="ew")
         self._tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        footer = ttk.Frame(self)
+        footer.pack(fill="x", pady=(4, 0))
+        ttk.Label(footer, textvariable=self._status_var).pack(anchor="w")
+        ttk.Label(footer, textvariable=self._chart_hint_var, wraplength=1500, justify="left").pack(anchor="w", pady=(2, 0))
 
         self._notebook.select(chart_tab)
 
@@ -243,7 +240,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._chart_hint_var.set("目前沒有可顯示的 K 線圖。")
             return
 
-        if FigureCanvasTkAgg is None or NavigationToolbar2Tk is None:
+        if FigureCanvasTkAgg is None:
             self._clear_embedded_chart()
             self._chart_hint_var.set("環境缺少 matplotlib Tk backend，無法在 GUI 內嵌顯示；可改開啟 HTML K 線圖。")
             return
@@ -263,30 +260,24 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._chart_placeholder.pack_forget()
 
         canvas = FigureCanvasTkAgg(figure, master=self._chart_canvas_host)
+        bind_matplotlib_chart_navigation(figure, canvas)
         canvas.draw()
         canvas_widget = canvas.get_tk_widget()
         canvas_widget.pack(fill="both", expand=True)
 
-        toolbar = NavigationToolbar2Tk(canvas, self._chart_toolbar_host, pack_toolbar=False)
-        toolbar.update()
-        toolbar.pack(fill="x")
-
         self._chart_canvas = canvas
-        self._chart_toolbar = toolbar
         self._chart_figure = figure
+        self._notebook.select(0)
         if self._show_volume_var.get():
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前顯示成交量，縮放時價量座標會依可視範圍自動重算。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前顯示成交量。滑鼠滾輪可直接縮放，按住左鍵可直接平移時間軸。")
         else:
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前隱藏成交量以保留大圖版面，縮放時價格座標會依可視範圍自動重算。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前隱藏成交量以保留大圖版面。滑鼠滾輪可直接縮放，按住左鍵可直接平移時間軸。")
 
     def _clear_embedded_chart(self):
         if self._chart_canvas is not None:
             widget = self._chart_canvas.get_tk_widget()
             widget.destroy()
             self._chart_canvas = None
-        if self._chart_toolbar is not None:
-            self._chart_toolbar.destroy()
-            self._chart_toolbar = None
         if self._chart_figure is not None:
             self._chart_figure.clear()
             self._chart_figure = None
