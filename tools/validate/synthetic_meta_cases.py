@@ -40,6 +40,7 @@ from tools.local_regression.meta_quality_targets import (
     ENTRY_PATH_CRITICAL_COVERAGE_TARGETS,
     FORMAL_STEP_ENTRY_COVERAGE_TARGETS,
     FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS,
+    POLICY_CONTRACT_COVERAGE_TARGETS,
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 
@@ -911,6 +912,71 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     return results, summary
 
 
+
+
+
+def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
+    case_id = "META_POLICY_CONTRACT_MODULES_IN_COVERAGE_TARGETS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    expected_targets = list(POLICY_CONTRACT_COVERAGE_TARGETS)
+    declared_targets = list(COVERAGE_TARGETS)
+    missing_targets = sorted(path for path in expected_targets if path not in declared_targets)
+    missing_files = sorted(path for path in expected_targets if not (PROJECT_ROOT / path).is_file())
+
+    module_symbol_expectations = {
+        "core.capital_policy": {
+            "resolve_single_backtest_sizing_capital",
+            "resolve_portfolio_sizing_equity",
+            "resolve_portfolio_entry_budget",
+            "resolve_scanner_live_capital",
+        },
+        "core.strategy_params": {
+            "V16StrategyParams",
+            "validate_strategy_param_ranges",
+            "normalize_runtime_param_value",
+        },
+        "core.params_io": {
+            "build_params_from_mapping",
+            "load_params_from_json",
+            "params_to_json_dict",
+        },
+        "config.execution_policy": {
+            "EXECUTION_POLICY_PARAM_SPECS",
+            "RUNTIME_PARAM_SPECS",
+            "build_execution_policy_snapshot",
+        },
+        "config.training_policy": {
+            "SELECTION_POLICY_PARAM_SPECS",
+            "build_training_threshold_snapshot",
+            "build_training_score_policy_snapshot",
+        },
+    }
+    module_import_failures = []
+    module_symbol_failures = []
+    reloaded_modules = []
+    for module_name, expected_symbols in module_symbol_expectations.items():
+        try:
+            module = importlib.import_module(module_name)
+            module = importlib.reload(module)
+        except Exception as exc:
+            module_import_failures.append(f"{module_name}: {type(exc).__name__}: {exc}")
+            continue
+        missing_symbols = sorted(symbol for symbol in expected_symbols if not hasattr(module, symbol))
+        if missing_symbols:
+            module_symbol_failures.append(f"{module_name}: {missing_symbols}")
+        reloaded_modules.append(module_name)
+
+    add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_exist", [], missing_files)
+    add_check(results, "meta_coverage", case_id, "policy_contract_coverage_targets_declared", [], missing_targets)
+    add_check(results, "meta_coverage", case_id, "policy_contract_modules_importable_for_coverage_probe", [], module_import_failures)
+    add_check(results, "meta_coverage", case_id, "policy_contract_modules_expose_expected_symbols", [], module_symbol_failures)
+
+    summary["expected_target_count"] = len(expected_targets)
+    summary["missing_targets"] = missing_targets
+    summary["reloaded_modules"] = reloaded_modules
+    return results, summary
 
 
 def validate_peak_traced_memory_tracker_context_management_case(_base_params):

@@ -38,6 +38,13 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "core/test_suite_reporting.py",
     "apps/test_suite.py",
 ]
+POLICY_CONTRACT_COVERAGE_TARGETS = [
+    "core/capital_policy.py",
+    "core/strategy_params.py",
+    "core/params_io.py",
+    "config/execution_policy.py",
+    "config/training_policy.py",
+]
 FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
     "tools/local_regression/run_quick_gate.py",
     "tools/validate/cli.py",
@@ -75,6 +82,7 @@ COVERAGE_TARGETS = list(dict.fromkeys([
     "core/history_filters.py",
     "core/portfolio_stats.py",
     *CORE_TRADING_COVERAGE_TARGETS,
+    *POLICY_CONTRACT_COVERAGE_TARGETS,
 ]))
 COVERAGE_LINE_MIN_FLOOR = 55.0
 COVERAGE_BRANCH_MIN_FLOOR = 50.0
@@ -87,6 +95,7 @@ __all__ = [
     "ENTRY_PATH_CRITICAL_COVERAGE_TARGETS",
     "CRITICAL_COVERAGE_TARGETS",
     "TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS",
+    "POLICY_CONTRACT_COVERAGE_TARGETS",
     "FORMAL_STEP_ENTRY_COVERAGE_TARGETS",
     "FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS",
     "COVERAGE_TARGETS",
