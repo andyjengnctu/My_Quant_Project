@@ -31,6 +31,7 @@ from tools.scanner.stock_processor import build_scanner_response_from_stats
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
 from .synthetic_frame_utils import write_synthetic_csv_bundle
+from . import module_loader as module_loader_module
 from .module_loader import build_project_absolute_path, normalize_project_relative_path
 from .tool_adapters import (
     run_debug_trade_log_check,
@@ -1739,6 +1740,21 @@ def validate_module_path_normalizer_accepts_path_objects_case(_base_params):
     add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_gui", "apps/gui.py", normalize_project_relative_path(gui_path))
     return results, summary
 
+
+
+def validate_module_loader_project_root_string_patch_case(_base_params):
+    case_id = "OUTPUT_TOOL_MODULE_LOADER_PROJECT_ROOT_STRING_PATCH"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="v16_module_loader_root_patch_") as tmp_dir:
+        runtime_root = Path(tmp_dir)
+        with patch.object(module_loader_module, "PROJECT_ROOT", str(runtime_root)):
+            patched_abs_path = module_loader_module.build_project_absolute_path("tools", "debug", "trade_log.py")
+            add_check(results, "output_contract", case_id, "build_project_absolute_path_accepts_string_project_root", str(runtime_root / "tools" / "debug" / "trade_log.py"), str(patched_abs_path))
+            add_check(results, "output_contract", case_id, "normalize_module_path_under_string_project_root", "tools/debug/trade_log.py", module_loader_module.normalize_project_relative_path(patched_abs_path))
+            add_check(results, "output_contract", case_id, "normalize_absolute_string_path_under_string_project_root", "tools/debug/trade_log.py", module_loader_module.normalize_project_relative_path(str(runtime_root / "tools" / "debug" / "trade_log.py")))
+    return results, summary
 
 def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
     case_id = "META_QUALITY_REUSE_COVERAGE_ARTIFACTS"

@@ -138,6 +138,7 @@
 | B67 | P1 | GUI | 單股 debug chart hooks 在 `export_chart=False` 時必須完全 no-op；`chart_context=None` 不得造成 runtime side effect 或中斷單股 / chain / synthetic suite | DONE | 已補 direct contract，直接釘死 `run_debug_backtest()` 走無圖模式時仍必須正常產生交易明細；chart marker / active level hooks 必須接受 `chart_context=None` | `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B68 | P1 | 契約 | validation / tool-check payload 的 `module_path` 必須統一為 repo-relative、forward-slash 穩定路徑；不得回傳機器相依絕對路徑 | DONE | 已補 direct contract 與 shared normalizer，直接釘死 absolute / backslash path 都必須正規化為穩定 repo-relative path，避免 bundle 與 synthetic 在不同 OS/工作目錄出現假失敗 | `tools/validate/module_loader.py`, `tools/validate/synthetic_contract_cases.py` |
 | B69 | P1 | 契約 | shared path normalizer 必須接受 `pathlib.Path` 等 path-like 輸入；不得假設 `PROJECT_ROOT` 或 path payload 一定是 str 才能正規化 | DONE | 已補 direct contract，直接釘死 `normalize_project_relative_path()` 對 `Path` 輸入也必須穩定回傳 repo-relative、forward-slash 路徑，避免 synthetic / local regression helper 再因字串 API 假設發生 runtime regression | `tools/validate/module_loader.py`, `tools/validate/synthetic_contract_cases.py` |
+| B70 | P1 | 契約 | shared module-loader path helpers 必須接受被 patch 成字串的 `PROJECT_ROOT`；不得假設 module-level root 永遠是 `Path`，否則 synthetic / error-path 測試環境會產生 helper 自身回歸 | DONE | 已補 direct contract，直接釘死 `build_project_absolute_path()` 與 `normalize_project_relative_path()` 在 `PROJECT_ROOT` 被 patch 成字串時仍必須正常組路徑並回傳穩定 repo-relative path，避免 shared helper 與既有 `patch.object(module_loader, "PROJECT_ROOT", str(...))` 測試環境互撞 | `tools/validate/module_loader.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -328,6 +329,7 @@
 | T146 | `validate_debug_trade_log_chart_context_optional_case` | B67 |
 | T147 | `validate_tool_module_path_normalization_case` | B68 |
 | T148 | `validate_module_path_normalizer_accepts_path_objects_case` | B69 |
+| T149 | `validate_module_loader_project_root_string_patch_case` | B70 |
 
 ## G. 逐項收斂紀錄
 
@@ -563,6 +565,7 @@
 | 2026-04-05 | B67 | 修正單股 debug chart hooks 在無圖模式仍存取 `chart_context` 的 runtime regression，並補 no-op contract 後收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B68 | 新增 module_path repo-relative normalization contract，並以 shared normalizer 收斂跨 OS 路徑穩定性 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B69 | 新增 path-like module path normalization contract，釘死 `Path` 輸入也必須維持穩定 repo-relative 輸出 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B70 | 補 shared module-loader path helper 在 `PROJECT_ROOT` 被 patch 成字串時的相容 contract，避免 synthetic error-path 測試環境再次觸發 helper 自身回歸 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -591,3 +594,4 @@
 | 2026-04-05 | T146 | 新增 debug chart hooks 無圖 no-op contract 並驗證 | NEW -> DONE | `validate_debug_trade_log_chart_context_optional_case` |
 | 2026-04-05 | T147 | 新增 module_path repo-relative normalization contract 並驗證 | NEW -> DONE | `validate_tool_module_path_normalization_case` |
 | 2026-04-05 | T148 | 新增 path-like module path normalization contract 並驗證 | NEW -> DONE | `validate_module_path_normalizer_accepts_path_objects_case` |
+| 2026-04-05 | T149 | 新增 `PROJECT_ROOT` string-patch 相容 contract 並驗證 | NEW -> DONE | `validate_module_loader_project_root_string_patch_case` |

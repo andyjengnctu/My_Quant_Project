@@ -12,8 +12,13 @@ def _normalize_path_separators(path):
     return str(path or '').strip().replace("\\", "/")
 
 
+def get_project_root_path():
+    root = PROJECT_ROOT
+    return root if isinstance(root, Path) else Path(str(root))
+
+
 def build_project_absolute_path(*parts):
-    return PROJECT_ROOT.joinpath(*parts)
+    return get_project_root_path().joinpath(*parts)
 
 
 def normalize_project_relative_path(path):
@@ -22,7 +27,7 @@ def normalize_project_relative_path(path):
         return ''
 
     normalized = _normalize_path_separators(raw_path)
-    project_root_norm = _normalize_path_separators(PROJECT_ROOT)
+    project_root_norm = _normalize_path_separators(get_project_root_path())
 
     if normalized.startswith(project_root_norm + '/'):
         return normalized[len(project_root_norm) + 1 :]
