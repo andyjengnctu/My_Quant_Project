@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pandas as pd
 from openpyxl import load_workbook
 
+from core import log_utils as log_utils_module
 from core.output_retention import RetentionRule, apply_retention_rules
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
@@ -375,6 +376,32 @@ def validate_quick_gate_output_path_guard_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
+    with tempfile.TemporaryDirectory(prefix="quick_gate_log_utils_contract_") as log_tmp_dir:
+        project_root = Path(log_tmp_dir)
+        outputs_root = project_root / "outputs"
+        outputs_root.mkdir(parents=True, exist_ok=True)
+        with patch.object(log_utils_module, "PROJECT_ROOT", str(project_root.resolve())), \
+             patch.object(log_utils_module, "PROJECT_ROOT_PATH", project_root.resolve()), \
+             patch.object(log_utils_module, "OUTPUTS_ROOT_PATH", outputs_root.resolve()):
+            invalid_log_dir_cases = [
+                ("resolve_log_dir_outputs_root_rejected", lambda: log_utils_module.resolve_log_dir("outputs")),
+                ("build_timestamped_log_path_outputs_root_rejected", lambda: log_utils_module.build_timestamped_log_path("scanner_issues", log_dir="outputs", timestamp="20260405_123000")),
+                ("write_issue_log_outputs_root_rejected", lambda: log_utils_module.write_issue_log("scanner_issues", ["probe"], log_dir="outputs", timestamp="20260405_123000")),
+            ]
+            for metric_name, probe in invalid_log_dir_cases:
+                try:
+                    probe()
+                    ok = False
+                    actual = "未拒絕 outputs/ 根目錄"
+                except ValueError as exc:
+                    ok = "outputs/ 根目錄" in str(exc)
+                    actual = str(exc)
+                except Exception as exc:
+                    ok = False
+                    actual = f"{type(exc).__name__}: {exc}"
+                add_check(results, "output_contract", case_id, metric_name, True, ok)
+                summary[metric_name] = actual
+
     staging_root = run_quick_gate_module.PROJECT_ROOT / "outputs" / "local_regression" / "_staging"
     staging_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="quick_gate_output_path_contract_", dir=str(staging_root)) as temp_dir:
@@ -386,7 +413,10 @@ def validate_quick_gate_output_path_guard_contract_case(_base_params):
         fail_run_dir.mkdir(parents=True, exist_ok=True)
 
         def _run_probe(run_dir: Path, *, outputs_ok: bool):
-            with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=run_dir),                  patch.object(run_quick_gate_module, "load_manifest", return_value=manifest),                  patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 10}),                  patch.object(run_quick_gate_module, "run_static_checks", return_value=[]),                  patch.object(run_quick_gate_module, "check_output_path_contract", return_value=[run_quick_gate_module.summarize_result("output_path_contract::valid_category_resolves_under_outputs", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_outputs_root_layout", return_value=[run_quick_gate_module.summarize_result("outputs_root_layout::root_has_only_category_dirs", outputs_ok, detail="probe")]),                  patch.object(run_quick_gate_module, "check_dataset_profile_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_log_path_contract", return_value=[run_quick_gate_module.summarize_result("log_path_contract::append_issue_log_outputs_root_file_rejected", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_local_regression_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_help", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_generic_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_error_paths", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_runtime_error_paths", return_value=[]),                  patch("builtins.print"):
+            with patch.object(run_quick_gate_module, "resolve_run_dir", return_value=run_dir),                  patch.object(run_quick_gate_module, "load_manifest", return_value=manifest),                  patch.object(run_quick_gate_module, "ensure_reduced_dataset", return_value={"csv_count": 10}),                  patch.object(run_quick_gate_module, "run_static_checks", return_value=[]),                  patch.object(run_quick_gate_module, "check_output_path_contract", return_value=[run_quick_gate_module.summarize_result("output_path_contract::valid_category_resolves_under_outputs", True, detail="probe")]),                  patch.object(run_quick_gate_module, "check_outputs_root_layout", return_value=[run_quick_gate_module.summarize_result("outputs_root_layout::root_has_only_category_dirs", outputs_ok, detail="probe")]),                  patch.object(run_quick_gate_module, "check_dataset_profile_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_log_path_contract", return_value=[
+                      run_quick_gate_module.summarize_result("log_path_contract::append_issue_log_outputs_root_file_rejected", True, detail="probe"),
+                      run_quick_gate_module.summarize_result("log_path_contract::resolve_log_dir_outputs_root_rejected", True, detail="probe"),
+                  ]),                  patch.object(run_quick_gate_module, "check_local_regression_contract", return_value=[]),                  patch.object(run_quick_gate_module, "check_help", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_generic_cli_errors", return_value=[]),                  patch.object(run_quick_gate_module, "check_error_paths", return_value=[]),                  patch.object(run_quick_gate_module, "check_dataset_runtime_error_paths", return_value=[]),                  patch("builtins.print"):
                 rc = run_quick_gate_module.main(["tools/local_regression/run_quick_gate.py"])
             payload = json.loads((run_dir / "quick_gate_summary.json").read_text(encoding="utf-8"))
             return rc, payload
@@ -398,6 +428,7 @@ def validate_quick_gate_output_path_guard_contract_case(_base_params):
         add_check(results, "output_contract", case_id, "quick_gate_main_wires_output_path_contract_guard", True, "output_path_contract::valid_category_resolves_under_outputs" in pass_step_names)
         add_check(results, "output_contract", case_id, "quick_gate_main_wires_outputs_root_layout_guard", True, "outputs_root_layout::root_has_only_category_dirs" in pass_step_names)
         add_check(results, "output_contract", case_id, "quick_gate_main_wires_log_path_contract_guard", True, "log_path_contract::append_issue_log_outputs_root_file_rejected" in pass_step_names)
+        add_check(results, "output_contract", case_id, "quick_gate_main_wires_log_dir_outputs_root_guard", True, "log_path_contract::resolve_log_dir_outputs_root_rejected" in pass_step_names)
         add_check(results, "output_contract", case_id, "quick_gate_output_path_probe_pass_return_code", 0, pass_rc)
         add_check(results, "output_contract", case_id, "quick_gate_output_path_probe_pass_status", "PASS", pass_payload.get("status"))
         add_check(results, "output_contract", case_id, "quick_gate_output_path_probe_fail_return_code", 1, fail_rc)

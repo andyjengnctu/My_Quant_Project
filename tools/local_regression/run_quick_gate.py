@@ -238,6 +238,7 @@ def check_log_path_contract() -> List[Dict[str, Any]]:
         ("log_path_contract::resolve_log_dir_parent_escape_rejected", "../outputs/debug_trade_log", "不可包含 . 或 .."),
         ("log_path_contract::resolve_log_dir_backslash_parent_escape_rejected", r"..\outputs\debug_trade_log", "不可包含 . 或 .."),
         ("log_path_contract::resolve_log_dir_absolute_outside_project_rejected", "/tmp/outside_logs", "必須落在專案目錄內"),
+        ("log_path_contract::resolve_log_dir_outputs_root_rejected", "outputs", "outputs/ 根目錄"),
     ]
 
     for name, log_dir, expected_text in invalid_dir_cases:

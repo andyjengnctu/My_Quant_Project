@@ -1,4 +1,7 @@
 ## Going
+
+training_polocy.py 與strategies/search_space.py都有定義history filters門檻，訓練時以哪個為主?
+
 - 先提升訓練分數
 - 訓練/測試樣本分離
 - overfitting量化驗證工具

@@ -78,7 +78,10 @@ def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only
 
 
 def resolve_log_dir(log_dir=None):
-    return _resolve_project_scoped_path(log_dir, field_name="log_dir", allow_file_name_only=False)
+    resolved_log_dir = _resolve_project_scoped_path(log_dir, field_name="log_dir", allow_file_name_only=False)
+    if Path(resolved_log_dir).resolve(strict=False) == OUTPUTS_ROOT_PATH:
+        raise ValueError("log_dir 不可直接使用 outputs/ 根目錄")
+    return resolved_log_dir
 
 
 def build_timestamped_log_path(prefix, log_dir=None, timestamp=None):
