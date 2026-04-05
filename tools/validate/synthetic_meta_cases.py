@@ -223,6 +223,24 @@ def _read_summary_value(result: dict, key: str, default=None):
     return default
 
 
+def _parsed_module_uses_numpy_alias(parsed_module: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "np"
+        for node in ast.walk(parsed_module)
+    )
+
+
+def _parsed_module_declares_numpy_alias_import(parsed_module: ast.AST) -> bool:
+    for node in getattr(parsed_module, "body", []):
+        if isinstance(node, ast.Import):
+            if any(alias.name == "numpy" and alias.asname == "np" for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "numpy" and any(alias.asname == "np" for alias in node.names):
+                return True
+    return False
+
+
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -904,17 +922,11 @@ def validate_synthetic_case_numpy_alias_import_contract_case(_base_params):
     missing_numpy_alias_import = []
     for source_path in sorted(SYNTHETIC_VALIDATE_DIR.glob("synthetic*_cases.py")):
         source_text = source_path.read_text(encoding="utf-8")
-        if "np." not in source_text:
+        parsed = ast.parse(source_text, filename=str(source_path))
+        if not _parsed_module_uses_numpy_alias(parsed):
             continue
         modules_using_numpy_alias.append(source_path.name)
-        parsed = ast.parse(source_text, filename=str(source_path))
-        has_numpy_alias_import = False
-        for node in parsed.body:
-            if isinstance(node, ast.Import):
-                has_numpy_alias_import = has_numpy_alias_import or any(alias.name == "numpy" and alias.asname == "np" for alias in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                has_numpy_alias_import = has_numpy_alias_import or (node.module == "numpy" and any(alias.name == "numpy" and alias.asname == "np" for alias in node.names))
-        if not has_numpy_alias_import:
+        if not _parsed_module_declares_numpy_alias_import(parsed):
             missing_numpy_alias_import.append(source_path.name)
 
     add_check(results, "meta_contract", case_id, "synthetic_case_numpy_alias_usage_detected", True, bool(modules_using_numpy_alias))
@@ -922,6 +934,56 @@ def validate_synthetic_case_numpy_alias_import_contract_case(_base_params):
 
     summary["modules_using_numpy_alias"] = modules_using_numpy_alias
     summary["missing_numpy_alias_import"] = missing_numpy_alias_import
+    return results, summary
+
+
+def validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CASE_NUMPY_ALIAS_SCAN_IGNORES_STRING_LITERALS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    string_only_source = """
+message = "np. should stay inside string literal"
+def describe():
+    return message
+"""
+    actual_usage_source = """
+import numpy as np
+
+def make_array():
+    return np.array([1, 2, 3])
+"""
+
+    parsed_string_only = ast.parse(string_only_source, filename="string_only_source.py")
+    parsed_actual_usage = ast.parse(actual_usage_source, filename="actual_usage_source.py")
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "numpy_alias_scan_ignores_string_literal_only_source",
+        False,
+        _parsed_module_uses_numpy_alias(parsed_string_only),
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "numpy_alias_scan_detects_actual_ast_usage",
+        True,
+        _parsed_module_uses_numpy_alias(parsed_actual_usage),
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "numpy_alias_scan_detects_numpy_alias_import",
+        True,
+        _parsed_module_declares_numpy_alias_import(parsed_actual_usage),
+    )
+
+    summary["string_literal_only_detected_as_usage"] = _parsed_module_uses_numpy_alias(parsed_string_only)
+    summary["actual_ast_usage_detected"] = _parsed_module_uses_numpy_alias(parsed_actual_usage)
     return results, summary
 
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):

@@ -141,6 +141,7 @@
 | B70 | P1 | 契約 | shared module-loader path helpers 必須接受被 patch 成字串的 `PROJECT_ROOT`；不得假設 module-level root 永遠是 `Path`，否則 synthetic / error-path 測試環境會產生 helper 自身回歸 | DONE | 已補 direct contract，直接釘死 `build_project_absolute_path()` 與 `normalize_project_relative_path()` 在 `PROJECT_ROOT` 被 patch 成字串時仍必須正常組路徑並回傳穩定 repo-relative path，避免 shared helper 與既有 `patch.object(module_loader, "PROJECT_ROOT", str(...))` 測試環境互撞 | `tools/validate/module_loader.py`, `tools/validate/synthetic_contract_cases.py` |
 | B71 | P1 | GUI | GUI 單股回測檢視必須內嵌大型 K 線圖，且初始視窗與縮放後 Y 軸比例都必須依可視 X 範圍自動重算；不得因全歷史資料或離屏極值導致圖形失真 | DONE | 已補 direct contract，直接釘死 workbench panel 必須宣告 inline chart backend、debug backend 必須回傳 chart payload，且 chart helper 的預設視窗與可視區間價量範圍計算必須忽略離屏極值並可建立 2 軸內嵌 figure | `tools/debug/charting.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
 | B72 | P2 | Meta | synthetic validator 若使用 `np.` 等外部 alias，必須顯式宣告對應 import，不得依賴 transitive import 或未定義名稱，避免 coverage / consistency synthetic suite 因 `NameError` 假失敗 | DONE | 已補 static contract，直接掃描 `tools/validate/synthetic*_cases.py` 中使用 `np.` 的模組，釘死必須顯式 `import numpy as np`；並修正 `synthetic_contract_cases.py` 缺失 import 所造成的 coverage synthetic suite runtime regression | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
+| B73 | P2 | Meta | 掃描 synthetic validator alias 使用情形時，必須以 AST 實際語意判定，不得用原始字串搜尋 `"np."` 誤判字串常值、註解或 validator 自述文字為真實 alias 使用，避免 meta validator 自己製造假失敗 | DONE | 已補 direct contract，直接釘死 numpy alias 使用掃描必須忽略僅出現在字串常值中的 `np.`，並仍可正確抓到實際 `np.array(...)` AST 使用；同步把 alias-import validator 改為 AST 判定，避免 `synthetic_meta_cases.py` 因自述字串誤被列為缺 import 模組 | `tools/validate/synthetic_meta_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -334,6 +335,7 @@
 | T149 | `validate_module_loader_project_root_string_patch_case` | B70 |
 | T150 | `validate_gui_embedded_chart_contract_case` | B71 |
 | T151 | `validate_synthetic_case_numpy_alias_import_contract_case` | B72 |
+| T152 | `validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case` | B73 |
 
 ## G. 逐項收斂紀錄
 
@@ -572,6 +574,7 @@
 | 2026-04-05 | B70 | 補 shared module-loader path helper 在 `PROJECT_ROOT` 被 patch 成字串時的相容 contract，避免 synthetic error-path 測試環境再次觸發 helper 自身回歸 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B71 | 新增 GUI 內嵌 K 線圖 viewport / autoscale contract，釘死大型內嵌檢視與可視區間縮放比例 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B72 | 新增 synthetic validator 外部 alias 顯式 import contract，並修正 `synthetic_contract_cases.py` 缺失 `numpy as np` 導致的 coverage synthetic suite 假失敗 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | B73 | 新增 synthetic alias 掃描 AST contract，避免以字串搜尋 `np.` 誤判 validator 自述內容為實際 numpy alias 使用 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -603,3 +606,4 @@
 | 2026-04-05 | T149 | 新增 `PROJECT_ROOT` string-patch 相容 contract 並驗證 | NEW -> DONE | `validate_module_loader_project_root_string_patch_case` |
 | 2026-04-05 | T150 | 新增 GUI 內嵌 K 線圖 viewport / autoscale contract 並驗證 | NEW -> DONE | `validate_gui_embedded_chart_contract_case` |
 | 2026-04-05 | T151 | 新增 synthetic validator 外部 alias 顯式 import contract 並驗證 | NEW -> DONE | `validate_synthetic_case_numpy_alias_import_contract_case` |
+| 2026-04-05 | T152 | 新增 synthetic alias 掃描忽略字串常值 contract 並驗證 | NEW -> DONE | `validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case` |
