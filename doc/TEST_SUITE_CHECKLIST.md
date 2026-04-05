@@ -33,7 +33,7 @@
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 5. 主表狀態為唯一真理來源；同步順序固定為先改主表，再同步 `T` / `G`；若同輪存在未完成缺口，再同步 `E`。任何 `Bxx` / `Txx` / 狀態變更，必須同一次 patch 更新完畢。
 6. 摘要表只保留最小必要欄位：`T` 不重複抄寫完成日期；完成日期與狀態時間軸一律只記於 `G`。
-7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 tracking ID 排序鍵整理：先比字首 namespace（如 `B` 在 `T` 前），再比數字段遞增，最後才比尾碼；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先抽出整個同日區塊、完成區塊內重排、以整段覆寫後再交付；若同日已有任何 `B` / `T` 混排列，禁止只插單列後假設局部正確，必須對整個同日區塊重新排序並逐列核對前後相鄰排序鍵；任何 `G` 列只能寫在 `## G. 逐項收斂紀錄` 表格內，檔案開頭第一個非空行固定為 `# Test Suite 收斂清單`；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列；同一 tracking ID 的 `NEW -> *` 只能出現在該 ID 首次收斂紀錄，且 `G` 中任何 backticked `validate_*` 名稱都必須是目前仍存在的有效 validator；交付前必須再做一次機械核對：確認該日期區塊所有列已依上述排序鍵單調不下降，否則不得交付。
+7. `T` 每列只記一個 `Txx` 與一個測試入口；不得在同列混寫多個 validator 或 script。各摘要表固定依 ID 升冪排序；`G` 僅記錄實際狀態變更，且固定依日期升冪、同日再依 tracking ID 排序鍵整理：先比字首 namespace（如 `B` 在 `T` 前），再比數字段遞增，最後才比尾碼；新增或改寫 `G` 列時，不得直接 append 到當日區塊尾端，必須先抽出整個同日區塊、完成區塊內重排、以整段覆寫後再交付；若同日已有任何 `B` / `T` 混排列，禁止只插單列後假設局部正確，必須對整個同日區塊重新排序並逐列核對前後相鄰排序鍵；若新增列的排序鍵小於當前同日區塊尾列，禁止保留原尾端位置，必須插回正確位置後再檢查前一列 ≤ 當前列 ≤ 後一列；任何 `G` 列只能寫在 `## G. 逐項收斂紀錄` 表格內，檔案開頭第一個非空行固定為 `# Test Suite 收斂清單`；`G` 備註欄最多只能保留一個 code/path/test entry，若同輪涉及多個檔案或測試，僅保留單一代表 entry，其餘改寫為一般文字；純補充說明改寫為表格外文字，不得再寫 `DONE -> DONE`、`PARTIAL -> PARTIAL` 等無狀態變更列；同一 tracking ID 的 `NEW -> *` 只能出現在該 ID 首次收斂紀錄，且 `G` 中任何 backticked `validate_*` 名稱都必須是目前仍存在的有效 validator；交付前必須再做一次機械核對：確認該日期區塊所有列已依上述排序鍵單調不下降，否則不得交付。
 
 ## A. 分層原則
 
@@ -323,7 +323,7 @@
 
 ## G. 逐項收斂紀錄
 
-使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
+使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
 
 | 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
 |---|---|---|---|---|
@@ -525,12 +525,16 @@
 | 2026-04-04 | T132 | 新增 scanner live capital contract 並驗證 | NEW -> DONE | `validate_scanner_live_capital_contract_case` |
 | 2026-04-04 | T133 | 新增 optimizer interrupt export contract 並驗證 | NEW -> DONE | `validate_optimizer_interrupt_export_contract_case` |
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
+| 2026-04-05 | B21 | 檢出 score header 將評分模型與分子混寫在同一括號，主表先改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_display_cases.py` |
+| 2026-04-05 | B21 | 將 score header 改為模型/分子分欄顯示並補契約後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_display_cases.py` |
 | 2026-04-05 | B26 | 檢出 `G` 仍可殘留退役 validator 名稱與重複 `NEW -> *`，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有歷史回寫缺口 |
 | 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
 | 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B26 | 檢出 checklist 摘要表固定升冪排序仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有摘要表排序契約缺口 |
 | 2026-04-05 | B26 | 補上 checklist 摘要表固定升冪排序 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-05 | B26 | 檢出 `G` 同日區塊新增列後未整段重排，造成排序 guard 再次被真實 bundle 擊中，主表改回 PARTIAL | DONE -> PARTIAL | checklist 同日區塊回寫仍有排序失誤 |
+| 2026-04-05 | B26 | 修正 2026-04-05 同日區塊排序並補強前後鄰列核對要求後重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-05 | B43 | 依新規格調整 package_zip：root bundle 不得移入 arch，主表先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
 | 2026-04-05 | B43 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-05 | B45 | 檢出 `write_issue_log` / `build_timestamped_log_path` 仍可接受 outputs 根目錄，主表改回 PARTIAL | DONE -> PARTIAL | log path create-path outputs-root guard 仍有缺口 |
@@ -547,12 +551,16 @@
 | 2026-04-05 | B63 | 新增 synthetic meta summary-value accessor contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B65 | 新增 package_zip commit → zip → test_suite orchestration contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
+| 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
+| 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
 | 2026-04-05 | T116 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂 | PARTIAL -> DONE | `validate_package_zip_runtime_contract_case` |
 | 2026-04-05 | T121 | 檢出 quick_gate log-path contract 尚未覆蓋 outputs-root create path，建議測試先改回 PARTIAL | DONE -> PARTIAL | 尚未釘死拒絕 outputs 根目錄寫入 |
 | 2026-04-05 | T121 | 補上 outputs-root create-path guard 並重新收斂 | PARTIAL -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-05 | T121 | 檢出 outputs-root create-path guard 錯誤語意被 generic root-dir 檢查覆蓋，建議測試先改回 PARTIAL | DONE -> PARTIAL | outputs-root 錯誤語意未命中 |
 | 2026-04-05 | T121 | 修正 outputs-root 專屬拒絕語意後重新收斂 | PARTIAL -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
+| 2026-04-05 | T124 | 檢出 `G` 同日區塊新增列後未整段重排，排序 guard 再次被真實 bundle 擊中 | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
+| 2026-04-05 | T124 | 修正同日區塊排序並補強前後鄰列核對流程後重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
@@ -567,7 +575,3 @@
 | 2026-04-05 | T142 | 新增 synthetic meta summary-value accessor static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` |
 | 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |
 | 2026-04-05 | T144 | 新增 package_zip commit → zip → test_suite orchestration contract 並驗證 | NEW -> DONE | `validate_package_zip_commit_test_suite_orchestration_case` |
-| 2026-04-05 | B21 | 檢出 score header 將評分模型與分子混寫在同一括號，主表先改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_display_cases.py` |
-| 2026-04-05 | B21 | 將 score header 改為模型/分子分欄顯示並補契約後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_display_cases.py` |
-| 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
-| 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
