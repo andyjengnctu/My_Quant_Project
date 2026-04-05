@@ -56,6 +56,8 @@ def _append_marker(marker_list, *, trace_name, current_date, price, hover_text):
 
 
 def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan):
+    if chart_context is None:
+        return
     pos = _resolve_chart_pos(chart_context, current_date)
     if not pd.isna(stop_price):
         chart_context["stop_line"][pos] = float(stop_price)
@@ -64,7 +66,7 @@ def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_h
 
 
 def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_type, status, note=""):
-    if pd.isna(limit_price):
+    if chart_context is None or pd.isna(limit_price):
         return
     trace_name = "限價買進(延續候選)" if entry_type == "extended" else "限價買進"
     status_label = ORDER_STATUS_LABELS.get(status, status)
@@ -86,7 +88,7 @@ def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_t
 
 
 def record_trade_marker(chart_context, *, current_date, action, price, qty, note=""):
-    if pd.isna(price):
+    if chart_context is None or pd.isna(price):
         return
     hover_text = (
         f"{action}<br>日期: {pd.Timestamp(current_date).strftime('%Y-%m-%d')}"

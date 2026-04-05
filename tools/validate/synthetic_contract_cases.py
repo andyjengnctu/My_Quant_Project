@@ -1690,6 +1690,27 @@ def validate_debug_trade_log_prepared_tool_contract_case(base_params):
 
 
 
+def validate_debug_trade_log_chart_context_optional_case(base_params):
+    case_id = "DEBUG_TRADE_LOG_CHART_CONTEXT_OPTIONAL"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+    min_rows_needed = get_required_min_rows(case["params"])
+    clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+
+    result_df, module_path = run_debug_trade_log_check(ticker, clean_df, case["params"])
+    records = _normalize_nan_records(result_df)
+
+    add_check(results, "output_contract", case_id, "debug_chart_context_optional_module_path", "tools/debug/trade_log.py", module_path.replace('\\', '/').split('/mnt/data/')[-1].split('/', 1)[-1] if '/mnt/data/' in module_path.replace('\\', '/') else module_path.replace('\\', '/'))
+    add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_rows", True, bool(records))
+    add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_buy_row", True, any(str(row.get("動作", "")).startswith("買進") for row in records))
+    return results, summary
+
+
+
 def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
     case_id = "META_QUALITY_REUSE_COVERAGE_ARTIFACTS"
     results = []

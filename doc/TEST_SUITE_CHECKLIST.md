@@ -135,6 +135,7 @@
 | B64 | P1 | Meta | checklist 各摘要表（`E1` / `E2` / `E3` / `T`）必須固定依 tracking ID 升冪排序，避免同步表雖內容正確但順序漂移而破壞機械比對 | DONE | 已補 direct checklist contract，直接釘死 `E1` / `E2` / `E3` / `T` 不能只做集合相等；若任何摘要表 row order 逆序，formal guard 必須 fail 並指出對應表名與前後 ID | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B65 | P1 | CLI | `apps/package_zip.py` 必須支援外部參數一鍵執行 commit → zip → test_suite，且 ZIP 檔名必須反映 commit 後 HEAD | DONE | 已補 orchestration contract，直接釘死 `--commit-message` 會先 `git add -A` + `git commit -m ...`、zip 產物必須使用 commit 後 HEAD short sha，且 `--run-test-suite` 必須在打包後才執行 `apps/test_suite.py` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
 | B66 | P1 | GUI | `apps/gui.py` 必須作為單一 GUI 啟用入口，且 workbench panel registry / 單股回測後端 / Excel+HTML artifact 契約必須穩定 | DONE | 已補 GUI workbench contract，直接釘死 `apps/gui.py` 必須對應到 `tools.gui.main`、workbench 必須註冊單股回測檢視 panel，且 debug backend 必須同時產生 `Debug_TradeLog_<ticker>.xlsx` 與 `Debug_TradeChart_<ticker>.html` | `apps/gui.py`, `tools/gui/workbench.py`, `tools/validate/synthetic_contract_cases.py` |
+| B67 | P1 | GUI | 單股 debug chart hooks 在 `export_chart=False` 時必須完全 no-op；`chart_context=None` 不得造成 runtime side effect 或中斷單股 / chain / synthetic suite | DONE | 已補 direct contract，直接釘死 `run_debug_backtest()` 走無圖模式時仍必須正常產生交易明細；chart marker / active level hooks 必須接受 `chart_context=None` | `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -322,6 +323,7 @@
 | T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
 | T144 | `validate_package_zip_commit_test_suite_orchestration_case` | B65 |
 | T145 | `validate_gui_workbench_contract_case` | B66 |
+| T146 | `validate_debug_trade_log_chart_context_optional_case` | B67 |
 
 ## G. 逐項收斂紀錄
 
@@ -554,6 +556,7 @@
 | 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B65 | 新增 package_zip commit → zip → test_suite orchestration contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-05 | B66 | 新增 GUI workbench / debug artifact contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B67 | 修正單股 debug chart hooks 在無圖模式仍存取 `chart_context` 的 runtime regression，並補 no-op contract 後收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -579,3 +582,4 @@
 | 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |
 | 2026-04-05 | T144 | 新增 package_zip commit → zip → test_suite orchestration contract 並驗證 | NEW -> DONE | `validate_package_zip_commit_test_suite_orchestration_case` |
 | 2026-04-05 | T145 | 新增 GUI workbench / debug artifact contract 並驗證 | NEW -> DONE | `validate_gui_workbench_contract_case` |
+| 2026-04-05 | T146 | 新增 debug chart hooks 無圖 no-op contract 並驗證 | NEW -> DONE | `validate_debug_trade_log_chart_context_optional_case` |
