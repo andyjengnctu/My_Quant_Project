@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import webbrowser
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -158,10 +159,18 @@ class PortfolioBacktestPanel(ttk.Frame):
             yscrollincrement=1,
         )
         self._summary_canvas.grid(row=1, column=0, sticky="nsew")
-        self._summary_body = tk.Frame(self._summary_canvas, bg=SUMMARY_BG, highlightthickness=0, bd=0)
-        self._summary_window_id = self._summary_canvas.create_window((0, 0), window=self._summary_body, anchor="nw")
-        self._summary_body.bind("<Configure>", self._handle_summary_body_configure, add="+")
         self._summary_canvas.bind("<Configure>", self._handle_summary_canvas_configure, add="+")
+        self._summary_fonts = {
+            SUMMARY_FONT: tkfont.Font(font=SUMMARY_FONT),
+            SUMMARY_HEADER_FONT: tkfont.Font(font=SUMMARY_HEADER_FONT),
+        }
+        self._summary_line_spacing = max(
+            self._summary_fonts[SUMMARY_FONT].metrics("linespace"),
+            self._summary_fonts[SUMMARY_HEADER_FONT].metrics("linespace"),
+        ) + 2
+        self._summary_items = []
+        self._summary_content_width = 0
+        self._summary_content_height = 0
         summary_y = ttk.Scrollbar(compare_section, orient="vertical", command=self._summary_canvas.yview, style="Workbench.Vertical.TScrollbar")
         summary_y.grid(row=1, column=1, sticky="ns")
         summary_x = ttk.Scrollbar(compare_section, orient="horizontal", command=self._summary_canvas.xview, style="Workbench.Horizontal.TScrollbar")
@@ -282,21 +291,15 @@ class PortfolioBacktestPanel(ttk.Frame):
         for row in normalized.to_dict("records"):
             tree.insert("", "end", values=[row.get(column, "") for column in columns])
 
-    def _handle_summary_body_configure(self, _event=None):
-        self._sync_summary_canvas_geometry()
-
     def _handle_summary_canvas_configure(self, _event=None):
         self._sync_summary_canvas_geometry()
 
     def _sync_summary_canvas_geometry(self):
-        canvas_width = max(int(self._summary_canvas.winfo_width() or 0) - 2, 0)
-        content_width = int(self._summary_body.winfo_reqwidth() or 0)
-        target_width = max(canvas_width, content_width)
-        if target_width > 0:
-            self._summary_canvas.itemconfigure(self._summary_window_id, width=target_width)
-        bbox = self._summary_canvas.bbox("all")
-        if bbox is not None:
-            self._summary_canvas.configure(scrollregion=bbox)
+        canvas_width = max(int(self._summary_canvas.winfo_width() or 0), 1)
+        canvas_height = max(int(self._summary_canvas.winfo_height() or 0), 1)
+        scroll_width = max(canvas_width, int(self._summary_content_width or 0) + 8)
+        scroll_height = max(canvas_height, int(self._summary_content_height or 0) + 4)
+        self._summary_canvas.configure(scrollregion=(0, 0, scroll_width, scroll_height))
 
     @staticmethod
     def _summary_tag_style(tag):
@@ -313,39 +316,34 @@ class PortfolioBacktestPanel(ttk.Frame):
         return "#f7fbff", SUMMARY_FONT
 
     def _clear_summary_rows(self):
-        for child in self._summary_body.winfo_children():
-            child.destroy()
+        self._summary_canvas.delete("all")
+        self._summary_items = []
+        self._summary_content_width = 0
+        self._summary_content_height = 0
 
     def _append_summary_segments(self, segments):
-        row = tk.Frame(self._summary_body, bg=SUMMARY_BG, highlightthickness=0, bd=0)
-        row.pack(anchor="w", fill="x", padx=8)
+        x = 8
+        y = self._summary_content_height
+        row_height = self._summary_line_spacing
         for text, tag in segments:
+            text = str(text)
             color, font = self._summary_tag_style(tag)
-            tk.Label(
-                row,
-                text=str(text),
-                bg=SUMMARY_BG,
-                fg=color,
+            canvas_item = self._summary_canvas.create_text(
+                x,
+                y,
+                text=text,
+                fill=color,
                 font=font,
-                anchor="w",
-                justify="left",
-                padx=0,
-                pady=0,
-            ).pack(side="left", anchor="w")
+                anchor="nw",
+            )
+            self._summary_items.append(canvas_item)
+            font_obj = self._summary_fonts[font]
+            x += int(font_obj.measure(text))
+        self._summary_content_width = max(self._summary_content_width, x + 8)
+        self._summary_content_height = y + row_height
 
     def _append_summary_plain_line(self, text, tag=SUMMARY_NEUTRAL_TAG):
-        color, font = self._summary_tag_style(tag)
-        tk.Label(
-            self._summary_body,
-            text=str(text),
-            bg=SUMMARY_BG,
-            fg=color,
-            font=font,
-            anchor="w",
-            justify="left",
-            padx=8,
-            pady=0,
-        ).pack(anchor="w", fill="x")
+        self._append_summary_segments([(str(text), tag)])
 
     def _summary_value_tag(self, value, *, item, column):
         text = str(value or "").strip()

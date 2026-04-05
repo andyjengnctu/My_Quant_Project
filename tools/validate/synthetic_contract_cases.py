@@ -2159,9 +2159,10 @@ def validate_gui_portfolio_summary_platform_renderer_contract_case(_base_params)
 
     portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "portfolio_summary_uses_canvas_with_embedded_frame_renderer", True, 'self._summary_canvas = tk.Canvas(' in portfolio_panel_source and 'self._summary_body = tk.Frame(self._summary_canvas' in portfolio_panel_source and 'create_window((0, 0), window=self._summary_body' in portfolio_panel_source)
-    add_check(results, "output_contract", case_id, "portfolio_summary_renders_each_segment_with_labels", True, 'tk.Label(' in portfolio_panel_source and 'def _summary_tag_style(tag):' in portfolio_panel_source and 'def _append_summary_segments(self, segments):' in portfolio_panel_source)
-    add_check(results, "output_contract", case_id, "portfolio_summary_syncs_canvas_scrollregion_to_content", True, 'def _sync_summary_canvas_geometry(self):' in portfolio_panel_source and 'self._summary_canvas.configure(scrollregion=bbox)' in portfolio_panel_source and 'self._summary_canvas.itemconfigure(self._summary_window_id, width=target_width)' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_uses_canvas_native_text_renderer", True, 'self._summary_canvas = tk.Canvas(' in portfolio_panel_source and 'self._summary_canvas.create_text(' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_avoids_embedded_widget_palette_inheritance", True, 'self._summary_body = tk.Frame(self._summary_canvas' not in portfolio_panel_source and 'create_window((0, 0), window=self._summary_body' not in portfolio_panel_source and 'tk.Label(' not in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_measures_text_width_per_segment", True, 'tkinter.font as tkfont' in portfolio_panel_source and 'font_obj.measure(text)' in portfolio_panel_source and 'self._summary_fonts' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_syncs_canvas_scrollregion_to_content", True, 'def _sync_summary_canvas_geometry(self):' in portfolio_panel_source and 'self._summary_canvas.configure(scrollregion=(' in portfolio_panel_source and 'self._summary_content_width' in portfolio_panel_source and 'self._summary_content_height' in portfolio_panel_source)
     return results, summary
 
 
