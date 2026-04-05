@@ -441,6 +441,8 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["summary_box"] = list(normalized.get("summary_box") or [])
     normalized["status_box"] = dict(normalized.get("status_box") or {})
     normalized["future_preview"] = dict(normalized.get("future_preview") or {})
+    normalized["hover_overlay_visible"] = bool(normalized.get("hover_overlay_visible", True))
+    normalized["compact_top_padding"] = bool(normalized.get("compact_top_padding", False))
 
     default_view = dict(normalized.get("default_view") or {})
     if not default_view:
@@ -849,10 +851,13 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     rcParams["axes.unicode_minus"] = False
     if font_family:
         rcParams["font.sans-serif"] = [font_family, *MATPLOTLIB_CJK_FONT_CANDIDATES]
+    hover_overlay_visible = bool(chart_payload.get("hover_overlay_visible", True))
+    compact_top_padding = bool(chart_payload.get("compact_top_padding", False))
     figure = Figure(figsize=MATPLOTLIB_DEBUG_CHART_FIGSIZE, dpi=96, facecolor=MATPLOTLIB_DARK_BG)
     axis_price = figure.add_subplot(1, 1, 1)
     axis_volume = None
-    figure.subplots_adjust(left=0.040, right=0.986, top=0.94, bottom=0.075)
+    top_margin = 0.985 if compact_top_padding and not hover_overlay_visible else 0.94
+    figure.subplots_adjust(left=0.040, right=0.986, top=top_margin, bottom=0.075)
     axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
     axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.12, linewidth=0.68)
     axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
@@ -933,7 +938,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    hover_text_artist = axis_price.text(0.006, 0.996, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
+    hover_text_artist = axis_price.text(0.006, 0.996, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8, visible=hover_overlay_visible)
     hover_text_artist.set_text(_build_hover_text(chart_payload, chart_payload["default_view"]["end_idx"]))
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
     crosshair_hline = axis_price.axhline(y=chart_payload["close"][chart_payload["default_view"]["end_idx"]], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.35, zorder=1)
@@ -1033,6 +1038,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "keyboard_pan_enabled": False,
         "toolbar_required": False,
         "hover_value_display_enabled": True,
+        "hover_overlay_visible": bool(hover_overlay_visible),
         "twse_up_color": MATPLOTLIB_UP_COLOR,
         "twse_down_color": MATPLOTLIB_DOWN_COLOR,
         "summary_box_present": bool(summary_lines),

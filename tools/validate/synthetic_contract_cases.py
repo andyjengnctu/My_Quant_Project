@@ -2110,9 +2110,34 @@ def validate_gui_sidebar_line_values_and_portfolio_progress_contract_case(_base_
     add_check(results, "output_contract", case_id, "single_stock_panel_declares_colored_line_value_labels", True, '_tp_value_label' in inspector_source and '_limit_value_label' in inspector_source and '_entry_value_label' in inspector_source and '_stop_value_label' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_hides_line_legend_from_left_top", False, 'axis_price.legend(' in charting_source)
     add_check(results, "output_contract", case_id, "charting_syncs_volume_xlim_during_mouse_pan", True, 'axis_volume.set_xlim(next_left, next_right, emit=False)' in charting_source)
-    add_check(results, "output_contract", case_id, "portfolio_panel_declares_chart_console_yearly_tabs", True, 'text="交易明細"' in portfolio_panel_source and 'text="年度報酬"' in portfolio_panel_source and 'text="Console"' in portfolio_panel_source)
-    add_check(results, "output_contract", case_id, "portfolio_panel_captures_runtime_progress_into_gui_console", True, 'redirect_stdout(self._console_writer)' in portfolio_panel_source and 'redirect_stderr(self._console_writer)' in portfolio_panel_source and 'self._progress.start(' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_declares_chart_console_yearly_tabs", True, 'text="交易明細"' in portfolio_panel_source and 'text="年度報酬%"' in portfolio_panel_source and 'text="Console"' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_captures_runtime_progress_into_gui_console", True, 'redirect_stdout(self._console_writer)' in portfolio_panel_source and 'redirect_stderr(self._console_writer)' in portfolio_panel_source and 'progress_callback=self._report_progress' in portfolio_panel_source)
     return results, summary
+
+
+def validate_gui_compact_header_and_portfolio_summary_contract_case(_base_params):
+    case_id = "GUI_COMPACT_HEADER_AND_PORTFOLIO_SUMMARY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
+    strategy_dashboard_source = build_project_absolute_path("core", "strategy_dashboard.py").read_text(encoding="utf-8")
+    simulation_runner_source = build_project_absolute_path("tools", "portfolio_sim", "simulation_runner.py").read_text(encoding="utf-8")
+    portfolio_engine_source = build_project_absolute_path("core", "portfolio_engine.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_gui_disables_chart_hover_overlay", True, 'chart_payload["hover_overlay_visible"] = False' in inspector_source and 'chart_payload["compact_top_padding"] = True' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_gui_moves_ohlcv_to_right_sidebar", True, '_selected_ohlcv_var' in inspector_source and 'volume_text =' in inspector_source)
+    add_check(results, "output_contract", case_id, "chart_helper_supports_compact_header_contract", True, 'normalized["hover_overlay_visible"]' in charting_source and 'compact_top_padding' in charting_source and 'top_margin = 0.985' in charting_source)
+    add_check(results, "output_contract", case_id, "portfolio_gui_declares_summary_yearly_trade_console_tabs", True, 'text="結果彙整"' in portfolio_panel_source and 'text="年度報酬%"' in portfolio_panel_source and 'text="交易明細"' in portfolio_panel_source and 'text="Console"' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_gui_uses_real_progress_callback", True, 'mode="determinate"' in portfolio_panel_source and 'progress_callback=self._report_progress' in portfolio_panel_source and 'timeline_progress' in portfolio_engine_source)
+    add_check(results, "output_contract", case_id, "portfolio_gui_uses_shared_dashboard_sections", True, 'build_strategy_dashboard_sections' in portfolio_panel_source and 'def build_strategy_dashboard_sections(' in strategy_dashboard_source)
+    add_check(results, "output_contract", case_id, "portfolio_gui_exposes_hover_time_axis_info", True, '_chart_hover_var' in portfolio_panel_source and '_bind_chart_hover' in portfolio_panel_source and 'motion_notify_event' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_runtime_forwards_load_progress_callbacks", True, 'progress_callback(' in simulation_runner_source and 'progress_callback=progress_callback' in simulation_runner_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []

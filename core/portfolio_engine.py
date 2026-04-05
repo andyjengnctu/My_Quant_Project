@@ -29,7 +29,7 @@ from core.portfolio_ops import (
     try_rotate_weakest_position,
 )
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None):
+def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, progress_callback=None):
     t_portfolio_start = time.perf_counter() if profile_stats is not None else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
@@ -88,6 +88,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             bucket.setdefault("candidate_dates", [])
             bucket.setdefault("orderable_dates", [])
             bucket.setdefault("trade_rows", [])
+
+    total_timeline_days = max(len(sorted_dates) - start_idx, 1)
 
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_stats is not None else None
@@ -215,6 +217,21 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             max_exp = exposure_pct
 
         strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
+
+        if progress_callback is not None:
+            progress_index = i - start_idx + 1
+            if progress_index == 1 or progress_index == total_timeline_days or progress_index % 5 == 0:
+                progress_callback(
+                    "timeline_progress",
+                    {
+                        "stage": "simulate_timeline",
+                        "current": int(progress_index),
+                        "total": int(total_timeline_days),
+                        "date": pd.Timestamp(today).strftime("%Y-%m-%d"),
+                        "equity": float(today_equity),
+                        "exposure_pct": float(exposure_pct),
+                    },
+                )
 
         if benchmark_data and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
             current_bm_px = get_fast_close(benchmark_data, date=today)

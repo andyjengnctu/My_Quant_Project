@@ -54,6 +54,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._sidebar_history_var = tk.StringVar(value="符合歷史績效")
         self._sidebar_summary_var = tk.StringVar(value="-")
         self._selected_date_var = tk.StringVar(value="選取日：-")
+        self._selected_ohlcv_var = tk.StringVar(value="開 -   高 -   低 -   收 -   量 -")
         self._selected_tp_var = tk.StringVar(value="━━ 停利：-")
         self._selected_limit_var = tk.StringVar(value="┄┄ 限價：-")
         self._selected_entry_var = tk.StringVar(value="━━ 成交：-")
@@ -115,30 +116,31 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         sidebar.configure(width=336)
         sidebar.columnconfigure(0, weight=1)
 
-        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#05090e", fg="#ffffff", font=("Microsoft JhengHei", 20, "bold"), padx=10, pady=8, anchor="center")
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#05090e", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=10, pady=8, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#05090e", fg="#ffffff", font=("Microsoft JhengHei", 20, "bold"), padx=10, pady=8, anchor="center")
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#05090e", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=10, pady=8, anchor="center")
         self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 12))
 
-        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=290).grid(row=3, column=0, sticky="ew", pady=(4, 12))
-        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel").grid(row=4, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=5, column=0, sticky="w", pady=(4, 2))
+        tk.Label(sidebar, text="歷史績效表", bg="#05090e", fg="#f7fbff", font=("Microsoft JhengHei", 13, "bold"), anchor="w", justify="left").grid(row=2, column=0, sticky="ew")
+        tk.Label(sidebar, textvariable=self._sidebar_summary_var, bg="#05090e", fg="#f7fbff", font=("Microsoft JhengHei", 12), anchor="nw", justify="left", wraplength=290).grid(row=3, column=0, sticky="ew", pady=(4, 12))
+        tk.Label(sidebar, text="選取日線值", bg="#05090e", fg="#f7fbff", font=("Microsoft JhengHei", 13, "bold"), anchor="w", justify="left").grid(row=4, column=0, sticky="ew")
+        tk.Label(sidebar, textvariable=self._selected_date_var, bg="#05090e", fg="#f7fbff", font=("Microsoft JhengHei", 12), anchor="w", justify="left").grid(row=5, column=0, sticky="w", pady=(4, 2))
+        tk.Label(sidebar, textvariable=self._selected_ohlcv_var, bg="#05090e", fg="#d6dfeb", font=("Consolas", 11, "bold"), anchor="w", justify="left", wraplength=294).grid(row=6, column=0, sticky="ew", pady=(0, 10))
 
         line_frame = tk.Frame(sidebar, bg="#05090e", highlightthickness=0, bd=0)
-        line_frame.grid(row=6, column=0, sticky="ew")
+        line_frame.grid(row=7, column=0, sticky="ew")
         line_frame.columnconfigure(0, weight=1)
-        self._tp_value_label = tk.Label(line_frame, textvariable=self._selected_tp_var, bg="#05090e", fg="#22c55e", font=("Consolas", 14, "bold"), anchor="w", justify="left")
+        self._tp_value_label = tk.Label(line_frame, textvariable=self._selected_tp_var, bg="#05090e", fg="#22c55e", font=("Consolas", 11, "bold"), anchor="w", justify="left")
         self._tp_value_label.grid(row=0, column=0, sticky="ew")
-        self._limit_value_label = tk.Label(line_frame, textvariable=self._selected_limit_var, bg="#05090e", fg="#4f86ff", font=("Consolas", 14, "bold"), anchor="w", justify="left")
+        self._limit_value_label = tk.Label(line_frame, textvariable=self._selected_limit_var, bg="#05090e", fg="#4f86ff", font=("Consolas", 11, "bold"), anchor="w", justify="left")
         self._limit_value_label.grid(row=1, column=0, sticky="ew")
-        self._entry_value_label = tk.Label(line_frame, textvariable=self._selected_entry_var, bg="#05090e", fg="#2f6df6", font=("Consolas", 14, "bold"), anchor="w", justify="left")
+        self._entry_value_label = tk.Label(line_frame, textvariable=self._selected_entry_var, bg="#05090e", fg="#2f6df6", font=("Consolas", 11, "bold"), anchor="w", justify="left")
         self._entry_value_label.grid(row=2, column=0, sticky="ew")
-        self._stop_value_label = tk.Label(line_frame, textvariable=self._selected_stop_var, bg="#05090e", fg="#ff4d4f", font=("Consolas", 14, "bold"), anchor="w", justify="left")
+        self._stop_value_label = tk.Label(line_frame, textvariable=self._selected_stop_var, bg="#05090e", fg="#ff4d4f", font=("Consolas", 11, "bold"), anchor="w", justify="left")
         self._stop_value_label.grid(row=3, column=0, sticky="ew")
 
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=7, column=0, sticky="ew", pady=(12, 0))
-        sidebar.rowconfigure(8, weight=1)
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=8, column=0, sticky="ew", pady=(12, 0))
+        sidebar.rowconfigure(9, weight=1)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         notebook.add(table_tab, text="交易明細")
@@ -258,12 +260,26 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _update_selected_value_sidebar(self, snapshot):
         if not snapshot:
             self._selected_date_var.set("選取日：-")
+            self._selected_ohlcv_var.set("開 -   高 -   低 -   收 -   量 -")
             self._selected_tp_var.set("━━ 停利：-")
             self._selected_limit_var.set("┄┄ 限價：-")
             self._selected_entry_var.set("━━ 成交：-")
             self._selected_stop_var.set("━━ 停損：-")
             return
         self._selected_date_var.set(f"選取日：{snapshot.get('date_label', '-')}")
+        volume_value = snapshot.get("volume")
+        volume_text = "-" if volume_value is None or pd.isna(volume_value) else f"{float(volume_value) / 1_000_000:.2f}M"
+        self._selected_ohlcv_var.set(
+            "   ".join(
+                [
+                    self._format_sidebar_line_value("開", snapshot.get("open")),
+                    self._format_sidebar_line_value("高", snapshot.get("high")),
+                    self._format_sidebar_line_value("低", snapshot.get("low")),
+                    self._format_sidebar_line_value("收", snapshot.get("close")),
+                    f"量：{volume_text}",
+                ]
+            )
+        )
         self._selected_tp_var.set(self._format_sidebar_line_value("━━ 停利", snapshot.get("tp_price")))
         self._selected_limit_var.set(self._format_sidebar_line_value("┄┄ 限價", snapshot.get("limit_price")))
         self._selected_entry_var.set(self._format_sidebar_line_value("━━ 成交", snapshot.get("entry_price")))
@@ -284,6 +300,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             idx = max(0, min(idx, len(dates) - 1))
             snapshot = {
                 "date_label": dates[idx],
+                "open": chart_payload.get("open", [None])[idx] if len(chart_payload.get("open", [])) > idx else None,
+                "high": chart_payload.get("high", [None])[idx] if len(chart_payload.get("high", [])) > idx else None,
+                "low": chart_payload.get("low", [None])[idx] if len(chart_payload.get("low", [])) > idx else None,
+                "close": chart_payload.get("close", [None])[idx] if len(chart_payload.get("close", [])) > idx else None,
+                "volume": chart_payload.get("volume", [None])[idx] if len(chart_payload.get("volume", [])) > idx else None,
                 "tp_price": chart_payload.get("tp_line", [None])[idx] if len(chart_payload.get("tp_line", [])) > idx else None,
                 "limit_price": chart_payload.get("limit_line", [None])[idx] if len(chart_payload.get("limit_line", [])) > idx else None,
                 "entry_price": chart_payload.get("entry_line", [None])[idx] if len(chart_payload.get("entry_line", [])) > idx else None,
@@ -297,6 +318,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         chart_payload = dict(result.get("chart_payload") or {})
         chart_payload["summary_box"] = []
         chart_payload["status_box"] = {}
+        chart_payload["hover_overlay_visible"] = False
+        chart_payload["compact_top_padding"] = True
         return chart_payload
 
     def _render_trade_table(self, trade_logs_df: pd.DataFrame | None):

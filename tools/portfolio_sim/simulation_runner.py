@@ -14,7 +14,7 @@ from core.portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_a
 from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, ensure_runtime_dirs, is_insufficient_data_error
 
 
-def load_portfolio_market_context(data_dir, params, *, verbose=True):
+def load_portfolio_market_context(data_dir, params, *, verbose=True, progress_callback=None):
     ensure_runtime_dirs()
     if not data_dir:
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
@@ -39,6 +39,18 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     load_issue_lines.extend(duplicate_file_issue_lines)
     total_files = len(csv_inputs)
+
+    if progress_callback is not None:
+        progress_callback(
+            "load_start",
+            {
+                "stage": "load_market",
+                "current": 0,
+                "total": int(total_files),
+                "success": 0,
+                "skipped": 0,
+            },
+        )
 
     for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
         try:
@@ -83,6 +95,17 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
             ) from e
 
         if count % LOAD_PROGRESS_EVERY == 0 or count == total_files:
+            if progress_callback is not None:
+                progress_callback(
+                    "load_progress",
+                    {
+                        "stage": "load_market",
+                        "current": int(count),
+                        "total": int(total_files),
+                        "success": int(len(all_dfs_fast)),
+                        "skipped": int(total_skipped_insufficient),
+                    },
+                )
             vprint(
                 f"{C_GRAY}   預載入進度: [{count}/{total_files}] "
                 f"成功:{len(all_dfs_fast)} | 資料不足:{total_skipped_insufficient}{C_RESET}",
@@ -106,13 +129,35 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
         f"候選清洗 {total_sanitize_issue_tickers} 檔，"
         f"資料不足跳過 {total_skipped_insufficient} 檔。{C_RESET}\n"
     )
+    if progress_callback is not None:
+        progress_callback(
+            "load_finish",
+            {
+                "stage": "load_market",
+                "current": int(total_files),
+                "total": int(total_files),
+                "success": int(len(all_dfs_fast)),
+                "skipped": int(total_skipped_insufficient),
+            },
+        )
     return {"all_dfs_fast": all_dfs_fast, "all_trade_logs": all_trade_logs, "sorted_dates": sorted_dates}
 
 
-def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050", verbose=True):
+def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050", verbose=True, progress_callback=None):
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
     if verbose:
         print(" " * 120, end="\r")
+
+    if progress_callback is not None:
+        progress_callback(
+            "timeline_start",
+            {
+                "stage": "simulate_timeline",
+                "current": 0,
+                "total": max(int(len(sorted_dates)), 1),
+                "benchmark_ticker": str(benchmark_ticker),
+            },
+        )
 
     pf_profile = {}
     result = run_portfolio_timeline(
@@ -128,12 +173,13 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
         is_training=False,
         profile_stats=pf_profile,
         verbose=verbose,
+        progress_callback=progress_callback,
     )
     return (*result, pf_profile)
 
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050", verbose=True):
-    context = load_portfolio_market_context(data_dir, params, verbose=verbose)
+def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=2015, benchmark_ticker="0050", verbose=True, progress_callback=None):
+    context = load_portfolio_market_context(data_dir, params, verbose=verbose, progress_callback=progress_callback)
     return run_portfolio_simulation_prepared(
         context["all_dfs_fast"],
         context["all_trade_logs"],
@@ -144,4 +190,5 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         start_year=start_year,
         benchmark_ticker=benchmark_ticker,
         verbose=verbose,
+        progress_callback=progress_callback,
     )

@@ -162,6 +162,7 @@
 | B91 | P2 | Meta | quick gate 必須在 formal suite 前置靜態攔截 `tools/validate/synthetic_cases.py` 中 imported / locally-defined `validate_*` case 已宣告但漏註冊 `_entry(...)` 的情況；不得等 consistency synthetic registry meta case 才暴露為回歸 | DONE | 已補 quick gate registry-completeness static contract，直接以 AST 比對 imported / defined `validate_*` names 與 `_entry(...)` registry；後續凡新增 `synthetic_contract_cases.py` validator 到 `synthetic_cases.py` import list，同輪必須同步加入 `_entry(...)` 主入口，避免 `validate_gui_portfolio_tab_and_htmlless_contract_case` 這類 GUI validator 再次漏註冊 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
 | B92 | P1 | GUI | GUI 單股頁必須將停利/停損/限價/成交線值整合到右側彩色 sidebar、移除左上重複 legend、價量時間軸在滑鼠拖曳時保持同步；投組頁不得只包 console，必須提供 GUI 進度、內嵌圖表與結果分頁 | DONE | 已補 direct contract，直接釘死單股控制列不得保留 `執行參數` 標題、右側必須宣告彩色線值 label、chart helper 不得再顯示左上 legend 且滑鼠平移時需同步 volume xlim；投組頁必須提供 Progressbar、內嵌 chart、交易明細 / 年度報酬 / Console 分頁，並以 GUI console 承接 runtime 進度輸出 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B93 | P2 | Meta | GUI synthetic validator 不得綁死已移除的 local widget 變數名或過期版面細節；`validate_gui_mouse_navigation_contract_case` 必須只驗 toolbar-free / mouse-binder 等行為契約，不得再把 `_chart_hint_var` 或過期 footer hint metric 視為必要條件 | DONE | 已補 direct meta contract，直接釘死 GUI mouse-navigation validator 不得再引用 `_chart_hint_var` 或 `gui_chart_hint_moved_to_footer` 這類已移除實作細節，避免單純版面重構就讓 consistency / coverage synthetic suite 假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
+| B94 | P1 | GUI | GUI 單股頁必須移除圖面頂部 hover 資訊列並把 OHLCV 移到右側 sidebar、縮減右側資訊字級；投組頁必須提供 `結果彙整 / 年度報酬% / 交易明細 / Console` 分頁、左圖右表 summary 版型、實際進度回報與滑鼠時間軸資訊，且 GUI 對比表需與 console strategy dashboard 共用單一來源 | DONE | 已補 direct contract，直接釘死單股 GUI 必須關閉 chart 內建 hover overlay 並啟用 compact top padding、右側 sidebar 必須顯示 OHLCV；投組 GUI 必須宣告 `結果彙整` 與 `年度報酬%` 分頁、使用 determinate progress + runtime callback、曲線 hover 顯示日期/投組/大盤資訊，且結果表必須改由 shared `build_strategy_dashboard_sections()` 產生，避免 GUI 與 console dashboard 再次分叉 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/portfolio_sim/simulation_runner.py`, `core/portfolio_engine.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -376,6 +377,7 @@
 | T170 | `tools/local_regression/run_quick_gate.py` registry-completeness-static-contract | B91 |
 | T171 | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` | B92 |
 | T172 | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` | B93 |
+| T173 | `validate_gui_compact_header_and_portfolio_summary_contract_case` | B94 |
 
 ## G. 逐項收斂紀錄
 
@@ -685,5 +687,7 @@
 | 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B93 | 新增 GUI mouse-navigation validator anti-overfit contract，釘死 synthetic validator 不得再綁死已移除的 `_chart_hint_var` / footer hint 細節 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-06 | B94 | 新增 GUI compact-header / OHLCV sidebar / portfolio summary-tab real-progress contract，釘死單股圖頂部 hover 列與投組結果頁分頁不得再回退 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
 | 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |
+| 2026-04-06 | T173 | 新增 GUI compact-header / portfolio summary-tab real-progress contract 並驗證 | NEW -> DONE | `validate_gui_compact_header_and_portfolio_summary_contract_case` |
