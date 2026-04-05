@@ -121,6 +121,8 @@ from .synthetic_contract_cases import (
     validate_gui_chart_recent_view_signal_overlay_contract_case,
     validate_gui_chart_overlay_layout_and_pan_contract_case,
     validate_debug_entry_plan_marker_optional_contract_case,
+    validate_gui_scanner_console_and_latest_contract_case,
+    validate_gui_sidebar_latest_preview_contract_case,
     validate_gui_workbench_contract_case,
     validate_tool_module_path_normalization_case,
     validate_module_path_normalizer_accepts_path_objects_case,
