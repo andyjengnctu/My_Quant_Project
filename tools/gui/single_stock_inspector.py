@@ -10,7 +10,14 @@ from tkinter import messagebox, ttk
 import pandas as pd
 
 from core.dataset_profiles import DATASET_PROFILE_REDUCED, DEFAULT_DATASET_PROFILE, get_dataset_profile_label
+from tools.debug.charting import create_matplotlib_debug_chart_figure
 from tools.debug.trade_log import run_debug_ticker_analysis
+
+try:
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+except ImportError:  # pragma: no cover - GUI runtime fallback
+    FigureCanvasTkAgg = None
+    NavigationToolbar2Tk = None
 
 
 DATASET_OPTIONS = (
@@ -38,10 +45,18 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
+        self._chart_hint_var = tk.StringVar(value="請先執行回測；K 線圖會直接顯示在此。")
         self._dataset_var = tk.StringVar(value=DEFAULT_DATASET_PROFILE)
         self._ticker_var = tk.StringVar()
         self._columns = []
+        self._chart_canvas = None
+        self._chart_toolbar = None
+        self._chart_figure = None
         self._build_ui()
+
+    def destroy(self):
+        self._clear_embedded_chart()
+        super().destroy()
 
     def _build_ui(self):
         top = ttk.Frame(self)
@@ -49,7 +64,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         controls = ttk.LabelFrame(top, text="執行參數", padding=10)
         controls.pack(fill="x")
-        controls.columnconfigure(5, weight=1)
+        controls.columnconfigure(8, weight=1)
 
         ttk.Label(controls, text="股票代號").grid(row=0, column=0, sticky="w")
         ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=20)
@@ -77,17 +92,39 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         _sync_dataset()
 
         ttk.Button(controls, text="執行回測", command=self._run_analysis).grid(row=0, column=4, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟 K 線圖", command=self._open_chart).grid(row=0, column=5, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟 HTML K 線圖", command=self._open_chart).grid(row=0, column=5, padx=(0, 8), sticky="w")
         ttk.Button(controls, text="開啟 Excel", command=self._open_excel).grid(row=0, column=6, padx=(0, 8), sticky="w")
         ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir).grid(row=0, column=7, sticky="w")
 
-        ttk.Label(top, textvariable=self._status_var).pack(anchor="w", pady=(8, 0))
+        ttk.Label(top, textvariable=self._status_var).pack(anchor="w", pady=(8, 2))
+        ttk.Label(top, textvariable=self._chart_hint_var).pack(anchor="w")
 
-        body = ttk.Panedwindow(self, orient="horizontal")
+        body = ttk.Panedwindow(self, orient="vertical")
         body.pack(fill="both", expand=True)
 
-        summary_frame = ttk.LabelFrame(body, text="執行摘要", padding=10)
-        body.add(summary_frame, weight=1)
+        chart_frame = ttk.LabelFrame(body, text="K 線交易檢視", padding=8)
+        body.add(chart_frame, weight=5)
+        chart_frame.rowconfigure(1, weight=1)
+        chart_frame.columnconfigure(0, weight=1)
+
+        self._chart_toolbar_host = ttk.Frame(chart_frame)
+        self._chart_toolbar_host.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+
+        self._chart_canvas_host = ttk.Frame(chart_frame)
+        self._chart_canvas_host.grid(row=1, column=0, sticky="nsew")
+        self._chart_placeholder = ttk.Label(
+            self._chart_canvas_host,
+            textvariable=self._chart_hint_var,
+            anchor="center",
+            justify="center",
+        )
+        self._chart_placeholder.pack(fill="both", expand=True)
+
+        lower = ttk.Panedwindow(body, orient="horizontal")
+        body.add(lower, weight=3)
+
+        summary_frame = ttk.LabelFrame(lower, text="執行摘要", padding=10)
+        lower.add(summary_frame, weight=1)
         for row_idx, (key, label) in enumerate(SUMMARY_FIELDS):
             ttk.Label(summary_frame, text=label).grid(row=row_idx, column=0, sticky="nw", pady=2)
             ttk.Label(summary_frame, textvariable=self._summary_vars[key], wraplength=360, justify="left").grid(
@@ -99,8 +136,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
         summary_frame.columnconfigure(1, weight=1)
 
-        table_frame = ttk.LabelFrame(body, text="交易明細", padding=10)
-        body.add(table_frame, weight=3)
+        table_frame = ttk.LabelFrame(lower, text="交易明細", padding=10)
+        lower.add(table_frame, weight=3)
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
 
@@ -120,6 +157,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         dataset_key = self._dataset_var.get().strip() or DEFAULT_DATASET_PROFILE
         self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(dataset_key)}")
+        self._chart_hint_var.set("載入 K 線圖中…")
         self.update_idletasks()
 
         try:
@@ -132,6 +170,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
         except Exception as exc:
             self._status_var.set(f"執行失敗：{type(exc).__name__}: {exc}")
+            self._chart_hint_var.set("執行失敗，無法顯示 K 線圖。")
             messagebox.showerror("股票工具工作台", str(exc))
             return
 
@@ -168,6 +207,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._summary_vars[key].set(value)
 
         self._render_trade_table(trade_logs_df)
+        self._render_embedded_chart(result)
 
     def _render_trade_table(self, trade_logs_df: pd.DataFrame | None):
         self._tree.delete(*self._tree.get_children())
@@ -191,6 +231,57 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         normalized_df = normalized_df.where(pd.notna(normalized_df), "")
         for row in normalized_df.to_dict("records"):
             self._tree.insert("", "end", values=[row.get(column, "") for column in columns])
+
+    def _render_embedded_chart(self, result):
+        chart_payload = result.get("chart_payload")
+        ticker = result.get("ticker", "")
+        if chart_payload is None:
+            self._clear_embedded_chart()
+            self._chart_hint_var.set("目前沒有可顯示的 K 線圖。")
+            return
+
+        if FigureCanvasTkAgg is None or NavigationToolbar2Tk is None:
+            self._clear_embedded_chart()
+            self._chart_hint_var.set("環境缺少 matplotlib Tk backend，無法在 GUI 內嵌顯示；可改開啟 HTML K 線圖。")
+            return
+
+        try:
+            figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker)
+        except Exception as exc:
+            self._clear_embedded_chart()
+            self._chart_hint_var.set(f"K 線圖建立失敗：{type(exc).__name__}: {exc}")
+            return
+
+        self._clear_embedded_chart()
+        self._chart_placeholder.pack_forget()
+
+        canvas = FigureCanvasTkAgg(figure, master=self._chart_canvas_host)
+        canvas.draw()
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill="both", expand=True)
+
+        toolbar = NavigationToolbar2Tk(canvas, self._chart_toolbar_host, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(fill="x")
+
+        self._chart_canvas = canvas
+        self._chart_toolbar = toolbar
+        self._chart_figure = figure
+        self._chart_hint_var.set("K 線圖已內嵌於 GUI；可直接用工具列縮放 / 平移，Y 軸會依可視範圍自動重算。")
+
+    def _clear_embedded_chart(self):
+        if self._chart_canvas is not None:
+            widget = self._chart_canvas.get_tk_widget()
+            widget.destroy()
+            self._chart_canvas = None
+        if self._chart_toolbar is not None:
+            self._chart_toolbar.destroy()
+            self._chart_toolbar = None
+        if self._chart_figure is not None:
+            self._chart_figure.clear()
+            self._chart_figure = None
+        if not self._chart_placeholder.winfo_ismapped():
+            self._chart_placeholder.pack(fill="both", expand=True)
 
     def _open_chart(self):
         self._open_result_path("chart_path")

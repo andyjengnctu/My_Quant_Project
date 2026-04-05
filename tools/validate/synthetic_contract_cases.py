@@ -27,6 +27,7 @@ from tools.validate.reporting import write_issue_excel_report, write_local_regre
 from core.portfolio_fast_data import prep_stock_data_and_trades
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
 from tools.scanner.stock_processor import build_scanner_response_from_stats
+from tools.debug.charting import compute_visible_value_ranges, create_matplotlib_debug_chart_figure
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -1608,6 +1609,70 @@ def validate_scanner_reference_clean_df_contract_case(base_params):
     return results, summary
 
 
+def validate_gui_embedded_chart_contract_case(base_params):
+    case_id = "GUI_EMBEDDED_CHART_VIEWPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    workbench_spec = importlib.import_module("tools.gui").build_workbench_spec()
+    panel_spec = workbench_spec.get("panels", [])[0]
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    ticker = case["primary_ticker"]
+    frame = case["frames"][ticker]
+    min_rows_needed = get_required_min_rows(case["params"])
+    clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
+
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    with tempfile.TemporaryDirectory(prefix="gui_embedded_chart_contract_") as temp_dir:
+        analysis_result = debug_module.run_debug_analysis(
+            clean_df.copy(),
+            ticker,
+            case["params"],
+            export_excel=False,
+            export_chart=True,
+            verbose=False,
+            output_dir=temp_dir,
+        )
+
+    chart_payload = analysis_result.get("chart_payload")
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_payload_exists", True, chart_payload is not None)
+    if chart_payload is None:
+        return results, summary
+
+    default_view = chart_payload.get("default_view", {})
+    start_idx = int(default_view.get("start_idx", 0))
+    end_idx = int(default_view.get("end_idx", 0))
+    focus_positions = [int(pos) for pos in chart_payload.get("focus_positions", [])]
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_default_view_nonempty", True, end_idx >= start_idx)
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_focus_positions_in_view", True, all(start_idx <= pos <= end_idx for pos in focus_positions))
+
+    visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=start_idx, end_idx=end_idx)
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_visible_price_range_valid", True, visible_ranges["price_max"] > visible_ranges["price_min"])
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_visible_volume_range_valid", True, visible_ranges["volume_max"] > visible_ranges["volume_min"])
+
+    outlier_window_start = max(1, len(chart_payload["x"]) - 15)
+    outlier_window_end = len(chart_payload["x"]) - 1
+    base_outlier_ranges = compute_visible_value_ranges(chart_payload, start_idx=outlier_window_start, end_idx=outlier_window_end)
+    outlier_payload = dict(chart_payload)
+    outlier_payload["high"] = np.array(chart_payload["high"], copy=True)
+    outlier_payload["low"] = np.array(chart_payload["low"], copy=True)
+    outlier_payload["high"][0] = outlier_payload["high"][0] + 100000.0
+    outlier_payload["low"][0] = max(0.0, outlier_payload["low"][0] - 100000.0)
+    outlier_ranges = compute_visible_value_ranges(outlier_payload, start_idx=outlier_window_start, end_idx=outlier_window_end)
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_offscreen_outlier_ignored", base_outlier_ranges["price_max"], outlier_ranges["price_max"])
+
+    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker)
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count", 2, len(figure.axes))
+    price_xlim = tuple(int(round(value)) for value in figure.axes[0].get_xlim())
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_initial_xlim", (start_idx - 1, end_idx + 1), price_xlim)
+    figure.clear()
+
+    summary["default_view"] = {"start_idx": start_idx, "end_idx": end_idx}
+    return results, summary
+
+
 def validate_gui_workbench_contract_case(base_params):
     case_id = "GUI_WORKBENCH_CONTRACT"
     results = []
@@ -1629,6 +1694,7 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
         add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.debug.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path", "chart_path"], panel_spec.get("artifact_keys"))
+        add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
 
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):
@@ -1660,6 +1726,7 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_backend_trade_logs_payload", _normalize_nan_records(legacy_df), _normalize_nan_records(analysis_result["trade_logs_df"]))
         add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_exists", True, chart_exists)
         add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_exists", True, excel_exists)
+        add_check(results, "output_contract", case_id, "gui_backend_chart_payload_exists", True, analysis_result.get("chart_payload") is not None)
         add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_name", f"Debug_TradeChart_{ticker}.html", os.path.basename(analysis_result["chart_path"]))
         add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_name", f"Debug_TradeLog_{ticker}.xlsx", os.path.basename(analysis_result["excel_path"]))
 

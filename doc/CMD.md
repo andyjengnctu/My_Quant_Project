@@ -70,7 +70,7 @@ python apps/smart_downloader.py
 python tools/debug/trade_log.py
 ```
 
-`tools/debug/trade_log.py` 為 debug 正式入口；`tools/debug/backtest.py` 只保留主控 façade，進場流程在 `tools/debug/entry_flow.py`，出場 / 錯失賣出 / 期末結算在 `tools/debug/exit_flow.py`，明細列建構 helper 在 `tools/debug/log_rows.py`，K 線視覺化在 `tools/debug/charting.py`，輸出摘要在 `tools/debug/reporting.py`。
+`tools/debug/trade_log.py` 為 debug 正式入口；`tools/debug/backtest.py` 只保留主控 façade，進場流程在 `tools/debug/entry_flow.py`，出場 / 錯失賣出 / 期末結算在 `tools/debug/exit_flow.py`，明細列建構 helper 在 `tools/debug/log_rows.py`，K 線 payload / HTML 輸出 / GUI 內嵌 matplotlib figure 在 `tools/debug/charting.py`，輸出摘要在 `tools/debug/reporting.py`。
 
 ## GUI 工作台
 
@@ -78,7 +78,7 @@ python tools/debug/trade_log.py
 python apps/gui.py
 ```
 
-`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤，會呼叫 `tools/debug/trade_log.py` 產生 Excel 與 HTML K 線檢視。
+`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤，會直接在 GUI 內嵌大型 K 線圖，並保留 Excel 與 HTML artifact 輸出。
 
 
 # portfolio engine 架構

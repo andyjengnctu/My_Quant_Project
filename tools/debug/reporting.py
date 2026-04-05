@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from tools.debug.charting import export_debug_chart_html
+from tools.debug.charting import build_debug_chart_payload, export_debug_chart_html
 
 
 def _emit_loss_summary(df_logs, colors):
@@ -43,6 +43,7 @@ def finalize_debug_analysis(
             "trade_logs_df": None,
             "excel_path": None,
             "chart_path": None,
+            "chart_payload": None,
         }
 
     df_logs = pd.DataFrame(trade_logs)
@@ -50,6 +51,7 @@ def finalize_debug_analysis(
 
     excel_path = None
     chart_path = None
+    chart_payload = None
     if export_excel or export_chart:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -62,6 +64,7 @@ def finalize_debug_analysis(
     if export_chart:
         if price_df is None or chart_context is None:
             raise ValueError("export_chart=True 時，必須提供 price_df 與 chart_context。")
+        chart_payload = build_debug_chart_payload(price_df, chart_context)
         chart_path = export_debug_chart_html(
             price_df,
             ticker=ticker,
@@ -78,6 +81,7 @@ def finalize_debug_analysis(
         "trade_logs_df": df_logs,
         "excel_path": excel_path,
         "chart_path": chart_path,
+        "chart_payload": chart_payload,
     }
 
 
