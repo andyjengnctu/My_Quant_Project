@@ -31,6 +31,7 @@ from tools.scanner.stock_processor import build_scanner_response_from_stats
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
 from .synthetic_frame_utils import write_synthetic_csv_bundle
+from .module_loader import normalize_project_relative_path
 from .tool_adapters import (
     run_debug_trade_log_check,
     run_portfolio_sim_tool_check,
@@ -1704,11 +1705,26 @@ def validate_debug_trade_log_chart_context_optional_case(base_params):
     result_df, module_path = run_debug_trade_log_check(ticker, clean_df, case["params"])
     records = _normalize_nan_records(result_df)
 
-    add_check(results, "output_contract", case_id, "debug_chart_context_optional_module_path", "tools/debug/trade_log.py", module_path.replace('\\', '/').split('/mnt/data/')[-1].split('/', 1)[-1] if '/mnt/data/' in module_path.replace('\\', '/') else module_path.replace('\\', '/'))
+    add_check(results, "output_contract", case_id, "debug_chart_context_optional_module_path", "tools/debug/trade_log.py", module_path)
     add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_rows", True, bool(records))
     add_check(results, "output_contract", case_id, "debug_chart_context_optional_has_buy_row", True, any(str(row.get("動作", "")).startswith("買進") for row in records))
     return results, summary
 
+
+
+def validate_tool_module_path_normalization_case(_base_params):
+    case_id = "OUTPUT_TOOL_MODULE_PATH_NORMALIZATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_root_forward = local_common.PROJECT_ROOT.replace("\\", "/")
+    abs_debug_path = f"{project_root_forward}/tools/debug/trade_log.py"
+    backslash_debug_path = abs_debug_path.replace("/", "\\")
+
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_absolute", "tools/debug/trade_log.py", normalize_project_relative_path(abs_debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_from_backslash_absolute", "tools/debug/trade_log.py", normalize_project_relative_path(backslash_debug_path))
+    add_check(results, "output_contract", case_id, "normalize_module_path_relative_passthrough", "apps/gui.py", normalize_project_relative_path("apps/gui.py"))
+    return results, summary
 
 
 def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
