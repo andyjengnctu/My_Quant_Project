@@ -123,6 +123,7 @@ from .synthetic_contract_cases import (
     validate_debug_entry_plan_marker_optional_contract_case,
     validate_gui_scanner_console_and_latest_contract_case,
     validate_gui_sidebar_latest_preview_contract_case,
+    validate_gui_portfolio_tab_and_htmlless_contract_case,
     validate_gui_workbench_contract_case,
     validate_tool_module_path_normalization_case,
     validate_module_path_normalizer_accepts_path_objects_case,

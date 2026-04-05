@@ -3,6 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
+from tools.gui.portfolio_backtest_panel import PortfolioBacktestPanel
 from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
@@ -38,10 +39,19 @@ PANEL_SPECS = (
         "panel_id": "single_stock_backtest_inspector",
         "tab_label": "單股回測檢視",
         "backend_runner": "tools.debug.trade_log.run_debug_ticker_analysis",
-        "artifact_keys": ("excel_path", "chart_path"),
+        "artifact_keys": ("excel_path",),
         "inline_chart_backend": "tools.debug.charting.create_matplotlib_debug_chart_figure",
         "default_show_volume": False,
         "panel_factory": SingleStockBacktestInspectorPanel,
+    },
+    {
+        "panel_id": "portfolio_backtest_view",
+        "tab_label": "投組回測檢視",
+        "backend_runner": "apps.portfolio_sim.main",
+        "artifact_keys": ("portfolio_dashboard_html", "portfolio_report_xlsx"),
+        "inline_chart_backend": "",
+        "default_show_volume": False,
+        "panel_factory": PortfolioBacktestPanel,
     },
 )
 

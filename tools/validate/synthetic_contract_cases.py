@@ -1949,7 +1949,7 @@ def validate_gui_chart_workspace_contract_case(_base_params):
 
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, 'ttk.Notebook(self, style="Workbench.TNotebook")' in inspector_source)
-    add_check(results, "output_contract", case_id, "gui_chart_workspace_has_summary_tab", True, 'text="執行摘要"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_removes_summary_tab", False, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_default_volume_hidden", True, 'self._show_volume_var = tk.BooleanVar(value=False)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_toggle_rerenders_chart", True, 'show_volume=bool(self._show_volume_var.get())' in inspector_source)
@@ -2049,6 +2049,7 @@ def validate_gui_scanner_console_and_latest_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "gui_panel_exposes_candidate_dropdown", True, '_candidate_combo' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_console_tab", True, 'text="Console"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_latest_button", True, 'text="回到最新K線"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_removes_html_button", False, 'text="開啟 HTML K 線圖"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_calls_scanner_runner", True, 'run_daily_scanner(' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_scroll_to_latest_helper", True, 'def scroll_chart_to_latest(' in charting_source)
     add_check(results, "output_contract", case_id, "charting_declares_right_padding_bars", True, 'CHART_RIGHT_PADDING_BARS' in charting_source)
@@ -2069,10 +2070,27 @@ def validate_gui_sidebar_latest_preview_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_enter", True, 'ticker_entry.bind("<Return>"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_candidate_select", True, 'self.after_idle(self._run_analysis)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_declares_right_sidebar_signal_chip", True, '_signal_chip' in inspector_source and '歷史績效表' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_removes_summary_tab", False, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_declares_selected_date_value_block", True, '選取日線值' in inspector_source and '_selected_tp_var' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_future_preview_contract", True, 'future_preview' in charting_source and '_render_future_preview_lines' in charting_source)
     add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source)
     add_check(results, "output_contract", case_id, "backtest_uses_future_preview_for_latest_signal", True, 'set_chart_future_preview(' in backtest_source)
+    return results, summary
+
+
+def validate_gui_portfolio_tab_and_htmlless_contract_case(_base_params):
+    case_id = "GUI_PORTFOLIO_TAB_AND_HTMLLESS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
+    portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_panel_removes_html_button", False, 'text="開啟 HTML K 線圖"' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_panel_removes_summary_tab", False, 'text="執行摘要"' in inspector_source)
+    add_check(results, "output_contract", case_id, "workbench_declares_portfolio_tab", True, '"panel_id": "portfolio_backtest_view"' in workbench_source and '"tab_label": "投組回測檢視"' in workbench_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_uses_portfolio_sim_source", True, 'portfolio_sim.py' in portfolio_panel_source and 'subprocess.run(' in portfolio_panel_source)
     return results, summary
 
 
@@ -2266,14 +2284,18 @@ def validate_gui_workbench_contract_case(base_params):
 
     panel_specs = workbench_spec.get("panels", [])
     panel_ids = [panel.get("panel_id") for panel in panel_specs]
-    add_check(results, "output_contract", case_id, "gui_workbench_panel_ids", ["single_stock_backtest_inspector"], panel_ids)
+    add_check(results, "output_contract", case_id, "gui_workbench_panel_ids", ["single_stock_backtest_inspector", "portfolio_backtest_view"], panel_ids)
     if panel_specs:
         panel_spec = panel_specs[0]
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
         add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.debug.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
-        add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path", "chart_path"], panel_spec.get("artifact_keys"))
+        add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
+    if len(panel_specs) > 1:
+        portfolio_panel_spec = panel_specs[1]
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_tab_label", "投組回測檢視", portfolio_panel_spec.get("tab_label"))
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_backend_runner", "apps.portfolio_sim.main", portfolio_panel_spec.get("backend_runner"))
 
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):

@@ -120,7 +120,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         current_date=signal_date,
         signal_type='buy',
         anchor_price=signal_low,
-        title='買訊',
+        title='買入訊號',
         detail_lines=detail_lines,
     )
 
@@ -147,7 +147,7 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         current_date=signal_date,
         signal_type='sell',
         anchor_price=signal_low,
-        title='賣訊',
+        title='賣出訊號',
         detail_lines=detail_lines,
         meta={'profit_pct': float(signal_trade_pct), 'max_drawdown': float(history_snapshot.get('max_drawdown', 0.0))},
     )
@@ -179,7 +179,7 @@ def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
         primary_signal_line = "無買入訊號"
     status_lines = [
         primary_signal_line,
-        f"歷史績效{'符合' if history_gate_ok else '未達'}",
+        f"{'符合歷史績效' if history_gate_ok else '不符合歷史績效'}",
     ]
     set_chart_status_box(chart_context, status_lines=status_lines, ok=history_gate_ok)
 

@@ -8,6 +8,7 @@ import pandas as pd
 
 CHART_SIGNAL_BOX_ALPHA = 0.44
 CHART_RIGHT_PADDING_BARS = 24
+CHART_LATEST_RIGHT_PADDING_RATIO = 0.22
 CHART_DEFAULT_LOOKBACK_MONTHS = 18
 CHART_DEFAULT_LOOKBACK_FALLBACK_BARS = 380
 CHART_FOCUS_PADDING_BARS = 15
@@ -509,7 +510,7 @@ def _clamp_chart_xlim(left, right, *, total_points, min_visible_bars=MATPLOTLIB_
     min_left = -0.5
     min_width = max(float(min_visible_bars), 4.0)
     width = max(float(right) - float(left), min_width)
-    extra_right_padding = max(float(CHART_RIGHT_PADDING_BARS), width * 0.55)
+    extra_right_padding = max(float(CHART_RIGHT_PADDING_BARS), width * float(CHART_LATEST_RIGHT_PADDING_RATIO))
     max_right = float(total_points) - 0.5 + extra_right_padding
     full_width = max_right - min_left
     width = min(width, full_width)
@@ -593,14 +594,6 @@ def _build_hover_text(chart_payload, index):
         f"收 {snapshot['close']:.2f}",
         f"量 {snapshot['volume'] / 1_000_000:.2f}M",
     ]
-    if snapshot["limit_price"] is not None:
-        parts.append(f"限價 {snapshot['limit_price']:.2f}")
-    if snapshot["entry_price"] is not None:
-        parts.append(f"成交 {snapshot['entry_price']:.2f}")
-    if snapshot["stop_price"] is not None:
-        parts.append(f"停損 {snapshot['stop_price']:.2f}")
-    if snapshot["tp_price"] is not None:
-        parts.append(f"停利 {snapshot['tp_price']:.2f}")
     return "   ".join(parts)
 
 
@@ -686,6 +679,9 @@ def _build_trade_label_text(trace_name, marker):
         expected_value = meta.get("expected_value")
         if expected_value is not None:
             lines.append(f"EV: {float(expected_value):.2f} R")
+        max_drawdown = meta.get("max_drawdown")
+        if max_drawdown is not None:
+            lines.append(f"最大回撤: {float(max_drawdown):.2f}%")
         return "\n".join(lines)
     return trace_name
 
@@ -696,13 +692,13 @@ def _build_status_chip_specs(status_box):
     for line in status_lines:
         if "買訊" in line or "買入訊號" in line or "候選" in line:
             is_active = all(token not in line for token in ("無", "否", "未", "不"))
-            chips.append({"text": "出現買入訊號" if is_active else "無買入訊號", "face": MATPLOTLIB_STATUS_CHIP_BUY_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+            chips.append({"text": "出現買入訊號", "face": MATPLOTLIB_STATUS_CHIP_BUY_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         elif "賣訊" in line:
             is_active = all(token not in line for token in ("無", "否", "未", "不"))
             chips.append({"text": "出現賣出訊號" if is_active else "無賣出訊號", "face": MATPLOTLIB_STATUS_CHIP_SELL_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         elif "歷史績效" in line or "歷績門檻" in line:
             is_ok = any(token in line for token in ("合格", "符合"))
-            chips.append({"text": "歷史績效符合" if is_ok else "歷史績效未達", "face": MATPLOTLIB_STATUS_CHIP_GATE_FACE if is_ok else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+            chips.append({"text": "符合歷史績效", "face": MATPLOTLIB_STATUS_CHIP_GATE_FACE if is_ok else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         else:
             chips.append({"text": line, "face": MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
     return chips[:3]
@@ -922,7 +918,6 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             label=trace_name,
         )
     future_preview_artists = _render_future_preview_lines(axis_price, chart_payload)
-    axis_price.set_title(f"{ticker} 單股回測 K 線交易檢視", fontsize=18, color=MATPLOTLIB_TEXT_COLOR, loc="left", pad=10, fontweight="bold" if title_font is None else None, fontproperties=title_font)
     axis_price.set_ylabel("價格", color=MATPLOTLIB_TEXT_COLOR, fontsize=12 if label_font is None else None, fontproperties=label_font)
     volume_collection = None
     if show_volume and axis_volume is not None:
@@ -1087,7 +1082,7 @@ def scroll_chart_to_latest(figure, *, redraw=True):
     total_points = int(state["total_points"])
     default_view = chart_payload.get("default_view") or {"start_idx": 0, "end_idx": max(0, total_points - 1)}
     window_width = max(float(default_view.get("end_idx", total_points - 1)) - float(default_view.get("start_idx", 0)) + 2.0, float(MATPLOTLIB_MIN_VISIBLE_BARS))
-    target_right = float(total_points) - 0.5 + max(float(CHART_RIGHT_PADDING_BARS), window_width * 0.55)
+    target_right = float(total_points) - 0.5 + max(float(CHART_RIGHT_PADDING_BARS), window_width * float(CHART_LATEST_RIGHT_PADDING_RATIO))
     target_left = target_right - window_width
     next_left, next_right = _clamp_chart_xlim(target_left, target_right, total_points=total_points)
     axis_price.set_xlim(next_left, next_right, emit=False)

@@ -273,3 +273,7 @@ tools/validate/
 
 
 - `tools/validate/synthetic_contract_cases.py` 亦負責 artifact lifecycle contract：bundle、archive、root copy、retention。
+
+
+- `tools/gui/workbench.py`：工作台上層分頁組裝；目前掛載 `SingleStockBacktestInspectorPanel` 與 `PortfolioBacktestPanel`。
+- `tools/gui/portfolio_backtest_panel.py`：GUI 投組回測分頁；以 `apps/portfolio_sim.py` 為來源入口執行投組回測，並顯示 console / 開啟 dashboard 與 report。
