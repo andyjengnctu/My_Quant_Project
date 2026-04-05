@@ -276,8 +276,12 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     allowed_g_from_statuses = STATUS_VALUES | {"NEW"}
     allowed_g_to_statuses = set(STATUS_VALUES)
     invalid_g_transition_rows = []
+    invalid_g_new_transition_rows = []
     no_op_convergence_rows = []
     invalid_g_note_rows = []
+    invalid_g_note_validate_rows = []
+    defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
+    seen_g_ids: Set[str] = set()
     for row in tables["G"]:
         if len(row) < 4:
             continue
@@ -285,11 +289,15 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         transition = row[3].strip()
         if "->" not in transition:
             invalid_g_transition_rows.append({"id": row_id, "transition": transition})
+            seen_g_ids.add(row_id)
             continue
         from_status, to_status = [part.strip() for part in transition.split("->", 1)]
         if (from_status not in allowed_g_from_statuses) or (to_status not in allowed_g_to_statuses):
             invalid_g_transition_rows.append({"id": row_id, "transition": transition})
+            seen_g_ids.add(row_id)
             continue
+        if from_status == "NEW" and row_id in seen_g_ids:
+            invalid_g_new_transition_rows.append({"id": row_id, "transition": transition})
         if from_status == to_status:
             no_op_convergence_rows.append({"id": row_id, "transition": transition})
         note = row[4].strip() if len(row) > 4 else ""
@@ -302,12 +310,30 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
                     "entries": note_entries,
                 }
             )
+        invalid_validate_entries = [entry for entry in note_entries if entry.startswith("validate_") and entry not in defined_validate_names]
+        if invalid_validate_entries:
+            invalid_g_note_validate_rows.append(
+                {
+                    "id": row_id,
+                    "note": note,
+                    "invalid_entries": invalid_validate_entries,
+                }
+            )
+        seen_g_ids.add(row_id)
     results.append(
         summarize_result(
             "checklist_g_rows_have_valid_status_transition",
             not invalid_g_transition_rows,
             detail=f"invalid={invalid_g_transition_rows}",
             extra={"invalid_transition_rows": invalid_g_transition_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_g_new_transition_only_on_first_occurrence",
+            not invalid_g_new_transition_rows,
+            detail=f"invalid={invalid_g_new_transition_rows}",
+            extra={"invalid_new_transition_rows": invalid_g_new_transition_rows},
         )
     )
     results.append(
@@ -324,6 +350,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_g_note_rows,
             detail=f"invalid={invalid_g_note_rows}",
             extra={"invalid_note_rows": invalid_g_note_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_g_note_validate_entries_exist",
+            not invalid_g_note_validate_rows,
+            detail=f"invalid={invalid_g_note_validate_rows}",
+            extra={"invalid_note_validate_rows": invalid_g_note_validate_rows},
         )
     )
 
@@ -456,6 +490,7 @@ def _extract_backticked_paths(text: str) -> List[str]:
 
 from tools.validate.meta_contracts import (
     extract_markdown_table_rows,
+    load_defined_validate_names_from_synthetic_case_modules,
     summarize_single_formal_test_entry_contract,
     summarize_test_suite_registry_contract,
 )

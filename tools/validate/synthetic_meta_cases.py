@@ -648,6 +648,86 @@ def validate_checklist_g_transition_format_case(_base_params):
     return results, summary
 
 
+def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_NEW_TRANSITION_FIRST_OCCURRENCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="B26",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:3] + ["NEW -> DONE"] + cols[4:],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_new_transition_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_new_result = result_by_name.get("checklist_g_new_transition_only_on_first_occurrence", {})
+    invalid_rows = g_new_result.get("invalid_new_transition_rows")
+    if invalid_rows is None:
+        invalid_rows = g_new_result.get("extra", {}).get("invalid_new_transition_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_guard_fails", "FAIL", g_new_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_reports_target_row", True, any(row.get("id") == "B26" for row in invalid_rows))
+
+    summary["guard_status"] = g_new_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
+def validate_checklist_g_note_validate_reference_exists_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_NOTE_VALIDATE_REFERENCE_EXISTS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="T138",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:4] + ["`validate_nonexistent_retired_case`"],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_validate_note_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_note_validate_result = result_by_name.get("checklist_g_note_validate_entries_exist", {})
+    invalid_rows = g_note_validate_result.get("invalid_note_validate_rows")
+    if invalid_rows is None:
+        invalid_rows = g_note_validate_result.get("extra", {}).get("invalid_note_validate_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_guard_fails", "FAIL", g_note_validate_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_reports_target_row", True, any(row.get("id") == "T138" for row in invalid_rows))
+
+    summary["guard_status"] = g_note_validate_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
 def validate_checklist_g_ordering_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
