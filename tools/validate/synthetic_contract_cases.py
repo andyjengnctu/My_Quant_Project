@@ -1949,7 +1949,7 @@ def validate_gui_chart_workspace_contract_case(_base_params):
 
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, 'ttk.Notebook(self, style="Workbench.TNotebook")' in inspector_source)
-    add_check(results, "output_contract", case_id, "gui_chart_workspace_has_summary_tab", True, 'text="執行摘要"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_omits_summary_tab", False, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_default_volume_hidden", True, 'self._show_volume_var = tk.BooleanVar(value=False)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_toggle_rerenders_chart", True, 'show_volume=bool(self._show_volume_var.get())' in inspector_source)
@@ -2069,10 +2069,12 @@ def validate_gui_sidebar_latest_preview_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_enter", True, 'ticker_entry.bind("<Return>"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_candidate_select", True, 'self.after_idle(self._run_analysis)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_declares_right_sidebar_signal_chip", True, '_signal_chip' in inspector_source and '歷史績效表' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_omits_html_button", False, '開啟 HTML K 線圖' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_declares_selected_date_value_block", True, '選取日線值' in inspector_source and '_selected_tp_var' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_future_preview_contract", True, 'future_preview' in charting_source and '_render_future_preview_lines' in charting_source)
-    add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source and 'CHART_RIGHT_PADDING_RATIO' in charting_source)
     add_check(results, "output_contract", case_id, "backtest_uses_future_preview_for_latest_signal", True, 'set_chart_future_preview(' in backtest_source)
+    add_check(results, "output_contract", case_id, "charting_reduces_latest_blank_space_to_about_one_fifth", True, "CHART_RIGHT_PADDING_RATIO = 0.22" in charting_source)
     return results, summary
 
 
@@ -2271,7 +2273,7 @@ def validate_gui_workbench_contract_case(base_params):
         panel_spec = panel_specs[0]
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
         add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.debug.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
-        add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path", "chart_path"], panel_spec.get("artifact_keys"))
+        add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
 
@@ -2296,17 +2298,16 @@ def validate_gui_workbench_contract_case(base_params):
             ticker,
             case["params"],
             export_excel=True,
-            export_chart=True,
+            export_chart=False,
+            return_chart_payload=True,
             verbose=False,
             output_dir=temp_dir,
         )
-        chart_exists = os.path.exists(analysis_result["chart_path"]) if analysis_result.get("chart_path") else False
         excel_exists = os.path.exists(analysis_result["excel_path"]) if analysis_result.get("excel_path") else False
         add_check(results, "output_contract", case_id, "gui_backend_trade_logs_payload", _normalize_nan_records(legacy_df), _normalize_nan_records(analysis_result["trade_logs_df"]))
-        add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_exists", True, chart_exists)
+        add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_omitted", None, analysis_result.get("chart_path"))
         add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_exists", True, excel_exists)
         add_check(results, "output_contract", case_id, "gui_backend_chart_payload_exists", True, analysis_result.get("chart_payload") is not None)
-        add_check(results, "output_contract", case_id, "gui_backend_chart_artifact_name", f"Debug_TradeChart_{ticker}.html", os.path.basename(analysis_result["chart_path"]))
         add_check(results, "output_contract", case_id, "gui_backend_excel_artifact_name", f"Debug_TradeLog_{ticker}.xlsx", os.path.basename(analysis_result["excel_path"]))
 
     summary["workbench_title"] = workbench_spec.get("title")

@@ -179,7 +179,7 @@ def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
         primary_signal_line = "無買入訊號"
     status_lines = [
         primary_signal_line,
-        f"歷史績效{'符合' if history_gate_ok else '未達'}",
+        '符合歷史績效' if history_gate_ok else '未符合歷史績效',
     ]
     set_chart_status_box(chart_context, status_lines=status_lines, ok=history_gate_ok)
 
