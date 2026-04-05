@@ -18,11 +18,11 @@ MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 132
 MATPLOTLIB_VOLUME_ALPHA = 0.42
 MATPLOTLIB_DARK_BG = "#02050a"
-MATPLOTLIB_GRID_COLOR = "#16304a"
+MATPLOTLIB_GRID_COLOR = "#12253a"
 MATPLOTLIB_TEXT_COLOR = "#fbfdff"
 MATPLOTLIB_MUTED_TEXT_COLOR = "#d7e3ef"
-MATPLOTLIB_UP_COLOR = "#ff4d5e"
-MATPLOTLIB_DOWN_COLOR = "#16a34a"
+MATPLOTLIB_UP_COLOR = "#ff5b6e"
+MATPLOTLIB_DOWN_COLOR = "#18b26b"
 MATPLOTLIB_STOP_COLOR = "#ff4d4f"
 MATPLOTLIB_TP_COLOR = "#22c55e"
 MATPLOTLIB_LIMIT_COLOR = "#4f86ff"
@@ -67,8 +67,8 @@ MATPLOTLIB_STATUS_CHIP_GATE_FACE = (0.98, 0.53, 0.10, 0.92)
 MATPLOTLIB_STATUS_CHIP_SELL_FACE = (0.90, 0.25, 0.34, 0.92)
 MATPLOTLIB_STATUS_CHIP_MUTED_FACE = (0.20, 0.27, 0.35, 0.92)
 MATPLOTLIB_BUY_FILL_FACE = (0.08, 0.28, 0.86, 0.38)
-MATPLOTLIB_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, 0.34)
-MATPLOTLIB_SELL_LOSS_FACE = (0.10, 0.60, 0.24, 0.34)
+MATPLOTLIB_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, 0.40)
+MATPLOTLIB_SELL_LOSS_FACE = (0.10, 0.60, 0.24, 0.40)
 MATPLOTLIB_SIGNAL_BUY_FACE = (0.10, 0.46, 0.94, CHART_SIGNAL_BOX_ALPHA)
 MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, CHART_SIGNAL_BOX_ALPHA)
 MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
@@ -651,14 +651,14 @@ def _render_status_chips(axis_price, status_box, label_font):
     chips = _build_status_chip_specs(status_box)
     if not chips:
         return artists
-    x_cursor = 0.015
-    for chip in chips:
+    x_cursor = 0.985
+    for chip in reversed(chips):
         artist = axis_price.text(
             x_cursor,
             0.05,
             chip["text"],
             transform=axis_price.transAxes,
-            ha="left",
+            ha="right",
             va="bottom",
             color=MATPLOTLIB_TEXT_COLOR,
             fontsize=11 if label_font is None else None,
@@ -668,7 +668,7 @@ def _render_status_chips(axis_price, status_box, label_font):
             zorder=7,
         )
         artists.append(artist)
-        x_cursor += 0.12 + len(chip["text"]) * 0.0074
+        x_cursor -= 0.12 + len(chip["text"]) * 0.0074
     return artists
 
 
@@ -707,7 +707,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
                 color=MATPLOTLIB_TEXT_COLOR,
                 fontsize=10 if label_font is None else None,
                 fontproperties=label_font,
-                bbox={"boxstyle": "round,pad=0.42", "fc": face_color, "ec": arrow_color, "alpha": 1.0},
+                bbox={"boxstyle": "round,pad=0.42", "fc": face_color, "ec": arrow_color},
                 arrowprops={"arrowstyle": "-|>", "color": arrow_color, "lw": 1.35, "alpha": 0.96, "mutation_scale": 17},
                 zorder=7,
                 annotation_clip=True,
@@ -724,7 +724,7 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=Non
                 continue
             if end_idx is not None and int(marker["x"]) > int(end_idx):
                 continue
-            if trace_name not in {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}:
+            if trace_name not in {"半倉停利", "停損殺出", "指標賣出", "期末強制結算"}:
                 continue
             face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
             y_offset = -78 if placement == "below" else 16
@@ -773,7 +773,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_volume = None
     figure.subplots_adjust(left=0.040, right=0.986, top=0.94, bottom=0.075)
     axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
-    axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.72, linewidth=0.8)
+    axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.34, linewidth=0.75)
     axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
     axis_price.spines["top"].set_visible(False)
     axis_price.spines["right"].set_visible(False)
@@ -789,6 +789,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         axis_volume.spines["right"].set_color(MATPLOTLIB_GRID_COLOR)
         axis_volume.yaxis.tick_right()
         axis_volume.tick_params(axis="y", colors=MATPLOTLIB_MUTED_TEXT_COLOR, labelsize=9, pad=2)
+        axis_volume.set_navigate(False)
         axis_volume.tick_params(axis="x", labelbottom=False, bottom=False)
         axis_volume.patch.set_alpha(0.0)
         axis_volume.set_zorder(1)
@@ -841,6 +842,10 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     if show_volume and axis_volume is not None:
         volume_colors = np.where(up_mask, MATPLOTLIB_UP_COLOR, MATPLOTLIB_DOWN_COLOR)
         volume_collection = axis_volume.vlines(x_positions, 0.0, chart_payload["volume"], colors=volume_colors, linewidth=2.2, alpha=MATPLOTLIB_VOLUME_ALPHA, zorder=1)
+        try:
+            volume_collection.set_rasterized(True)
+        except Exception:
+            pass
     date_labels = chart_payload["date_labels"]
     def _format_date_label(x_value, _pos):
         rounded = int(round(x_value))
@@ -950,9 +955,12 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "twse_down_color": MATPLOTLIB_DOWN_COLOR,
         "summary_box_present": bool(summary_lines),
         "status_box_present": bool(status_box.get("lines")),
-        "status_chip_layout": "left_bottom",
+        "status_chip_layout": "right_bottom",
         "signal_annotation_count": int(len(chart_payload.get("signal_annotations", []))),
         "dynamic_candle_width_enabled": True,
+        "buy_trade_label_boxes_enabled": False,
+        "mouse_drag_pan_mode": "pixel_anchor",
+        "grid_alpha": 0.34,
     }
     figure._stock_chart_navigation_state = {
         "axis_price": axis_price,
@@ -992,7 +1000,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
     crosshair_vline = state["crosshair_vline"]
     crosshair_hline = state["crosshair_hline"]
     sync_visible_ranges = state["sync_visible_ranges"]
-    drag_state = {"active": False, "anchor_x": None, "orig_xlim": None}
+    drag_state = {"active": False, "anchor_x": None, "anchor_px": None, "orig_xlim": None}
     canvas_widget = canvas.get_tk_widget()
     canvas_widget.configure(cursor="", highlightthickness=0, bd=0, takefocus=1, background=MATPLOTLIB_DARK_BG)
 
@@ -1021,8 +1029,6 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         left, right = axis_price.get_xlim()
         next_left, next_right = _clamp_chart_xlim(left + float(delta_bars), right + float(delta_bars), total_points=total_points)
         axis_price.set_xlim(next_left, next_right, emit=False)
-        if axis_volume is not None:
-            axis_volume.set_xlim(next_left, next_right, emit=False)
         if relayout:
             sync_visible_ranges(force=True, redraw=True)
         elif figure.canvas is not None:
@@ -1043,21 +1049,22 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             return
         drag_state["active"] = True
         drag_state["anchor_x"] = anchor_x
+        drag_state["anchor_px"] = float(getattr(event, "x", 0.0))
         drag_state["orig_xlim"] = axis_price.get_xlim()
         canvas_widget.focus_set()
         canvas_widget.configure(cursor=MATPLOTLIB_PAN_CURSOR)
 
     def _on_motion(event):
         if drag_state["active"]:
-            current_x = _resolve_event_data_x(axis_price, event)
-            if current_x is None:
+            current_px = getattr(event, "x", None)
+            if current_px is None:
                 return
             origin_left, origin_right = drag_state["orig_xlim"]
-            delta = drag_state["anchor_x"] - current_x
+            axis_width_px = max(float(axis_price.bbox.width), 1.0)
+            bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px
+            delta = (float(drag_state["anchor_px"]) - float(current_px)) * bars_per_pixel
             next_left, next_right = _clamp_chart_xlim(origin_left + delta, origin_right + delta, total_points=total_points)
             axis_price.set_xlim(next_left, next_right, emit=False)
-            if axis_volume is not None:
-                axis_volume.set_xlim(next_left, next_right, emit=False)
             if figure.canvas is not None:
                 figure.canvas.draw_idle()
             return
@@ -1067,6 +1074,7 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         if event.button == 1 and drag_state["active"]:
             drag_state["active"] = False
             drag_state["anchor_x"] = None
+            drag_state["anchor_px"] = None
             drag_state["orig_xlim"] = None
             canvas_widget.configure(cursor="")
             sync_visible_ranges(force=True, redraw=True)
@@ -1090,8 +1098,6 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         next_right = next_left + new_width
         next_left, next_right = _clamp_chart_xlim(next_left, next_right, total_points=total_points)
         axis_price.set_xlim(next_left, next_right, emit=False)
-        if axis_volume is not None:
-            axis_volume.set_xlim(next_left, next_right, emit=False)
         sync_visible_ranges(force=True, redraw=True)
         _set_hover_index(int(round(focus_x)), redraw=True)
 

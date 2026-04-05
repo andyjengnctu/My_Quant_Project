@@ -14,7 +14,17 @@ WORKBENCH_SURFACE_ALT = "#0d1626"
 WORKBENCH_BORDER = "#18324a"
 WORKBENCH_TEXT = "#f7fbff"
 WORKBENCH_MUTED = "#d6dfeb"
-WORKBENCH_ACCENT = "#1f9cf0"
+WORKBENCH_FRAME_STYLE = "Workbench.TFrame"
+WORKBENCH_LABELLF_STYLE = "Workbench.TLabelframe"
+WORKBENCH_LABEL_STYLE = "Workbench.TLabel"
+WORKBENCH_BUTTON_STYLE = "Workbench.TButton"
+WORKBENCH_CHECK_STYLE = "Workbench.TCheckbutton"
+WORKBENCH_ENTRY_STYLE = "Workbench.TEntry"
+WORKBENCH_COMBO_STYLE = "Workbench.TCombobox"
+WORKBENCH_NOTEBOOK_STYLE = "Workbench.TNotebook"
+WORKBENCH_TREE_STYLE = "Workbench.Treeview"
+WORKBENCH_VSCROLL_STYLE = "Workbench.Vertical.TScrollbar"
+WORKBENCH_HSCROLL_STYLE = "Workbench.Horizontal.TScrollbar"
 
 
 PANEL_SPECS = (
@@ -59,6 +69,10 @@ def configure_workbench_theme(root):
     except tk.TclError:
         pass
     root.configure(bg=WORKBENCH_BG)
+    try:
+        root.tk_setPalette(background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, activeBackground=WORKBENCH_SURFACE_ALT, activeForeground=WORKBENCH_TEXT, highlightColor=WORKBENCH_ACCENT, selectColor=WORKBENCH_ACCENT, selectBackground=WORKBENCH_ACCENT, selectForeground=WORKBENCH_TEXT)
+    except tk.TclError:
+        pass
     root.option_add("*Background", WORKBENCH_BG)
     root.option_add("*Foreground", WORKBENCH_TEXT)
     root.option_add("*TCombobox*Listbox.background", WORKBENCH_SURFACE)
@@ -67,24 +81,24 @@ def configure_workbench_theme(root):
     root.option_add("*TCombobox*Listbox.selectForeground", WORKBENCH_TEXT)
 
     style.configure(".", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, fieldbackground=WORKBENCH_SURFACE, bordercolor=WORKBENCH_BORDER, lightcolor=WORKBENCH_BORDER, darkcolor=WORKBENCH_BORDER, troughcolor=WORKBENCH_BG)
-    style.configure("TFrame", background=WORKBENCH_BG)
-    style.configure("TLabelframe", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
-    style.configure("TLabelframe.Label", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
-    style.configure("TLabel", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
-    style.configure("TButton", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4))
-    style.map("TButton", background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
-    style.configure("TCheckbutton", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
-    style.map("TCheckbutton", foreground=[("active", WORKBENCH_TEXT)])
-    style.configure("TEntry", fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, insertcolor=WORKBENCH_TEXT)
-    style.configure("TCombobox", fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, arrowcolor=WORKBENCH_TEXT)
-    style.configure("TNotebook", background=WORKBENCH_BG, borderwidth=0)
-    style.configure("TNotebook.Tab", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, padding=(10, 5))
-    style.map("TNotebook.Tab", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
-    style.configure("Treeview", background=WORKBENCH_SURFACE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
-    style.configure("Treeview.Heading", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT)
-    style.map("Treeview", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
-    style.configure("Vertical.TScrollbar", background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
-    style.configure("Horizontal.TScrollbar", background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_FRAME_STYLE, background=WORKBENCH_BG)
+    style.configure(WORKBENCH_LABELLF_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
+    style.configure(f"{WORKBENCH_LABELLF_STYLE}.Label", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4))
+    style.map(WORKBENCH_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
+    style.configure(WORKBENCH_CHECK_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.map(WORKBENCH_CHECK_STYLE, foreground=[("active", WORKBENCH_TEXT)])
+    style.configure(WORKBENCH_ENTRY_STYLE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, insertcolor=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_COMBO_STYLE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, arrowcolor=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_NOTEBOOK_STYLE, background=WORKBENCH_BG, borderwidth=0)
+    style.configure(f"{WORKBENCH_NOTEBOOK_STYLE}.Tab", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, padding=(10, 5))
+    style.map(f"{WORKBENCH_NOTEBOOK_STYLE}.Tab", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
+    style.configure(WORKBENCH_TREE_STYLE, background=WORKBENCH_SURFACE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
+    style.configure(f"{WORKBENCH_TREE_STYLE}.Heading", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT)
+    style.map(WORKBENCH_TREE_STYLE, background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
+    style.configure(WORKBENCH_VSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
+    style.configure(WORKBENCH_HSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
 
 def _maximize_root_window(root):
     try:
@@ -117,10 +131,10 @@ class StockToolsWorkbench:
         self._build_ui()
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, padding=4)
+        container = ttk.Frame(self.root, padding=4, style=WORKBENCH_FRAME_STYLE)
         container.pack(fill="both", expand=True)
 
-        notebook = ttk.Notebook(container)
+        notebook = ttk.Notebook(container, style=WORKBENCH_NOTEBOOK_STYLE)
         notebook.pack(fill="both", expand=True)
 
         for panel_spec in PANEL_SPECS:

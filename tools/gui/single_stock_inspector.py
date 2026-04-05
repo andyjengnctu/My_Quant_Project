@@ -40,7 +40,7 @@ SUMMARY_FIELDS = (
 
 class SingleStockBacktestInspectorPanel(ttk.Frame):
     def __init__(self, master):
-        super().__init__(master, padding=4)
+        super().__init__(master, padding=4, style="Workbench.TFrame")
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
@@ -58,21 +58,22 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         super().destroy()
 
     def _build_ui(self):
-        controls = ttk.LabelFrame(self, text="執行參數", padding=8)
+        controls = ttk.LabelFrame(self, text="執行參數", padding=8, style="Workbench.TLabelframe")
         controls.pack(fill="x", pady=(0, 4))
         controls.columnconfigure(10, weight=1)
 
-        ttk.Label(controls, text="股票代號").grid(row=0, column=0, sticky="w")
-        ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=18)
+        ttk.Label(controls, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, sticky="w")
+        ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=18, style="Workbench.TEntry")
         ticker_entry.grid(row=0, column=1, padx=(6, 12), sticky="w")
         ticker_entry.focus_set()
 
-        ttk.Label(controls, text="資料集").grid(row=0, column=2, sticky="w")
+        ttk.Label(controls, text="資料集", style="Workbench.TLabel").grid(row=0, column=2, sticky="w")
         dataset_combo = ttk.Combobox(
             controls,
             state="readonly",
             width=10,
             values=[label for _key, label in DATASET_OPTIONS],
+            style="Workbench.TCombobox",
         )
         dataset_combo.grid(row=0, column=3, padx=(6, 12), sticky="w")
         dataset_combo.current(0)
@@ -87,36 +88,39 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         dataset_combo.bind("<<ComboboxSelected>>", _sync_dataset)
         _sync_dataset()
 
-        ttk.Button(controls, text="執行回測", command=self._run_analysis).grid(row=0, column=4, padx=(0, 8), sticky="w")
-        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart).grid(row=0, column=5, padx=(0, 12), sticky="w")
-        ttk.Button(controls, text="開啟 HTML K 線圖", command=self._open_chart).grid(row=0, column=6, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟 Excel", command=self._open_excel).grid(row=0, column=7, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir).grid(row=0, column=8, sticky="w")
+        ttk.Button(controls, text="執行回測", command=self._run_analysis, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
+        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=5, padx=(0, 12), sticky="w")
+        ttk.Button(controls, text="開啟 HTML K 線圖", command=self._open_chart, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=7, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=8, sticky="w")
 
-        notebook = ttk.Notebook(self)
+        notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
 
-        chart_tab = ttk.Frame(notebook, padding=1)
+        chart_tab = ttk.Frame(notebook, padding=1, style="Workbench.TFrame")
         chart_tab.rowconfigure(0, weight=1)
         chart_tab.columnconfigure(0, weight=1)
         notebook.add(chart_tab, text="K 線圖")
 
-        self._chart_canvas_host = ttk.Frame(chart_tab)
+        self._chart_canvas_host = tk.Frame(chart_tab, bg=ttk.Style(self).lookup("Workbench.TFrame", "background") or "#05090e", highlightthickness=0, bd=0)
         self._chart_canvas_host.grid(row=0, column=0, sticky="nsew")
-        self._chart_placeholder = ttk.Label(
+        chart_tab.configure(style="Workbench.TFrame")
+        self._chart_placeholder = tk.Label(
             self._chart_canvas_host,
             text="請先執行回測；K 線圖會直接顯示在此。",
             anchor="center",
             justify="center",
+            bg=ttk.Style(self).lookup("Workbench.TFrame", "background") or "#05090e",
+            fg=ttk.Style(self).lookup("Workbench.TLabel", "foreground") or "#f7fbff",
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        summary_tab = ttk.Frame(notebook, padding=10)
+        summary_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         notebook.add(summary_tab, text="執行摘要")
         for row_idx, (key, label) in enumerate(SUMMARY_FIELDS):
-            ttk.Label(summary_tab, text=label).grid(row=row_idx, column=0, sticky="nw", pady=3)
-            ttk.Label(summary_tab, textvariable=self._summary_vars[key], wraplength=860, justify="left").grid(
+            ttk.Label(summary_tab, text=label, style="Workbench.TLabel").grid(row=row_idx, column=0, sticky="nw", pady=3)
+            ttk.Label(summary_tab, textvariable=self._summary_vars[key], wraplength=860, justify="left", style="Workbench.TLabel").grid(
                 row=row_idx,
                 column=1,
                 sticky="nw",
@@ -125,23 +129,23 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
         summary_tab.columnconfigure(1, weight=1)
 
-        table_tab = ttk.Frame(notebook, padding=10)
+        table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         notebook.add(table_tab, text="交易明細")
         table_tab.rowconfigure(0, weight=1)
         table_tab.columnconfigure(0, weight=1)
 
-        self._tree = ttk.Treeview(table_tab, show="headings")
+        self._tree = ttk.Treeview(table_tab, show="headings", style="Workbench.Treeview")
         self._tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll = ttk.Scrollbar(table_tab, orient="vertical", command=self._tree.yview)
+        y_scroll = ttk.Scrollbar(table_tab, orient="vertical", command=self._tree.yview, style="Workbench.Vertical.TScrollbar")
         y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll = ttk.Scrollbar(table_tab, orient="horizontal", command=self._tree.xview)
+        x_scroll = ttk.Scrollbar(table_tab, orient="horizontal", command=self._tree.xview, style="Workbench.Horizontal.TScrollbar")
         x_scroll.grid(row=1, column=0, sticky="ew")
         self._tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
 
-        footer = ttk.Frame(self)
+        footer = ttk.Frame(self, style="Workbench.TFrame")
         footer.pack(fill="x", pady=(4, 0))
-        ttk.Label(footer, textvariable=self._status_var).pack(anchor="w")
-        ttk.Label(footer, textvariable=self._chart_hint_var, wraplength=1500, justify="left").pack(anchor="w", pady=(2, 0))
+        ttk.Label(footer, textvariable=self._status_var, style="Workbench.TLabel").pack(anchor="w")
+        ttk.Label(footer, textvariable=self._chart_hint_var, wraplength=1500, justify="left", style="Workbench.TLabel").pack(anchor="w", pady=(2, 0))
 
         self._notebook.select(chart_tab)
 

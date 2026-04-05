@@ -154,6 +154,7 @@
 | B83 | P2 | 契約 | synthetic GUI chart validator 使用的 matplotlib canvas stub 必須滿足 figure cleanup 所需的最小 mouse-grab 介面；至少需提供 `grab_mouse()` / `release_mouse()`，不得在 formal suite runtime 因 stub 缺口而於 `figure.clear()` / artist cleanup 階段以 `AttributeError` 假失敗 | DONE | 已補 direct contract，直接釘死 shared `_build_matplotlib_canvas_stub()` 必須宣告 `grab_mouse()` / `release_mouse()` 並在 release 後清空 grabbed axis；同步讓 GUI keyboard-pan validator 共用該 stub，避免 synthetic contract 自己的 canvas 測試替身比 matplotlib figure cleanup 契約更弱而造成 consistency 假失敗 | `tools/validate/synthetic_contract_cases.py` |
 | B84 | P2 | 契約 | synthetic GUI chart validator 使用的 matplotlib canvas stub 必須同時滿足 figure cleanup 對 `canvas.toolbar` 的最低相容契約；至少需宣告 `toolbar` attribute，且預設為 `None`，不得在 formal suite runtime 因 stub 缺少 toolbar 屬性而於 `figure.clear()` / artist cleanup 階段以 `AttributeError` 假失敗 | DONE | 已補 direct contract，直接釘死 shared `_build_matplotlib_canvas_stub()` 必須宣告 `toolbar=None`，避免 matplotlib cleanup 讀取 `self.canvas.toolbar` 時因 synthetic 替身比實際 canvas 介面更弱而造成 consistency 假失敗 | `tools/validate/synthetic_contract_cases.py` |
 | B85 | P1 | 契約 | shared chart signal annotation helper 必須接受可選 `meta` keyword，並將其穩定寫入 chart context / chart payload；不得在 GUI 或 synthetic path 因 sell-signal annotation 帶入績效 metadata 而以 `TypeError` runtime 失敗 | DONE | 已補 direct contract，直接釘死 `record_signal_annotation()` 必須接受 `meta` keyword，且 `profit_pct` 等 metadata 必須在 chart context 與 normalized chart payload 中保留，避免 GUI chart / synthetic coverage path 對賣訊績效色彩與訊號框資訊的 shared helper 契約再分叉 | `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
+| B86 | P1 | GUI | GUI 單股 K 線圖必須消除重複買訊資訊框、將買訊/歷績門檻狀態晶片固定於右下角、滑鼠拖曳平移採 pixel-anchor 避免左右平移時上下跳動，並以 explicit dark widget styles 真正套用 deep-dark 佈景；同時背景網格需維持低對比、賣出虧損資訊框必須半透明 | DONE | 已補 direct contract，直接釘死 panel 必須顯式套用 `Workbench.*` dark styles、mouse pan 必須使用 pixel-anchor、status chip layout 必須是 `right_bottom`、買進 trade label 不得再與買訊框重複渲染，並用 synthetic figure 驗證僅保留賣出績效框與淡化 grid alpha | `tools/gui/workbench.py`, `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -360,6 +361,7 @@
 | T162 | `validate_gui_navigation_canvas_stub_cleanup_contract_case` | B83 |
 | T163 | `validate_gui_navigation_canvas_stub_toolbar_contract_case` | B84 |
 | T164 | `validate_record_signal_annotation_meta_contract_case` | B85 |
+| T165 | `validate_gui_chart_overlay_layout_and_pan_contract_case` | B86 |
 
 ## G. 逐項收斂紀錄
 
@@ -610,6 +612,7 @@
 | 2026-04-05 | B83 | 新增 synthetic GUI canvas stub cleanup contract，釘死 stub 必須提供 `grab_mouse()` / `release_mouse()`，避免 figure cleanup 於 formal suite runtime 因替身介面不足假失敗 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B84 | 新增 synthetic GUI canvas stub toolbar contract，釘死 stub 必須宣告 `toolbar=None`，避免 figure cleanup 讀取 `self.canvas.toolbar` 時因替身介面不足假失敗 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B85 | 新增 signal annotation meta contract，釘死 shared helper 必須接受 `meta` keyword 並保留至 chart payload，避免賣訊績效 metadata 在 GUI / synthetic path runtime 分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B86 | 新增 GUI overlay layout / dark widget styles / pixel-anchor mouse pan contract，釘死右下 status chip、買訊不重複框、淡化 grid 與滑鼠拖曳不跳動 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -655,3 +658,4 @@
 | 2026-04-05 | T162 | 新增 synthetic GUI canvas stub cleanup contract 並驗證 | NEW -> DONE | `validate_gui_navigation_canvas_stub_cleanup_contract_case` |
 | 2026-04-05 | T163 | 新增 synthetic GUI canvas stub toolbar contract 並驗證 | NEW -> DONE | `validate_gui_navigation_canvas_stub_toolbar_contract_case` |
 | 2026-04-05 | T164 | 新增 signal annotation meta contract 並驗證 | NEW -> DONE | `validate_record_signal_annotation_meta_contract_case` |
+| 2026-04-05 | T165 | 新增 GUI overlay layout / dark widget styles / pixel-anchor mouse pan contract 並驗證 | NEW -> DONE | `validate_gui_chart_overlay_layout_and_pan_contract_case` |

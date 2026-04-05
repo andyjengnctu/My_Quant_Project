@@ -1937,7 +1937,7 @@ def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "figure_contract_keyboard_pan_enabled", True, contract.get("keyboard_pan_enabled"))
     add_check(results, "output_contract", case_id, "figure_contract_dynamic_candle_width_enabled", True, contract.get("dynamic_candle_width_enabled"))
-    add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout", "left_bottom", contract.get("status_chip_layout"))
+    add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout", "right_bottom", contract.get("status_chip_layout"))
     figure.clear()
     return results, summary
 
@@ -1948,7 +1948,7 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
-    add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, "ttk.Notebook(self)" in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, 'ttk.Notebook(self, style="Workbench.TNotebook")' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_has_summary_tab", True, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_workspace_default_volume_hidden", True, 'self._show_volume_var = tk.BooleanVar(value=False)' in inspector_source)
@@ -2018,6 +2018,56 @@ def validate_record_signal_annotation_meta_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "signal_annotation_meta_retained_in_chart_context", meta_payload, chart_context["signal_annotations"][0].get("meta") if chart_context["signal_annotations"] else None)
     add_check(results, "output_contract", case_id, "signal_annotation_meta_retained_in_chart_payload", meta_payload, first_annotation.get("meta"))
     add_check(results, "output_contract", case_id, "signal_annotation_profit_pct_available_for_sell_face_resolution", 3.25, (first_annotation.get("meta") or {}).get("profit_pct"))
+    return results, summary
+
+
+def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
+    case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "gui_panel_uses_explicit_workbench_dark_styles", True, 'style="Workbench.TNotebook"' in inspector_source and 'style="Workbench.TLabelframe"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_workbench_uses_palette_force_for_dark_theme", True, "root.tk_setPalette(" in workbench_source)
+    add_check(results, "output_contract", case_id, "chart_mouse_pan_uses_pixel_anchor", True, 'drag_state = {"active": False, "anchor_x": None, "anchor_px": None, "orig_xlim": None}' in charting_source and 'bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px' in charting_source)
+
+    dates = pd.date_range("2024-01-01", periods=80, freq="B")
+    payload = {
+        "dates": dates,
+        "date_labels": [dt.strftime("%Y-%m-%d") for dt in dates],
+        "x": np.arange(len(dates), dtype=np.float64),
+        "open": np.linspace(30.0, 38.0, len(dates), dtype=np.float64),
+        "high": np.linspace(30.8, 38.8, len(dates), dtype=np.float64),
+        "low": np.linspace(29.4, 37.4, len(dates), dtype=np.float64),
+        "close": np.linspace(30.3, 38.3, len(dates), dtype=np.float64),
+        "volume": np.linspace(1000.0, 3000.0, len(dates), dtype=np.float64),
+        "up_mask": np.array([idx % 2 == 0 for idx in range(len(dates))], dtype=bool),
+        "stop_line": np.full(len(dates), np.nan, dtype=np.float64),
+        "tp_line": np.full(len(dates), np.nan, dtype=np.float64),
+        "limit_line": np.full(len(dates), np.nan, dtype=np.float64),
+        "entry_line": np.full(len(dates), np.nan, dtype=np.float64),
+        "marker_groups": {
+            "買進": [{"trace_name": "買進", "date": dates[20], "x": 20, "price": 32.1, "qty": 1000, "note": "", "hover_text": "買進", "meta": {"limit_price": 32.0, "entry_price": 32.1}}],
+            "指標賣出": [{"trace_name": "指標賣出", "date": dates[30], "x": 30, "price": 34.2, "qty": 1000, "note": "本次績效: -2.00%", "hover_text": "賣出", "meta": {"pnl_pct": -2.0, "pnl_value": -2000.0}}],
+        },
+        "signal_annotations": [{"date": dates[20], "x": 20, "anchor_price": 31.8, "signal_type": "buy", "title": "買訊", "detail_text": "限價: 32.00", "note": "", "meta": {}}],
+        "summary_box": ["資產成長: 10.0%"],
+        "status_box": {"lines": ["出現買訊", "歷績門檻合格"], "ok": True},
+        "focus_positions": [20, 30],
+        "default_view": {"start_idx": 10, "end_idx": 45},
+    }
+    figure = create_matplotlib_debug_chart_figure(chart_payload=payload, ticker="2330", show_volume=True)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    state = getattr(figure, "_stock_chart_navigation_state", {})
+    add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout_right_bottom", "right_bottom", contract.get("status_chip_layout"))
+    add_check(results, "output_contract", case_id, "figure_contract_buy_trade_label_boxes_disabled", False, contract.get("buy_trade_label_boxes_enabled"))
+    add_check(results, "output_contract", case_id, "figure_contract_mouse_drag_pan_mode_pixel_anchor", "pixel_anchor", contract.get("mouse_drag_pan_mode"))
+    add_check(results, "output_contract", case_id, "figure_contract_grid_alpha_subtle", True, float(contract.get("grid_alpha", 1.0)) <= 0.40)
+    add_check(results, "output_contract", case_id, "figure_trade_labels_skip_buy_markers", 1, len(state.get("trade_label_artists") or []))
+    figure.clear()
     return results, summary
 
 
