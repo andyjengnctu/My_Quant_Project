@@ -102,7 +102,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard，以及 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard；正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱、檔案開頭第一個非空行漂移，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -130,6 +130,7 @@
 | B59 | P1 | Meta | 關鍵費稅 / sizing / 資金來源 helper 必須維持單一真理來源，不得在其他模組重複定義 | DONE | 已補 static contract，直接釘死 `calc_entry_price`、`calc_net_sell_price`、`calc_position_size`、`calc_initial_risk_total`、`resolve_single_backtest_sizing_capital`、`resolve_portfolio_sizing_equity`、`resolve_portfolio_entry_budget`、`resolve_scanner_live_capital` 只能定義在各自 canonical 模組，避免費稅 / sizing / 資金來源規則分叉 | `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py`, `core/capital_policy.py` |
 | B60 | P1 | Meta | `PROJECT_SETTINGS.md` 必須明確禁止 GPT 端重跑任何動態測試，且不得繞過 `apps/test_suite.py` 直接執行 formal step / validator / 腳本 / 函式 | DONE | 已補 explicit boundary wording 與 static contract，直接釘死文件必須同時宣告『不得重覆執行 `apps/test_suite.py` 已涵蓋項目 / 不得執行任何動態測試』與『不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式』 | `doc/PROJECT_SETTINGS.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
 | B61 | P1 | Meta | 關鍵資金 / 參數 / 政策契約模組必須納入 coverage targets，避免 helper / guardrail 雖有測項但 coverage 退化時無法被 meta quality 擋下 | DONE | 已補 static coverage-target contract，直接釘死 `core/capital_policy.py`、`core/strategy_params.py`、`core/params_io.py`、`config/execution_policy.py`、`config/training_policy.py` 必須列入 coverage targets，且關鍵公開符號需可匯入 | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` |
+| B62 | P1 | Meta | `doc/TEST_SUITE_CHECKLIST.md` 檔案開頭第一個非空行必須固定為 `# Test Suite 收斂清單`，避免 checklist parser / guard 前提漂移 | DONE | 已補 direct checklist contract，直接釘死檔案前置非空內容不得漂移；若有人在標題前插入額外說明、註記或其他文字，formal guard 必須 fail | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -312,6 +313,7 @@
 | T138 | `validate_policy_contract_modules_in_coverage_targets_case` | B61 |
 | T139 | `validate_checklist_g_new_transition_first_occurrence_case` | B26 |
 | T140 | `validate_checklist_g_note_validate_reference_exists_case` | B26 |
+| T141 | `validate_checklist_first_nonempty_line_case` | B62 |
 
 ## G. 逐項收斂紀錄
 
@@ -519,10 +521,13 @@
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
 | 2026-04-05 | B26 | 檢出 `G` 仍可殘留退役 validator 名稱與重複 `NEW -> *`，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有歷史回寫缺口 |
 | 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
+| 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
 | 2026-04-05 | B59 | 補關鍵 helper single-source-of-truth static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B60 | 補 `PROJECT_SETTINGS.md` dynamic-test / formal-step bypass boundary contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B61 | 補 policy/config coverage-target static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | B62 | 新增 checklist 首行固定標題 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
@@ -531,3 +536,4 @@
 | 2026-04-05 | T139 | 檢出 synthetic mutation target 指到首筆合法歷史列，guard 驗證暫時失真 | DONE -> PARTIAL | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T139 | 改為鎖定同 ID 非首次出現列後，guard synthetic validator 重新收斂 | PARTIAL -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T140 | 新增 `G` 備註欄 validator reference existence guard 並驗證 | NEW -> DONE | `validate_checklist_g_note_validate_reference_exists_case` |
+| 2026-04-05 | T141 | 新增 checklist 首行固定標題 guard 並驗證 | NEW -> DONE | `validate_checklist_first_nonempty_line_case` |

@@ -698,6 +698,33 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     summary["target_match_index"] = target_match_index
     return results, summary
+def validate_checklist_first_nonempty_line_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_FIRST_NONEMPTY_LINE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    mutated_text = "<!-- synthetic mutation -->\n" + original_text
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_first_line_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    first_line_result = result_by_name.get("checklist_first_nonempty_line_matches_title", {})
+
+    add_check(results, "meta_checklist", case_id, "mutated_first_nonempty_line_guard_fails", "FAIL", first_line_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_first_nonempty_line_reports_false_match", False, first_line_result.get("extra", {}).get("matches"))
+
+    summary["guard_status"] = first_line_result.get("status")
+    summary["match_flag"] = first_line_result.get("extra", {}).get("matches")
+    return results, summary
+
+
 def validate_checklist_g_note_validate_reference_exists_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
