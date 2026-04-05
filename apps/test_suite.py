@@ -126,7 +126,7 @@ def main(argv=None) -> int:
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/test_suite.py")
         print(f"用法: python {program_name}")
-        print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試（含 meta quality、dataset fingerprint、artifact integrity、single-stock compounding-capital contract、single-ticker compounding parity contract、critical-helper single-source-of-truth guard、policy/config coverage-target contract、unsupported use_compounding guardrail、GPT 端 dynamic-test / formal-step bypass boundary contract、checklist convergence first-nonempty-title / summary-table-ID-order / `NEW`-only-first-occurrence / stale-validator-reference guard、summarize_result flattened-summary accessor contract 與 memory tracker lifecycle contract），若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
+        print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試（含 meta quality、dataset fingerprint、artifact integrity、single-stock compounding-capital contract、single-ticker compounding parity contract、critical-helper single-source-of-truth guard、policy/config coverage-target contract、unsupported use_compounding guardrail、GPT 端 dynamic-test / formal-step bypass boundary contract、checklist convergence first-nonempty-title / summary-table-ID-order / `NEW`-only-first-occurrence / stale-validator-reference guard、summarize_result flattened-summary accessor contract、package_zip root-bundle-preserve / commit-zip-test_suite orchestration contract 與 memory tracker lifecycle contract），若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
 
     from tools.local_regression.run_all import execute_all

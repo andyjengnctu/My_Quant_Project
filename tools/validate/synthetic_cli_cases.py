@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import importlib
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -249,6 +250,7 @@ def validate_package_zip_runtime_contract_case(_base_params):
         (project_root / "orphan.pyc").write_bytes(b"orphan-cache")
         (project_root / "main_20250101_deadbeef.zip").write_bytes(b"main-old")
         (project_root / "other_branch_20250102_cafebabe.zip").write_bytes(b"other-old")
+        (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").write_bytes(b"bundle-old")
 
         fake_now = SimpleNamespace(strftime=lambda fmt: "20260404_123456")
 
@@ -261,17 +263,17 @@ def validate_package_zip_runtime_contract_case(_base_params):
                 return SimpleNamespace(stdout="pkg/module.py\0README.md\0pkg/__pycache__/module.cpython-312.pyc\0orphan.pyc\0")
             raise AssertionError(f"unexpected git args: {args}")
 
-        with patch.object(app_package_zip, "PROJECT_ROOT", project_root), \
-             patch.object(app_package_zip, "get_taipei_now", return_value=fake_now), \
-             patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git):
+        with patch.object(app_package_zip, "PROJECT_ROOT", project_root),              patch.object(app_package_zip, "get_taipei_now", return_value=fake_now),              patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git):
             rc, stdout_text = _capture_stdout(app_package_zip.main, ["apps/package_zip.py"])
 
         new_zip_path = project_root / "feature-runtime-contract_20260404_123456_abc1234.zip"
         archived_root_zips = sorted(path.name for path in (project_root / "arch").glob("*.zip"))
         add_check(results, "cli_contract", case_id, "package_zip_main_rc", 0, rc)
         add_check(results, "cli_contract", case_id, "package_zip_output_exists", True, new_zip_path.exists())
-        add_check(results, "cli_contract", case_id, "package_zip_archives_all_root_zips", ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"], archived_root_zips)
+        add_check(results, "cli_contract", case_id, "package_zip_archives_non_bundle_root_zips_only", ["main_20250101_deadbeef.zip", "other_branch_20250102_cafebabe.zip"], archived_root_zips)
         add_check(results, "cli_contract", case_id, "package_zip_root_old_zip_removed", False, (project_root / "other_branch_20250102_cafebabe.zip").exists())
+        add_check(results, "cli_contract", case_id, "package_zip_root_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
+        add_check(results, "cli_contract", case_id, "package_zip_root_bundle_not_archived", False, (project_root / "arch" / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
         add_check(results, "cli_contract", case_id, "package_zip_cache_dir_removed", False, (project_root / "pkg" / "__pycache__").exists())
         add_check(results, "cli_contract", case_id, "package_zip_orphan_pyc_removed", False, (project_root / "orphan.pyc").exists())
         add_check(results, "cli_contract", case_id, "package_zip_stdout_reports_archived_count", True, "[package_zip] archived old root zips=2" in stdout_text)
@@ -279,6 +281,70 @@ def validate_package_zip_runtime_contract_case(_base_params):
         with zipfile.ZipFile(new_zip_path) as zf:
             member_names = sorted(zf.namelist())
         add_check(results, "cli_contract", case_id, "package_zip_zip_members", ["README.md", "pkg/module.py"], member_names)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+
+def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
+    case_id = "PACKAGE_ZIP_COMMIT_TEST_SUITE_ORCHESTRATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    app_package_zip = importlib.import_module("apps.package_zip")
+
+    with TemporaryDirectory(prefix="package_zip_orchestration_") as tmp_dir:
+        project_root = Path(tmp_dir)
+        (project_root / "apps").mkdir(parents=True)
+        (project_root / "pkg").mkdir()
+        (project_root / "pkg" / "module.py").write_text("print('ok')\n", encoding="utf-8")
+        (project_root / "README.md").write_text("demo\n", encoding="utf-8")
+        (project_root / "legacy_20250101_deadbeef.zip").write_bytes(b"legacy")
+        (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").write_bytes(b"bundle-old")
+
+        fake_now = SimpleNamespace(strftime=lambda fmt: "20260405_120000")
+        git_commands = []
+        python_commands = []
+
+        def _fake_run_git(*args):
+            git_commands.append(args)
+            if args == ("status", "--porcelain", "--untracked-files=all"):
+                return SimpleNamespace(stdout=" M apps/package_zip.py\n?? README.md\n")
+            if args == ("add", "-A"):
+                return SimpleNamespace(stdout="")
+            if args == ("commit", "-m", "feat: package workflow"):
+                return SimpleNamespace(stdout="[feature/workflow fedcba9] feat: package workflow\n")
+            if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+                return SimpleNamespace(stdout="feature/workflow\n")
+            if args == ("rev-parse", "--short", "HEAD"):
+                return SimpleNamespace(stdout="fedcba9\n")
+            if args == ("ls-files", "--cached", "--others", "--exclude-standard", "-z"):
+                return SimpleNamespace(stdout="README.md\0pkg/module.py\0")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        def _fake_run_python_command(command):
+            python_commands.append(command)
+            return SimpleNamespace(returncode=0)
+
+        with patch.object(app_package_zip, "PROJECT_ROOT", project_root),              patch.object(app_package_zip, "get_taipei_now", return_value=fake_now),              patch.object(app_package_zip, "_run_git", side_effect=_fake_run_git),              patch.object(app_package_zip, "_run_python_command", side_effect=_fake_run_python_command):
+            rc, stdout_text = _capture_stdout(
+                app_package_zip.main,
+                ["apps/package_zip.py", "--commit-message", "feat: package workflow", "--run-test-suite"],
+            )
+
+        new_zip_path = project_root / "feature-workflow_20260405_120000_fedcba9.zip"
+        commit_idx = git_commands.index(("commit", "-m", "feat: package workflow"))
+        ls_files_idx = git_commands.index(("ls-files", "--cached", "--others", "--exclude-standard", "-z"))
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_main_rc", 0, rc)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_add_called", True, ("add", "-A") in git_commands)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_called", True, ("commit", "-m", "feat: package workflow") in git_commands)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_precedes_zip_snapshot", True, commit_idx < ls_files_idx)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_output_uses_post_commit_sha", True, new_zip_path.exists())
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_called", [[sys.executable, "apps/test_suite.py"]], python_commands)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_test_suite_after_zip", True, stdout_text.index(f"[package_zip] output={new_zip_path}") < stdout_text.index("[package_zip] test_suite=pass"))
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_commit_headline_reported", True, "[package_zip] commit=[feature/workflow fedcba9] feat: package workflow" in stdout_text)
+        add_check(results, "cli_contract", case_id, "package_zip_orchestration_bundle_preserved", True, (project_root / "to_chatgpt_bundle_20250103_deadbeef.zip").exists())
 
     summary["checks"] = len(results)
     return results, summary

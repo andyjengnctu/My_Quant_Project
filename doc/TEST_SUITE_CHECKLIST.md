@@ -119,7 +119,7 @@
 | B40 | P1 | Meta | `PeakTracedMemoryTracker` lifecycle 必須用 context manager 統一管理 | DONE | 已將 `run_chain_checks.py`、`run_meta_quality.py`、`run_ml_smoke.py`、`run_quick_gate.py`、`tools/validate/main.py` 收斂為 `with PeakTracedMemoryTracker() as tracker:`，並新增 static guard，直接阻擋手動 `__enter__` / `__exit__` 導致 early return / runtime error 路徑漏掉 `__exit__` | `core/runtime_utils.py`, `tools/local_regression/*.py`, `tools/validate/main.py`, `tools/validate/synthetic_meta_cases.py` |
 | B41 | P1 | 文件 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 不得殘留已移除的 app 測試入口與手動刪檔指引 | DONE | 已移除 `apps/local_regression.py` / `apps/validate_consistency.py` 的殘留文件指引，並新增 formal guard，直接阻擋文件再出現已移除入口或「手動刪除」式 app 測試入口清理說明 | `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
 | B42 | P1 | Meta | app thin wrapper 的 lazy public exports 不得發生 `LAZY_EXPORTS` / `__all__` 漏同步 | DONE | 已補 thin wrapper export contract，直接阻擋 `apps/portfolio_sim.py`、`apps/vip_scanner.py` 出現 lazy export 重複、`__all__` 漏列或 lazy symbol 無法解析，避免對外 façade 可 `getattr` 但 public export contract 漏同步 | `apps/portfolio_sim.py`, `apps/vip_scanner.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
-| B43 | P1 | I/O | `apps/package_zip.py` 正式入口必須驗證舊 ZIP 全數歸檔，且輸出 ZIP 不得夾帶 Python 快取 | DONE | 已補 `package_zip` runtime contract，直接釘死 root 既有舊 ZIP 不分 branch label 都必須移入 `arch/`，且新 ZIP 僅可包含 tracked/untracked 非忽略檔，不得夾帶 `__pycache__/` 或 `*.pyc` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
+| B43 | P1 | I/O | `apps/package_zip.py` 正式入口必須驗證 root 舊 package ZIP 歸檔、保留 root bundle copy，且輸出 ZIP 不得夾帶 Python 快取 | DONE | 已補 `package_zip` runtime contract，直接釘死 root 既有非 bundle 舊 ZIP 必須移入 `arch`、`to_chatgpt_bundle_*.zip` 不得被移入 `arch`，且新 ZIP 僅可包含 tracked/untracked 非忽略檔，不得夾帶 `__pycache__/` 或 `*.pyc` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
 | B44 | P1 | Meta | `quick_gate` 不得移除裸 `except` static guard | DONE | 已補 `quick_gate` bare-except guard contract，直接釘死 `run_static_checks()` 必須保留 `bare_except_scan`，且遇到裸 `except` 時必須回報 FAIL 與命中文件 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B45 | P1 | I/O | `quick_gate` 不得移除 output path / outputs root / log path guard | DONE | 已補 `quick_gate` output-path guard contract，直接釘死正式入口 summary 必須保留 `output_path_contract`、`outputs_root_layout`、`log_path_contract` 關鍵步驟，且 guard FAIL 時必須正確傳遞到 `failed_steps` | `tools/local_regression/run_quick_gate.py`, `core/output_paths.py`, `core/log_utils.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
 | B46 | P1 | 錯誤處理 | formal pipeline 關鍵 fallback / console tail 不得靜默吞掉非 cleanup I/O 例外 | DONE | 已補 dataset prepare fallback summary write traceability 與 console tail read-error traceability contract，直接釘死 `run_all.py` fallback 寫檔失敗必須回寫 `fallback_write_errors` / stderr，且 `gather_recent_console_tail()` 讀檔失敗不得靜默略過 | `tools/local_regression/run_all.py`, `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `tools/validate/synthetic_cases.py` |
@@ -133,6 +133,7 @@
 | B62 | P1 | Meta | `doc/TEST_SUITE_CHECKLIST.md` 檔案開頭第一個非空行必須固定為 `# Test Suite 收斂清單`，避免 checklist parser / guard 前提漂移 | DONE | 已補 direct checklist contract，直接釘死檔案前置非空內容不得漂移；若有人在標題前插入額外說明、註記或其他文字，formal guard 必須 fail | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B63 | P1 | Meta | synthetic meta validators 讀取 `summarize_result` 額外欄位時，必須相容 flattened top-level payload；不得直接依賴巢狀 `result["extra"]` schema | DONE | 已補 shared summary-value accessor 與 static contract，直接釘死 `tools/validate/synthetic_meta_cases.py` 不得再用直接 `.get("extra", {}).get(...)` 讀取 meta summary 欄位，避免 formal synthetic suite 因 payload schema 讀法錯誤出現假失敗 | `tools/local_regression/common.py`, `tools/validate/synthetic_meta_cases.py` |
 | B64 | P1 | Meta | checklist 各摘要表（`E1` / `E2` / `E3` / `T`）必須固定依 tracking ID 升冪排序，避免同步表雖內容正確但順序漂移而破壞機械比對 | DONE | 已補 direct checklist contract，直接釘死 `E1` / `E2` / `E3` / `T` 不能只做集合相等；若任何摘要表 row order 逆序，formal guard 必須 fail 並指出對應表名與前後 ID | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B65 | P1 | CLI | `apps/package_zip.py` 必須支援外部參數一鍵執行 commit → zip → test_suite，且 ZIP 檔名必須反映 commit 後 HEAD | DONE | 已補 orchestration contract，直接釘死 `--commit-message` 會先 `git add -A` + `git commit -m ...`、zip 產物必須使用 commit 後 HEAD short sha，且 `--run-test-suite` 必須在打包後才執行 `apps/test_suite.py` | `apps/package_zip.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -318,6 +319,7 @@
 | T141 | `validate_checklist_first_nonempty_line_case` | B62 |
 | T142 | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` | B63 |
 | T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
+| T144 | `validate_package_zip_commit_test_suite_orchestration_case` | B65 |
 
 ## G. 逐項收斂紀錄
 
@@ -524,6 +526,8 @@
 | 2026-04-04 | T133 | 新增 optimizer interrupt export contract 並驗證 | NEW -> DONE | `validate_optimizer_interrupt_export_contract_case` |
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
 | 2026-04-05 | B26 | 檢出 `G` 仍可殘留退役 validator 名稱與重複 `NEW -> *`，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有歷史回寫缺口 |
+| 2026-04-05 | B43 | 依新規格調整 package_zip：root bundle 不得移入 arch，主表先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
+| 2026-04-05 | B43 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cli_cases.py` |
 | 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
 | 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
@@ -538,6 +542,9 @@
 | 2026-04-05 | B62 | 改以 shared summary-value accessor 相容 flattened payload，並補 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B63 | 新增 synthetic meta summary-value accessor contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | B65 | 新增 package_zip commit → zip → test_suite orchestration contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
+| 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
+| 2026-04-05 | T116 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂 | PARTIAL -> DONE | `validate_package_zip_runtime_contract_case` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
@@ -551,3 +558,4 @@
 | 2026-04-05 | T141 | 改以 shared summary-value accessor 讀取 flattened payload 後重新收斂 | PARTIAL -> DONE | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T142 | 新增 synthetic meta summary-value accessor static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` |
 | 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |
+| 2026-04-05 | T144 | 新增 package_zip commit → zip → test_suite orchestration contract 並驗證 | NEW -> DONE | `validate_package_zip_commit_test_suite_orchestration_case` |

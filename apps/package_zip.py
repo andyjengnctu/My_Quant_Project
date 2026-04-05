@@ -11,14 +11,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.runtime_utils import get_taipei_now, parse_no_arg_cli, run_cli_entrypoint
+from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_program_name, run_cli_entrypoint, validate_cli_args
 
-HELP_DESCRIPTION = "清除 Python 快取、歸檔舊 ZIP，並將目前 working tree 的 tracked/untracked 非忽略檔打成乾淨 ZIP。"
+HELP_DESCRIPTION = "清除 Python 快取、歸檔舊 package ZIP，並將目前 working tree 的 tracked/untracked 非忽略檔打成乾淨 ZIP；可選擇先 commit，再於打包後執行 test suite。"
 EXCLUDED_DIR_NAMES = {"__pycache__", "arch"}
 EXCLUDED_SUFFIXES = {".pyc"}
 EXCLUDED_CSV_DIR_PREFIXES = {
     PurePosixPath("data/tw_stock_data_vip_reduced"),
 }
+ROOT_BUNDLE_PREFIX = "to_chatgpt_bundle_"
+COMMIT_MESSAGE_OPTION = "--commit-message"
+RUN_TEST_SUITE_OPTION = "--run-test-suite"
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -38,6 +41,13 @@ def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
         command_text = " ".join(["git", *args])
         message = stderr if stderr else f"git 指令失敗：{command_text}"
         raise RuntimeError(message) from exc
+
+
+def _run_python_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(command, cwd=PROJECT_ROOT, check=False)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"找不到可執行檔：{command[0]}") from exc
 
 
 def _sanitize_filename_component(value: str) -> str:
@@ -75,13 +85,17 @@ def _remove_python_caches() -> tuple[int, int]:
     return removed_cache_dirs, removed_pyc_files
 
 
-def _archive_existing_root_zips() -> int:
+def _is_root_bundle_zip(zip_path: Path) -> bool:
+    return zip_path.name.startswith(ROOT_BUNDLE_PREFIX)
+
+
+def _archive_existing_root_package_zips() -> int:
     archive_dir = PROJECT_ROOT / "arch"
     archive_dir.mkdir(exist_ok=True)
     moved_count = 0
 
     for zip_path in sorted(PROJECT_ROOT.glob("*.zip")):
-        if not zip_path.is_file():
+        if not zip_path.is_file() or _is_root_bundle_zip(zip_path):
             continue
         shutil.move(str(zip_path), archive_dir / zip_path.name)
         moved_count += 1
@@ -149,16 +163,81 @@ def _build_zip(branch_label: str, head_sha: str, package_paths: list[Path]) -> P
     return zip_path
 
 
+def _parse_cli_args(argv=None):
+    args = list(sys.argv if argv is None else argv)
+    program_name = resolve_cli_program_name(args, "apps/package_zip.py")
+    if has_help_flag(args):
+        print(f"用法: python {program_name} [{COMMIT_MESSAGE_OPTION} <message>] [{RUN_TEST_SUITE_OPTION}]")
+        print(f"說明: {HELP_DESCRIPTION}")
+        print(f"選項: {COMMIT_MESSAGE_OPTION} 先 git add -A 並 commit；{RUN_TEST_SUITE_OPTION} 於打包後執行 python apps/test_suite.py")
+        return {"help": True, "program_name": program_name, "commit_message": None, "run_test_suite": False}
+
+    validate_cli_args(args, value_options=(COMMIT_MESSAGE_OPTION,), flag_options=(RUN_TEST_SUITE_OPTION,))
+    parsed = {"help": False, "program_name": program_name, "commit_message": None, "run_test_suite": False}
+
+    idx = 1
+    while idx < len(args):
+        raw_arg = str(args[idx]).strip()
+        option_name, has_inline_value, inline_value = raw_arg.partition("=")
+        if option_name == COMMIT_MESSAGE_OPTION:
+            if has_inline_value:
+                parsed["commit_message"] = inline_value.strip()
+                idx += 1
+                continue
+            parsed["commit_message"] = str(args[idx + 1]).strip()
+            idx += 2
+            continue
+        if option_name == RUN_TEST_SUITE_OPTION:
+            parsed["run_test_suite"] = True
+            idx += 1
+            continue
+        idx += 1
+
+    return parsed
+
+
+def _has_pending_changes() -> bool:
+    status_output = _run_git("status", "--porcelain", "--untracked-files=all").stdout
+    return status_output.strip() != ""
+
+
+def _commit_all_changes(commit_message: str) -> tuple[bool, str | None]:
+    if not _has_pending_changes():
+        return False, None
+
+    _run_git("add", "-A")
+    commit_result = _run_git("commit", "-m", commit_message)
+    commit_line = (commit_result.stdout or "").strip().splitlines()
+    return True, commit_line[0] if commit_line else None
+
+
+def _run_test_suite() -> None:
+    command = [sys.executable, "apps/test_suite.py"]
+    completed = _run_python_command(command)
+    if completed.returncode != 0:
+        raise RuntimeError(f"test_suite 執行失敗，exit code={completed.returncode}")
+
+
 def main(argv=None) -> int:
-    parsed = parse_no_arg_cli(argv, "apps/package_zip.py", description=HELP_DESCRIPTION)
+    parsed = _parse_cli_args(argv)
     if parsed["help"]:
         return 0
+
+    commit_summary = "skipped"
+    commit_message = parsed.get("commit_message")
+    if commit_message:
+        committed, commit_headline = _commit_all_changes(commit_message)
+        commit_summary = "created" if committed else "no_changes"
+        if committed and commit_headline:
+            print(f"[package_zip] commit={commit_headline}")
+        elif not committed:
+            print("[package_zip] commit=skip (working tree clean)")
 
     branch_name = _get_current_branch_name()
     branch_label = _sanitize_filename_component(branch_name)
     head_sha = _get_head_short_sha()
     removed_cache_dirs, removed_pyc_files = _remove_python_caches()
-    moved_count = _archive_existing_root_zips()
+    moved_count = _archive_existing_root_package_zips()
     package_paths = _collect_package_paths()
     zip_path = _build_zip(branch_label, head_sha, package_paths)
 
@@ -167,6 +246,15 @@ def main(argv=None) -> int:
     print(f"[package_zip] archived old root zips={moved_count}")
     print(f"[package_zip] packaged files={len(package_paths)}")
     print(f"[package_zip] output={zip_path}")
+
+    test_suite_summary = "not_run"
+    if parsed.get("run_test_suite"):
+        _run_test_suite()
+        test_suite_summary = "pass"
+        print("[package_zip] test_suite=pass")
+
+    if not parsed.get("run_test_suite"):
+        print(f"[package_zip] commit_status={commit_summary} test_suite={test_suite_summary}")
     return 0
 
 

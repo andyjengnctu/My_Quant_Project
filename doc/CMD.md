@@ -4,6 +4,7 @@ python -m pip install -r requirements/requirements-lock.txt
 
 # 打包
 python apps/package_zip.py
+python apps/package_zip.py --commit-message "feat: snapshot" --run-test-suite
 
 # 資料集切換
 python tools/validate/cli.py --dataset reduced
@@ -22,6 +23,9 @@ set V16_VALIDATE_DATASET=reduced
 set V16_DATASET_PROFILE=full
 # optimizer 可重現
 set V16_OPTIMIZER_SEED=20260401
+
+# package_zip 可選擇先 git add -A + commit，再打包；`--run-test-suite` 會在打包後執行 `python apps/test_suite.py`
+# package_zip 只會把 root 的非 bundle ZIP 移入 arch；`to_chatgpt_bundle_*.zip` 會留在 root，由 test_suite 自己維護最新 copy
 
 # optimizer 架構
 python apps/ml_optimizer.py --dataset full            # 正式入口
