@@ -2152,6 +2152,19 @@ def validate_gui_portfolio_summary_semantic_color_contract_case(_base_params):
     return results, summary
 
 
+def validate_gui_portfolio_summary_readonly_text_contract_case(_base_params):
+    case_id = "GUI_PORTFOLIO_SUMMARY_READONLY_TEXT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "portfolio_summary_avoids_disabled_text_state_that_flattens_semantic_colors", True, 'self._summary_text.configure(state="disabled")' not in portfolio_panel_source and 'self._summary_text.configure(state="normal")' not in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_configures_readonly_text_bindings", True, '_configure_readonly_text_widget(self._summary_text)' in portfolio_panel_source and 'def _configure_readonly_text_widget(self, widget):' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_summary_blocks_mutation_but_keeps_navigation_copy_contract", True, 'def _handle_readonly_text_keypress(self, event):' in portfolio_panel_source and 'keysym.lower() in {"c", "insert"}' in portfolio_panel_source and 'widget.bind("<<Paste>>", self._block_text_mutation, add="+")' in portfolio_panel_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []

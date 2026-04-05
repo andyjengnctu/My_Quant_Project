@@ -158,7 +158,6 @@ class PortfolioBacktestPanel(ttk.Frame):
             font=("Consolas", 10),
         )
         self._summary_text.grid(row=1, column=0, sticky="nsew")
-        self._summary_text.configure(state="disabled")
         self._summary_text.tag_configure(SUMMARY_BORDER_TAG, foreground="#9aa9bd")
         self._summary_text.tag_configure(SUMMARY_HEADER_TAG, foreground="#f7fbff", font=("Consolas", 10, "bold"))
         self._summary_text.tag_configure(SUMMARY_NEUTRAL_TAG, foreground="#f7fbff")
@@ -171,6 +170,7 @@ class PortfolioBacktestPanel(ttk.Frame):
         summary_x = ttk.Scrollbar(compare_section, orient="horizontal", command=self._summary_text.xview, style="Workbench.Horizontal.TScrollbar")
         summary_x.grid(row=2, column=0, sticky="ew")
         self._summary_text.configure(yscrollcommand=summary_y.set, xscrollcommand=summary_x.set)
+        self._configure_readonly_text_widget(self._summary_text)
         ttk.Button(compare_section, text="開啟投組儀表板", command=lambda: self._open_path(DASHBOARD_HTML_PATH), style="Workbench.TButton").grid(row=3, column=0, sticky="ew", pady=(8, 0))
 
         yearly_tab = ttk.Frame(notebook, padding=8, style="Workbench.TFrame")
@@ -286,16 +286,52 @@ class PortfolioBacktestPanel(ttk.Frame):
         for row in normalized.to_dict("records"):
             tree.insert("", "end", values=[row.get(column, "") for column in columns])
 
+    @staticmethod
+    def _block_text_mutation(_event=None):
+        return "break"
+
+    @staticmethod
+    def _is_readonly_navigation_key(event):
+        keysym = str(getattr(event, "keysym", "") or "")
+        state = int(getattr(event, "state", 0) or 0)
+        if not keysym:
+            return False
+        if state & 0x4 and keysym.lower() in {"c", "insert"}:
+            return True
+        return keysym in {
+            "Left",
+            "Right",
+            "Up",
+            "Down",
+            "Prior",
+            "Next",
+            "Home",
+            "End",
+            "Shift_L",
+            "Shift_R",
+            "Control_L",
+            "Control_R",
+        }
+
+    def _handle_readonly_text_keypress(self, event):
+        if self._is_readonly_navigation_key(event):
+            return None
+        return self._block_text_mutation(event)
+
+    def _configure_readonly_text_widget(self, widget):
+        widget.configure(insertwidth=0, cursor="arrow")
+        widget.bind("<Key>", self._handle_readonly_text_keypress, add="+")
+        widget.bind("<<Cut>>", self._block_text_mutation, add="+")
+        widget.bind("<<Paste>>", self._block_text_mutation, add="+")
+        widget.bind("<<Clear>>", self._block_text_mutation, add="+")
+        widget.bind("<Button-2>", self._block_text_mutation, add="+")
+
     def _clear_summary_text(self):
-        self._summary_text.configure(state="normal")
         self._summary_text.delete("1.0", "end")
-        self._summary_text.configure(state="disabled")
 
     def _append_summary_segments(self, segments):
-        self._summary_text.configure(state="normal")
         for text, tag in segments:
             self._summary_text.insert("end", str(text), tag)
-        self._summary_text.configure(state="disabled")
 
     def _append_summary_plain_line(self, text, tag=SUMMARY_NEUTRAL_TAG):
         self._append_summary_segments([(f"{text}\n", tag)])
