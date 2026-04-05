@@ -13,6 +13,7 @@ from .checks import add_check
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
+SYNTHETIC_VALIDATE_DIR = PROJECT_ROOT / "tools" / "validate"
 
 from .meta_contracts import (
     extract_markdown_table_rows,
@@ -891,6 +892,37 @@ def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
     summary["invalid_summary_table_orders"] = invalid_rows
     return results, summary
 
+
+
+
+def validate_synthetic_case_numpy_alias_import_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CASE_NUMPY_ALIAS_IMPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    modules_using_numpy_alias = []
+    missing_numpy_alias_import = []
+    for source_path in sorted(SYNTHETIC_VALIDATE_DIR.glob("synthetic*_cases.py")):
+        source_text = source_path.read_text(encoding="utf-8")
+        if "np." not in source_text:
+            continue
+        modules_using_numpy_alias.append(source_path.name)
+        parsed = ast.parse(source_text, filename=str(source_path))
+        has_numpy_alias_import = False
+        for node in parsed.body:
+            if isinstance(node, ast.Import):
+                has_numpy_alias_import = has_numpy_alias_import or any(alias.name == "numpy" and alias.asname == "np" for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                has_numpy_alias_import = has_numpy_alias_import or (node.module == "numpy" and any(alias.name == "numpy" and alias.asname == "np" for alias in node.names))
+        if not has_numpy_alias_import:
+            missing_numpy_alias_import.append(source_path.name)
+
+    add_check(results, "meta_contract", case_id, "synthetic_case_numpy_alias_usage_detected", True, bool(modules_using_numpy_alias))
+    add_check(results, "meta_contract", case_id, "synthetic_case_numpy_alias_imports_declared", [], missing_numpy_alias_import)
+
+    summary["modules_using_numpy_alias"] = modules_using_numpy_alias
+    summary["missing_numpy_alias_import"] = missing_numpy_alias_import
+    return results, summary
 
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
     case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"

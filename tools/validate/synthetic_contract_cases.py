@@ -10,6 +10,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
 
