@@ -116,11 +116,13 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     )
 
 
-def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, position, history_snapshot):
+def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot):
     if chart_context is None or position.get('qty', 0) <= 0:
         return
+    signal_trade_pct = ((float(signal_close) - float(position.get('entry', signal_close))) / float(position.get('entry', signal_close)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0
     detail_lines = [
         f"股數: {int(position['qty']):,}",
+        f"本次績效: {signal_trade_pct:+.2f}%",
         f"資產成長: {history_snapshot['asset_growth_pct']:.1f}%",
         f"勝率: {history_snapshot['win_rate']:.1f}% | 風報比: {history_snapshot['payoff_ratio']:.2f}",
         f"期望值: {history_snapshot['expected_value']:.2f} R | 交易: {history_snapshot['trade_count']}",
@@ -132,6 +134,7 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, po
         anchor_price=signal_low,
         title='賣訊',
         detail_lines=detail_lines,
+        meta={'profit_pct': float(signal_trade_pct)},
     )
 
 
@@ -153,10 +156,15 @@ def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
     has_raw_buy_signal = bool(stats_dict.get('is_setup_today')) or stats_dict.get('extended_candidate_today') is not None
     sell_signal_today = bool(sell_condition[-1]) if len(sell_condition) > 0 else False
     history_gate_ok = bool(stats_dict.get('is_candidate', False))
+    if sell_signal_today:
+        primary_signal_line = "出現賣訊"
+    elif has_raw_buy_signal:
+        primary_signal_line = "出現買訊"
+    else:
+        primary_signal_line = "無買訊"
     status_lines = [
-        f"賣訊: {'是' if sell_signal_today else '否'}",
-        f"候選: {'是' if has_raw_buy_signal else '否'}",
-        f"歷績門檻: {'合格' if history_gate_ok else '未達'}",
+        primary_signal_line,
+        f"歷績門檻{'合格' if history_gate_ok else '未達'}",
     ]
     set_chart_status_box(chart_context, status_lines=status_lines, ok=history_gate_ok)
 
@@ -202,6 +210,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 chart_context=chart_context,
                 signal_date=signal_date,
                 signal_low=l[j - 1],
+                signal_close=c[j - 1],
                 position=position,
                 history_snapshot=signal_history_snapshot,
             )

@@ -44,7 +44,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
-        self._chart_hint_var = tk.StringVar(value="預設顯示最近 18 個月；滑鼠滾輪縮放、按住左鍵拖曳平移，左上即時顯示滑鼠所在 K 棒數值。")
+        self._chart_hint_var = tk.StringVar(value="預設顯示最近 18 個月；滑鼠滾輪縮放、按住左鍵拖曳平移、左右鍵逐根移動時間軸，左上即時顯示滑鼠所在 K 棒數值。")
         self._dataset_var = tk.StringVar(value=DEFAULT_DATASET_PROFILE)
         self._ticker_var = tk.StringVar()
         self._show_volume_var = tk.BooleanVar(value=False)
@@ -264,15 +264,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         bind_matplotlib_chart_navigation(figure, canvas)
         canvas.draw()
         canvas_widget = canvas.get_tk_widget()
+        canvas_widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
         canvas_widget.pack(fill="both", expand=True)
+        canvas_widget.focus_set()
 
         self._chart_canvas = canvas
         self._chart_figure = figure
         self._notebook.select(0)
         if self._show_volume_var.get():
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設從最近 18 個月開始，左上即時顯示滑鼠所在 K 棒數值，成交量為同圖 overlay。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設從最近 18 個月開始，滑鼠滾輪縮放、左鍵拖曳平移、左右鍵逐根移動，成交量為同圖 overlay。")
         else:
-            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設顯示最近 18 個月，左上即時顯示滑鼠所在 K 棒數值，隱藏成交量以保留大圖版面。")
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；預設顯示最近 18 個月，滑鼠滾輪縮放、左鍵拖曳平移、左右鍵逐根移動，隱藏成交量以保留大圖版面。")
 
     def _clear_embedded_chart(self):
         if self._chart_canvas is not None:

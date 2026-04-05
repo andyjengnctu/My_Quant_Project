@@ -66,6 +66,10 @@ def process_debug_position_step(
             action="半倉停利",
             price=exec_sell_price_half,
             qty=sold_qty,
+            meta={
+                'pnl_value': float(realized_delta),
+                'pnl_pct': float(((sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+            },
         )
 
     if 'STOP' in events or 'IND_SELL' in events:
@@ -97,6 +101,10 @@ def process_debug_position_step(
             action=action_str,
             price=sell_price,
             qty=final_exit_qty,
+            meta={
+                'pnl_value': float(final_leg_pnl),
+                'pnl_pct': float(((sell_net_price - float(position.get('entry', sell_price))) / float(position.get('entry', sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+            },
         )
     elif 'MISSED_SELL' in events:
         sell_block_reason = next((event for event in events if event in {'NO_VOLUME', 'LOCKED_DOWN'}), None)
@@ -154,4 +162,8 @@ def append_debug_forced_closeout(*, position, current_date, atr_last, params, tr
         action="期末強制結算",
         price=exec_sell_price,
         qty=position['qty'],
+        meta={
+            'pnl_value': float(final_leg_pnl),
+            'pnl_pct': float(((sell_net_price - float(position.get('entry', exec_sell_price))) / float(position.get('entry', exec_sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+        },
     )

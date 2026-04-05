@@ -8,6 +8,13 @@ from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 WORKBENCH_TITLE = "股票工具工作台"
 WORKBENCH_GEOMETRY = "1920x1180"
+WORKBENCH_BG = "#05090e"
+WORKBENCH_SURFACE = "#0a1220"
+WORKBENCH_SURFACE_ALT = "#0d1626"
+WORKBENCH_BORDER = "#18324a"
+WORKBENCH_TEXT = "#f7fbff"
+WORKBENCH_MUTED = "#d6dfeb"
+WORKBENCH_ACCENT = "#1f9cf0"
 
 
 PANEL_SPECS = (
@@ -30,6 +37,7 @@ def build_workbench_spec():
         "title": WORKBENCH_TITLE,
         "geometry": WORKBENCH_GEOMETRY,
         "startup_window_mode": "maximized",
+        "ui_theme": "deep_dark",
         "panels": [
             {
                 "panel_id": panel["panel_id"],
@@ -43,6 +51,40 @@ def build_workbench_spec():
         ],
     }
 
+
+def configure_workbench_theme(root):
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    root.configure(bg=WORKBENCH_BG)
+    root.option_add("*Background", WORKBENCH_BG)
+    root.option_add("*Foreground", WORKBENCH_TEXT)
+    root.option_add("*TCombobox*Listbox.background", WORKBENCH_SURFACE)
+    root.option_add("*TCombobox*Listbox.foreground", WORKBENCH_TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", WORKBENCH_ACCENT)
+    root.option_add("*TCombobox*Listbox.selectForeground", WORKBENCH_TEXT)
+
+    style.configure(".", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, fieldbackground=WORKBENCH_SURFACE, bordercolor=WORKBENCH_BORDER, lightcolor=WORKBENCH_BORDER, darkcolor=WORKBENCH_BORDER, troughcolor=WORKBENCH_BG)
+    style.configure("TFrame", background=WORKBENCH_BG)
+    style.configure("TLabelframe", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
+    style.configure("TLabelframe.Label", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.configure("TLabel", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.configure("TButton", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4))
+    style.map("TButton", background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
+    style.configure("TCheckbutton", background=WORKBENCH_BG, foreground=WORKBENCH_TEXT)
+    style.map("TCheckbutton", foreground=[("active", WORKBENCH_TEXT)])
+    style.configure("TEntry", fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, insertcolor=WORKBENCH_TEXT)
+    style.configure("TCombobox", fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, arrowcolor=WORKBENCH_TEXT)
+    style.configure("TNotebook", background=WORKBENCH_BG, borderwidth=0)
+    style.configure("TNotebook.Tab", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, padding=(10, 5))
+    style.map("TNotebook.Tab", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
+    style.configure("Treeview", background=WORKBENCH_SURFACE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER)
+    style.configure("Treeview.Heading", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT)
+    style.map("Treeview", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
+    style.configure("Vertical.TScrollbar", background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
+    style.configure("Horizontal.TScrollbar", background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
 
 def _maximize_root_window(root):
     try:
@@ -66,6 +108,7 @@ def _maximize_root_window(root):
 class StockToolsWorkbench:
     def __init__(self):
         self.root = tk.Tk()
+        configure_workbench_theme(self.root)
         self.root.title(WORKBENCH_TITLE)
         self.root.geometry(WORKBENCH_GEOMETRY)
         self.root.minsize(1520, 920)

@@ -109,6 +109,12 @@ def process_debug_entry_for_day(
                 action="買進",
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
+                meta={
+                    'limit_price': float(entry_plan['limit_price']),
+                    'entry_price': float(entry_result['buy_price']),
+                    'stop_price': float(entry_plan['init_sl']),
+                    'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                },
             )
         elif entry_result['count_as_missed_buy']:
             reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
@@ -193,6 +199,12 @@ def process_debug_entry_for_day(
                 action="買進(延續候選)",
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
+                meta={
+                    'limit_price': float(entry_plan['limit_price']),
+                    'entry_price': float(entry_result['buy_price']),
+                    'stop_price': float(entry_plan['init_sl']),
+                    'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                },
             )
         elif entry_result['count_as_missed_buy']:
             reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']

@@ -1832,6 +1832,73 @@ def validate_gui_mouse_navigation_contract_case(_base_params):
     return results, summary
 
 
+def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
+    case_id = "GUI_DARK_THEME_AND_KEYBOARD_PAN_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    workbench_spec = importlib.import_module("tools.gui").build_workbench_spec()
+
+    add_check(results, "output_contract", case_id, "gui_workbench_declares_deep_dark_theme", True, workbench_spec.get("ui_theme") == "deep_dark")
+    add_check(results, "output_contract", case_id, "gui_workbench_configures_dark_ttk_theme", True, "def configure_workbench_theme(root):" in workbench_source and 'style.theme_use("clam")' in workbench_source)
+    add_check(results, "output_contract", case_id, "charting_supports_keyboard_pan_event", True, '"key_press_event"' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_supports_status_chip_rendering", True, "def _render_status_chips(axis_price, status_box, label_font):" in charting_source)
+    add_check(results, "output_contract", case_id, "charting_supports_dynamic_candle_widths", True, "def _compute_dynamic_linewidths(axis_price, figure):" in charting_source)
+
+    minimal_payload = {
+        "dates": pd.date_range("2024-01-01", periods=120, freq="D"),
+        "date_labels": [f"2024-01-{(day % 30) + 1:02d}" for day in range(120)],
+        "x": np.arange(120, dtype=np.float64),
+        "open": np.linspace(30.0, 42.0, 120, dtype=np.float64),
+        "high": np.linspace(31.0, 43.0, 120, dtype=np.float64),
+        "low": np.linspace(29.0, 41.0, 120, dtype=np.float64),
+        "close": np.linspace(30.5, 42.5, 120, dtype=np.float64),
+        "volume": np.linspace(1000.0, 5000.0, 120, dtype=np.float64),
+        "up_mask": np.array([True if idx % 2 == 0 else False for idx in range(120)], dtype=bool),
+        "stop_line": np.full(120, np.nan, dtype=np.float64),
+        "tp_line": np.full(120, np.nan, dtype=np.float64),
+        "limit_line": np.full(120, np.nan, dtype=np.float64),
+        "entry_line": np.full(120, np.nan, dtype=np.float64),
+        "marker_groups": {},
+        "signal_annotations": [],
+        "summary_box": ["資產成長: 1.0%"],
+        "status_box": {"lines": ["出現買訊", "歷績門檻合格"], "ok": True},
+        "focus_positions": [100],
+        "default_view": {"start_idx": 84, "end_idx": 119},
+    }
+    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=True)
+
+    class _CanvasWidget:
+        def __init__(self):
+            self.config_calls = []
+        def configure(self, **kwargs):
+            self.config_calls.append(kwargs)
+        def focus_set(self):
+            return None
+    class _CanvasStub:
+        def __init__(self):
+            self._widget = _CanvasWidget()
+            self._connections = {}
+        def mpl_connect(self, name, callback):
+            self._connections[name] = callback
+            return len(self._connections)
+        def get_tk_widget(self):
+            return self._widget
+        def draw_idle(self):
+            return None
+    canvas = _CanvasStub()
+    figure.canvas = canvas
+    bind_matplotlib_chart_navigation(figure, canvas)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "figure_contract_keyboard_pan_enabled", True, contract.get("keyboard_pan_enabled"))
+    add_check(results, "output_contract", case_id, "figure_contract_dynamic_candle_width_enabled", True, contract.get("dynamic_candle_width_enabled"))
+    add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout", "left_bottom", contract.get("status_chip_layout"))
+    figure.clear()
+    return results, summary
+
+
 def validate_gui_chart_workspace_contract_case(_base_params):
     case_id = "GUI_CHART_WORKSPACE_CONTRACT"
     results = []

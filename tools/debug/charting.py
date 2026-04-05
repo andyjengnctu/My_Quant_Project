@@ -1,10 +1,11 @@
 import os
+import re
 
 import numpy as np
 import pandas as pd
 
 
-CHART_SIGNAL_BOX_ALPHA = 0.32
+CHART_SIGNAL_BOX_ALPHA = 0.44
 CHART_DEFAULT_LOOKBACK_MONTHS = 18
 CHART_DEFAULT_LOOKBACK_FALLBACK_BARS = 380
 CHART_FOCUS_PADDING_BARS = 15
@@ -14,26 +15,26 @@ CHART_PRICE_PADDING_RATIO = 0.035
 CHART_VOLUME_PADDING_RATIO = 0.10
 MATPLOTLIB_DEBUG_CHART_FIGSIZE = (18.2, 10.6)
 MATPLOTLIB_CANDLE_WIDTH = 0.72
-MATPLOTLIB_MARKER_SIZE = 88
+MATPLOTLIB_MARKER_SIZE = 132
 MATPLOTLIB_VOLUME_ALPHA = 0.42
-MATPLOTLIB_DARK_BG = "#04070b"
-MATPLOTLIB_GRID_COLOR = "#1a2634"
-MATPLOTLIB_TEXT_COLOR = "#edf2f7"
-MATPLOTLIB_MUTED_TEXT_COLOR = "#a8b3c2"
-MATPLOTLIB_UP_COLOR = "#ff5b6e"
-MATPLOTLIB_DOWN_COLOR = "#18b26b"
+MATPLOTLIB_DARK_BG = "#02050a"
+MATPLOTLIB_GRID_COLOR = "#16304a"
+MATPLOTLIB_TEXT_COLOR = "#fbfdff"
+MATPLOTLIB_MUTED_TEXT_COLOR = "#d7e3ef"
+MATPLOTLIB_UP_COLOR = "#ff4d5e"
+MATPLOTLIB_DOWN_COLOR = "#16a34a"
 MATPLOTLIB_STOP_COLOR = "#ff4d4f"
 MATPLOTLIB_TP_COLOR = "#22c55e"
 MATPLOTLIB_LIMIT_COLOR = "#4f86ff"
 MATPLOTLIB_ENTRY_COLOR = "#2f6df6"
-MATPLOTLIB_INFO_BOX_FACE = (0.02, 0.04, 0.06, 0.72)
-MATPLOTLIB_SIGNAL_BUY_COLOR = "#d9485f"
-MATPLOTLIB_SIGNAL_SELL_COLOR = "#8b5cf6"
+MATPLOTLIB_INFO_BOX_FACE = (0.02, 0.04, 0.06, 0.80)
+MATPLOTLIB_SIGNAL_BUY_COLOR = "#1f9cf0"
+MATPLOTLIB_SIGNAL_SELL_COLOR = "#ff6174"
 MATPLOTLIB_SIGNAL_TEXT_COLOR = "#f8fafc"
-MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO = 0.18
+MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO = 0.14
 MATPLOTLIB_VOLUME_OVERLAY_BOTTOM_GAP = 0.015
-MATPLOTLIB_CROSSHAIR_COLOR = "#9fb3c8"
-MATPLOTLIB_HOVER_BOX_FACE = (0.02, 0.04, 0.06, 0.68)
+MATPLOTLIB_CROSSHAIR_COLOR = "#b8d1e8"
+MATPLOTLIB_HOVER_BOX_FACE = (0.01, 0.03, 0.06, 0.82)
 MATPLOTLIB_CJK_FONT_CANDIDATES = (
     "Microsoft JhengHei",
     "Microsoft JhengHei UI",
@@ -54,6 +55,23 @@ MATPLOTLIB_CJK_FONT_CANDIDATES = (
 MATPLOTLIB_MIN_VISIBLE_BARS = 12
 MATPLOTLIB_WHEEL_ZOOM_IN_FACTOR = 0.82
 MATPLOTLIB_WHEEL_ZOOM_OUT_FACTOR = 1.22
+
+MATPLOTLIB_PAN_CURSOR = "fleur"
+MATPLOTLIB_KEY_PAN_STEP_RATIO = 0.16
+MATPLOTLIB_KEY_EDGE_MARGIN_BARS = 2
+MATPLOTLIB_DYNAMIC_BODY_WIDTH_RANGE = (1.8, 7.4)
+MATPLOTLIB_DYNAMIC_WICK_WIDTH_RANGE = (0.7, 1.7)
+MATPLOTLIB_VOLUME_WIDTH_SCALE = 0.72
+MATPLOTLIB_STATUS_CHIP_BUY_FACE = (0.10, 0.46, 0.94, 0.92)
+MATPLOTLIB_STATUS_CHIP_GATE_FACE = (0.98, 0.53, 0.10, 0.92)
+MATPLOTLIB_STATUS_CHIP_SELL_FACE = (0.90, 0.25, 0.34, 0.92)
+MATPLOTLIB_STATUS_CHIP_MUTED_FACE = (0.20, 0.27, 0.35, 0.92)
+MATPLOTLIB_BUY_FILL_FACE = (0.08, 0.28, 0.86, 0.38)
+MATPLOTLIB_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, 0.34)
+MATPLOTLIB_SELL_LOSS_FACE = (0.10, 0.60, 0.24, 0.34)
+MATPLOTLIB_SIGNAL_BUY_FACE = (0.10, 0.46, 0.94, CHART_SIGNAL_BOX_ALPHA)
+MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, CHART_SIGNAL_BOX_ALPHA)
+MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
 
 
 ACTION_STYLE_MAP = {
@@ -105,7 +123,7 @@ def _resolve_chart_pos(chart_context, current_date):
     return pos
 
 
-def _append_marker(marker_list, *, trace_name, current_date, price, qty, hover_text, note=""):
+def _append_marker(marker_list, *, trace_name, current_date, price, qty, hover_text, note="", meta=None):
     if pd.isna(price):
         return
     marker_list.append(
@@ -116,6 +134,7 @@ def _append_marker(marker_list, *, trace_name, current_date, price, qty, hover_t
             "qty": int(qty) if qty is not None and not pd.isna(qty) else 0,
             "note": str(note or ""),
             "hover_text": hover_text,
+            "meta": dict(meta or {}),
         }
     )
 
@@ -158,7 +177,7 @@ def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_t
     )
 
 
-def record_trade_marker(chart_context, *, current_date, action, price, qty, note=""):
+def record_trade_marker(chart_context, *, current_date, action, price, qty, note="", meta=None):
     if chart_context is None or pd.isna(price):
         return
     hover_text = (
@@ -176,6 +195,7 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
         qty=qty,
         note=note,
         hover_text=hover_text,
+        meta=meta,
     )
 
 
@@ -241,6 +261,7 @@ def _build_marker_groups(*, marker_lists, date_to_pos):
             "qty": int(marker.get("qty", 0) or 0),
             "note": str(marker.get("note", "") or ""),
             "hover_text": marker["hover_text"],
+            "meta": dict(marker.get("meta") or {}),
         }
         groups.setdefault(marker["trace_name"], []).append(normalized_marker)
         focus_positions.append(int(pos))
@@ -263,6 +284,7 @@ def _build_signal_annotations(*, signal_annotations, date_to_pos):
             "title": item["title"],
             "detail_text": item.get("detail_text", ""),
             "note": item.get("note", ""),
+            "meta": dict(item.get("meta") or {}),
         }
         normalized_annotations.append(normalized)
         focus_positions.append(int(pos))
@@ -539,6 +561,127 @@ def _build_hover_text(chart_payload, index):
     return "   ".join(parts)
 
 
+def _extract_signed_percent(text):
+    if not text:
+        return None
+    match = re.search(r'([+-]?\d+(?:\.\d+)?)\s*%', str(text))
+    return float(match.group(1)) if match else None
+
+
+def _resolve_signal_annotation_face(item):
+    is_buy = item.get("signal_type") == "buy"
+    if is_buy:
+        return MATPLOTLIB_SIGNAL_BUY_FACE, MATPLOTLIB_SIGNAL_BUY_COLOR
+    profit_pct = item.get("meta", {}).get("profit_pct")
+    if profit_pct is None:
+        profit_pct = _extract_signed_percent(item.get("detail_text", ""))
+    if profit_pct is not None and float(profit_pct) >= 0.0:
+        return MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE, MATPLOTLIB_SIGNAL_SELL_COLOR
+    return MATPLOTLIB_SIGNAL_SELL_LOSS_FACE, MATPLOTLIB_DOWN_COLOR
+
+
+def _resolve_trade_box_style(trace_name, marker):
+    meta = marker.get("meta") or {}
+    if trace_name in {"買進", "買進(延續候選)"}:
+        return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
+    if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
+        pnl_pct = meta.get("pnl_pct")
+        if pnl_pct is None:
+            pnl_pct = _extract_signed_percent(marker.get("note", ""))
+        face = MATPLOTLIB_SELL_PROFIT_FACE if pnl_pct is not None and float(pnl_pct) >= 0.0 else MATPLOTLIB_SELL_LOSS_FACE
+        color = MATPLOTLIB_UP_COLOR if pnl_pct is not None and float(pnl_pct) >= 0.0 else MATPLOTLIB_DOWN_COLOR
+        return face, color, "below"
+    if trace_name == "半倉停利":
+        return MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE, MATPLOTLIB_TP_COLOR, "above"
+    return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_TEXT_COLOR, "above"
+
+
+def _build_trade_label_text(trace_name, marker):
+    meta = marker.get("meta") or {}
+    if trace_name in {"買進", "買進(延續候選)"}:
+        lines = ["買進"]
+        for key in ("limit_price", "entry_price", "stop_price", "tp_price"):
+            value = meta.get(key)
+            if value is None or pd.isna(value):
+                continue
+            label = {
+                "limit_price": "限價",
+                "entry_price": "成交",
+                "stop_price": "停損",
+                "tp_price": "停利",
+            }[key]
+            lines.append(f"{label}: {float(value):.2f}")
+        qty = marker.get("qty", 0)
+        if qty:
+            lines.append(f"股數: {int(qty):,}")
+        return "\n".join(lines)
+    if trace_name == "半倉停利":
+        return f"平倉: {int(marker.get('qty', 0)):,}"
+    if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
+        pnl_pct = meta.get("pnl_pct")
+        pnl_value = meta.get("pnl_value")
+        action_label = "停損" if trace_name == "停損殺出" else ("賣出" if trace_name == "指標賣出" else "結算")
+        lines = [action_label]
+        if pnl_pct is not None:
+            lines.append(f"本次績效: {float(pnl_pct):+.2f}%")
+        if pnl_value is not None:
+            lines.append(f"損益: {float(pnl_value):+,.0f}")
+        return "\n".join(lines)
+    return trace_name
+
+
+def _build_status_chip_specs(status_box):
+    status_lines = [str(line).strip() for line in (status_box.get("lines") or []) if str(line).strip()]
+    chips = []
+    for line in status_lines:
+        if "買訊" in line or "候選" in line:
+            chips.append({"text": "出現買訊" if "無" not in line and "否" not in line else "無買訊", "face": MATPLOTLIB_STATUS_CHIP_BUY_FACE if "無" not in line and "否" not in line else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+        elif "賣訊" in line:
+            chips.append({"text": "出現賣訊" if "無" not in line and "否" not in line else "無賣訊", "face": MATPLOTLIB_STATUS_CHIP_SELL_FACE if "無" not in line and "否" not in line else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+        elif "歷績門檻" in line:
+            chips.append({"text": "歷績門檻合格" if "合格" in line else "歷績門檻未達", "face": MATPLOTLIB_STATUS_CHIP_GATE_FACE if "合格" in line else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+        else:
+            chips.append({"text": line, "face": MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+    return chips[:3]
+
+
+def _render_status_chips(axis_price, status_box, label_font):
+    artists = []
+    chips = _build_status_chip_specs(status_box)
+    if not chips:
+        return artists
+    x_cursor = 0.015
+    for chip in chips:
+        artist = axis_price.text(
+            x_cursor,
+            0.05,
+            chip["text"],
+            transform=axis_price.transAxes,
+            ha="left",
+            va="bottom",
+            color=MATPLOTLIB_TEXT_COLOR,
+            fontsize=11 if label_font is None else None,
+            fontproperties=label_font,
+            fontweight="bold" if label_font is None else None,
+            bbox={"boxstyle": "round,pad=0.34", "fc": chip["face"], "ec": "none"},
+            zorder=7,
+        )
+        artists.append(artist)
+        x_cursor += 0.12 + len(chip["text"]) * 0.0074
+    return artists
+
+
+def _compute_dynamic_linewidths(axis_price, figure):
+    left, right = axis_price.get_xlim()
+    visible_bars = max(float(right) - float(left), 1.0)
+    axis_width_px = max(float(axis_price.bbox.width), 240.0)
+    px_per_bar = axis_width_px / visible_bars
+    body_px = min(max(px_per_bar * 0.72, MATPLOTLIB_DYNAMIC_BODY_WIDTH_RANGE[0]), MATPLOTLIB_DYNAMIC_BODY_WIDTH_RANGE[1])
+    wick_px = min(max(px_per_bar * 0.18, MATPLOTLIB_DYNAMIC_WICK_WIDTH_RANGE[0]), MATPLOTLIB_DYNAMIC_WICK_WIDTH_RANGE[1])
+    pt_scale = 72.0 / float(figure.dpi)
+    return body_px * pt_scale, wick_px * pt_scale
+
+
 def _render_signal_annotations(axis_price, signal_annotations, label_font, *, start_idx=None, end_idx=None):
     rendered = []
     for item in signal_annotations:
@@ -547,8 +690,8 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
         if end_idx is not None and int(item["x"]) > int(end_idx):
             continue
         is_buy = item["signal_type"] == "buy"
-        y_offset = -34 if is_buy else -52
-        arrow_color = MATPLOTLIB_SIGNAL_BUY_COLOR if is_buy else MATPLOTLIB_SIGNAL_SELL_COLOR
+        y_offset = -58 if is_buy else -68
+        face_color, arrow_color = _resolve_signal_annotation_face(item)
         annotation_text = item["title"]
         if item.get("detail_text"):
             annotation_text = f"{annotation_text}\n{item['detail_text']}"
@@ -560,12 +703,12 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
                 textcoords="offset points",
                 ha="center",
                 va="top",
-                color=MATPLOTLIB_SIGNAL_TEXT_COLOR,
-                fontsize=9 if label_font is None else None,
+                color=MATPLOTLIB_TEXT_COLOR,
+                fontsize=10 if label_font is None else None,
                 fontproperties=label_font,
-                bbox={"boxstyle": "round,pad=0.3", "fc": arrow_color, "ec": arrow_color, "alpha": CHART_SIGNAL_BOX_ALPHA},
-                arrowprops={"arrowstyle": "-|>", "color": arrow_color, "lw": 0.9, "alpha": 0.8},
-                zorder=6,
+                bbox={"boxstyle": "round,pad=0.42", "fc": face_color, "ec": arrow_color, "alpha": 1.0},
+                arrowprops={"arrowstyle": "-|>", "color": arrow_color, "lw": 1.35, "alpha": 0.96, "mutation_scale": 17},
+                zorder=7,
                 annotation_clip=True,
             )
         )
@@ -575,32 +718,28 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=None, end_idx=None):
     rendered = []
     for trace_name, markers in marker_groups.items():
-        if trace_name not in {"半倉停利", "停損殺出", "指標賣出", "期末強制結算"}:
-            continue
         for marker in markers:
             if start_idx is not None and int(marker["x"]) < int(start_idx):
                 continue
             if end_idx is not None and int(marker["x"]) > int(end_idx):
                 continue
-            if trace_name == "半倉停利":
-                label = f"平倉: {marker['qty']:,}"
-            elif trace_name == "停損殺出":
-                label = "停損"
-            elif trace_name == "指標賣出":
-                label = "賣出"
-            else:
-                label = "結算"
+            if trace_name not in {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}:
+                continue
+            face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
+            y_offset = -78 if placement == "below" else 16
+            va = "top" if placement == "below" else "bottom"
             rendered.append(
                 axis_price.annotate(
-                    label,
+                    _build_trade_label_text(trace_name, marker),
                     xy=(marker["x"], marker["price"]),
-                    xytext=(0, 12),
+                    xytext=(0, y_offset),
                     textcoords="offset points",
                     ha="center",
-                    va="bottom",
-                    color=ACTION_STYLE_MAP.get(trace_name, {}).get("color", MATPLOTLIB_TEXT_COLOR),
-                    fontsize=9 if label_font is None else None,
+                    va=va,
+                    color=MATPLOTLIB_TEXT_COLOR if placement == "below" else text_color,
+                    fontsize=10 if label_font is None else None,
                     fontproperties=label_font,
+                    bbox={"boxstyle": "round,pad=0.35", "fc": face_color, "ec": "none"},
                     zorder=6,
                     annotation_clip=True,
                 )
@@ -631,7 +770,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     figure = Figure(figsize=MATPLOTLIB_DEBUG_CHART_FIGSIZE, dpi=96, facecolor=MATPLOTLIB_DARK_BG)
     axis_price = figure.add_subplot(1, 1, 1)
     axis_volume = None
-    figure.subplots_adjust(left=0.042, right=0.985, top=0.94, bottom=0.07)
+    figure.subplots_adjust(left=0.040, right=0.986, top=0.94, bottom=0.075)
     axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
     axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.72, linewidth=0.8)
     axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
@@ -669,26 +808,38 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         body_high = body_high.copy()
         body_low[flat_mask] -= float(min_body_height) / 2.0
         body_high[flat_mask] += float(min_body_height) / 2.0
-    axis_price.vlines(x_positions, low_values, high_values, colors=candle_colors, linewidth=1.05, zorder=2)
+    wick_collection = axis_price.vlines(x_positions, low_values, high_values, colors=candle_colors, linewidth=1.0, zorder=2)
+    body_up_collection = None
+    body_down_collection = None
     if np.any(up_mask):
-        axis_price.vlines(x_positions[up_mask], body_low[up_mask], body_high[up_mask], colors=MATPLOTLIB_UP_COLOR, linewidth=5.8, zorder=3)
+        body_up_collection = axis_price.vlines(x_positions[up_mask], body_low[up_mask], body_high[up_mask], colors=MATPLOTLIB_UP_COLOR, linewidth=4.8, zorder=3)
     if np.any(~up_mask):
-        axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=5.8, zorder=3)
-    axis_price.step(x_positions, chart_payload["stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=1.9, label="停損線", zorder=4)
+        body_down_collection = axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=4.8, zorder=3)
+    axis_price.step(x_positions, chart_payload["stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, label="停損線", zorder=4)
     if np.isfinite(chart_payload["tp_line"]).any():
-        axis_price.step(x_positions, chart_payload["tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.8, label="半倉停利線", zorder=4)
+        axis_price.step(x_positions, chart_payload["tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, label="停利線", zorder=4)
     if np.isfinite(chart_payload["limit_line"]).any():
         axis_price.step(x_positions, chart_payload["limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (4, 2)), label="限價線", zorder=4)
     if np.isfinite(chart_payload["entry_line"]).any():
         axis_price.step(x_positions, chart_payload["entry_line"], where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, label="成交線", zorder=4)
     for trace_name, markers in chart_payload["marker_groups"].items():
         style = ACTION_STYLE_MAP.get(trace_name, {"mpl_marker": "o", "color": MATPLOTLIB_TEXT_COLOR})
-        axis_price.scatter([item["x"] for item in markers], [item["price"] for item in markers], marker=style["mpl_marker"], s=MATPLOTLIB_MARKER_SIZE, color=style["color"], linewidths=1.5, zorder=5, label=trace_name)
+        axis_price.scatter(
+            [item["x"] for item in markers],
+            [item["price"] for item in markers],
+            marker=style["mpl_marker"],
+            s=MATPLOTLIB_MARKER_SIZE,
+            color=style["color"],
+            linewidths=1.8,
+            zorder=5,
+            label=trace_name,
+        )
     axis_price.set_title(f"{ticker} 單股回測 K 線交易檢視", fontsize=18, color=MATPLOTLIB_TEXT_COLOR, loc="left", pad=10, fontweight="bold" if title_font is None else None, fontproperties=title_font)
     axis_price.set_ylabel("價格", color=MATPLOTLIB_TEXT_COLOR, fontsize=12 if label_font is None else None, fontproperties=label_font)
+    volume_collection = None
     if show_volume and axis_volume is not None:
         volume_colors = np.where(up_mask, MATPLOTLIB_UP_COLOR, MATPLOTLIB_DOWN_COLOR)
-        axis_volume.bar(x_positions, chart_payload["volume"], width=MATPLOTLIB_CANDLE_WIDTH, color=volume_colors, alpha=MATPLOTLIB_VOLUME_ALPHA, align="center", zorder=1, label="成交量")
+        volume_collection = axis_volume.vlines(x_positions, 0.0, chart_payload["volume"], colors=volume_colors, linewidth=2.2, alpha=MATPLOTLIB_VOLUME_ALPHA, zorder=1)
     date_labels = chart_payload["date_labels"]
     def _format_date_label(x_value, _pos):
         rounded = int(round(x_value))
@@ -696,28 +847,20 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
     line_handles, line_labels = axis_price.get_legend_handles_labels()
-    if show_volume and axis_volume is not None:
-        volume_handles, volume_labels = axis_volume.get_legend_handles_labels()
-        line_handles = line_handles + volume_handles
-        line_labels = line_labels + volume_labels
     if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(7, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.01), handlelength=2.2)
+        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.01), handlelength=2.2)
     hover_text_artist = axis_price.text(0.01, 0.965, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.25", "fc": MATPLOTLIB_HOVER_BOX_FACE, "ec": "none"}, zorder=8)
     hover_text_artist.set_text(_build_hover_text(chart_payload, chart_payload["default_view"]["end_idx"]))
-    crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.6, zorder=1)
+    crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
     crosshair_hline = axis_price.axhline(y=chart_payload["close"][chart_payload["default_view"]["end_idx"]], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.35, zorder=1)
     rendered_signal_annotations = []
     rendered_trade_labels = []
     summary_lines = chart_payload.get("summary_box") or []
     summary_artist = None
     if summary_lines:
-        summary_artist = axis_price.text(0.985, 0.52, "\n".join(summary_lines), transform=axis_price.transAxes, ha="right", va="center", color=MATPLOTLIB_TEXT_COLOR, fontsize=11 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.32", "fc": MATPLOTLIB_INFO_BOX_FACE, "ec": MATPLOTLIB_GRID_COLOR, "lw": 0.9}, zorder=6)
+        summary_artist = axis_price.text(0.985, 0.52, "\n".join(summary_lines), transform=axis_price.transAxes, ha="right", va="center", color=MATPLOTLIB_TEXT_COLOR, fontsize=11 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.34", "fc": MATPLOTLIB_INFO_BOX_FACE, "ec": MATPLOTLIB_GRID_COLOR, "lw": 0.9}, zorder=6)
     status_box = chart_payload.get("status_box") or {}
-    status_lines = status_box.get("lines") or []
-    status_artist = None
-    if status_lines:
-        status_face = (0.02, 0.11, 0.08, 0.82) if status_box.get("ok", False) else (0.16, 0.10, 0.03, 0.85)
-        status_artist = axis_price.text(0.985, 0.04, "\n".join(status_lines), transform=axis_price.transAxes, ha="right", va="bottom", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.28", "fc": status_face, "ec": MATPLOTLIB_GRID_COLOR, "lw": 0.9}, zorder=6)
+    status_chip_artists = _render_status_chips(axis_price, status_box, legend_font)
     default_view = chart_payload["default_view"]
     x_start, x_end = _clamp_chart_xlim(default_view["start_idx"] - 1, default_view["end_idx"] + 1, total_points=len(chart_payload["x"]))
     ranges = compute_visible_value_ranges(chart_payload, start_idx=x_start, end_idx=x_end)
@@ -738,28 +881,20 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     def _refresh_overlay_annotations(start_idx, end_idx):
         render_start = max(0, int(start_idx) - 2)
         render_end = min(len(chart_payload["x"]) - 1, int(end_idx) + 2)
-        _replace_artist_list(
-            rendered_signal_annotations,
-            _render_signal_annotations(
-                axis_price,
-                chart_payload.get("signal_annotations", []),
-                legend_font,
-                start_idx=render_start,
-                end_idx=render_end,
-            ),
-        )
-        _replace_artist_list(
-            rendered_trade_labels,
-            _render_trade_labels(
-                axis_price,
-                chart_payload["marker_groups"],
-                legend_font,
-                start_idx=render_start,
-                end_idx=render_end,
-            ),
-        )
+        _replace_artist_list(rendered_signal_annotations, _render_signal_annotations(axis_price, chart_payload.get("signal_annotations", []), legend_font, start_idx=render_start, end_idx=render_end))
+        _replace_artist_list(rendered_trade_labels, _render_trade_labels(axis_price, chart_payload["marker_groups"], legend_font, start_idx=render_start, end_idx=render_end))
 
-    def _sync_visible_ranges(_axis):
+    def _refresh_candle_widths():
+        body_width, wick_width = _compute_dynamic_linewidths(axis_price, figure)
+        wick_collection.set_linewidth(wick_width)
+        if body_up_collection is not None:
+            body_up_collection.set_linewidth(body_width)
+        if body_down_collection is not None:
+            body_down_collection.set_linewidth(body_width)
+        if volume_collection is not None:
+            volume_collection.set_linewidth(body_width * MATPLOTLIB_VOLUME_WIDTH_SCALE)
+
+    def _sync_visible_ranges(*, force=False, redraw=True):
         if sync_state["updating"]:
             return
         sync_state["updating"] = True
@@ -771,21 +906,24 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
                 if axis_volume is not None:
                     axis_volume.set_xlim(clamped_left, clamped_right, emit=False)
             visible_window = (int(np.floor(clamped_left)), int(np.ceil(clamped_right)))
-            if sync_state["last_window"] != visible_window:
+            if force or sync_state["last_window"] != visible_window:
                 visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=clamped_left, end_idx=clamped_right)
                 axis_price.set_ylim(visible_ranges["price_min"], visible_ranges["price_max"])
                 if axis_volume is not None:
                     axis_volume.set_ylim(visible_ranges["volume_min"], visible_ranges["volume_max"])
                 _refresh_overlay_annotations(*visible_window)
                 sync_state["last_window"] = visible_window
-            if figure.canvas is not None:
+            _refresh_candle_widths()
+            if redraw and figure.canvas is not None:
                 figure.canvas.draw_idle()
         finally:
             sync_state["updating"] = False
+
     initial_visible_window = (int(np.floor(x_start)), int(np.ceil(x_end)))
     _refresh_overlay_annotations(*initial_visible_window)
+    _refresh_candle_widths()
     sync_state["last_window"] = initial_visible_window
-    axis_price.callbacks.connect("xlim_changed", _sync_visible_ranges)
+    axis_price.callbacks.connect("xlim_changed", lambda _axis: _sync_visible_ranges(force=False, redraw=True))
     _apply_axis_text_font(axis_price, base_font)
     if axis_volume is not None:
         _apply_axis_text_font(axis_volume, base_font)
@@ -804,13 +942,16 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "volume_overlay_ratio": float(MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO),
         "mouse_wheel_zoom_enabled": False,
         "mouse_left_drag_pan_enabled": False,
+        "keyboard_pan_enabled": False,
         "toolbar_required": False,
         "hover_value_display_enabled": True,
         "twse_up_color": MATPLOTLIB_UP_COLOR,
         "twse_down_color": MATPLOTLIB_DOWN_COLOR,
         "summary_box_present": bool(summary_lines),
-        "status_box_present": bool(status_lines),
+        "status_box_present": bool(status_box.get("lines")),
+        "status_chip_layout": "left_bottom",
         "signal_annotation_count": int(len(chart_payload.get("signal_annotations", []))),
+        "dynamic_candle_width_enabled": True,
     }
     figure._stock_chart_navigation_state = {
         "axis_price": axis_price,
@@ -822,11 +963,15 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "hover_text_artist": hover_text_artist,
         "crosshair_vline": crosshair_vline,
         "crosshair_hline": crosshair_hline,
-        "hover_last_index": None,
+        "hover_last_index": int(chart_payload["default_view"]["end_idx"]),
         "summary_artist": summary_artist,
-        "status_artist": status_artist,
+        "status_chip_artists": status_chip_artists,
         "signal_artists": rendered_signal_annotations,
         "trade_label_artists": rendered_trade_labels,
+        "body_up_collection": body_up_collection,
+        "body_down_collection": body_down_collection,
+        "wick_collection": wick_collection,
+        "volume_collection": volume_collection,
     }
     return figure
 
@@ -845,26 +990,50 @@ def bind_matplotlib_chart_navigation(figure, canvas):
     hover_text_artist = state["hover_text_artist"]
     crosshair_vline = state["crosshair_vline"]
     crosshair_hline = state["crosshair_hline"]
+    sync_visible_ranges = state["sync_visible_ranges"]
     drag_state = {"active": False, "anchor_x": None, "orig_xlim": None}
     canvas_widget = canvas.get_tk_widget()
+    canvas_widget.configure(cursor="", highlightthickness=0, bd=0, takefocus=1, background=MATPLOTLIB_DARK_BG)
+
     def _allowed_axis(event):
         return event.inaxes in {axis_price, axis_volume}
+
+    def _set_hover_index(index, *, redraw=True):
+        nearest_idx = int(np.clip(index, 0, total_points - 1))
+        state["hover_last_index"] = nearest_idx
+        hover_text_artist.set_text(_build_hover_text(chart_payload, nearest_idx))
+        crosshair_vline.set_xdata([nearest_idx, nearest_idx])
+        close_price = float(chart_payload["close"][nearest_idx])
+        crosshair_hline.set_ydata([close_price, close_price])
+        if redraw and figure.canvas is not None:
+            figure.canvas.draw_idle()
+
     def _update_hover(event):
         if not _allowed_axis(event):
             return
         data_x = _resolve_event_data_x(axis_price, event)
         if data_x is None:
             return
-        nearest_idx = int(np.clip(round(data_x), 0, total_points - 1))
-        if state.get("hover_last_index") == nearest_idx:
-            return
-        state["hover_last_index"] = nearest_idx
-        hover_text_artist.set_text(_build_hover_text(chart_payload, nearest_idx))
-        crosshair_vline.set_xdata([nearest_idx, nearest_idx])
-        close_price = float(chart_payload["close"][nearest_idx])
-        crosshair_hline.set_ydata([close_price, close_price])
-        if figure.canvas is not None:
+        _set_hover_index(int(round(data_x)), redraw=True)
+
+    def _pan_visible_window(delta_bars, *, relayout=False):
+        left, right = axis_price.get_xlim()
+        next_left, next_right = _clamp_chart_xlim(left + float(delta_bars), right + float(delta_bars), total_points=total_points)
+        axis_price.set_xlim(next_left, next_right, emit=False)
+        if axis_volume is not None:
+            axis_volume.set_xlim(next_left, next_right, emit=False)
+        if relayout:
+            sync_visible_ranges(force=True, redraw=True)
+        elif figure.canvas is not None:
             figure.canvas.draw_idle()
+
+    def _ensure_hover_visible(index):
+        left, right = axis_price.get_xlim()
+        if index >= int(np.floor(right)) - MATPLOTLIB_KEY_EDGE_MARGIN_BARS:
+            _pan_visible_window(index - (int(np.floor(right)) - MATPLOTLIB_KEY_EDGE_MARGIN_BARS), relayout=True)
+        elif index <= int(np.ceil(left)) + MATPLOTLIB_KEY_EDGE_MARGIN_BARS:
+            _pan_visible_window(index - (int(np.ceil(left)) + MATPLOTLIB_KEY_EDGE_MARGIN_BARS), relayout=True)
+
     def _on_press(event):
         if event.button != 1 or not _allowed_axis(event):
             return
@@ -874,7 +1043,9 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         drag_state["active"] = True
         drag_state["anchor_x"] = anchor_x
         drag_state["orig_xlim"] = axis_price.get_xlim()
-        canvas_widget.configure(cursor="fleur")
+        canvas_widget.focus_set()
+        canvas_widget.configure(cursor=MATPLOTLIB_PAN_CURSOR)
+
     def _on_motion(event):
         if drag_state["active"]:
             current_x = _resolve_event_data_x(axis_price, event)
@@ -883,16 +1054,23 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             origin_left, origin_right = drag_state["orig_xlim"]
             delta = drag_state["anchor_x"] - current_x
             next_left, next_right = _clamp_chart_xlim(origin_left + delta, origin_right + delta, total_points=total_points)
-            axis_price.set_xlim(next_left, next_right)
+            axis_price.set_xlim(next_left, next_right, emit=False)
+            if axis_volume is not None:
+                axis_volume.set_xlim(next_left, next_right, emit=False)
+            if figure.canvas is not None:
+                figure.canvas.draw_idle()
             return
         _update_hover(event)
+
     def _on_release(event):
         if event.button == 1 and drag_state["active"]:
             drag_state["active"] = False
             drag_state["anchor_x"] = None
             drag_state["orig_xlim"] = None
             canvas_widget.configure(cursor="")
+            sync_visible_ranges(force=True, redraw=True)
             _update_hover(event)
+
     def _on_scroll(event):
         if not _allowed_axis(event):
             return
@@ -910,20 +1088,41 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         next_left = focus_x - new_width * focus_ratio
         next_right = next_left + new_width
         next_left, next_right = _clamp_chart_xlim(next_left, next_right, total_points=total_points)
-        axis_price.set_xlim(next_left, next_right)
-        _update_hover(event)
+        axis_price.set_xlim(next_left, next_right, emit=False)
+        if axis_volume is not None:
+            axis_volume.set_xlim(next_left, next_right, emit=False)
+        sync_visible_ranges(force=True, redraw=True)
+        _set_hover_index(int(round(focus_x)), redraw=True)
+
+    def _on_key_press(event):
+        key = getattr(event, "key", None)
+        if key not in {"left", "right"}:
+            return
+        current_index = state.get("hover_last_index")
+        if current_index is None:
+            current_index = int(round(sum(axis_price.get_xlim()) / 2.0))
+        next_index = max(0, current_index - 1) if key == "left" else min(total_points - 1, current_index + 1)
+        _set_hover_index(next_index, redraw=False)
+        _ensure_hover_visible(next_index)
+        if figure.canvas is not None:
+            figure.canvas.draw_idle()
+
     def _on_leave(_event):
-        canvas_widget.configure(cursor="")
+        if not drag_state["active"]:
+            canvas_widget.configure(cursor="")
+
     connection_ids = {
         "button_press_event": canvas.mpl_connect("button_press_event", _on_press),
         "motion_notify_event": canvas.mpl_connect("motion_notify_event", _on_motion),
         "button_release_event": canvas.mpl_connect("button_release_event", _on_release),
         "scroll_event": canvas.mpl_connect("scroll_event", _on_scroll),
         "figure_leave_event": canvas.mpl_connect("figure_leave_event", _on_leave),
+        "key_press_event": canvas.mpl_connect("key_press_event", _on_key_press),
     }
     state["connection_ids"] = connection_ids
     figure._stock_chart_contract["mouse_wheel_zoom_enabled"] = True
     figure._stock_chart_contract["mouse_left_drag_pan_enabled"] = True
+    figure._stock_chart_contract["keyboard_pan_enabled"] = True
     figure._stock_chart_contract["toolbar_required"] = False
     return connection_ids
 
