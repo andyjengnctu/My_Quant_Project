@@ -1847,6 +1847,7 @@ def _build_matplotlib_canvas_stub():
             self._connections = {}
             self._grabbed_axis = None
             self.release_calls = []
+            self.toolbar = None
         def mpl_connect(self, name, callback):
             self._connections[name] = callback
             return len(self._connections)
@@ -1878,6 +1879,17 @@ def validate_gui_navigation_canvas_stub_cleanup_contract_case(_base_params):
     canvas.release_mouse(sentinel_axis)
     add_check(results, "output_contract", case_id, "canvas_stub_release_mouse_clears_grabbed_axis", None, canvas._grabbed_axis)
     add_check(results, "output_contract", case_id, "canvas_stub_release_mouse_records_axis", 1, len(canvas.release_calls))
+    return results, summary
+
+
+def validate_gui_navigation_canvas_stub_toolbar_contract_case(_base_params):
+    case_id = "GUI_NAVIGATION_CANVAS_STUB_TOOLBAR_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    canvas = _build_matplotlib_canvas_stub()
+    add_check(results, "output_contract", case_id, "canvas_stub_declares_toolbar_attribute", True, hasattr(canvas, "toolbar"))
+    add_check(results, "output_contract", case_id, "canvas_stub_toolbar_defaults_to_none", None, getattr(canvas, "toolbar", None))
     return results, summary
 
 
