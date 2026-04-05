@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import webbrowser
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -42,10 +43,6 @@ SUMMARY_FONT = ("Consolas", 10)
 SUMMARY_HEADER_FONT = ("Consolas", 10, "bold")
 SUMMARY_ITEM_WIDTH = 16
 SUMMARY_VALUE_WIDTH = 16
-SUMMARY_IMAGE_PADDING_X = 8
-SUMMARY_IMAGE_PADDING_Y = 6
-SUMMARY_IMAGE_ROW_GAP = 2
-SUMMARY_IMAGE_DPI = 120
 
 
 class _ThreadSafeConsoleWriter(io.TextIOBase):
@@ -79,7 +76,6 @@ class PortfolioBacktestPanel(ttk.Frame):
         self._chart_canvas = None
         self._chart_figure = None
         self._chart_hover_binding_id = None
-        self._summary_font_family = None
         self._console_writer = _ThreadSafeConsoleWriter(self)
         self._build_ui()
         self._render_summary_placeholder("尚未執行投組回測")
@@ -165,7 +161,16 @@ class PortfolioBacktestPanel(ttk.Frame):
         )
         self._summary_canvas.grid(row=1, column=0, sticky="nsew")
         self._summary_canvas.bind("<Configure>", self._handle_summary_canvas_configure, add="+")
+        self._summary_fonts = {
+            SUMMARY_FONT: tkfont.Font(font=SUMMARY_FONT),
+            SUMMARY_HEADER_FONT: tkfont.Font(font=SUMMARY_HEADER_FONT),
+        }
+        self._summary_line_spacing = max(
+            self._summary_fonts[SUMMARY_FONT].metrics("linespace"),
+            self._summary_fonts[SUMMARY_HEADER_FONT].metrics("linespace"),
+        ) + 2
         self._summary_rows = []
+        self._summary_image_id = None
         self._summary_photo = None
         self._summary_content_width = 0
         self._summary_content_height = 0
@@ -316,102 +321,78 @@ class PortfolioBacktestPanel(ttk.Frame):
     def _clear_summary_rows(self):
         self._summary_canvas.delete("all")
         self._summary_rows = []
+        self._summary_image_id = None
         self._summary_photo = None
         self._summary_content_width = 0
         self._summary_content_height = 0
 
     def _append_summary_segments(self, segments):
-        self._summary_rows.append([(str(text), str(tag)) for text, tag in segments])
+        normalized_segments = []
+        x = 8
+        row_height = self._summary_line_spacing
+        for text, tag in segments:
+            text = str(text)
+            normalized_segments.append((text, tag))
+            _, font = self._summary_tag_style(tag)
+            font_obj = self._summary_fonts[font]
+            x += int(font_obj.measure(text))
+        self._summary_rows.append(tuple(normalized_segments))
+        self._summary_content_width = max(self._summary_content_width, x + 8)
+        self._summary_content_height += row_height
+
+    def _render_summary_image(self):
+        self._summary_canvas.delete("all")
+        self._summary_image_id = None
+        self._summary_photo = None
+        if not self._summary_rows:
+            return
+
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+        from matplotlib.font_manager import FontProperties
+
+        width_px = max(int(self._summary_content_width or 0), 64)
+        height_px = max(int(self._summary_content_height or 0), self._summary_line_spacing)
+        dpi = 100
+        figure = Figure(figsize=(width_px / dpi, height_px / dpi), dpi=dpi, facecolor=SUMMARY_BG)
+        canvas = FigureCanvasAgg(figure)
+        axis = figure.add_axes([0, 0, 1, 1])
+        axis.set_axis_off()
+        axis.set_facecolor(SUMMARY_BG)
+        axis.set_xlim(0, width_px)
+        axis.set_ylim(height_px, 0)
+
+        font_family = self._resolve_matplotlib_font_family()
+        regular_font = FontProperties(family=font_family, size=10) if font_family else FontProperties(size=10)
+        bold_font = FontProperties(family=font_family, size=10, weight="bold") if font_family else FontProperties(size=10, weight="bold")
+
+        for row_index, segments in enumerate(self._summary_rows):
+            x = 8
+            baseline_y = row_index * self._summary_line_spacing + int(self._summary_line_spacing * 0.82)
+            for text, tag in segments:
+                color, font = self._summary_tag_style(tag)
+                font_obj = self._summary_fonts[font]
+                axis.text(
+                    x,
+                    baseline_y,
+                    text,
+                    color=color,
+                    fontproperties=(bold_font if font == SUMMARY_HEADER_FONT else regular_font),
+                    ha="left",
+                    va="baseline",
+                )
+                x += int(font_obj.measure(text))
+
+        buffer = io.BytesIO()
+        figure.savefig(buffer, format="png", dpi=dpi, facecolor=SUMMARY_BG, transparent=False, bbox_inches=None, pad_inches=0)
+        figure.clear()
+        canvas.draw()
+        encoded_png = base64.b64encode(buffer.getvalue()).decode("ascii")
+        self._summary_photo = tk.PhotoImage(data=encoded_png)
+        self._summary_image_id = self._summary_canvas.create_image(0, 0, image=self._summary_photo, anchor="nw")
 
     def _append_summary_plain_line(self, text, tag=SUMMARY_NEUTRAL_TAG):
         self._append_summary_segments([(str(text), tag)])
-
-    def _summary_matplotlib_font_properties(self, font):
-        from matplotlib.font_manager import FontProperties
-
-        if self._summary_font_family is None:
-            self._summary_font_family = self._resolve_matplotlib_font_family() or "DejaVu Sans"
-        family = self._summary_font_family
-        size = int(font[1]) if len(font) > 1 else 10
-        weight = "bold" if len(font) > 2 and str(font[2]).lower() == "bold" else "normal"
-        return FontProperties(family=family, size=size, weight=weight)
-
-    def _render_summary_image(self):
-        if not self._summary_rows:
-            self._summary_canvas.delete("all")
-            self._summary_photo = None
-            self._summary_content_width = 0
-            self._summary_content_height = 0
-            self._sync_summary_canvas_geometry()
-            return
-
-        try:
-            from matplotlib.backends.backend_agg import FigureCanvasAgg
-            from matplotlib.figure import Figure
-        except ImportError:
-            self._summary_canvas.delete("all")
-            self._summary_photo = None
-            self._summary_content_width = 0
-            self._summary_content_height = 0
-            self._sync_summary_canvas_geometry()
-            return
-
-        probe_figure = Figure(figsize=(1, 1), dpi=SUMMARY_IMAGE_DPI)
-        probe_canvas = FigureCanvasAgg(probe_figure)
-        probe_canvas.draw()
-        probe_renderer = probe_canvas.get_renderer()
-
-        measured_rows = []
-        max_row_width = 0
-        line_height = 0
-        for segments in self._summary_rows:
-            row_parts = []
-            row_width = 0
-            row_height = 0
-            for text, tag in segments:
-                color, font = self._summary_tag_style(tag)
-                font_prop = self._summary_matplotlib_font_properties(font)
-                width, height, _descent = probe_renderer.get_text_width_height_descent(str(text), font_prop, ismath=False)
-                width = int(round(width))
-                height = int(round(height))
-                row_parts.append((str(text), color, font_prop, width, height))
-                row_width += width
-                row_height = max(row_height, height)
-            measured_rows.append((row_parts, row_width, row_height))
-            max_row_width = max(max_row_width, row_width)
-            line_height = max(line_height, row_height)
-
-        line_height = max(line_height, 1) + SUMMARY_IMAGE_ROW_GAP
-        content_width = max_row_width + SUMMARY_IMAGE_PADDING_X * 2
-        content_height = len(measured_rows) * line_height + SUMMARY_IMAGE_PADDING_Y * 2
-        figure = Figure(
-            figsize=(max(content_width, 1) / SUMMARY_IMAGE_DPI, max(content_height, 1) / SUMMARY_IMAGE_DPI),
-            dpi=SUMMARY_IMAGE_DPI,
-            facecolor=SUMMARY_BG,
-        )
-        canvas = FigureCanvasAgg(figure)
-        axis = figure.add_axes([0.0, 0.0, 1.0, 1.0])
-        axis.set_axis_off()
-        axis.set_xlim(0, max(content_width, 1))
-        axis.set_ylim(max(content_height, 1), 0)
-        axis.set_facecolor(SUMMARY_BG)
-
-        y = SUMMARY_IMAGE_PADDING_Y
-        for row_parts, _row_width, row_height in measured_rows:
-            x = SUMMARY_IMAGE_PADDING_X
-            for text, color, font_prop, width, _height in row_parts:
-                axis.text(x, y, text, color=color, fontproperties=font_prop, ha="left", va="top")
-                x += width
-            y += max(row_height, line_height)
-
-        png_buffer = io.BytesIO()
-        canvas.print_png(png_buffer)
-        self._summary_photo = tk.PhotoImage(data=base64.b64encode(png_buffer.getvalue()).decode("ascii"))
-        self._summary_canvas.delete("all")
-        self._summary_canvas.create_image(0, 0, anchor="nw", image=self._summary_photo)
-        self._summary_content_width = int(self._summary_photo.width())
-        self._summary_content_height = int(self._summary_photo.height())
-        self._sync_summary_canvas_geometry()
 
     def _summary_value_tag(self, value, *, item, column):
         text = str(value or "").strip()
@@ -454,6 +435,7 @@ class PortfolioBacktestPanel(ttk.Frame):
         self._clear_summary_rows()
         self._append_summary_plain_line(str(message), tag=SUMMARY_MUTED_TAG)
         self._render_summary_image()
+        self._sync_summary_canvas_geometry()
         self._summary_canvas.yview_moveto(0.0)
         self._summary_canvas.xview_moveto(0.0)
 
@@ -531,6 +513,7 @@ class PortfolioBacktestPanel(ttk.Frame):
         for row in sections["threshold_rows"]:
             self._append_summary_plain_line(f"{row['item']} : {row['value']}")
         self._render_summary_image()
+        self._sync_summary_canvas_geometry()
         self._summary_canvas.yview_moveto(0.0)
         self._summary_canvas.xview_moveto(0.0)
 
