@@ -16,8 +16,8 @@ MATPLOTLIB_VOLUME_ALPHA = 0.65
 MATPLOTLIB_DARK_BG = "#0b0f14"
 MATPLOTLIB_GRID_COLOR = "#243447"
 MATPLOTLIB_TEXT_COLOR = "#e9ecef"
-MATPLOTLIB_GUI_RENDER_CONTEXT_BARS = 36
-MATPLOTLIB_GUI_MAX_RENDER_BARS = 180
+MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO = 0.22
+MATPLOTLIB_VOLUME_OVERLAY_BOTTOM_GAP = 0.015
 MATPLOTLIB_CJK_FONT_CANDIDATES = (
     "Microsoft JhengHei",
     "Microsoft JhengHei UI",
@@ -226,28 +226,11 @@ def compute_default_view_window(total_bars, focus_positions, *, padding_bars=CHA
     return {"start_idx": int(start_idx), "end_idx": int(end_idx)}
 
 
-def compute_gui_render_window(chart_payload, *, extra_context_bars=MATPLOTLIB_GUI_RENDER_CONTEXT_BARS, max_render_bars=MATPLOTLIB_GUI_MAX_RENDER_BARS):
+def compute_gui_render_window(chart_payload):
     total_bars = int(len(chart_payload["x"]))
     if total_bars <= 0:
         return {"start_idx": 0, "end_idx": 0}
-
-    default_view = chart_payload.get("default_view", {"start_idx": 0, "end_idx": total_bars - 1})
-    start_idx = max(0, int(default_view.get("start_idx", 0)) - int(extra_context_bars))
-    end_idx = min(total_bars - 1, int(default_view.get("end_idx", total_bars - 1)) + int(extra_context_bars))
-    render_window = _expand_window_to_min_bars(
-        start_idx,
-        end_idx,
-        total_bars=total_bars,
-        min_window_bars=min(total_bars, int(max_render_bars)),
-    )
-    render_start, render_end = render_window
-    if render_end - render_start + 1 > int(max_render_bars):
-        width = int(max_render_bars)
-        center = (render_start + render_end) // 2
-        render_start = max(0, center - width // 2)
-        render_end = min(total_bars - 1, render_start + width - 1)
-        render_start = max(0, render_end - width + 1)
-    return {"start_idx": int(render_start), "end_idx": int(render_end)}
+    return {"start_idx": 0, "end_idx": total_bars - 1}
 
 
 def build_debug_chart_payload(price_df, chart_context):
@@ -460,24 +443,17 @@ def _apply_axis_text_font(axis, font_properties):
 def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False):
     try:
         from matplotlib.figure import Figure
-        from matplotlib.patches import Rectangle
         from matplotlib import rcParams
         from matplotlib import ticker as mticker
         from matplotlib.font_manager import FontProperties
     except ImportError as exc:
         raise RuntimeError("缺少 matplotlib，無法在 GUI 內嵌單股回測 K 線圖。") from exc
 
-    x_positions = chart_payload["x"]
-    if len(x_positions) == 0:
+    x_positions = np.asarray(chart_payload["x"], dtype=np.float64)
+    if x_positions.size == 0:
         raise ValueError("chart_payload 不可為空。")
 
-    render_window = compute_gui_render_window(chart_payload)
-    render_payload = _slice_chart_payload(
-        chart_payload,
-        start_idx=render_window["start_idx"],
-        end_idx=render_window["end_idx"],
-    )
-
+    render_payload = chart_payload
     font_family = _resolve_matplotlib_font_family()
     base_font = FontProperties(family=font_family) if font_family else None
     title_font = FontProperties(family=font_family, weight="bold", size=18) if font_family else None
@@ -488,53 +464,65 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         rcParams["font.sans-serif"] = [font_family, *MATPLOTLIB_CJK_FONT_CANDIDATES]
 
     figure = Figure(figsize=MATPLOTLIB_DEBUG_CHART_FIGSIZE, dpi=96, facecolor=MATPLOTLIB_DARK_BG)
-    if show_volume:
-        axis_price = figure.add_subplot(2, 1, 1)
-        axis_volume = figure.add_subplot(2, 1, 2, sharex=axis_price)
-        figure.subplots_adjust(left=0.048, right=0.995, top=0.955, bottom=0.072, hspace=0.04)
-        axes = (axis_price, axis_volume)
-    else:
-        axis_price = figure.add_subplot(1, 1, 1)
-        axis_volume = None
-        figure.subplots_adjust(left=0.048, right=0.995, top=0.955, bottom=0.072)
-        axes = (axis_price,)
+    axis_price = figure.add_subplot(1, 1, 1)
+    axis_volume = None
+    figure.subplots_adjust(left=0.045, right=0.995, top=0.955, bottom=0.075)
 
-    for axis in axes:
-        axis.set_facecolor(MATPLOTLIB_DARK_BG)
-        axis.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.65, linewidth=0.8)
-        axis.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
-        axis.spines["top"].set_visible(False)
-        axis.spines["right"].set_visible(False)
-        axis.spines["left"].set_color(MATPLOTLIB_GRID_COLOR)
-        axis.spines["bottom"].set_color(MATPLOTLIB_GRID_COLOR)
+    axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
+    axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.65, linewidth=0.8)
+    axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
+    axis_price.spines["top"].set_visible(False)
+    axis_price.spines["right"].set_visible(False)
+    axis_price.spines["left"].set_color(MATPLOTLIB_GRID_COLOR)
+    axis_price.spines["bottom"].set_color(MATPLOTLIB_GRID_COLOR)
+
+    if show_volume:
+        axis_volume = axis_price.inset_axes([0.0, MATPLOTLIB_VOLUME_OVERLAY_BOTTOM_GAP, 1.0, MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO], sharex=axis_price)
+        axis_volume.set_facecolor("none")
+        axis_volume.grid(False)
+        axis_volume.spines["top"].set_visible(False)
+        axis_volume.spines["left"].set_visible(False)
+        axis_volume.spines["bottom"].set_visible(False)
+        axis_volume.spines["right"].set_color(MATPLOTLIB_GRID_COLOR)
+        axis_volume.yaxis.tick_right()
+        axis_volume.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=9, pad=2)
+        axis_volume.tick_params(axis="x", labelbottom=False, bottom=False)
+        axis_volume.patch.set_alpha(0.0)
+        axis_volume.set_zorder(1)
+        axis_price.set_zorder(2)
 
     candle_width = MATPLOTLIB_CANDLE_WIDTH
-    x_positions = render_payload["x"]
-    for idx, x_pos in enumerate(x_positions):
-        is_up = bool(render_payload["up_mask"][idx])
-        body_color = "#2ec4b6" if is_up else "#ff6b6b"
-        axis_price.vlines(
-            x_pos,
-            render_payload["low"][idx],
-            render_payload["high"][idx],
-            color=body_color,
-            linewidth=1.2,
-            zorder=2,
-        )
-        body_low = min(render_payload["open"][idx], render_payload["close"][idx])
-        body_high = max(render_payload["open"][idx], render_payload["close"][idx])
-        body_height = max(body_high - body_low, 0.01)
-        axis_price.add_patch(
-            Rectangle(
-                (x_pos - candle_width / 2.0, body_low),
-                candle_width,
-                body_height,
-                facecolor=body_color,
-                edgecolor=body_color,
-                linewidth=1.0,
-                zorder=3,
-            )
-        )
+    open_values = np.asarray(render_payload["open"], dtype=np.float64)
+    close_values = np.asarray(render_payload["close"], dtype=np.float64)
+    high_values = np.asarray(render_payload["high"], dtype=np.float64)
+    low_values = np.asarray(render_payload["low"], dtype=np.float64)
+    up_mask = np.asarray(render_payload["up_mask"], dtype=bool)
+    candle_colors = np.where(up_mask, "#2ec4b6", "#ff6b6b")
+    candle_bottom = np.minimum(open_values, close_values)
+    candle_height = np.abs(close_values - open_values)
+    median_price = float(np.nanmedian(close_values)) if np.isfinite(close_values).any() else 1.0
+    min_body_height = max(median_price * 0.0008, 0.01)
+    candle_height = np.where(candle_height > 0.0, candle_height, min_body_height)
+
+    axis_price.vlines(
+        x_positions,
+        low_values,
+        high_values,
+        colors=candle_colors.tolist(),
+        linewidth=1.2,
+        zorder=2,
+    )
+    axis_price.bar(
+        x_positions,
+        candle_height,
+        bottom=candle_bottom,
+        width=candle_width,
+        color=candle_colors.tolist(),
+        edgecolor=candle_colors.tolist(),
+        linewidth=1.0,
+        align="center",
+        zorder=3,
+    )
 
     axis_price.step(
         x_positions,
@@ -543,7 +531,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         color="#ff4d4f",
         linewidth=2.0,
         label="停損線",
-        zorder=1,
+        zorder=4,
     )
     if np.isfinite(render_payload["tp_line"]).any():
         axis_price.step(
@@ -554,7 +542,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             linewidth=2.0,
             linestyle=":",
             label="半倉停利線",
-            zorder=1,
+            zorder=4,
         )
 
     for trace_name, markers in render_payload["marker_groups"].items():
@@ -566,7 +554,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             s=MATPLOTLIB_MARKER_SIZE,
             color=style["color"],
             linewidths=1.5,
-            zorder=4,
+            zorder=5,
             label=trace_name,
         )
 
@@ -582,16 +570,18 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.set_ylabel("價格", color=MATPLOTLIB_TEXT_COLOR, fontsize=13 if label_font is None else None, fontproperties=label_font)
 
     if show_volume and axis_volume is not None:
-        volume_colors = np.where(render_payload["up_mask"], "#2ec4b6", "#ff6b6b")
+        volume_colors = np.where(up_mask, "#2ec4b6", "#ff6b6b")
         axis_volume.bar(
             x_positions,
             render_payload["volume"],
             width=candle_width,
             color=volume_colors.tolist(),
             alpha=MATPLOTLIB_VOLUME_ALPHA,
+            align="center",
+            zorder=1,
             label="成交量",
         )
-        axis_volume.set_ylabel("成交量", color=MATPLOTLIB_TEXT_COLOR, fontsize=13 if label_font is None else None, fontproperties=label_font)
+        axis_volume.set_ylabel("成交量", color=MATPLOTLIB_TEXT_COLOR, fontsize=9 if label_font is None else None, fontproperties=legend_font)
 
     date_labels = render_payload["date_labels"]
 
@@ -601,11 +591,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             return date_labels[rounded]
         return ""
 
-    target_axis = axis_volume if axis_volume is not None else axis_price
-    target_axis.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
-    target_axis.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    if axis_volume is not None:
-        axis_price.tick_params(axis="x", labelbottom=False)
+    axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
+    axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
 
     line_handles, line_labels = axis_price.get_legend_handles_labels()
     volume_handles, volume_labels = (axis_volume.get_legend_handles_labels() if axis_volume is not None else ([], []))
@@ -644,6 +631,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             clamped_left, clamped_right = _clamp_chart_xlim(left, right, total_points=len(render_payload["x"]))
             if abs(clamped_left - left) > 1e-9 or abs(clamped_right - right) > 1e-9:
                 axis_price.set_xlim(clamped_left, clamped_right, emit=False)
+                if axis_volume is not None:
+                    axis_volume.set_xlim(clamped_left, clamped_right, emit=False)
             visible_ranges = compute_visible_value_ranges(render_payload, start_idx=clamped_left, end_idx=clamped_right)
             axis_price.set_ylim(visible_ranges["price_min"], visible_ranges["price_max"])
             if axis_volume is not None:
@@ -655,17 +644,20 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
 
     axis_price.callbacks.connect("xlim_changed", _sync_visible_ranges)
 
-    for axis in axes:
-        _apply_axis_text_font(axis, base_font)
+    _apply_axis_text_font(axis_price, base_font)
+    if axis_volume is not None:
+        _apply_axis_text_font(axis_volume, base_font)
 
     figure._stock_chart_contract = {
         "volume_visible": bool(show_volume),
         "selected_font_family": font_family or "",
-        "render_start_idx": int(render_window["start_idx"]),
-        "render_end_idx": int(render_window["end_idx"]),
+        "render_start_idx": 0,
+        "render_end_idx": int(len(render_payload["x"]) - 1),
         "render_bar_count": int(len(render_payload["x"])),
         "total_bar_count": int(len(chart_payload["x"])),
         "default_view": render_payload["default_view"],
+        "full_history_navigation_enabled": True,
+        "volume_overlay_ratio": float(MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO),
         "mouse_wheel_zoom_enabled": False,
         "mouse_left_drag_pan_enabled": False,
         "toolbar_required": False,
@@ -679,7 +671,6 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "connection_ids": {},
     }
     return figure
-
 
 def bind_matplotlib_chart_navigation(figure, canvas):
     state = getattr(figure, "_stock_chart_navigation_state", None)

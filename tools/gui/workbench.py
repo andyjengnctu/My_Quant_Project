@@ -7,7 +7,7 @@ from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
 WORKBENCH_TITLE = "股票工具工作台"
-WORKBENCH_GEOMETRY = "1820x1120"
+WORKBENCH_GEOMETRY = "1920x1180"
 
 
 PANEL_SPECS = (
@@ -29,6 +29,7 @@ def build_workbench_spec():
         "entry_module": "apps.gui",
         "title": WORKBENCH_TITLE,
         "geometry": WORKBENCH_GEOMETRY,
+        "startup_window_mode": "maximized",
         "panels": [
             {
                 "panel_id": panel["panel_id"],
@@ -43,12 +44,33 @@ def build_workbench_spec():
     }
 
 
+def _maximize_root_window(root):
+    try:
+        root.state("zoomed")
+        return "zoomed"
+    except tk.TclError:
+        pass
+
+    try:
+        root.attributes("-zoomed", True)
+        return "attributes-zoomed"
+    except tk.TclError:
+        pass
+
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    root.geometry(f"{screen_width}x{screen_height}+0+0")
+    return "geometry-screen"
+
+
 class StockToolsWorkbench:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title(WORKBENCH_TITLE)
         self.root.geometry(WORKBENCH_GEOMETRY)
         self.root.minsize(1520, 920)
+        self.root.update_idletasks()
+        self._maximize_mode = _maximize_root_window(self.root)
         self._build_ui()
 
     def _build_ui(self):

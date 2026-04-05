@@ -33,9 +33,11 @@ from tools.debug.charting import (
     bind_matplotlib_chart_navigation,
     build_debug_chart_payload,
     compute_visible_value_ranges,
+    create_debug_chart_context,
     create_matplotlib_debug_chart_figure,
     get_matplotlib_cjk_font_candidates,
 )
+from tools.debug.entry_flow import _record_entry_plan_marker
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -1705,7 +1707,8 @@ def validate_gui_embedded_chart_contract_case(base_params):
     large_chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
     large_figure = create_matplotlib_debug_chart_figure(chart_payload=large_chart_payload, ticker="LARGE", show_volume=False)
     large_contract = getattr(large_figure, "_stock_chart_contract", {})
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_scoped_render_window", True, large_contract.get("render_bar_count", 0) < large_contract.get("total_bar_count", 0))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_full_history_render_window", large_contract.get("total_bar_count", 0), large_contract.get("render_bar_count", 0))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_full_history_navigation_enabled", True, large_contract.get("full_history_navigation_enabled"))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_cjk_font_candidates_include_jhenghei", True, "Microsoft JhengHei" in get_matplotlib_cjk_font_candidates())
     add_check(results, "output_contract", case_id, "gui_embedded_chart_cjk_font_candidates_include_noto_tc", True, "Noto Sans CJK TC" in get_matplotlib_cjk_font_candidates())
     large_figure.clear()
@@ -1768,8 +1771,57 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     workbench_spec = importlib.import_module("tools.gui").build_workbench_spec()
     panel_spec = workbench_spec.get("panels", [])[0]
     add_check(results, "output_contract", case_id, "gui_chart_workspace_panel_default_show_volume", False, panel_spec.get("default_show_volume"))
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_startup_window_mode", "maximized", workbench_spec.get("startup_window_mode"))
+
+    large_dates = pd.date_range("2010-01-01", periods=2400, freq="B")
+    large_frame = pd.DataFrame(
+        {
+            "Open": np.linspace(50.0, 150.0, len(large_dates)),
+            "High": np.linspace(51.0, 151.0, len(large_dates)),
+            "Low": np.linspace(49.0, 149.0, len(large_dates)),
+            "Close": np.linspace(50.5, 150.5, len(large_dates)),
+            "Volume": np.linspace(5000.0, 25000.0, len(large_dates)),
+        },
+        index=large_dates,
+    )
+    chart_payload = build_debug_chart_payload(large_frame, create_debug_chart_context(large_frame))
+    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_full_history_bar_count", len(chart_payload["x"]), contract.get("render_bar_count"))
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_ratio_leq_quarter", True, contract.get("volume_overlay_ratio", 1.0) <= 0.25)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_axes_count", 2, len(figure.axes))
+    figure.clear()
 
     summary["panel_id"] = panel_spec.get("panel_id")
+    return results, summary
+
+
+def validate_debug_entry_plan_marker_optional_contract_case(_base_params):
+    case_id = "DEBUG_ENTRY_PLAN_MARKER_OPTIONAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.date_range("2024-01-01", periods=6, freq="D")
+    frame = pd.DataFrame(
+        {
+            "Open": np.linspace(10.0, 15.0, len(dates)),
+            "High": np.linspace(11.0, 16.0, len(dates)),
+            "Low": np.linspace(9.0, 14.0, len(dates)),
+            "Close": np.linspace(10.5, 15.5, len(dates)),
+            "Volume": np.full(len(dates), 1000.0),
+        },
+        index=dates,
+    )
+    chart_context = create_debug_chart_context(frame)
+    _record_entry_plan_marker(
+        chart_context,
+        current_date=dates[2],
+        entry_plan=None,
+        entry_type="normal",
+        entry_result={"filled": False, "count_as_missed_buy": False},
+        note="",
+    )
+    add_check(results, "output_contract", case_id, "debug_entry_plan_marker_none_plan_noop", 0, len(chart_context["order_markers"]))
     return results, summary
 
 
@@ -1785,6 +1837,7 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "gui_app_thin_entry_main", apps_gui.main, tools_gui.main)
     add_check(results, "output_contract", case_id, "gui_workbench_entry_module", "apps.gui", workbench_spec.get("entry_module"))
     add_check(results, "output_contract", case_id, "gui_workbench_title", "股票工具工作台", workbench_spec.get("title"))
+    add_check(results, "output_contract", case_id, "gui_workbench_startup_window_mode", "maximized", workbench_spec.get("startup_window_mode"))
 
     panel_specs = workbench_spec.get("panels", [])
     panel_ids = [panel.get("panel_id") for panel in panel_specs]

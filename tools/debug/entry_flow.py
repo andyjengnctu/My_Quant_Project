@@ -12,7 +12,7 @@ from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
 
 def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_type, entry_result, note=""):
-    if chart_context is None:
+    if chart_context is None or entry_plan is None:
         return
 
     status = "abandoned"
