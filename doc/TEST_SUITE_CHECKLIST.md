@@ -161,6 +161,7 @@
 | B90 | P1 | GUI | GUI 工作台必須新增 `投組回測檢視` 上層分頁，單股分頁不得再暴露 HTML K 線按鈕或執行摘要分頁；右側 sidebar 的狀態與選取日線值必須成為單一資訊來源，不得再與 chart hover 線值重覆顯示 | DONE | 已補 direct contract，直接釘死 workbench 必須宣告 `portfolio_backtest_view` 分頁且來源是 `apps/portfolio_sim.py`；單股分頁不得再出現 HTML K 線按鈕與執行摘要分頁，避免 GUI 資訊來源再次分叉 | `tools/gui/workbench.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
 | B91 | P2 | Meta | quick gate 必須在 formal suite 前置靜態攔截 `tools/validate/synthetic_cases.py` 中 imported / locally-defined `validate_*` case 已宣告但漏註冊 `_entry(...)` 的情況；不得等 consistency synthetic registry meta case 才暴露為回歸 | DONE | 已補 quick gate registry-completeness static contract，直接以 AST 比對 imported / defined `validate_*` names 與 `_entry(...)` registry；後續凡新增 `synthetic_contract_cases.py` validator 到 `synthetic_cases.py` import list，同輪必須同步加入 `_entry(...)` 主入口，避免 `validate_gui_portfolio_tab_and_htmlless_contract_case` 這類 GUI validator 再次漏註冊 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
 | B92 | P1 | GUI | GUI 單股頁必須將停利/停損/限價/成交線值整合到右側彩色 sidebar、移除左上重複 legend、價量時間軸在滑鼠拖曳時保持同步；投組頁不得只包 console，必須提供 GUI 進度、內嵌圖表與結果分頁 | DONE | 已補 direct contract，直接釘死單股控制列不得保留 `執行參數` 標題、右側必須宣告彩色線值 label、chart helper 不得再顯示左上 legend 且滑鼠平移時需同步 volume xlim；投組頁必須提供 Progressbar、內嵌 chart、交易明細 / 年度報酬 / Console 分頁，並以 GUI console 承接 runtime 進度輸出 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
+| B93 | P2 | Meta | GUI synthetic validator 不得綁死已移除的 local widget 變數名或過期版面細節；`validate_gui_mouse_navigation_contract_case` 必須只驗 toolbar-free / mouse-binder 等行為契約，不得再把 `_chart_hint_var` 或過期 footer hint metric 視為必要條件 | DONE | 已補 direct meta contract，直接釘死 GUI mouse-navigation validator 不得再引用 `_chart_hint_var` 或 `gui_chart_hint_moved_to_footer` 這類已移除實作細節，避免單純版面重構就讓 consistency / coverage synthetic suite 假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -374,6 +375,7 @@
 | T169 | `validate_gui_portfolio_tab_and_htmlless_contract_case` | B90 |
 | T170 | `tools/local_regression/run_quick_gate.py` registry-completeness-static-contract | B91 |
 | T171 | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` | B92 |
+| T172 | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` | B93 |
 
 ## G. 逐項收斂紀錄
 
@@ -683,3 +685,5 @@
 | 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
+| 2026-04-06 | B93 | 新增 GUI mouse-navigation validator anti-overfit contract，釘死 synthetic validator 不得再綁死已移除的 `_chart_hint_var` / footer hint 細節 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |

@@ -1036,6 +1036,40 @@ def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_p
     return results, summary
 
 
+def validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case(_base_params):
+    case_id = "META_GUI_MOUSE_NAV_VALIDATOR_AVOIDS_LEGACY_FOOTER_HINT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    function_start = source_text.index("def validate_gui_mouse_navigation_contract_case")
+    next_def = source_text.find("\ndef ", function_start + 1)
+    function_source = source_text[function_start:] if next_def == -1 else source_text[function_start:next_def]
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "gui_mouse_navigation_validator_not_bound_to_legacy_chart_hint_var",
+        False,
+        "_chart_hint_var" in function_source,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "gui_mouse_navigation_validator_not_bound_to_legacy_footer_hint_metric",
+        False,
+        "gui_chart_hint_moved_to_footer" in function_source,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["legacy_chart_hint_var_referenced"] = "_chart_hint_var" in function_source
+    summary["legacy_footer_hint_metric_referenced"] = "gui_chart_hint_moved_to_footer" in function_source
+    return results, summary
+
+
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
     case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"
     results = []
