@@ -3,7 +3,6 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 
-from tools.gui.portfolio_backtest_panel import PortfolioBacktestPanel
 from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
@@ -27,7 +26,6 @@ WORKBENCH_NOTEBOOK_STYLE = "Workbench.TNotebook"
 WORKBENCH_TREE_STYLE = "Workbench.Treeview"
 WORKBENCH_VSCROLL_STYLE = "Workbench.Vertical.TScrollbar"
 WORKBENCH_HSCROLL_STYLE = "Workbench.Horizontal.TScrollbar"
-WORKBENCH_PROGRESS_STYLE = "Workbench.Horizontal.TProgressbar"
 WORKBENCH_SIDEBAR_SIGNAL_STYLE = "Workbench.SidebarSignal.TLabel"
 WORKBENCH_SIDEBAR_GATE_STYLE = "Workbench.SidebarGate.TLabel"
 WORKBENCH_SIDEBAR_HEADER_STYLE = "Workbench.SidebarHeader.TLabel"
@@ -40,19 +38,10 @@ PANEL_SPECS = (
         "panel_id": "single_stock_backtest_inspector",
         "tab_label": "單股回測檢視",
         "backend_runner": "tools.debug.trade_log.run_debug_ticker_analysis",
-        "artifact_keys": ("excel_path",),
+        "artifact_keys": ("excel_path", "chart_path"),
         "inline_chart_backend": "tools.debug.charting.create_matplotlib_debug_chart_figure",
         "default_show_volume": False,
         "panel_factory": SingleStockBacktestInspectorPanel,
-    },
-    {
-        "panel_id": "portfolio_backtest_view",
-        "tab_label": "投組回測檢視",
-        "backend_runner": "apps.portfolio_sim.main",
-        "artifact_keys": ("portfolio_dashboard_html", "portfolio_report_xlsx"),
-        "inline_chart_backend": "",
-        "default_show_volume": False,
-        "panel_factory": PortfolioBacktestPanel,
     },
 )
 
@@ -120,7 +109,6 @@ def configure_workbench_theme(root):
     style.map(WORKBENCH_TREE_STYLE, background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
     style.configure(WORKBENCH_VSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
     style.configure(WORKBENCH_HSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
-    style.configure(WORKBENCH_PROGRESS_STYLE, background=WORKBENCH_ACCENT, troughcolor=WORKBENCH_SURFACE_ALT, bordercolor=WORKBENCH_BORDER, lightcolor=WORKBENCH_ACCENT, darkcolor=WORKBENCH_ACCENT)
     style.configure(WORKBENCH_SIDEBAR_SIGNAL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
     style.configure(WORKBENCH_SIDEBAR_GATE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
     style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 16, "bold"))

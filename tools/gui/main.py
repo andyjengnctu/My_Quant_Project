@@ -5,7 +5,7 @@ from core.runtime_utils import parse_no_arg_cli
 from tools.gui.workbench import launch_workbench
 
 
-HELP_DESCRIPTION = "啟動股票工具工作台；目前內建單股回測檢視與投組回測檢視頁籤，後續 GUI 功能統一擴充於此入口。"
+HELP_DESCRIPTION = "啟動股票工具工作台；目前內建單股回測檢視頁籤，後續 GUI 功能統一擴充於此入口。"
 
 
 def main(argv=None):

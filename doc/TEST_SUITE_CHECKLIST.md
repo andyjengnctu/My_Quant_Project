@@ -158,13 +158,6 @@
 | B87 | P1 | GUI | GUI workbench deep-dark theme 供 palette/style 使用的 theme token 必須完整宣告；`configure_workbench_theme()` 不得引用未定義 accent 常數而在啟動入口直接 NameError | DONE | 已補 direct contract，直接釘死 `WORKBENCH_ACCENT` 必須存在且為 hex 色碼，避免 `apps/gui.py` 於 theme 初始化階段即失敗 | `tools/gui/workbench.py`, `tools/validate/synthetic_contract_cases.py` |
 | B88 | P1 | GUI | GUI 單股工作台必須固定使用完整資料集、提供候選股掃描下拉選單 / Console 分頁 / 一鍵回到最新 K 線，且 latest-bar 買訊預覽、右側狀態晶片與滑鼠互動不得與單股圖表契約分叉 | DONE | 已補 direct contract，直接釘死 panel 不得再顯示資料集選項，必須提供 scanner button、candidate combobox、Console tab、latest button，scanner runner 必須回傳 candidate rows，chart helper 必須提供 `scroll_chart_to_latest()` 與右側留白契約 | `tools/gui/single_stock_inspector.py`, `tools/scanner/scan_runner.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 歷史績效符合 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後至少半個版面右側留白，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
-| B90 | P1 | GUI | GUI 工作台必須新增 `投組回測檢視` 上層分頁，單股分頁不得再暴露 HTML K 線按鈕或執行摘要分頁；右側 sidebar 的狀態與選取日線值必須成為單一資訊來源，不得再與 chart hover 線值重覆顯示 | DONE | 已補 direct contract，直接釘死 workbench 必須宣告 `portfolio_backtest_view` 分頁且來源是 `apps/portfolio_sim.py`；單股分頁不得再出現 HTML K 線按鈕與執行摘要分頁，避免 GUI 資訊來源再次分叉 | `tools/gui/workbench.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
-| B91 | P2 | Meta | quick gate 必須在 formal suite 前置靜態攔截 `tools/validate/synthetic_cases.py` 中 imported / locally-defined `validate_*` case 已宣告但漏註冊 `_entry(...)` 的情況；不得等 consistency synthetic registry meta case 才暴露為回歸 | DONE | 已補 quick gate registry-completeness static contract，直接以 AST 比對 imported / defined `validate_*` names 與 `_entry(...)` registry；後續凡新增 `synthetic_contract_cases.py` validator 到 `synthetic_cases.py` import list，同輪必須同步加入 `_entry(...)` 主入口，避免 `validate_gui_portfolio_tab_and_htmlless_contract_case` 這類 GUI validator 再次漏註冊 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
-| B92 | P1 | GUI | GUI 單股頁必須將停利/停損/限價/成交線值整合到右側彩色 sidebar、移除左上重複 legend、價量時間軸在滑鼠拖曳時保持同步；投組頁不得只包 console，必須提供 GUI 進度、內嵌圖表與結果分頁 | DONE | 已補 direct contract，直接釘死單股控制列不得保留 `執行參數` 標題、右側必須宣告彩色線值 label、chart helper 不得再顯示左上 legend 且滑鼠平移時需同步 volume xlim；投組頁必須提供 Progressbar、內嵌 chart、交易明細 / 年度報酬 / Console 分頁，並以 GUI console 承接 runtime 進度輸出 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
-| B93 | P2 | Meta | GUI synthetic validator 不得綁死已移除的 local widget 變數名或過期版面細節；`validate_gui_mouse_navigation_contract_case` 必須只驗 toolbar-free / mouse-binder 等行為契約，不得再把 `_chart_hint_var` 或過期 footer hint metric 視為必要條件 | DONE | 已補 direct meta contract，直接釘死 GUI mouse-navigation validator 不得再引用 `_chart_hint_var` 或 `gui_chart_hint_moved_to_footer` 這類已移除實作細節，避免單純版面重構就讓 consistency / coverage synthetic suite 假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
-| B94 | P1 | GUI | GUI 單股頁必須移除圖面頂部 hover 資訊列並把 OHLCV 移到右側 sidebar、縮減右側資訊字級；投組頁必須提供 `結果彙整 / 年度報酬% / 交易明細 / Console` 分頁、左圖右表 summary 版型、實際進度回報與滑鼠時間軸資訊，且 GUI 對比表需與 console strategy dashboard 共用單一來源 | DONE | 已補 direct contract，直接釘死單股 GUI 必須關閉 chart 內建 hover overlay 並啟用 compact top padding、右側 sidebar 必須顯示 OHLCV；投組 GUI 必須宣告 `結果彙整` 與 `年度報酬%` 分頁、使用 determinate progress + runtime callback、曲線 hover 顯示日期/投組/大盤資訊，且結果表必須改由 shared `build_strategy_dashboard_sections()` 產生，避免 GUI 與 console dashboard 再次分叉 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/portfolio_sim/simulation_runner.py`, `core/portfolio_engine.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
-| B95 | P1 | GUI | GUI 投組結果頁右側對比表必須保留正負值語意著色，不得因單一前景色 widget 或不穩定 tag renderer 而退化成單色；至少需區分正值、負值、MDD caution 與 Alpha 的少跌/多跌語意 | DONE | 已補 direct contract，直接釘死投組右側對比表不得再使用單一前景色 `Treeview` 或 `tk.Text` tag renderer，必須維持逐段語意著色，避免 GUI 與原 dashboard 視覺語意退化成單色 | `tools/gui/portfolio_backtest_panel.py`, `core/strategy_dashboard.py`, `tools/validate/synthetic_contract_cases.py` |
-| B96 | P1 | GUI | GUI 投組結果頁右側對比表語意著色 renderer 必須避開 Tk 文字前景色路徑，改用平台穩定的 rasterized image renderer；不得再依賴 `Treeview` / `tk.Text` tag / `Canvas.create_text()` / embedded widget palette inheritance，且需保留 scroll 與跨平台多色顯示 | DONE | 已補 direct contract，直接釘死投組 summary 必須先將彩色段落 rasterize 成 PNG，再以 `tk.PhotoImage` 貼到 canvas；不得再走任何 Tk text foreground renderer，避免 Windows/Tk palette/theme 再把顏色壓回黑白 | `tools/gui/portfolio_backtest_panel.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -201,7 +194,7 @@
 
 使用方式：本節只保留 `DONE` 的建議測試項目最小必要索引；不重複抄寫主表的建議落點，也不重複記錄完成日期。主表狀態、測試入口細節與缺口摘要仍以主表為準，時間軸僅寫在 `G`。
 
-維護規則：`T` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。若同一檔案承載多個 contract，`建議測試名稱` 不得僅重複填同一 file path，必須改用唯一 contract 名稱或 file path + contract label；若該列不是 `validate_*` 名稱，則首個可機械辨識 token 必須仍為可辨識的 script path 或 `run_*` 入口名稱，且 file path + contract label 形式必須將 file path 單獨作為可獨立解析的 token（例如僅將 file path 包在一組 backticks 內，後接純文字 label）。交付前至少核對一次「所有已註冊 validator / script 類型的 `Txx` 已同步列入 `T`，且 `T` 與 `G` 的最新狀態一致」。
+維護規則：`T` 固定只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。交付前至少核對一次「所有已註冊 validator / script 類型的 `Txx` 已同步列入 `T`，且 `T` 與 `G` 的最新狀態一致」。
 
 ### T. 目前所有 `DONE` 的建議測試項目摘要
 
@@ -375,13 +368,6 @@
 | T166 | `validate_workbench_theme_accent_symbol_contract_case` | B87 |
 | T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
-| T169 | `validate_gui_portfolio_tab_and_htmlless_contract_case` | B90 |
-| T170 | `tools/local_regression/run_quick_gate.py` registry-completeness-static-contract | B91 |
-| T171 | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` | B92 |
-| T172 | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` | B93 |
-| T173 | `validate_gui_compact_header_and_portfolio_summary_contract_case` | B94 |
-| T174 | `validate_gui_portfolio_summary_semantic_color_contract_case` | B95 |
-| T175 | `validate_gui_portfolio_summary_platform_renderer_contract_case` | B96 |
 
 ## G. 逐項收斂紀錄
 
@@ -636,8 +622,6 @@
 | 2026-04-05 | B87 | 新增 GUI workbench theme accent token contract，釘死 dark theme palette/style 不得引用未宣告 accent 常數而在 GUI 啟動入口直接 NameError | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B88 | 新增 GUI scanner / Console / latest-view contract，釘死完整資料集固定化、候選股下拉與 latest-bar 預覽不得分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B89 | 新增 GUI 右側 sidebar / Enter 回測 / latest next-day preview contract，釘死狀態摘要與預掛線預覽不得再分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-05 | B90 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract，釘死工作台上層分頁與單股 GUI 資訊來源不得再分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-05 | B91 | 新增 quick gate registry-completeness static contract，釘死 imported / defined `validate_*` case 不得漏註冊 `_entry(...)` 主入口，避免 consistency 才暴露 synthetic registry 回歸 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -687,23 +671,3 @@
 | 2026-04-05 | T166 | 新增 GUI workbench theme accent token contract 並驗證 | NEW -> DONE | `validate_workbench_theme_accent_symbol_contract_case` |
 | 2026-04-05 | T167 | 新增 GUI scanner / Console / latest-view contract 並驗證 | NEW -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |
-| 2026-04-05 | T169 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_tab_and_htmlless_contract_case` |
-| 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
-| 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B93 | 新增 GUI mouse-navigation validator anti-overfit contract，釘死 synthetic validator 不得再綁死已移除的 `_chart_hint_var` / footer hint 細節 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-06 | B94 | 新增 GUI compact-header / OHLCV sidebar / portfolio summary-tab real-progress contract，釘死單股圖頂部 hover 列與投組結果頁分頁不得再回退 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B95 | 新增 GUI 投組 summary semantic-color contract，釘死右側對比表不得因單一前景色 widget 或不穩定 tag renderer 而退化成單色 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 新增 GUI 投組 summary platform-renderer contract，釘死右側對比表不得再依賴 `tk.Text` tag/state 行為 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 檢出 `Canvas + Frame + Label` 仍會受 palette/theme 影響退化成黑白，原 platform-renderer contract 不足 | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 改以 canvas-native text renderer 與更強 static contract 重新收斂 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 檢出 `Canvas.create_text()` 仍屬 Tk 文字前景色路徑，實機環境仍可能退化成黑白，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B96 | 改以 rasterized PNG + `tk.PhotoImage` renderer 與更強 static contract 重新收斂 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
-| 2026-04-06 | T172 | 新增 GUI mouse-navigation validator anti-overfit contract 並驗證 | NEW -> DONE | `validate_gui_mouse_navigation_validator_avoids_legacy_footer_hint_contract_case` |
-| 2026-04-06 | T173 | 新增 GUI compact-header / portfolio summary-tab real-progress contract 並驗證 | NEW -> DONE | `validate_gui_compact_header_and_portfolio_summary_contract_case` |
-| 2026-04-06 | T174 | 新增 GUI 投組 summary semantic-color contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_summary_semantic_color_contract_case` |
-| 2026-04-06 | T175 | 新增 GUI 投組 summary platform-renderer contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
-| 2026-04-06 | T175 | 檢出舊 platform-renderer validator 綁死 `Frame + Label` renderer，無法攔截 palette/theme 造成的黑白退化 | DONE -> PARTIAL | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
-| 2026-04-06 | T175 | 改驗 canvas-native text renderer / no-embedded-widget contract 後重新收斂 | PARTIAL -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
-| 2026-04-06 | T175 | 檢出舊 validator 仍把 `Canvas.create_text()` 當成平台穩定 renderer，無法攔截 Tk 文字前景色路徑的黑白退化 | DONE -> PARTIAL | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
-| 2026-04-06 | T175 | 改驗 rasterized-image renderer / no-Tk-text-foreground-path contract 後重新收斂 | PARTIAL -> DONE | `validate_gui_portfolio_summary_platform_renderer_contract_case` |
