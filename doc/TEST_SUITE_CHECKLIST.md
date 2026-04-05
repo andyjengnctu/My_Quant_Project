@@ -159,6 +159,7 @@
 | B88 | P1 | GUI | GUI 單股工作台必須固定使用完整資料集、提供候選股掃描下拉選單 / Console 分頁 / 一鍵回到最新 K 線，且 latest-bar 買訊預覽、右側狀態晶片與滑鼠互動不得與單股圖表契約分叉 | DONE | 已補 direct contract，直接釘死 panel 不得再顯示資料集選項，必須提供 scanner button、candidate combobox、Console tab、latest button，scanner runner 必須回傳 candidate rows，chart helper 必須提供 `scroll_chart_to_latest()` 與右側留白契約 | `tools/gui/single_stock_inspector.py`, `tools/scanner/scan_runner.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 歷史績效符合 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後至少半個版面右側留白，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B90 | P1 | GUI | GUI 工作台必須新增 `投組回測檢視` 上層分頁，單股分頁不得再暴露 HTML K 線按鈕或執行摘要分頁；右側 sidebar 的狀態與選取日線值必須成為單一資訊來源，不得再與 chart hover 線值重覆顯示 | DONE | 已補 direct contract，直接釘死 workbench 必須宣告 `portfolio_backtest_view` 分頁且來源是 `apps/portfolio_sim.py`；單股分頁不得再出現 HTML K 線按鈕與執行摘要分頁，避免 GUI 資訊來源再次分叉 | `tools/gui/workbench.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
+| B91 | P2 | Meta | quick gate 必須在 formal suite 前置靜態攔截 `tools/validate/synthetic_cases.py` 中 imported / locally-defined `validate_*` case 已宣告但漏註冊 `_entry(...)` 的情況；不得等 consistency synthetic registry meta case 才暴露為回歸 | DONE | 已補 quick gate registry-completeness static contract，直接以 AST 比對 imported / defined `validate_*` names 與 `_entry(...)` registry；後續凡新增 `synthetic_contract_cases.py` validator 到 `synthetic_cases.py` import list，同輪必須同步加入 `_entry(...)` 主入口，避免 `validate_gui_portfolio_tab_and_htmlless_contract_case` 這類 GUI validator 再次漏註冊 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -370,6 +371,7 @@
 | T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
 | T169 | `validate_gui_portfolio_tab_and_htmlless_contract_case` | B90 |
+| T170 | `tools/local_regression/run_quick_gate.py` | B91 |
 
 ## G. 逐項收斂紀錄
 
@@ -625,6 +627,7 @@
 | 2026-04-05 | B88 | 新增 GUI scanner / Console / latest-view contract，釘死完整資料集固定化、候選股下拉與 latest-bar 預覽不得分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B89 | 新增 GUI 右側 sidebar / Enter 回測 / latest next-day preview contract，釘死狀態摘要與預掛線預覽不得再分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B90 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract，釘死工作台上層分頁與單股 GUI 資訊來源不得再分叉 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B91 | 新增 quick gate registry-completeness static contract，釘死 imported / defined `validate_*` case 不得漏註冊 `_entry(...)` 主入口，避免 consistency 才暴露 synthetic registry 回歸 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -675,3 +678,4 @@
 | 2026-04-05 | T167 | 新增 GUI scanner / Console / latest-view contract 並驗證 | NEW -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |
 | 2026-04-05 | T169 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_tab_and_htmlless_contract_case` |
+| 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |

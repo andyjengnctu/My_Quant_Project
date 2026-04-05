@@ -119,6 +119,8 @@ def _load_synthetic_registry_symbol_resolution() -> Dict[str, Any]:
     allowed_names = imported_validate_names | locally_defined_names
     unresolved_registry_names = sorted(name for name in registry_name_set if name.startswith("validate_") and name not in allowed_names)
     duplicate_registry_names = sorted(name for name in registry_name_set if registry_names.count(name) > 1)
+    missing_imported_registry_names = sorted(name for name in imported_validate_names if name not in registry_name_set)
+    missing_defined_registry_names = sorted(name for name in locally_defined_names if name.startswith("validate_") and name not in registry_name_set)
 
     return {
         "source_path": str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
@@ -127,6 +129,8 @@ def _load_synthetic_registry_symbol_resolution() -> Dict[str, Any]:
         "locally_defined_count": len(locally_defined_names),
         "unresolved_registry_names": unresolved_registry_names,
         "duplicate_registry_names": sorted(set(duplicate_registry_names)),
+        "missing_imported_registry_names": missing_imported_registry_names,
+        "missing_defined_registry_names": missing_defined_registry_names,
     }
 
 
@@ -178,11 +182,16 @@ def run_static_checks() -> List[Dict[str, Any]]:
     results.append(
         summarize_result(
             "synthetic_registry_symbol_resolution",
-            (not synthetic_registry_contract["unresolved_registry_names"]) and (not synthetic_registry_contract["duplicate_registry_names"]),
+            (not synthetic_registry_contract["unresolved_registry_names"])
+            and (not synthetic_registry_contract["duplicate_registry_names"])
+            and (not synthetic_registry_contract["missing_imported_registry_names"])
+            and (not synthetic_registry_contract["missing_defined_registry_names"]),
             detail=(
                 f"registry entries {synthetic_registry_contract['registry_entry_count']} 筆；"
                 f"未解析 symbol {len(synthetic_registry_contract['unresolved_registry_names'])} 筆；"
-                f"重複 symbol {len(synthetic_registry_contract['duplicate_registry_names'])} 筆"
+                f"重複 symbol {len(synthetic_registry_contract['duplicate_registry_names'])} 筆；"
+                f"未註冊 imported validate {len(synthetic_registry_contract['missing_imported_registry_names'])} 筆；"
+                f"未註冊 defined validate {len(synthetic_registry_contract['missing_defined_registry_names'])} 筆"
             ),
             extra=synthetic_registry_contract,
         )
