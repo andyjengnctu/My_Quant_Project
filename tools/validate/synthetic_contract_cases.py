@@ -493,7 +493,7 @@ def validate_local_regression_summary_contract_case(_base_params):
         dataset_pass_json = json.loads((run_dir / "dataset_prepare_summary.json").read_text(encoding="utf-8"))
         dataset_pass_text = (run_dir / "dataset_prepare_summary.txt").read_text(encoding="utf-8")
         add_check(results, "output_contract", case_id, "dataset_prepare_pass_required_keys", [], sorted(REQUIRED_DATASET_PREP_SUMMARY_KEYS - set(dataset_pass_json.keys())))
-        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and f"csv_count   : {dataset_pass_json.get("csv_count")}" in dataset_pass_text and "members_sha : " in dataset_pass_text and "content_sha : " in dataset_pass_text)
+        add_check(results, "output_contract", case_id, "dataset_prepare_pass_text_contract", True, "dataset_dir : data/tw_stock_data_vip_reduced" in dataset_pass_text and f"csv_count   : {dataset_pass_json.get('csv_count')}" in dataset_pass_text and "members_sha : " in dataset_pass_text and "content_sha : " in dataset_pass_text)
 
         dataset_fail = run_all_module._write_dataset_prepare_summary(run_dir, {
             "status": "FAIL",
@@ -2090,10 +2090,30 @@ def validate_gui_portfolio_tab_and_htmlless_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "single_stock_panel_removes_html_button", False, 'text="開啟 HTML K 線圖"' in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_panel_removes_summary_tab", False, 'text="執行摘要"' in inspector_source)
     add_check(results, "output_contract", case_id, "workbench_declares_portfolio_tab", True, '"panel_id": "portfolio_backtest_view"' in workbench_source and '"tab_label": "投組回測檢視"' in workbench_source)
-    add_check(results, "output_contract", case_id, "portfolio_panel_uses_portfolio_sim_source", True, 'portfolio_sim.py' in portfolio_panel_source and 'subprocess.run(' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_uses_gui_notebook_layout", True, 'ttk.Notebook' in portfolio_panel_source and '_build_portfolio_figure' in portfolio_panel_source and '_render_result' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_declares_gui_progressbar", True, 'ttk.Progressbar' in portfolio_panel_source and '_set_running' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_avoids_subprocess_console_shell_only_mode", False, 'subprocess.run(' in portfolio_panel_source)
     return results, summary
 
 
+
+
+def validate_gui_sidebar_line_values_and_portfolio_progress_contract_case(_base_params):
+    case_id = "GUI_SIDEBAR_LINE_VALUES_AND_PORTFOLIO_PROGRESS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    portfolio_panel_source = build_project_absolute_path("tools", "gui", "portfolio_backtest_panel.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_panel_removes_parameter_labelframe_title", False, 'text="執行參數"' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_panel_declares_colored_line_value_labels", True, '_tp_value_label' in inspector_source and '_limit_value_label' in inspector_source and '_entry_value_label' in inspector_source and '_stop_value_label' in inspector_source)
+    add_check(results, "output_contract", case_id, "charting_hides_line_legend_from_left_top", False, 'axis_price.legend(' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_syncs_volume_xlim_during_mouse_pan", True, 'axis_volume.set_xlim(next_left, next_right, emit=False)' in charting_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_declares_chart_console_yearly_tabs", True, 'text="交易明細"' in portfolio_panel_source and 'text="年度報酬"' in portfolio_panel_source and 'text="Console"' in portfolio_panel_source)
+    add_check(results, "output_contract", case_id, "portfolio_panel_captures_runtime_progress_into_gui_console", True, 'redirect_stdout(self._console_writer)' in portfolio_panel_source and 'redirect_stderr(self._console_writer)' in portfolio_panel_source and 'self._progress.start(' in portfolio_panel_source)
+    return results, summary
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []
@@ -2103,7 +2123,7 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
     charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "gui_panel_uses_explicit_workbench_dark_styles", True, 'style="Workbench.TNotebook"' in inspector_source and 'style="Workbench.TLabelframe"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_uses_explicit_workbench_dark_styles", True, 'style="Workbench.TNotebook"' in inspector_source and 'style="Workbench.TFrame"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_workbench_uses_palette_force_for_dark_theme", True, "root.tk_setPalette(" in workbench_source)
     add_check(results, "output_contract", case_id, "chart_mouse_pan_uses_pixel_anchor", True, "anchor_px" in charting_source and "bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px" in charting_source and 'interaction_flags["dragging"]' in charting_source)
 

@@ -7,8 +7,8 @@ import pandas as pd
 
 
 CHART_SIGNAL_BOX_ALPHA = 0.44
-CHART_RIGHT_PADDING_BARS = 24
-CHART_LATEST_RIGHT_PADDING_RATIO = 0.22
+CHART_RIGHT_PADDING_BARS = 8
+CHART_LATEST_RIGHT_PADDING_RATIO = 0.18
 CHART_DEFAULT_LOOKBACK_MONTHS = 18
 CHART_DEFAULT_LOOKBACK_FALLBACK_BARS = 380
 CHART_FOCUS_PADDING_BARS = 15
@@ -60,8 +60,8 @@ MATPLOTLIB_WHEEL_ZOOM_IN_FACTOR = 0.82
 MATPLOTLIB_WHEEL_ZOOM_OUT_FACTOR = 1.22
 
 MATPLOTLIB_PAN_CURSOR = "fleur"
-MATPLOTLIB_PAN_REDRAW_MIN_INTERVAL_SEC = 0.012
-MATPLOTLIB_PAN_REDRAW_MIN_PIXEL_DELTA = 2.0
+MATPLOTLIB_PAN_REDRAW_MIN_INTERVAL_SEC = 0.018
+MATPLOTLIB_PAN_REDRAW_MIN_PIXEL_DELTA = 3.0
 MATPLOTLIB_KEY_PAN_STEP_RATIO = 0.16
 MATPLOTLIB_KEY_EDGE_MARGIN_BARS = 2
 MATPLOTLIB_DYNAMIC_BODY_WIDTH_RANGE = (1.8, 7.4)
@@ -933,10 +933,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    line_handles, line_labels = axis_price.get_legend_handles_labels()
-    if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.01), handlelength=2.2)
-    hover_text_artist = axis_price.text(0.01, 0.965, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.25", "fc": MATPLOTLIB_HOVER_BOX_FACE, "ec": "none"}, zorder=8)
+    hover_text_artist = axis_price.text(0.006, 0.996, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_text(_build_hover_text(chart_payload, chart_payload["default_view"]["end_idx"]))
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
     crosshair_hline = axis_price.axhline(y=chart_payload["close"][chart_payload["default_view"]["end_idx"]], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.35, zorder=1)
@@ -1045,7 +1042,9 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "dynamic_candle_width_enabled": True,
         "buy_trade_label_boxes_enabled": False,
         "mouse_drag_pan_mode": "pixel_anchor",
-        "grid_alpha": 0.12,
+        "grid_alpha": 0.10,
+        "line_value_sidebar_mode": "right_sidebar_only",
+        "line_legend_visible": False,
     }
     figure._stock_chart_navigation_state = {
         "axis_price": axis_price,
@@ -1157,6 +1156,8 @@ def bind_matplotlib_chart_navigation(figure, canvas):
         left, right = axis_price.get_xlim()
         next_left, next_right = _clamp_chart_xlim(left + float(delta_bars), right + float(delta_bars), total_points=total_points)
         axis_price.set_xlim(next_left, next_right, emit=False)
+        if axis_volume is not None:
+            axis_volume.set_xlim(next_left, next_right, emit=False)
         if relayout:
             sync_visible_ranges(force=True, redraw=True)
         elif figure.canvas is not None:
@@ -1196,6 +1197,8 @@ def bind_matplotlib_chart_navigation(figure, canvas):
             delta = (float(drag_state["anchor_px"]) - float(current_px)) * bars_per_pixel
             next_left, next_right = _clamp_chart_xlim(origin_left + delta, origin_right + delta, total_points=total_points)
             axis_price.set_xlim(next_left, next_right, emit=False)
+            if axis_volume is not None:
+                axis_volume.set_xlim(next_left, next_right, emit=False)
             if figure.canvas is not None:
                 now_ts = time.monotonic()
                 last_px = drag_state.get("last_draw_px")

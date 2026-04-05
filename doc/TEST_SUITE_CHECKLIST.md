@@ -160,6 +160,7 @@
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 歷史績效符合 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後至少半個版面右側留白，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B90 | P1 | GUI | GUI 工作台必須新增 `投組回測檢視` 上層分頁，單股分頁不得再暴露 HTML K 線按鈕或執行摘要分頁；右側 sidebar 的狀態與選取日線值必須成為單一資訊來源，不得再與 chart hover 線值重覆顯示 | DONE | 已補 direct contract，直接釘死 workbench 必須宣告 `portfolio_backtest_view` 分頁且來源是 `apps/portfolio_sim.py`；單股分頁不得再出現 HTML K 線按鈕與執行摘要分頁，避免 GUI 資訊來源再次分叉 | `tools/gui/workbench.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/synthetic_contract_cases.py` |
 | B91 | P2 | Meta | quick gate 必須在 formal suite 前置靜態攔截 `tools/validate/synthetic_cases.py` 中 imported / locally-defined `validate_*` case 已宣告但漏註冊 `_entry(...)` 的情況；不得等 consistency synthetic registry meta case 才暴露為回歸 | DONE | 已補 quick gate registry-completeness static contract，直接以 AST 比對 imported / defined `validate_*` names 與 `_entry(...)` registry；後續凡新增 `synthetic_contract_cases.py` validator 到 `synthetic_cases.py` import list，同輪必須同步加入 `_entry(...)` 主入口，避免 `validate_gui_portfolio_tab_and_htmlless_contract_case` 這類 GUI validator 再次漏註冊 | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
+| B92 | P1 | GUI | GUI 單股頁必須將停利/停損/限價/成交線值整合到右側彩色 sidebar、移除左上重複 legend、價量時間軸在滑鼠拖曳時保持同步；投組頁不得只包 console，必須提供 GUI 進度、內嵌圖表與結果分頁 | DONE | 已補 direct contract，直接釘死單股控制列不得保留 `執行參數` 標題、右側必須宣告彩色線值 label、chart helper 不得再顯示左上 legend 且滑鼠平移時需同步 volume xlim；投組頁必須提供 Progressbar、內嵌 chart、交易明細 / 年度報酬 / Console 分頁，並以 GUI console 承接 runtime 進度輸出 | `tools/gui/single_stock_inspector.py`, `tools/gui/portfolio_backtest_panel.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -372,6 +373,7 @@
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
 | T169 | `validate_gui_portfolio_tab_and_htmlless_contract_case` | B90 |
 | T170 | `tools/local_regression/run_quick_gate.py` registry-completeness-static-contract | B91 |
+| T171 | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` | B92 |
 
 ## G. 逐項收斂紀錄
 
@@ -679,3 +681,5 @@
 | 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |
 | 2026-04-05 | T169 | 新增 GUI 投組回測分頁 / no-HTML / no-summary-tab contract 並驗證 | NEW -> DONE | `validate_gui_portfolio_tab_and_htmlless_contract_case` |
 | 2026-04-05 | T170 | 新增 quick gate registry-completeness static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
+| 2026-04-06 | B92 | 新增 GUI sidebar 彩色線值 / 價量同步 / portfolio GUI 進度與結果分頁 contract，釘死單股與投組頁不得再退回 console-only 或左上重複 legend 版型 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | T171 | 新增 GUI sidebar 彩色線值 / portfolio GUI 進度 contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_line_values_and_portfolio_progress_contract_case` |
