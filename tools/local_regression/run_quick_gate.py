@@ -88,6 +88,48 @@ def _compile_to_temp_pyc(source_path: Path, *, pyc_root: Path) -> Path:
     return pyc_path
 
 
+def _load_synthetic_registry_symbol_resolution() -> Dict[str, Any]:
+    source_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_cases.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+
+    imported_validate_names = set()
+    locally_defined_names = set()
+    registry_names = []
+
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported_name = alias.asname or alias.name
+                if imported_name.startswith("validate_"):
+                    imported_validate_names.add(imported_name)
+        elif isinstance(node, ast.FunctionDef):
+            locally_defined_names.add(node.name)
+            if node.name != "get_synthetic_validator_entries":
+                continue
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Call):
+                    continue
+                if not isinstance(child.func, ast.Name) or child.func.id != "_entry":
+                    continue
+                if not child.args or not isinstance(child.args[0], ast.Name):
+                    continue
+                registry_names.append(child.args[0].id)
+
+    registry_name_set = set(registry_names)
+    allowed_names = imported_validate_names | locally_defined_names
+    unresolved_registry_names = sorted(name for name in registry_name_set if name.startswith("validate_") and name not in allowed_names)
+    duplicate_registry_names = sorted(name for name in registry_name_set if registry_names.count(name) > 1)
+
+    return {
+        "source_path": str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        "registry_entry_count": len(registry_names),
+        "imported_validate_count": len(imported_validate_names),
+        "locally_defined_count": len(locally_defined_names),
+        "unresolved_registry_names": unresolved_registry_names,
+        "duplicate_registry_names": sorted(set(duplicate_registry_names)),
+    }
+
+
 def run_static_checks() -> List[Dict[str, Any]]:
     py_files = iter_python_files()
     results: List[Dict[str, Any]] = []
@@ -129,6 +171,20 @@ def run_static_checks() -> List[Dict[str, Any]]:
             (not bare_except_hits) and (not bare_except_scan_errors),
             detail=f"裸 except 命中 {len(bare_except_hits)} 筆；AST 解析失敗 {len(bare_except_scan_errors)} 筆",
             extra={"hits": bare_except_hits, "ast_parse_errors": bare_except_scan_errors},
+        )
+    )
+
+    synthetic_registry_contract = _load_synthetic_registry_symbol_resolution()
+    results.append(
+        summarize_result(
+            "synthetic_registry_symbol_resolution",
+            (not synthetic_registry_contract["unresolved_registry_names"]) and (not synthetic_registry_contract["duplicate_registry_names"]),
+            detail=(
+                f"registry entries {synthetic_registry_contract['registry_entry_count']} 筆；"
+                f"未解析 symbol {len(synthetic_registry_contract['unresolved_registry_names'])} 筆；"
+                f"重複 symbol {len(synthetic_registry_contract['duplicate_registry_names'])} 筆"
+            ),
+            extra=synthetic_registry_contract,
         )
     )
     return results

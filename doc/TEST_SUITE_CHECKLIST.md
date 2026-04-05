@@ -147,6 +147,7 @@
 | B76 | P2 | Meta | synthetic validator 直接引用外部 chart/navigation helper 名稱時，必須在同檔顯式 import；不得依賴遺漏名稱在 formal suite 執行時才以 `NameError` 暴露，避免 coverage / consistency synthetic suite 假失敗 | DONE | 已補 static contract，直接釘死 `synthetic_contract_cases.py` 只要實際使用 `bind_matplotlib_chart_navigation`，就必須顯式自 `tools.debug.charting` import 該名稱；並修正缺失 import 造成的 synthetic suite runtime regression | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B77 | P1 | 契約 | debug 單股回測 entry marker 在 entry plan 不可掛單或為 `None` 時，必須 no-op；不得在 GUI / chart export 路徑中因直接存取 `entry_plan["limit_price"]` 而對特定股票炸出 `'NoneType' object is not subscriptable` | DONE | 已補 direct contract，直接以 `entry_plan=None` 呼叫 debug entry marker helper，釘死必須不新增 marker 且不得拋例外；同步修正 `_record_entry_plan_marker()` 的空 plan guard，避免高價股或 sizing 為 0 的股票在 GUI 執行回測時失敗 | `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B78 | P2 | 效能 | 內嵌 GUI K 線相關 synthetic contract 若只需驗證 chart payload / figure 契約，不得強制走 HTML export；正式 debug analysis 應支援在 `export_chart=False` 時直接回傳 chart payload，避免 consistency synthetic suite 因額外載入 plotly / HTML artifact 路徑造成記憶體回歸 | DONE | 已補 direct contract，直接釘死 `run_debug_analysis(..., export_chart=False, return_chart_payload=True)` 必須可回傳 `chart_payload` 且 `chart_path` 保持 `None`；同步讓 reporting / backtest / trade_log wrapper 支援此 lightweight path，避免 GUI chart synthetic validator 為了拿 payload 而額外走 HTML export | `tools/debug/reporting.py`, `tools/debug/backtest.py`, `tools/debug/trade_log.py`, `tools/validate/synthetic_contract_cases.py` |
+| B79 | P2 | Meta | `tools/validate/synthetic_cases.py` 的 `_entry(validate_...)` registry symbol 必須能在檔內解析到對應 import 或本地定義；不得等 consistency import 階段才以 `NameError` 爆炸，否則 quick gate 無法在 formal suite 前置攔截 synthetic 主入口回歸 | DONE | 已補 quick gate static contract，直接以 AST 掃描 `synthetic_cases.py` 的 registry entries、imported validate symbols 與本地定義，釘死 `_entry(...)` 內的 `validate_*` symbol 不得有 unresolved/duplicate；同步修正 `validate_debug_chart_payload_without_html_export_contract_case` 漏 import 造成的 synthetic suite runtime regression | `tools/local_regression/run_quick_gate.py`, `tools/validate/synthetic_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -346,6 +347,7 @@
 | T155 | `validate_synthetic_case_chart_navigation_binder_import_contract_case` | B76 |
 | T156 | `validate_debug_entry_plan_marker_optional_contract_case` | B77 |
 | T157 | `validate_debug_chart_payload_without_html_export_contract_case` | B78 |
+| T158 | `tools/local_regression/run_quick_gate.py` | B79 |
 
 ## G. 逐項收斂紀錄
 
@@ -591,6 +593,7 @@
 | 2026-04-05 | B76 | 新增 synthetic validator chart-navigation helper 顯式 import contract，避免遺漏 `bind_matplotlib_chart_navigation` 在 formal suite 才以 `NameError` 造成假失敗 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B77 | 新增 debug entry marker optional-plan contract，釘死 entry_plan=None 時必須 no-op 不得炸出 NoneType 下標錯誤 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-05 | B78 | 新增 debug chart payload 無需 HTML export contract，釘死 `export_chart=False` 也可回傳 payload 以避免 synthetic suite 額外載入 plotly 造成記憶體回歸 | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-05 | B79 | 新增 quick gate synthetic registry symbol-resolution static contract，釘死 `_entry(validate_...)` 不得引用未 import / 未定義 symbol，避免 consistency import 階段才以 `NameError` 爆炸 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約後收斂完成 | DONE -> PARTIAL | display header contract 缺口待補。 |
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
@@ -629,3 +632,4 @@
 | 2026-04-05 | T155 | 新增 chart-navigation binder 顯式 import static contract 並驗證 | NEW -> DONE | `validate_synthetic_case_chart_navigation_binder_import_contract_case` |
 | 2026-04-05 | T156 | 新增 debug entry marker optional-plan contract 並驗證 | NEW -> DONE | `validate_debug_entry_plan_marker_optional_contract_case` |
 | 2026-04-05 | T157 | 新增 debug chart payload 無需 HTML export contract 並驗證 | NEW -> DONE | `validate_debug_chart_payload_without_html_export_contract_case` |
+| 2026-04-05 | T158 | 新增 quick gate synthetic registry symbol-resolution static contract 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |

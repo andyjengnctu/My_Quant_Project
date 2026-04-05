@@ -108,6 +108,7 @@ from .synthetic_contract_cases import (
     validate_meta_quality_reuses_existing_coverage_artifacts_case,
     validate_debug_trade_log_chart_context_optional_case,
     validate_debug_trade_log_prepared_tool_contract_case,
+    validate_debug_chart_payload_without_html_export_contract_case,
     validate_gui_embedded_chart_contract_case,
     validate_gui_chart_workspace_contract_case,
     validate_gui_mouse_navigation_contract_case,
