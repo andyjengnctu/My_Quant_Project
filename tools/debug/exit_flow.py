@@ -21,6 +21,7 @@ def process_debug_position_step(
     params,
     trade_logs,
     chart_context=None,
+    history_snapshot=None,
 ):
     prev_qty = position['qty']
     prev_realized = position.get('realized_pnl', 0.0)
@@ -69,6 +70,10 @@ def process_debug_position_step(
             meta={
                 'pnl_value': float(realized_delta),
                 'pnl_pct': float(((sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+                'sell_capital': float(sell_net_price_half * sold_qty),
+                'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
+                'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
+                'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
             },
         )
 
@@ -104,6 +109,10 @@ def process_debug_position_step(
             meta={
                 'pnl_value': float(final_leg_pnl),
                 'pnl_pct': float(((sell_net_price - float(position.get('entry', sell_price))) / float(position.get('entry', sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+                'sell_capital': float(sell_net_price * final_exit_qty),
+                'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
+                'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
+                'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
             },
         )
     elif 'MISSED_SELL' in events:
@@ -165,5 +174,6 @@ def append_debug_forced_closeout(*, position, current_date, atr_last, params, tr
         meta={
             'pnl_value': float(final_leg_pnl),
             'pnl_pct': float(((sell_net_price - float(position.get('entry', exec_sell_price))) / float(position.get('entry', exec_sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+            'sell_capital': float(sell_net_price * position['qty']),
         },
     )

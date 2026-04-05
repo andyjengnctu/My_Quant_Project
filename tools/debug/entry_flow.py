@@ -114,6 +114,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
                     'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                    'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
         elif entry_result['count_as_missed_buy']:
@@ -204,6 +205,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
                     'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                    'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
         elif entry_result['count_as_missed_buy']:

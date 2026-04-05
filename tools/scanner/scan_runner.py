@@ -94,6 +94,17 @@ def run_daily_scanner(data_dir, params):
         candidate_rows=candidate_rows,
         scanner_issue_log_path=scanner_issue_log_path,
     )
+    return {
+        'count_scanned': count_scanned,
+        'elapsed_time': elapsed_time,
+        'count_history_qualified': count_history_qualified,
+        'count_skipped_insufficient': count_skipped_insufficient,
+        'count_sanitized_candidates': count_sanitized_candidates,
+        'max_workers': max_workers,
+        'pool_start_method': pool_start_method,
+        'candidate_rows': list(candidate_rows),
+        'scanner_issue_log_path': scanner_issue_log_path,
+    }
 
 
 def main(argv=None, env=None):

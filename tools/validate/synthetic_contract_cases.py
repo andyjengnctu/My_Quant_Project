@@ -1925,7 +1925,7 @@ def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
         "marker_groups": {},
         "signal_annotations": [],
         "summary_box": ["資產成長: 1.0%"],
-        "status_box": {"lines": ["出現買訊", "歷績門檻合格"], "ok": True},
+        "status_box": {"lines": ["出現買入訊號", "歷史績效符合"], "ok": True},
         "focus_positions": [100],
         "default_view": {"start_idx": 84, "end_idx": 119},
     }
@@ -2035,6 +2035,27 @@ def validate_workbench_theme_accent_symbol_contract_case(_base_params):
     return results, summary
 
 
+def validate_gui_scanner_console_and_latest_contract_case(_base_params):
+    case_id = "GUI_SCANNER_CONSOLE_AND_LATEST_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    scanner_source = build_project_absolute_path("tools", "scanner", "scan_runner.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "gui_panel_uses_full_dataset_only", False, 'text="資料集"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_scanner_button", True, 'text="計算候選股"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_candidate_dropdown", True, '_candidate_combo' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_console_tab", True, 'text="Console"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_latest_button", True, 'text="回到最新K線"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_calls_scanner_runner", True, 'run_daily_scanner(' in inspector_source)
+    add_check(results, "output_contract", case_id, "charting_declares_scroll_to_latest_helper", True, 'def scroll_chart_to_latest(' in charting_source)
+    add_check(results, "output_contract", case_id, "charting_declares_right_padding_bars", True, 'CHART_RIGHT_PADDING_BARS' in charting_source)
+    add_check(results, "output_contract", case_id, "scanner_runner_returns_candidate_rows_payload", True, '"candidate_rows": list(candidate_rows)' in scanner_source or "'candidate_rows': list(candidate_rows)" in scanner_source)
+    return results, summary
+
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []
@@ -2046,7 +2067,7 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
 
     add_check(results, "output_contract", case_id, "gui_panel_uses_explicit_workbench_dark_styles", True, 'style="Workbench.TNotebook"' in inspector_source and 'style="Workbench.TLabelframe"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_workbench_uses_palette_force_for_dark_theme", True, "root.tk_setPalette(" in workbench_source)
-    add_check(results, "output_contract", case_id, "chart_mouse_pan_uses_pixel_anchor", True, 'drag_state = {"active": False, "anchor_x": None, "anchor_px": None, "orig_xlim": None}' in charting_source and 'bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px' in charting_source)
+    add_check(results, "output_contract", case_id, "chart_mouse_pan_uses_pixel_anchor", True, "anchor_px" in charting_source and "bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px" in charting_source and 'interaction_flags["dragging"]' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=80, freq="B")
     payload = {
@@ -2069,7 +2090,7 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
         },
         "signal_annotations": [{"date": dates[20], "x": 20, "anchor_price": 31.8, "signal_type": "buy", "title": "買訊", "detail_text": "限價: 32.00", "note": "", "meta": {}}],
         "summary_box": ["資產成長: 10.0%"],
-        "status_box": {"lines": ["出現買訊", "歷績門檻合格"], "ok": True},
+        "status_box": {"lines": ["出現買入訊號", "歷史績效符合"], "ok": True},
         "focus_positions": [20, 30],
         "default_view": {"start_idx": 10, "end_idx": 45},
     }
@@ -2114,7 +2135,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
         detail_lines=["限價: 120.00", "停損: 115.00", "股數: 1,000"],
     )
     set_chart_summary_box(large_chart_context, summary_lines=["資產成長: 10.0%", "交易次數: 5"])
-    set_chart_status_box(large_chart_context, status_lines=["賣訊: 否", "Candidate: 是", "歷績門檻: 合格"], ok=True)
+    set_chart_status_box(large_chart_context, status_lines=["無賣訊", "出現買入訊號", "歷史績效符合"], ok=True)
     chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
     figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
     contract = getattr(figure, "_stock_chart_contract", {})

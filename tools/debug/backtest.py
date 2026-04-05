@@ -6,6 +6,7 @@ from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_entry_plan
 from core.history_filters import evaluate_history_candidate_metrics
+from core.price_utils import calc_entry_price, calc_net_sell_price
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
 from tools.debug.charting import (
@@ -88,23 +89,20 @@ def _build_pit_history_snapshot(stats_index, current_date, params, current_capit
     }
 
 
-def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot):
+def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot, params):
     if chart_context is None:
         return
     if entry_plan is None:
-        detail_lines = [
-            f"歷績門檻: {'合格' if history_snapshot['is_candidate'] else '未達'}",
-            '本次資金不足，無法掛單',
-        ]
+        detail_lines = ['本次資金不足，無法掛單']
     else:
         tp_line = entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])
+        buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
         detail_lines = [
+            f"停利: {tp_line:.2f}",
             f"限價: {entry_plan['limit_price']:.2f}",
             f"停損: {entry_plan['init_sl']:.2f}",
-            f"停利: {tp_line:.2f}",
-            f"股數: {int(entry_plan['qty']):,}",
-            f"歷績門檻: {'合格' if history_snapshot['is_candidate'] else '未達'}",
-            f"EV: {history_snapshot['expected_value']:.2f} R | 勝率: {history_snapshot['win_rate']:.1f}%",
+            f"買入股數: {int(entry_plan['qty']):,}",
+            f"買入資金: {buy_capital:,.0f}",
         ]
     record_signal_annotation(
         chart_context,
@@ -116,16 +114,21 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     )
 
 
-def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot):
+def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot, params):
     if chart_context is None or position.get('qty', 0) <= 0:
         return
-    signal_trade_pct = ((float(signal_close) - float(position.get('entry', signal_close))) / float(position.get('entry', signal_close)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0
+    entry_price = float(position.get('entry', signal_close))
+    signal_trade_pct = ((float(signal_close) - entry_price) / entry_price * 100.0) if entry_price > 0 else 0.0
+    sell_capital = calc_net_sell_price(signal_close, position['qty'], params) * position['qty']
+    pnl_value = (calc_net_sell_price(signal_close, position['qty'], params) - entry_price) * position['qty']
     detail_lines = [
-        f"股數: {int(position['qty']):,}",
-        f"本次績效: {signal_trade_pct:+.2f}%",
-        f"資產成長: {history_snapshot['asset_growth_pct']:.1f}%",
-        f"勝率: {history_snapshot['win_rate']:.1f}% | 風報比: {history_snapshot['payoff_ratio']:.2f}",
-        f"期望值: {history_snapshot['expected_value']:.2f} R | 交易: {history_snapshot['trade_count']}",
+        f"賣出股數: {int(position['qty']):,}",
+        f"賣出資金: {sell_capital:,.0f}",
+        f"本次損益: {pnl_value:+,.0f}",
+        f"本次報酬率: {signal_trade_pct:+.2f}%",
+        f"風報比: {history_snapshot['payoff_ratio']:.2f}",
+        f"勝率: {history_snapshot['win_rate']:.1f}%",
+        f"EV: {history_snapshot['expected_value']:.2f} R",
     ]
     record_signal_annotation(
         chart_context,
@@ -159,12 +162,12 @@ def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
     if sell_signal_today:
         primary_signal_line = "出現賣訊"
     elif has_raw_buy_signal:
-        primary_signal_line = "出現買訊"
+        primary_signal_line = "出現買入訊號"
     else:
-        primary_signal_line = "無買訊"
+        primary_signal_line = "無買入訊號"
     status_lines = [
         primary_signal_line,
-        f"歷績門檻{'合格' if history_gate_ok else '未達'}",
+        f"歷史績效{'符合' if history_gate_ok else '未達'}",
     ]
     set_chart_status_box(chart_context, status_lines=status_lines, ok=history_gate_ok)
 
@@ -204,6 +207,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 signal_low=l[j - 1],
                 entry_plan=entry_plan_preview,
                 history_snapshot=signal_history_snapshot,
+                params=params,
             )
         if chart_context is not None and pos_qty_start_of_bar > 0 and sell_condition[j - 1]:
             _record_sell_signal_annotation(
@@ -213,6 +217,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 signal_close=c[j - 1],
                 position=position,
                 history_snapshot=signal_history_snapshot,
+                params=params,
             )
         if pos_qty_start_of_bar > 0:
             position, pnl_realized = process_debug_position_step(
@@ -229,6 +234,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 params=params,
                 trade_logs=trade_logs,
                 chart_context=chart_context,
+                history_snapshot=signal_history_snapshot,
             )
             current_capital += pnl_realized
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
@@ -259,6 +265,39 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 tp_half_price=_resolve_active_tp_half(position),
                 limit_price=position.get('limit_price', np.nan),
                 entry_price=position.get('pure_buy_price', np.nan),
+            )
+    if len(c) > 0:
+        latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital)
+        if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
+            latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
+            latest_entry_plan_preview = build_normal_entry_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
+            _record_buy_signal_annotation(
+                chart_context=chart_context,
+                signal_date=dates[-1],
+                signal_low=l[-1],
+                entry_plan=latest_entry_plan_preview,
+                history_snapshot=latest_history_snapshot,
+                params=params,
+            )
+            if latest_entry_plan_preview is not None and latest_history_snapshot.get('is_candidate', False):
+                preview_tp = latest_entry_plan_preview['limit_price'] + (latest_entry_plan_preview['limit_price'] - latest_entry_plan_preview['init_sl'])
+                record_active_levels(
+                    chart_context,
+                    current_date=dates[-1],
+                    stop_price=latest_entry_plan_preview['init_sl'],
+                    tp_half_price=preview_tp,
+                    limit_price=latest_entry_plan_preview['limit_price'],
+                    entry_price=np.nan,
+                )
+        if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):
+            _record_sell_signal_annotation(
+                chart_context=chart_context,
+                signal_date=dates[-1],
+                signal_low=l[-1],
+                signal_close=c[-1],
+                position=position,
+                history_snapshot=latest_history_snapshot,
+                params=params,
             )
     if position['qty'] > 0:
         position['close_price'] = c[-1]

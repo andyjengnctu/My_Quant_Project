@@ -57,6 +57,10 @@ def build_workbench_spec():
                 "artifact_keys": list(panel["artifact_keys"]),
                 "inline_chart_backend": panel["inline_chart_backend"],
                 "default_show_volume": panel["default_show_volume"],
+                "default_dataset": "full",
+                "scanner_dropdown_enabled": True,
+                "console_tab_enabled": True,
+                "jump_to_latest_enabled": True,
             }
             for panel in PANEL_SPECS
         ],
