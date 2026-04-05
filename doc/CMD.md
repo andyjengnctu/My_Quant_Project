@@ -78,7 +78,7 @@ python tools/debug/trade_log.py
 python apps/gui.py
 ```
 
-`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤，會直接在 GUI 內嵌大型 K 線圖，並保留 Excel 與 HTML artifact 輸出。
+`apps/gui.py` 是 GUI 單一啟用入口；GUI 工作台與頁籤 registry 在 `tools/gui/workbench.py`，目前內建 `單股回測檢視` 頁籤：K 線圖分頁預設佔主要版面、成交量預設隱藏且可切換，執行摘要與交易明細改為獨立分頁，並保留 Excel 與 HTML artifact 輸出。
 
 
 # portfolio engine 架構

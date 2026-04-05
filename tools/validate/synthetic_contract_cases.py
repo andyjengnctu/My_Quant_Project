@@ -1,3 +1,4 @@
+import ast
 import csv
 import io
 import importlib
@@ -28,7 +29,12 @@ from tools.validate.reporting import write_issue_excel_report, write_local_regre
 from core.portfolio_fast_data import prep_stock_data_and_trades
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
 from tools.scanner.stock_processor import build_scanner_response_from_stats
-from tools.debug.charting import compute_visible_value_ranges, create_matplotlib_debug_chart_figure
+from tools.debug.charting import (
+    build_debug_chart_payload,
+    compute_visible_value_ranges,
+    create_matplotlib_debug_chart_figure,
+    get_matplotlib_cjk_font_candidates,
+)
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -1618,6 +1624,7 @@ def validate_gui_embedded_chart_contract_case(base_params):
     workbench_spec = importlib.import_module("tools.gui").build_workbench_spec()
     panel_spec = workbench_spec.get("panels", [])[0]
     add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_default_show_volume", False, panel_spec.get("default_show_volume"))
 
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
     ticker = case["primary_ticker"]
@@ -1664,13 +1671,65 @@ def validate_gui_embedded_chart_contract_case(base_params):
     outlier_ranges = compute_visible_value_ranges(outlier_payload, start_idx=outlier_window_start, end_idx=outlier_window_end)
     add_check(results, "output_contract", case_id, "gui_embedded_chart_offscreen_outlier_ignored", base_outlier_ranges["price_max"], outlier_ranges["price_max"])
 
-    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker)
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count", 2, len(figure.axes))
-    price_xlim = tuple(int(round(value)) for value in figure.axes[0].get_xlim())
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_initial_xlim", (start_idx - 1, end_idx + 1), price_xlim)
+    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=False)
+    contract = getattr(figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count_without_volume", 1, len(figure.axes))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_volume_hidden", False, contract.get("volume_visible"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_default_view_preserved", True, contract.get("default_view", {}).get("end_idx", -1) >= contract.get("default_view", {}).get("start_idx", 0))
     figure.clear()
 
+    figure_with_volume = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=True)
+    contract_with_volume = getattr(figure_with_volume, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count_with_volume", 2, len(figure_with_volume.axes))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_volume_visible", True, contract_with_volume.get("volume_visible"))
+    figure_with_volume.clear()
+
+    large_dates = pd.date_range("2020-01-01", periods=900, freq="B")
+    large_frame = pd.DataFrame(
+        {
+            "Open": np.linspace(50.0, 130.0, len(large_dates)),
+            "High": np.linspace(51.0, 131.0, len(large_dates)),
+            "Low": np.linspace(49.0, 129.0, len(large_dates)),
+            "Close": np.linspace(50.5, 130.5, len(large_dates)),
+            "Volume": np.linspace(1000.0, 5000.0, len(large_dates)),
+        },
+        index=large_dates,
+    )
+    large_chart_context = {
+        "stop_line": np.full(len(large_dates), np.nan, dtype=np.float64),
+        "tp_line": np.full(len(large_dates), np.nan, dtype=np.float64),
+        "order_markers": [{"trace_name": "限價買進", "date": large_dates[-25], "price": 127.0, "hover_text": "限價買進"}],
+        "trade_markers": [{"trace_name": "買進", "date": large_dates[-20], "price": 128.0, "hover_text": "買進"}],
+    }
+    large_chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
+    large_figure = create_matplotlib_debug_chart_figure(chart_payload=large_chart_payload, ticker="LARGE", show_volume=False)
+    large_contract = getattr(large_figure, "_stock_chart_contract", {})
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_scoped_render_window", True, large_contract.get("render_bar_count", 0) < large_contract.get("total_bar_count", 0))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_cjk_font_candidates_include_jhenghei", True, "Microsoft JhengHei" in get_matplotlib_cjk_font_candidates())
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_cjk_font_candidates_include_noto_tc", True, "Noto Sans CJK TC" in get_matplotlib_cjk_font_candidates())
+    large_figure.clear()
+
     summary["default_view"] = {"start_idx": start_idx, "end_idx": end_idx}
+    return results, summary
+
+
+def validate_gui_chart_workspace_contract_case(_base_params):
+    case_id = "GUI_CHART_WORKSPACE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_uses_notebook_tabs", True, "ttk.Notebook(self)" in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_has_summary_tab", True, 'text="執行摘要"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_default_volume_hidden", True, 'self._show_volume_var = tk.BooleanVar(value=False)' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_toggle_rerenders_chart", True, 'show_volume=bool(self._show_volume_var.get())' in inspector_source)
+
+    workbench_spec = importlib.import_module("tools.gui").build_workbench_spec()
+    panel_spec = workbench_spec.get("panels", [])[0]
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_panel_default_show_volume", False, panel_spec.get("default_show_volume"))
+
+    summary["panel_id"] = panel_spec.get("panel_id")
     return results, summary
 
 
@@ -1696,6 +1755,7 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.debug.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path", "chart_path"], panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.debug.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
+        add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
 
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):

@@ -41,13 +41,14 @@ SUMMARY_FIELDS = (
 
 class SingleStockBacktestInspectorPanel(ttk.Frame):
     def __init__(self, master):
-        super().__init__(master, padding=12)
+        super().__init__(master, padding=8)
         self._result = None
         self._summary_vars = {key: tk.StringVar(value="-") for key, _label in SUMMARY_FIELDS}
         self._status_var = tk.StringVar(value="尚未執行")
         self._chart_hint_var = tk.StringVar(value="請先執行回測；K 線圖會直接顯示在此。")
         self._dataset_var = tk.StringVar(value=DEFAULT_DATASET_PROFILE)
         self._ticker_var = tk.StringVar()
+        self._show_volume_var = tk.BooleanVar(value=False)
         self._columns = []
         self._chart_canvas = None
         self._chart_toolbar = None
@@ -59,16 +60,13 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         super().destroy()
 
     def _build_ui(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", pady=(0, 10))
-
-        controls = ttk.LabelFrame(top, text="執行參數", padding=10)
-        controls.pack(fill="x")
-        controls.columnconfigure(8, weight=1)
+        controls = ttk.LabelFrame(self, text="執行參數", padding=8)
+        controls.pack(fill="x", pady=(0, 6))
+        controls.columnconfigure(10, weight=1)
 
         ttk.Label(controls, text="股票代號").grid(row=0, column=0, sticky="w")
-        ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=20)
-        ticker_entry.grid(row=0, column=1, padx=(6, 14), sticky="w")
+        ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=18)
+        ticker_entry.grid(row=0, column=1, padx=(6, 12), sticky="w")
         ticker_entry.focus_set()
 
         ttk.Label(controls, text="資料集").grid(row=0, column=2, sticky="w")
@@ -78,7 +76,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             width=10,
             values=[label for _key, label in DATASET_OPTIONS],
         )
-        dataset_combo.grid(row=0, column=3, padx=(6, 14), sticky="w")
+        dataset_combo.grid(row=0, column=3, padx=(6, 12), sticky="w")
         dataset_combo.current(0)
 
         def _sync_dataset(*_args):
@@ -92,25 +90,27 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         _sync_dataset()
 
         ttk.Button(controls, text="執行回測", command=self._run_analysis).grid(row=0, column=4, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟 HTML K 線圖", command=self._open_chart).grid(row=0, column=5, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟 Excel", command=self._open_excel).grid(row=0, column=6, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir).grid(row=0, column=7, sticky="w")
+        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart).grid(row=0, column=5, padx=(0, 12), sticky="w")
+        ttk.Button(controls, text="開啟 HTML K 線圖", command=self._open_chart).grid(row=0, column=6, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟 Excel", command=self._open_excel).grid(row=0, column=7, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir).grid(row=0, column=8, sticky="w")
 
-        ttk.Label(top, textvariable=self._status_var).pack(anchor="w", pady=(8, 2))
-        ttk.Label(top, textvariable=self._chart_hint_var).pack(anchor="w")
+        ttk.Label(self, textvariable=self._status_var).pack(anchor="w", pady=(0, 2))
+        ttk.Label(self, textvariable=self._chart_hint_var).pack(anchor="w", pady=(0, 6))
 
-        body = ttk.Panedwindow(self, orient="vertical")
-        body.pack(fill="both", expand=True)
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+        self._notebook = notebook
 
-        chart_frame = ttk.LabelFrame(body, text="K 線交易檢視", padding=8)
-        body.add(chart_frame, weight=5)
-        chart_frame.rowconfigure(1, weight=1)
-        chart_frame.columnconfigure(0, weight=1)
+        chart_tab = ttk.Frame(notebook, padding=4)
+        chart_tab.rowconfigure(1, weight=1)
+        chart_tab.columnconfigure(0, weight=1)
+        notebook.add(chart_tab, text="K 線圖")
 
-        self._chart_toolbar_host = ttk.Frame(chart_frame)
+        self._chart_toolbar_host = ttk.Frame(chart_tab)
         self._chart_toolbar_host.grid(row=0, column=0, sticky="ew", pady=(0, 4))
 
-        self._chart_canvas_host = ttk.Frame(chart_frame)
+        self._chart_canvas_host = ttk.Frame(chart_tab)
         self._chart_canvas_host.grid(row=1, column=0, sticky="nsew")
         self._chart_placeholder = ttk.Label(
             self._chart_canvas_host,
@@ -120,34 +120,33 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        lower = ttk.Panedwindow(body, orient="horizontal")
-        body.add(lower, weight=3)
-
-        summary_frame = ttk.LabelFrame(lower, text="執行摘要", padding=10)
-        lower.add(summary_frame, weight=1)
+        summary_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(summary_tab, text="執行摘要")
         for row_idx, (key, label) in enumerate(SUMMARY_FIELDS):
-            ttk.Label(summary_frame, text=label).grid(row=row_idx, column=0, sticky="nw", pady=2)
-            ttk.Label(summary_frame, textvariable=self._summary_vars[key], wraplength=360, justify="left").grid(
+            ttk.Label(summary_tab, text=label).grid(row=row_idx, column=0, sticky="nw", pady=3)
+            ttk.Label(summary_tab, textvariable=self._summary_vars[key], wraplength=860, justify="left").grid(
                 row=row_idx,
                 column=1,
                 sticky="nw",
                 padx=(8, 0),
-                pady=2,
+                pady=3,
             )
-        summary_frame.columnconfigure(1, weight=1)
+        summary_tab.columnconfigure(1, weight=1)
 
-        table_frame = ttk.LabelFrame(lower, text="交易明細", padding=10)
-        lower.add(table_frame, weight=3)
-        table_frame.rowconfigure(0, weight=1)
-        table_frame.columnconfigure(0, weight=1)
+        table_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(table_tab, text="交易明細")
+        table_tab.rowconfigure(0, weight=1)
+        table_tab.columnconfigure(0, weight=1)
 
-        self._tree = ttk.Treeview(table_frame, show="headings")
+        self._tree = ttk.Treeview(table_tab, show="headings")
         self._tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self._tree.yview)
+        y_scroll = ttk.Scrollbar(table_tab, orient="vertical", command=self._tree.yview)
         y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self._tree.xview)
+        x_scroll = ttk.Scrollbar(table_tab, orient="horizontal", command=self._tree.xview)
         x_scroll.grid(row=1, column=0, sticky="ew")
         self._tree.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+
+        self._notebook.select(chart_tab)
 
     def _run_analysis(self):
         ticker = self._ticker_var.get().strip()
@@ -214,7 +213,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if trade_logs_df is None or trade_logs_df.empty:
             self._tree.configure(columns=("message",))
             self._tree.heading("message", text="訊息")
-            self._tree.column("message", width=520, anchor="w")
+            self._tree.column("message", width=920, anchor="w")
             self._tree.insert("", "end", values=("這檔股票沒有任何交易紀錄。",))
             self._columns = ["message"]
             return
@@ -224,13 +223,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._columns = columns
         for column in columns:
             self._tree.heading(column, text=column)
-            width = 120 if column not in {"備註", "日期", "動作"} else (260 if column == "備註" else 120)
+            width = 120 if column not in {"備註", "日期", "動作"} else (340 if column == "備註" else 120)
             self._tree.column(column, width=width, anchor="center")
 
         normalized_df = trade_logs_df.copy()
         normalized_df = normalized_df.where(pd.notna(normalized_df), "")
         for row in normalized_df.to_dict("records"):
             self._tree.insert("", "end", values=[row.get(column, "") for column in columns])
+
+    def _rerender_current_chart(self):
+        if self._result is not None:
+            self._render_embedded_chart(self._result)
 
     def _render_embedded_chart(self, result):
         chart_payload = result.get("chart_payload")
@@ -246,7 +249,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
 
         try:
-            figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker)
+            figure = create_matplotlib_debug_chart_figure(
+                chart_payload=chart_payload,
+                ticker=ticker,
+                show_volume=bool(self._show_volume_var.get()),
+            )
         except Exception as exc:
             self._clear_embedded_chart()
             self._chart_hint_var.set(f"K 線圖建立失敗：{type(exc).__name__}: {exc}")
@@ -267,7 +274,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._chart_canvas = canvas
         self._chart_toolbar = toolbar
         self._chart_figure = figure
-        self._chart_hint_var.set("K 線圖已內嵌於 GUI；可直接用工具列縮放 / 平移，Y 軸會依可視範圍自動重算。")
+        if self._show_volume_var.get():
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前顯示成交量，縮放時價量座標會依可視範圍自動重算。")
+        else:
+            self._chart_hint_var.set("K 線圖已內嵌於 GUI；目前隱藏成交量以保留大圖版面，縮放時價格座標會依可視範圍自動重算。")
 
     def _clear_embedded_chart(self):
         if self._chart_canvas is not None:

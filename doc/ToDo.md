@@ -1,6 +1,7 @@
 ## Going
 
 - TV-based UI
+    改叫viewer
 - 先提升訓練分數
 - 訓練/測試樣本分離
 - overfitting量化驗證工具

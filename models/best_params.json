@@ -1,6 +1,6 @@
 {
     "high_len": 240,
-    "atr_len": 23,
+    "atr_len": 22,
     "atr_buy_tol": 1.1,
     "atr_times_init": 2.8,
     "atr_times_trail": 4.0,
@@ -15,7 +15,7 @@
     "vol_short_len": 10,
     "vol_long_len": 28,
     "min_history_trades": 5,
-    "min_history_ev": -0.5,
+    "min_history_ev": -0.7,
     "min_history_win_rate": 0.37,
     "initial_capital": 1000000.0,
     "fixed_risk": 0.01,

@@ -7,7 +7,7 @@ from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
 WORKBENCH_TITLE = "股票工具工作台"
-WORKBENCH_GEOMETRY = "1500x980"
+WORKBENCH_GEOMETRY = "1680x980"
 
 
 PANEL_SPECS = (
@@ -17,6 +17,7 @@ PANEL_SPECS = (
         "backend_runner": "tools.debug.trade_log.run_debug_ticker_analysis",
         "artifact_keys": ("excel_path", "chart_path"),
         "inline_chart_backend": "tools.debug.charting.create_matplotlib_debug_chart_figure",
+        "default_show_volume": False,
         "panel_factory": SingleStockBacktestInspectorPanel,
     },
 )
@@ -35,6 +36,7 @@ def build_workbench_spec():
                 "backend_runner": panel["backend_runner"],
                 "artifact_keys": list(panel["artifact_keys"]),
                 "inline_chart_backend": panel["inline_chart_backend"],
+                "default_show_volume": panel["default_show_volume"],
             }
             for panel in PANEL_SPECS
         ],
@@ -46,20 +48,12 @@ class StockToolsWorkbench:
         self.root = tk.Tk()
         self.root.title(WORKBENCH_TITLE)
         self.root.geometry(WORKBENCH_GEOMETRY)
-        self.root.minsize(1280, 820)
+        self.root.minsize(1400, 860)
         self._build_ui()
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, padding=12)
+        container = ttk.Frame(self.root, padding=8)
         container.pack(fill="both", expand=True)
-
-        header = ttk.Frame(container)
-        header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text=WORKBENCH_TITLE, font=("Microsoft JhengHei UI", 16, "bold")).pack(anchor="w")
-        ttk.Label(
-            header,
-            text="apps/gui.py 為單一啟用入口；各 GUI 功能以頁籤方式持續擴充。",
-        ).pack(anchor="w", pady=(4, 0))
 
         notebook = ttk.Notebook(container)
         notebook.pack(fill="both", expand=True)
