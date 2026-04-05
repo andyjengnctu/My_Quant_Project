@@ -179,6 +179,17 @@ def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_
             updated_text += "\n"
         return updated_text
     raise ValueError(f"找不到 checklist heading={heading}, row_id={row_id}, match_index={match_index}")
+
+
+def _read_summary_value(result: dict, key: str, default=None):
+    if key in result:
+        return result.get(key)
+    extra = result.get("extra")
+    if isinstance(extra, dict) and key in extra:
+        return extra.get(key)
+    return default
+
+
 def validate_cmd_document_contract_case(_base_params):
     from tools.local_regression.run_all import STEP_NAMES
     from tools.local_regression.run_quick_gate import HELP_TARGETS
@@ -471,7 +482,7 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
     g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
     invalid_rows = g_note_result.get("invalid_note_rows")
     if invalid_rows is None:
-        invalid_rows = g_note_result.get("extra", {}).get("invalid_note_rows", [])
+        invalid_rows = _read_summary_value(g_note_result, "invalid_note_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_note_single_entry_guard_fails", "FAIL", g_note_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_multiple_entries", True, any(row.get("id") == "B38" for row in invalid_rows))
@@ -511,7 +522,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     f2_result = result_by_name.get("checklist_f_rows_use_single_test_entry", {})
     invalid_rows = f2_result.get("invalid_entries")
     if invalid_rows is None:
-        invalid_rows = f2_result.get("extra", {}).get("invalid_entries", [])
+        invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_f2_single_entry_guard_fails", "FAIL", f2_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "T107" for row in invalid_rows))
@@ -556,7 +567,7 @@ def validate_checklist_no_legacy_f1_section_case(_base_params):
     legacy_result = result_by_name.get("checklist_has_no_legacy_f1_section", {})
     legacy_present = legacy_result.get("legacy_f1_section_present")
     if legacy_present is None:
-        legacy_present = legacy_result.get("extra", {}).get("legacy_f1_section_present")
+        legacy_present = _read_summary_value(legacy_result, "legacy_f1_section_present")
 
     add_check(results, "meta_checklist", case_id, "mutated_legacy_f1_section_guard_fails", "FAIL", legacy_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_legacy_f1_section_reported", True, bool(legacy_present))
@@ -600,7 +611,7 @@ def validate_checklist_no_legacy_d_section_case(_base_params):
     legacy_result = result_by_name.get("checklist_has_no_legacy_d_section", {})
     legacy_present = legacy_result.get("legacy_d_section_present")
     if legacy_present is None:
-        legacy_present = legacy_result.get("extra", {}).get("legacy_d_section_present")
+        legacy_present = _read_summary_value(legacy_result, "legacy_d_section_present")
 
     add_check(results, "meta_checklist", case_id, "mutated_legacy_d_section_guard_fails", "FAIL", legacy_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_legacy_d_section_reports_presence", True, bool(legacy_present))
@@ -640,7 +651,7 @@ def validate_checklist_g_transition_format_case(_base_params):
     g_transition_result = result_by_name.get("checklist_g_rows_have_valid_status_transition", {})
     invalid_rows = g_transition_result.get("invalid_transition_rows")
     if invalid_rows is None:
-        invalid_rows = g_transition_result.get("extra", {}).get("invalid_transition_rows", [])
+        invalid_rows = _read_summary_value(g_transition_result, "invalid_transition_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_transition_guard_fails", "FAIL", g_transition_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_transition_reports_invalid_row", True, any(row.get("id") == "B38" for row in invalid_rows))
@@ -688,7 +699,7 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
     g_new_result = result_by_name.get("checklist_g_new_transition_only_on_first_occurrence", {})
     invalid_rows = g_new_result.get("invalid_new_transition_rows")
     if invalid_rows is None:
-        invalid_rows = g_new_result.get("extra", {}).get("invalid_new_transition_rows", [])
+        invalid_rows = _read_summary_value(g_new_result, "invalid_new_transition_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_guard_fails", "FAIL", g_new_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_new_transition_reports_target_row", True, any(row.get("id") == "B26" for row in invalid_rows))
@@ -718,10 +729,12 @@ def validate_checklist_first_nonempty_line_case(_base_params):
     first_line_result = result_by_name.get("checklist_first_nonempty_line_matches_title", {})
 
     add_check(results, "meta_checklist", case_id, "mutated_first_nonempty_line_guard_fails", "FAIL", first_line_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_first_nonempty_line_reports_false_match", False, first_line_result.get("extra", {}).get("matches"))
+    match_flag = _read_summary_value(first_line_result, "matches")
+
+    add_check(results, "meta_checklist", case_id, "mutated_first_nonempty_line_reports_false_match", False, match_flag)
 
     summary["guard_status"] = first_line_result.get("status")
-    summary["match_flag"] = first_line_result.get("extra", {}).get("matches")
+    summary["match_flag"] = match_flag
     return results, summary
 
 
@@ -755,7 +768,7 @@ def validate_checklist_g_note_validate_reference_exists_case(_base_params):
     g_note_validate_result = result_by_name.get("checklist_g_note_validate_entries_exist", {})
     invalid_rows = g_note_validate_result.get("invalid_note_validate_rows")
     if invalid_rows is None:
-        invalid_rows = g_note_validate_result.get("extra", {}).get("invalid_note_validate_rows", [])
+        invalid_rows = _read_summary_value(g_note_validate_result, "invalid_note_validate_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_guard_fails", "FAIL", g_note_validate_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_reports_target_row", True, any(row.get("id") == "T138" for row in invalid_rows))
@@ -795,7 +808,7 @@ def validate_checklist_g_ordering_case(_base_params):
     g_order_result = result_by_name.get("checklist_g_rows_sorted_by_date_then_id", {})
     invalid_rows = g_order_result.get("invalid_order_rows")
     if invalid_rows is None:
-        invalid_rows = g_order_result.get("extra", {}).get("invalid_order_rows", [])
+        invalid_rows = _read_summary_value(g_order_result, "invalid_order_rows", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_g_order_guard_fails", "FAIL", g_order_result.get("status"))
     add_check(results, "meta_checklist", case_id, "mutated_g_order_reports_invalid_pair", True, bool(invalid_rows))
@@ -804,6 +817,27 @@ def validate_checklist_g_ordering_case(_base_params):
     summary["invalid_order_rows"] = invalid_rows
     return results, summary
 
+
+
+def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
+    case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_text = Path(__file__).read_text(encoding="utf-8")
+    helper_defined = "def _read_summary_value(" in source_text
+    direct_extra_access_patterns = []
+    for quote in ('"', "'"):
+        pattern = f".get({quote}extra{quote}, {{}}).get("
+        if pattern in source_text:
+            direct_extra_access_patterns.append(pattern)
+
+    add_check(results, "meta_contract", case_id, "summary_value_accessor_helper_defined", True, helper_defined)
+    add_check(results, "meta_contract", case_id, "summary_value_accessor_no_direct_extra_get_chain", [], direct_extra_access_patterns)
+
+    summary["helper_defined"] = helper_defined
+    summary["direct_extra_access_patterns"] = direct_extra_access_patterns
+    return results, summary
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
