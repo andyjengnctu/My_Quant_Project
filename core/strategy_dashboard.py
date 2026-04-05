@@ -126,7 +126,8 @@ def print_strategy_dashboard(
     print(
         f"🎯 全域戰略: 買入排序 [{C_YELLOW}{get_buy_sort_title(BUY_SORT_METHOD)}{C_RESET}] | "
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
-        f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET} / 分子 {C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}] | "
+        f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
+        f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}] | "
         f"系統得分: {C_CYAN}{final_score * SYSTEM_SCORE_DISPLAY_MULTIPLIER:.2f}{C_RESET}"
     )
     print(f"模式: {mode_display} | 最大持股: {max_pos} 檔")
