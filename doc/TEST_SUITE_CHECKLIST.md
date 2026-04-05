@@ -132,6 +132,7 @@
 | B61 | P1 | Meta | 關鍵資金 / 參數 / 政策契約模組必須納入 coverage targets，避免 helper / guardrail 雖有測項但 coverage 退化時無法被 meta quality 擋下 | DONE | 已補 static coverage-target contract，直接釘死 `core/capital_policy.py`、`core/strategy_params.py`、`core/params_io.py`、`config/execution_policy.py`、`config/training_policy.py` 必須列入 coverage targets，且關鍵公開符號需可匯入 | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` |
 | B62 | P1 | Meta | `doc/TEST_SUITE_CHECKLIST.md` 檔案開頭第一個非空行必須固定為 `# Test Suite 收斂清單`，避免 checklist parser / guard 前提漂移 | DONE | 已補 direct checklist contract，直接釘死檔案前置非空內容不得漂移；若有人在標題前插入額外說明、註記或其他文字，formal guard 必須 fail | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B63 | P1 | Meta | synthetic meta validators 讀取 `summarize_result` 額外欄位時，必須相容 flattened top-level payload；不得直接依賴巢狀 `result["extra"]` schema | DONE | 已補 shared summary-value accessor 與 static contract，直接釘死 `tools/validate/synthetic_meta_cases.py` 不得再用直接 `.get("extra", {}).get(...)` 讀取 meta summary 欄位，避免 formal synthetic suite 因 payload schema 讀法錯誤出現假失敗 | `tools/local_regression/common.py`, `tools/validate/synthetic_meta_cases.py` |
+| B64 | P1 | Meta | checklist 各摘要表（`E1` / `E2` / `E3` / `T`）必須固定依 tracking ID 升冪排序，避免同步表雖內容正確但順序漂移而破壞機械比對 | DONE | 已補 direct checklist contract，直接釘死 `E1` / `E2` / `E3` / `T` 不能只做集合相等；若任何摘要表 row order 逆序，formal guard 必須 fail 並指出對應表名與前後 ID | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -316,6 +317,7 @@
 | T140 | `validate_checklist_g_note_validate_reference_exists_case` | B26 |
 | T141 | `validate_checklist_first_nonempty_line_case` | B62 |
 | T142 | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` | B63 |
+| T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
 
 ## G. 逐項收斂紀錄
 
@@ -525,6 +527,8 @@
 | 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
 | 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-05 | B26 | 檢出 checklist 摘要表固定升冪排序仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有摘要表排序契約缺口 |
+| 2026-04-05 | B26 | 補上 checklist 摘要表固定升冪排序 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
 | 2026-04-05 | B59 | 補關鍵 helper single-source-of-truth static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B60 | 補 `PROJECT_SETTINGS.md` dynamic-test / formal-step bypass boundary contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
@@ -533,6 +537,7 @@
 | 2026-04-05 | B62 | 檢出 T141 直接依賴巢狀 `result["extra"]` 讀取 summary 欄位，造成首行 guard synthetic validator 假失敗，主表改回 PARTIAL | DONE -> PARTIAL | checklist 首行契約的 synthetic validator payload 讀法仍綁定舊 schema |
 | 2026-04-05 | B62 | 改以 shared summary-value accessor 相容 flattened payload，並補 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B63 | 新增 synthetic meta summary-value accessor contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
@@ -545,3 +550,4 @@
 | 2026-04-05 | T141 | 檢出 synthetic case 直接依賴巢狀 `result["extra"]` 導致 formal suite 假失敗 | DONE -> PARTIAL | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T141 | 改以 shared summary-value accessor 讀取 flattened payload 後重新收斂 | PARTIAL -> DONE | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T142 | 新增 synthetic meta summary-value accessor static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` |
+| 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |

@@ -181,6 +181,38 @@ def _replace_markdown_table_row(text: str, *, heading: str, row_id: str, id_col_
     raise ValueError(f"找不到 checklist heading={heading}, row_id={row_id}, match_index={match_index}")
 
 
+def _swap_markdown_table_rows(text: str, *, heading: str, row_id_a: str, row_id_b: str, id_col_idx: int):
+    original_had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    in_target_section = False
+    row_idx_a = None
+    row_idx_b = None
+    for line_idx, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if stripped.startswith("## ") or stripped.startswith("### "):
+            current_heading = stripped.lstrip("#").strip()
+            if in_target_section and current_heading != heading:
+                break
+            in_target_section = current_heading == heading
+            continue
+        if not in_target_section or not stripped.startswith("|"):
+            continue
+        cols = [part.strip() for part in raw_line.split("|")[1:-1]]
+        if len(cols) <= id_col_idx:
+            continue
+        if cols[id_col_idx] == row_id_a and row_idx_a is None:
+            row_idx_a = line_idx
+        elif cols[id_col_idx] == row_id_b and row_idx_b is None:
+            row_idx_b = line_idx
+    if row_idx_a is None or row_idx_b is None:
+        raise ValueError(f"找不到 checklist heading={heading}, row_id_a={row_id_a}, row_id_b={row_id_b}")
+    lines[row_idx_a], lines[row_idx_b] = lines[row_idx_b], lines[row_idx_a]
+    swapped_text = "\n".join(lines)
+    if original_had_trailing_newline:
+        swapped_text += "\n"
+    return swapped_text
+
+
 def _read_summary_value(result: dict, key: str, default=None):
     if key in result:
         return result.get(key)
@@ -817,6 +849,47 @@ def validate_checklist_g_ordering_case(_base_params):
     summary["invalid_order_rows"] = invalid_rows
     return results, summary
 
+
+
+def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
+    from tools.local_regression import run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_SUMMARY_TABLE_ORDER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    mutated_text = _swap_markdown_table_rows(
+        original_text,
+        heading="T. 目前所有 `DONE` 的建議測試項目摘要",
+        row_id_a="T01",
+        row_id_b="T02",
+        id_col_idx=0,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_summary_order_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    order_result = result_by_name.get("checklist_summary_tables_sorted_by_id", {})
+    invalid_rows = _read_summary_value(order_result, "invalid_summary_table_orders", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_summary_table_order_guard_fails", "FAIL", order_result.get("status"))
+    add_check(
+        results,
+        "meta_checklist",
+        case_id,
+        "mutated_summary_table_order_reports_t_table",
+        True,
+        any(row.get("table") == "T" for row in invalid_rows),
+    )
+
+    summary["guard_status"] = order_result.get("status")
+    summary["invalid_summary_table_orders"] = invalid_rows
+    return results, summary
 
 
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):

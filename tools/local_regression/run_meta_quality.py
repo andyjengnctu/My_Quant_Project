@@ -128,6 +128,25 @@ def _convergence_row_sort_key(row: List[str]) -> tuple[str, tuple[str, int, str]
     return (date_value, _tracking_id_sort_key(item_id))
 
 
+def _find_invalid_summary_table_order(rows: List[List[str]], *, id_col_idx: int, table_name: str) -> List[Dict[str, str]]:
+    invalid_rows: List[Dict[str, str]] = []
+    previous_key = None
+    previous_id = ""
+    for cols in rows:
+        if len(cols) <= id_col_idx:
+            continue
+        item_id = cols[id_col_idx].strip()
+        if not item_id:
+            continue
+        current_key = _tracking_id_sort_key(item_id)
+        if previous_key is not None and current_key < previous_key:
+            invalid_rows.append({"table": table_name, "previous_id": previous_id, "current_id": item_id})
+            break
+        previous_key = current_key
+        previous_id = item_id
+    return invalid_rows
+
+
 def _extract_checklist_note_entries(note: str) -> List[str]:
     note_entries: Set[str] = set()
     for raw_token in re.findall(r"`([^`]+)`", note):
@@ -210,6 +229,11 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     e2_ids = sorted(_ids_from_table(tables["E2"]))
     e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
     f_rows = tables["F"]
+    invalid_summary_table_orders: List[Dict[str, str]] = []
+    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E1"], id_col_idx=1, table_name="E1"))
+    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E2"], id_col_idx=1, table_name="E2"))
+    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E3"], id_col_idx=0, table_name="E3"))
+    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(f_rows, id_col_idx=0, table_name="T"))
     f_ids_raw = _ids_from_table(f_rows, idx=0)
     f_ids = _sorted_unique(f_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
@@ -231,6 +255,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             e2_ids == todo_ids,
             detail=f"summary={e2_ids} | main={todo_ids}",
             extra={"summary_ids": e2_ids, "main_ids": todo_ids},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_summary_tables_sorted_by_id",
+            not invalid_summary_table_orders,
+            detail=f"invalid={invalid_summary_table_orders}",
+            extra={"invalid_summary_table_orders": invalid_summary_table_orders},
         )
     )
 
