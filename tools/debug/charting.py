@@ -69,8 +69,8 @@ def create_debug_chart_context(df):
     return {
         "dates": dates,
         "date_to_pos": {pd.Timestamp(dt): idx for idx, dt in enumerate(dates)},
-        "stop_line": np.full(len(dates), np.nan, dtype=np.float64),
-        "tp_line": np.full(len(dates), np.nan, dtype=np.float64),
+        "stop_line": np.full(len(dates), np.nan, dtype=np.float32),
+        "tp_line": np.full(len(dates), np.nan, dtype=np.float32),
         "order_markers": [],
         "trade_markers": [],
     }
@@ -150,11 +150,11 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
 
 def _normalize_line_array(values, expected_len):
     if values is None:
-        return np.full(expected_len, np.nan, dtype=np.float64)
-    normalized = np.asarray(values, dtype=np.float64)
+        return np.full(expected_len, np.nan, dtype=np.float32)
+    normalized = np.asarray(values, dtype=np.float32)
     if normalized.size == expected_len:
         return normalized.copy()
-    resized = np.full(expected_len, np.nan, dtype=np.float64)
+    resized = np.full(expected_len, np.nan, dtype=np.float32)
     copy_len = min(expected_len, normalized.size)
     resized[:copy_len] = normalized[:copy_len]
     return resized
@@ -251,12 +251,12 @@ def build_debug_chart_payload(price_df, chart_context):
     payload = {
         "dates": dates,
         "date_labels": [dt.strftime("%Y-%m-%d") for dt in dates],
-        "x": x_positions,
-        "open": df_chart["Open"].to_numpy(dtype=np.float64, copy=False),
-        "high": df_chart["High"].to_numpy(dtype=np.float64, copy=False),
-        "low": df_chart["Low"].to_numpy(dtype=np.float64, copy=False),
-        "close": df_chart["Close"].to_numpy(dtype=np.float64, copy=False),
-        "volume": df_chart["Volume"].to_numpy(dtype=np.float64, copy=False),
+        "x": x_positions.astype(np.float32, copy=False),
+        "open": df_chart["Open"].to_numpy(dtype=np.float32, copy=False),
+        "high": df_chart["High"].to_numpy(dtype=np.float32, copy=False),
+        "low": df_chart["Low"].to_numpy(dtype=np.float32, copy=False),
+        "close": df_chart["Close"].to_numpy(dtype=np.float32, copy=False),
+        "volume": df_chart["Volume"].to_numpy(dtype=np.float32, copy=False),
         "up_mask": (df_chart["Close"] >= df_chart["Open"]).to_numpy(dtype=bool, copy=False),
         "stop_line": _normalize_line_array((chart_context or {}).get("stop_line"), total_bars),
         "tp_line": _normalize_line_array((chart_context or {}).get("tp_line"), total_bars),
@@ -269,7 +269,7 @@ def build_debug_chart_payload(price_df, chart_context):
 
 
 def _slice_visible_window(array, start_idx, end_idx):
-    return np.asarray(array[start_idx : end_idx + 1], dtype=np.float64)
+    return np.asarray(array[start_idx : end_idx + 1])
 
 
 def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_padding_ratio=CHART_PRICE_PADDING_RATIO, volume_padding_ratio=CHART_VOLUME_PADDING_RATIO):
@@ -449,7 +449,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     except ImportError as exc:
         raise RuntimeError("缺少 matplotlib，無法在 GUI 內嵌單股回測 K 線圖。") from exc
 
-    x_positions = np.asarray(chart_payload["x"], dtype=np.float64)
+    x_positions = np.asarray(chart_payload["x"])
     if x_positions.size == 0:
         raise ValueError("chart_payload 不可為空。")
 
@@ -492,10 +492,10 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         axis_price.set_zorder(2)
 
     candle_width = MATPLOTLIB_CANDLE_WIDTH
-    open_values = np.asarray(render_payload["open"], dtype=np.float64)
-    close_values = np.asarray(render_payload["close"], dtype=np.float64)
-    high_values = np.asarray(render_payload["high"], dtype=np.float64)
-    low_values = np.asarray(render_payload["low"], dtype=np.float64)
+    open_values = np.asarray(render_payload["open"])
+    close_values = np.asarray(render_payload["close"])
+    high_values = np.asarray(render_payload["high"])
+    low_values = np.asarray(render_payload["low"])
     up_mask = np.asarray(render_payload["up_mask"], dtype=bool)
     candle_colors = np.where(up_mask, "#2ec4b6", "#ff6b6b")
     candle_bottom = np.minimum(open_values, close_values)
@@ -508,7 +508,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         x_positions,
         low_values,
         high_values,
-        colors=candle_colors.tolist(),
+        colors=candle_colors,
         linewidth=1.2,
         zorder=2,
     )
@@ -517,8 +517,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         candle_height,
         bottom=candle_bottom,
         width=candle_width,
-        color=candle_colors.tolist(),
-        edgecolor=candle_colors.tolist(),
+        color=candle_colors,
+        edgecolor=candle_colors,
         linewidth=1.0,
         align="center",
         zorder=3,
@@ -575,7 +575,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             x_positions,
             render_payload["volume"],
             width=candle_width,
-            color=volume_colors.tolist(),
+            color=volume_colors,
             alpha=MATPLOTLIB_VOLUME_ALPHA,
             align="center",
             zorder=1,
@@ -650,6 +650,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
 
     figure._stock_chart_contract = {
         "volume_visible": bool(show_volume),
+        "volume_overlay_mode": "inset" if show_volume else "hidden",
+        "volume_overlay_axis_present": bool(axis_volume is not None),
         "selected_font_family": font_family or "",
         "render_start_idx": 0,
         "render_end_idx": int(len(render_payload["x"]) - 1),

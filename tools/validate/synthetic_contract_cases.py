@@ -1683,8 +1683,9 @@ def validate_gui_embedded_chart_contract_case(base_params):
 
     figure_with_volume = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=True)
     contract_with_volume = getattr(figure_with_volume, "_stock_chart_contract", {})
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count_with_volume", 2, len(figure_with_volume.axes))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_volume_visible", True, contract_with_volume.get("volume_visible"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_volume_overlay_mode", "inset", contract_with_volume.get("volume_overlay_mode"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_volume_overlay_axis_present", True, contract_with_volume.get("volume_overlay_axis_present"))
     figure_with_volume.clear()
 
     large_dates = pd.date_range("2020-01-01", periods=900, freq="B")
@@ -1789,7 +1790,8 @@ def validate_gui_chart_workspace_contract_case(_base_params):
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "gui_chart_workspace_full_history_bar_count", len(chart_payload["x"]), contract.get("render_bar_count"))
     add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_ratio_leq_quarter", True, contract.get("volume_overlay_ratio", 1.0) <= 0.25)
-    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_axes_count", 2, len(figure.axes))
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_mode", "inset", contract.get("volume_overlay_mode"))
+    add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_axis_present", True, contract.get("volume_overlay_axis_present"))
     figure.clear()
 
     summary["panel_id"] = panel_spec.get("panel_id")
