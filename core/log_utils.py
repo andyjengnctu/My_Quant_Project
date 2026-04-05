@@ -78,9 +78,12 @@ def _resolve_project_scoped_path(path_value, *, field_name, allow_file_name_only
 
 
 def resolve_log_dir(log_dir=None):
-    resolved_log_dir = _resolve_project_scoped_path(log_dir, field_name="log_dir", allow_file_name_only=False)
-    if Path(resolved_log_dir).resolve(strict=False) == OUTPUTS_ROOT_PATH:
+    resolved_log_dir = _resolve_project_scoped_path(log_dir, field_name="log_dir", allow_file_name_only=True)
+    resolved_log_dir_path = Path(resolved_log_dir).resolve(strict=False)
+    if resolved_log_dir_path == OUTPUTS_ROOT_PATH:
         raise ValueError("log_dir 不可直接使用 outputs/ 根目錄")
+    if resolved_log_dir_path == PROJECT_ROOT_PATH:
+        raise ValueError("log_dir 必須包含目錄，避免把檔案直接輸出到專案根目錄")
     return resolved_log_dir
 
 
