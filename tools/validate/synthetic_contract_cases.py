@@ -2087,7 +2087,16 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
     charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "gui_panel_uses_explicit_workbench_dark_styles", True, 'style="Workbench.TNotebook"' in inspector_source and 'style="Workbench.TLabelframe"' in inspector_source)
+    add_check(
+        results,
+        "output_contract",
+        case_id,
+        "gui_panel_uses_explicit_workbench_dark_styles",
+        True,
+        'style="Workbench.TNotebook"' in inspector_source
+        and 'style="Workbench.TFrame"' in inspector_source
+        and 'style="Workbench.TLabel"' in inspector_source,
+    )
     add_check(results, "output_contract", case_id, "gui_workbench_uses_palette_force_for_dark_theme", True, "root.tk_setPalette(" in workbench_source)
     add_check(results, "output_contract", case_id, "chart_mouse_pan_uses_pixel_anchor", True, "anchor_px" in charting_source and "bars_per_pixel = (float(origin_right) - float(origin_left)) / axis_width_px" in charting_source and 'interaction_flags["dragging"]' in charting_source)
 
