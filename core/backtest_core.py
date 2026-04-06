@@ -41,6 +41,33 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     trade_logs = []
     currentEquity = currentCapital
 
+    if len(C) == 0:
+        stats_dict = build_backtest_stats(
+            params=params,
+            current_capital=currentCapital,
+            current_equity=currentEquity,
+            max_drawdown_pct=maxDrawdownPct,
+            trade_count=tradeCount,
+            full_wins=fullWins,
+            total_profit=totalProfit,
+            total_loss=totalLoss,
+            total_r_multiple=total_r_multiple,
+            total_r_win=total_r_win,
+            total_r_loss=total_r_loss,
+            missed_buy_count=missedBuyCount,
+            missed_sell_count=missedSellCount,
+            buy_condition_last=False,
+            atr_last=float('nan'),
+            close_last=float('nan'),
+            had_open_position_at_end=False,
+            active_extended_signal=None,
+            end_position_qty=0,
+            avg_bars_held=0,
+        )
+        if return_logs:
+            return stats_dict, trade_logs
+        return stats_dict
+
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j - 1]):
             continue

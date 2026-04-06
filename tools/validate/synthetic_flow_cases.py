@@ -694,3 +694,25 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
     summary["rotation_sell"] = True
     summary["delayed_reentry"] = True
     return results, summary
+
+
+
+def validate_synthetic_empty_backtest_df_contract_case(base_params):
+    from core.backtest_core import run_v16_backtest
+
+    case_id = "SYNTH_EMPTY_BACKTEST_DF_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    empty_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    stats, trade_logs = run_v16_backtest(empty_df, make_synthetic_validation_params(base_params), return_logs=True)
+
+    add_check(results, "flow", case_id, "empty_df_trade_count_zero", 0, stats["trade_count"])
+    add_check(results, "flow", case_id, "empty_df_missed_buys_zero", 0, stats["missed_buys"])
+    add_check(results, "flow", case_id, "empty_df_missed_sells_zero", 0, stats["missed_sells"])
+    add_check(results, "flow", case_id, "empty_df_current_position_zero", 0, stats["current_position"])
+    add_check(results, "flow", case_id, "empty_df_is_candidate_false", False, stats["is_candidate"])
+    add_check(results, "flow", case_id, "empty_df_is_setup_today_false", False, stats["is_setup_today"])
+    add_check(results, "flow", case_id, "empty_df_logs_empty", 0, len(trade_logs))
+    add_check(results, "flow", case_id, "empty_df_asset_growth_zero", 0.0, stats["asset_growth"])
+    return results, summary
