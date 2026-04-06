@@ -40,6 +40,7 @@ MATPLOTLIB_INFO_BOX_FACE = (0.02, 0.04, 0.06, 0.80)
 MATPLOTLIB_SIGNAL_BUY_COLOR = "#1f9cf0"
 MATPLOTLIB_SIGNAL_SELL_COLOR = "#ff6174"
 MATPLOTLIB_SIGNAL_TEXT_COLOR = "#f8fafc"
+CHART_RUNTIME_FALLBACK_WARNING_KEYS = set()
 MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO = 0.14
 MATPLOTLIB_VOLUME_OVERLAY_BOTTOM_GAP = 0.015
 MATPLOTLIB_CROSSHAIR_COLOR = "#b8d1e8"
@@ -107,6 +108,13 @@ ORDER_STATUS_LABELS = {
     "missed": "未成交",
     "abandoned": "先達停損放棄",
 }
+
+
+def _warn_chart_runtime_fallback_once(key, exc, *, context):
+    if key in CHART_RUNTIME_FALLBACK_WARNING_KEYS:
+        return
+    CHART_RUNTIME_FALLBACK_WARNING_KEYS.add(key)
+    warnings.warn(f"{context}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
 MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR = ""
@@ -1008,8 +1016,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         for artist in target_list:
             try:
                 artist.remove()
-            except ValueError:
-                pass
+            except ValueError as exc:
+                _warn_chart_runtime_fallback_once("artist_remove_value_error", exc, context="artist remove skipped")
         target_list[:] = list(new_items)
 
     def _refresh_overlay_annotations(start_idx, end_idx):

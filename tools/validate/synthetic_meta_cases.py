@@ -557,6 +557,77 @@ def validate_optional_dependency_fallback_traceability_contract_case(_base_param
     return results, summary
 
 
+def validate_specific_pass_only_exception_traceability_contract_case(_base_params):
+    case_id = "META_SPECIFIC_PASS_ONLY_EXCEPTION_TRACEABILITY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    scan_roots = [
+        PROJECT_ROOT / "apps",
+        PROJECT_ROOT / "config",
+        PROJECT_ROOT / "core",
+        PROJECT_ROOT / "strategies",
+        PROJECT_ROOT / "tools",
+    ]
+    syntax_errors = []
+    specific_pass_only_failures = []
+    scanned_files = []
+    allowed_pass_only_exception_names = {"FileNotFoundError"}
+
+    def _exception_type_names(node):
+        if isinstance(node, ast.Name):
+            return [node.id]
+        if isinstance(node, ast.Attribute):
+            return [node.attr]
+        if isinstance(node, ast.Tuple):
+            names = []
+            for element in node.elts:
+                names.extend(_exception_type_names(element))
+            return names
+        return []
+
+    def _is_traceability_contract_exempt(path):
+        rel_path = path.relative_to(PROJECT_ROOT).as_posix()
+        return rel_path.startswith("tools/validate/synthetic_")
+
+    for scan_root in scan_roots:
+        for path in sorted(scan_root.rglob("*.py")):
+            if _is_traceability_contract_exempt(path):
+                continue
+            rel_path = path.relative_to(PROJECT_ROOT).as_posix()
+            scanned_files.append(rel_path)
+            try:
+                source_text = path.read_text(encoding="utf-8")
+                parsed = ast.parse(source_text, filename=str(path))
+            except SyntaxError as exc:
+                syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
+                continue
+
+            for node in ast.walk(parsed):
+                if not isinstance(node, ast.ExceptHandler) or node.type is None:
+                    continue
+                if len(node.body) != 1 or not isinstance(node.body[0], ast.Pass):
+                    continue
+                exception_names = set(_exception_type_names(node.type))
+                if not exception_names:
+                    continue
+                if exception_names & {"Exception", "BaseException", "ImportError", "ModuleNotFoundError", "TclError"}:
+                    continue
+                if exception_names <= allowed_pass_only_exception_names:
+                    continue
+                specific_pass_only_failures.append(
+                    f"{rel_path}:{node.lineno}: pass-only specific exception handler must trace, re-raise, or use an allowed control-flow exception"
+                )
+
+    add_check(results, "meta_contract", case_id, "specific_pass_only_exception_handler_files_parse", [], syntax_errors)
+    add_check(results, "meta_contract", case_id, "specific_pass_only_exception_handlers_forbidden", [], specific_pass_only_failures)
+
+    summary["scanned_file_count"] = len(scanned_files)
+    summary["failure_count"] = len(specific_pass_only_failures)
+    summary["syntax_error_count"] = len(syntax_errors)
+    return results, summary
+
+
 def validate_broad_exception_traceability_contract_case(_base_params):
     case_id = "META_BROAD_EXCEPTION_TRACEABILITY_CONTRACT"
     results = []

@@ -2,6 +2,7 @@ import inspect
 import os
 import sys
 import tracemalloc
+import warnings
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from multiprocessing import get_context
@@ -13,6 +14,14 @@ TAIPEI_TIMEZONE = ZoneInfo(TAIPEI_TIMEZONE_NAME)
 VALID_PROCESS_START_METHODS = ("spawn", "forkserver", "fork")
 DEFAULT_PROCESS_START_METHODS_POSIX = ("forkserver", "spawn")
 DEFAULT_PROCESS_START_METHODS_WINDOWS = ("spawn",)
+_STDOUT_FALLBACK_WARNING_KEYS = set()
+
+
+def _warn_stdout_runtime_fallback_once(key, exc):
+    if key in _STDOUT_FALLBACK_WARNING_KEYS:
+        return
+    _STDOUT_FALLBACK_WARNING_KEYS.add(key)
+    warnings.warn(f"stdout line-buffer fallback: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
 # # (AI註: 台灣盤前/交易日推導統一使用 Asia/Taipei，避免容器或異地主機時區漂移)
@@ -77,10 +86,10 @@ def enable_line_buffered_stdout(stream=None):
         except TypeError:
             try:
                 reconfigure(line_buffering=True)
-            except (OSError, ValueError):
-                pass
-        except (OSError, ValueError):
-            pass
+            except (OSError, ValueError) as exc:
+                _warn_stdout_runtime_fallback_once("line_buffering_without_errors_replace", exc)
+        except (OSError, ValueError) as exc:
+            _warn_stdout_runtime_fallback_once("line_buffering_with_errors_replace", exc)
     return target
 
 
