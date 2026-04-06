@@ -6,6 +6,13 @@ from tools.debug.charting import record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row
 
 
+def _resolve_completed_trade_count(history_snapshot, *, include_current_round_trip):
+    if history_snapshot is None:
+        return None
+    base_trade_count = int(history_snapshot.get('trade_count', 0) or 0)
+    return base_trade_count + 1 if include_current_round_trip else base_trade_count
+
+
 def process_debug_position_step(
     *,
     position,
@@ -74,7 +81,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
-                'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0),
+                'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=False),
                 'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
@@ -115,7 +122,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
-                'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0),
+                'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=True),
                 'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
@@ -152,7 +159,7 @@ def process_debug_position_step(
     return position, pnl_realized
 
 
-def append_debug_forced_closeout(*, position, current_date, atr_last, params, trade_logs, chart_context=None):
+def append_debug_forced_closeout(*, position, current_date, atr_last, params, trade_logs, chart_context=None, history_snapshot=None):
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
     final_leg_pnl = (sell_net_price - position['entry']) * position['qty']
@@ -179,6 +186,6 @@ def append_debug_forced_closeout(*, position, current_date, atr_last, params, tr
             'pnl_value': float(final_leg_pnl),
             'pnl_pct': float(((sell_net_price - float(position.get('entry', exec_sell_price))) / float(position.get('entry', exec_sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
             'sell_capital': float(sell_net_price * position['qty']),
-            'trade_count': None,
+            'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=True),
         },
     )

@@ -139,7 +139,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=8, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=9, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#22c55e", font=("Microsoft JhengHei", 13, "bold"))
+        self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#facc15", font=("Microsoft JhengHei", 13, "bold"))
         self._tp_icon.grid(row=11, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=11, column=1, sticky="w")
         self._limit_icon = tk.Label(sidebar, text="┅┅", bg="#05090e", fg="#4f86ff", font=("Microsoft JhengHei", 13, "bold"))
