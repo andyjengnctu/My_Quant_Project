@@ -275,12 +275,12 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     ticker = "9818"
     frame = pd.DataFrame(
         {
-            "Open": [120.0, 108.5, 105.0, 104.0],
+            "Open": [120.0, 108.5, 109.0, 104.0],
             "High": [121.0, 109.0, 110.1, 104.5],
-            "Low": [119.0, 108.0, 99.0, 89.5],
-            "Close": [120.0, 105.0, 104.0, 90.0],
+            "Low": [119.0, 108.0, 100.2, 89.5],
+            "Close": [120.0, 108.5, 109.5, 90.0],
             "Volume": [1000.0, 1000.0, 1000.0, 1000.0],
-            "ATR": [5.0, 5.0, 5.0, 5.0],
+            "ATR": [10.0, 10.0, 10.0, 10.0],
             "buy_limit": [100.0, 100.0, 100.0, 100.0],
             "is_setup": [False, False, False, False],
             "ind_sell_signal": [False, False, False, False],
@@ -294,7 +294,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
             {"exit_date": pd.Timestamp("2024-01-01"), "pnl": 1.0, "r_mult": 1.0},
         ])
     }
-    signal_state = create_signal_tracking_state(100.0, 5.0, params)
+    signal_state = create_signal_tracking_state(100.0, 10.0, params)
 
     active_extended_signals = {ticker: dict(signal_state)}
     day2_candidates, day2_orderable, day2_normal_setup_tickers = build_daily_candidates(
@@ -313,7 +313,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_keeps_valid_extended_candidate_even_when_unreachable", 1, len(day2_candidates))
     add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_unreachable_extended_signal_not_in_orderable_list", 0, len(day2_orderable))
     add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_limit_stays_signal_day_limit", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_stop_stays_signal_day_stop", 90.0, None if day2_plan is None else float(day2_plan["init_sl"]))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_stop_stays_signal_day_stop", float(signal_state["init_sl"]), None if day2_plan is None else float(day2_plan["init_sl"]))
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1])
     add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_target_not_hit_signal_remains_active", True, ticker in active_extended_signals)

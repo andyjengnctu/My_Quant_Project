@@ -37,18 +37,15 @@ def finalize_debug_analysis(
     price_df=None,
     chart_context=None,
 ):
-    if not trade_logs:
+    has_trade_logs = bool(trade_logs)
+    if has_trade_logs:
+        df_logs = pd.DataFrame(trade_logs)
+        if '投入總金額' in df_logs.columns:
+            df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
+    else:
+        df_logs = None
         if verbose:
             print(f"{colors['yellow']}⚠️ 這檔股票沒有任何交易紀錄。{colors['reset']}")
-        return {
-            "trade_logs_df": None,
-            "excel_path": None,
-            "chart_path": None,
-            "chart_payload": None,
-        }
-
-    df_logs = pd.DataFrame(trade_logs)
-    df_logs['投入總金額'] = df_logs['投入總金額'].round(0)
 
     excel_path = None
     chart_path = None
@@ -56,7 +53,7 @@ def finalize_debug_analysis(
     if export_excel or export_chart or return_chart_payload:
         os.makedirs(output_dir, exist_ok=True)
 
-    if export_excel:
+    if export_excel and df_logs is not None:
         excel_path = os.path.join(output_dir, f"Debug_TradeLog_{ticker}.xlsx")
         df_logs.to_excel(excel_path, index=False)
         if verbose:
@@ -78,7 +75,7 @@ def finalize_debug_analysis(
         if verbose:
             print(f"{colors['green']}📈 K 線交易檢視已成功匯出至：{chart_path}{colors['reset']}")
 
-    if verbose:
+    if verbose and df_logs is not None and not df_logs.empty:
         _emit_loss_summary(df_logs, colors)
 
     return {

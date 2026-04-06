@@ -61,7 +61,7 @@ def execute_reserved_entries_for_day(
                 break
 
         cand = remaining_orderable_candidates.pop(chosen_idx)
-        if not cand.get('is_orderable', False):
+        if cand.get('is_orderable') is False:
             continue
         if chosen_entry_plan is None:
             chosen_entry_plan = build_cash_capped_entry_plan(
