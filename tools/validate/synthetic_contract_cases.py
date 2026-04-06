@@ -2212,6 +2212,7 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     chart_payload = normalize_chart_payload_contract(
         {
             "dates": dates,
+            "x": np.arange(4, dtype=np.float32),
             "open": np.array([100.0, 101.0, 102.0, 103.0], dtype=np.float32),
             "high": np.array([101.0, 102.0, 103.0, 104.0], dtype=np.float32),
             "low": np.array([99.0, 100.0, 101.0, 102.0], dtype=np.float32),
@@ -2256,6 +2257,7 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
     chart_payload = normalize_chart_payload_contract(
         {
             "dates": dates,
+            "x": np.arange(4, dtype=np.float32),
             "open": np.array([100.0, 101.0, 102.0, 103.0], dtype=np.float32),
             "high": np.array([101.0, 102.0, 103.0, 104.0], dtype=np.float32),
             "low": np.array([99.0, 100.0, 101.0, 102.0], dtype=np.float32),

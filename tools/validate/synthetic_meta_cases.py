@@ -1104,6 +1104,44 @@ def validate_synthetic_meta_cases_build_project_absolute_path_import_contract_ca
     return results, summary
 
 
+def validate_synthetic_case_normalize_chart_payload_literal_x_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CASE_NORMALIZE_CHART_PAYLOAD_LITERAL_X_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    invalid_calls = []
+    for node in ast.walk(parsed):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "normalize_chart_payload_contract":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Dict):
+            continue
+        key_names = []
+        for key_node in node.args[0].keys:
+            if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                key_names.append(key_node.value)
+        if "x" not in key_names:
+            invalid_calls.append(f"{source_path.name}:{node.lineno}")
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "normalize_chart_payload_literal_contracts_require_x_field",
+        [],
+        invalid_calls,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["invalid_calls"] = invalid_calls
+    return results, summary
+
+
 def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
     case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"
     results = []

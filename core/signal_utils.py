@@ -25,6 +25,8 @@ def tv_atr(high, low, close, length):
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
+    if high.size == 0 or low.size == 0 or close.size == 0:
+        return np.full(close.shape, np.nan, dtype=np.float64)
     tr1 = high - low
     tr2 = np.abs(high - np.roll(close, 1))
     tr3 = np.abs(low - np.roll(close, 1))
@@ -88,6 +90,10 @@ def tv_supertrend(high, low, close, atr, multiplier):
 
 
 def generate_signals(df, params):
+    if len(df) == 0:
+        empty_float = np.array([], dtype=np.float64)
+        empty_bool = np.array([], dtype=bool)
+        return empty_float, empty_bool, empty_bool, empty_float
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
     L = df['Low'].to_numpy(dtype=np.float64, copy=False)
     C = df['Close'].to_numpy(dtype=np.float64, copy=False)
