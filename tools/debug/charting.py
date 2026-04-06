@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -958,8 +959,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         volume_collection = axis_volume.vlines(x_positions, 0.0, chart_payload["volume"], colors=volume_colors, linewidth=2.2, alpha=MATPLOTLIB_VOLUME_ALPHA, zorder=1)
         try:
             volume_collection.set_rasterized(True)
-        except Exception:
-            pass
+        except Exception as exc:
+            warnings.warn(f"volume rasterization skipped: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
     date_labels = chart_payload["date_labels"]
     def _format_date_label(x_value, _pos):
         rounded = int(round(x_value))

@@ -434,6 +434,70 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     return results, summary
 
 
+def validate_broad_exception_traceability_contract_case(_base_params):
+    case_id = "META_BROAD_EXCEPTION_TRACEABILITY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    scan_roots = [
+        PROJECT_ROOT / "apps",
+        PROJECT_ROOT / "config",
+        PROJECT_ROOT / "core",
+        PROJECT_ROOT / "strategies",
+        PROJECT_ROOT / "tools",
+    ]
+    syntax_errors = []
+    broad_exception_traceability_failures = []
+    scanned_files = []
+
+    def _is_broad_exception_type(node):
+        if isinstance(node, ast.Name):
+            return node.id in {"Exception", "BaseException"}
+        if isinstance(node, ast.Tuple):
+            return any(_is_broad_exception_type(element) for element in node.elts)
+        return False
+
+    def _handler_uses_exception_name(handler, exception_name):
+        handler_module = ast.Module(body=handler.body, type_ignores=[])
+        return any(
+            isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == exception_name
+            for child in ast.walk(handler_module)
+        )
+
+    def _handler_reraises(handler):
+        return any(isinstance(child, ast.Raise) for child in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
+
+    for scan_root in scan_roots:
+        for path in sorted(scan_root.rglob("*.py")):
+            rel_path = path.relative_to(PROJECT_ROOT).as_posix()
+            scanned_files.append(rel_path)
+            try:
+                source_text = path.read_text(encoding="utf-8")
+                parsed = ast.parse(source_text, filename=str(path))
+            except SyntaxError as exc:
+                syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
+                continue
+
+            for node in ast.walk(parsed):
+                if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_broad_exception_type(node.type):
+                    continue
+                if not node.name:
+                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must bind exception name")
+                    continue
+                if _handler_reraises(node):
+                    continue
+                if not _handler_uses_exception_name(node, node.name):
+                    broad_exception_traceability_failures.append(f"{rel_path}:{node.lineno}: broad exception handler must use bound exception or re-raise")
+
+    add_check(results, "meta_contract", case_id, "broad_exception_handler_files_parse", [], syntax_errors)
+    add_check(results, "meta_contract", case_id, "broad_exception_handlers_bind_and_trace_or_reraise", [], broad_exception_traceability_failures)
+
+    summary["scanned_file_count"] = len(scanned_files)
+    summary["failure_count"] = len(broad_exception_traceability_failures)
+    summary["syntax_error_count"] = len(syntax_errors)
+    return results, summary
+
+
 def validate_no_legacy_app_entry_doc_references_case(_base_params):
     case_id = "META_NO_LEGACY_APP_ENTRY_DOC_REFERENCES"
     results = []

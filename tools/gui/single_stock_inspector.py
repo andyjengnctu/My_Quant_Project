@@ -393,6 +393,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             figure = create_matplotlib_debug_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
         except Exception as exc:
             self._clear_embedded_chart()
+            error_text = f"圖表渲染失敗：{type(exc).__name__}: {exc}"
+            self._status_var.set(error_text)
+            messagebox.showerror("股票工具工作台", error_text)
             return
 
         self._clear_embedded_chart()
