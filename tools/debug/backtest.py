@@ -5,7 +5,7 @@ import pandas as pd
 
 from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
-from core.entry_plans import build_normal_candidate_plan
+from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
 from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
 from core.price_utils import calc_entry_price, calc_net_sell_price

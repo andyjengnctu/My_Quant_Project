@@ -2238,6 +2238,29 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
     }
     return results, summary
 
+
+def validate_gui_latest_raw_signal_preview_helper_contract_case(_base_params):
+    case_id = "GUI_LATEST_RAW_SIGNAL_PREVIEW_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    backtest_source = backtest_path.read_text(encoding="utf-8")
+    backtest_ast = ast.parse(backtest_source)
+
+    imported_entry_plan_symbols = set()
+    referenced_names = set()
+    for node in ast.walk(backtest_ast):
+        if isinstance(node, ast.ImportFrom) and node.module == "core.entry_plans":
+            imported_entry_plan_symbols.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Name):
+            referenced_names.add(node.id)
+
+    add_check(results, "output_contract", case_id, "latest_raw_signal_preview_uses_normal_entry_plan_helper", True, "build_normal_entry_plan" in backtest_source and "entry_plan_preview = build_normal_entry_plan(" in backtest_source)
+    add_check(results, "output_contract", case_id, "latest_raw_signal_preview_helper_is_imported_from_core_entry_plans", True, "build_normal_entry_plan" in referenced_names and "build_normal_entry_plan" in imported_entry_plan_symbols)
+    add_check(results, "output_contract", case_id, "latest_tail_preview_candidate_helper_is_imported_from_core_entry_plans", True, "build_normal_candidate_plan" in referenced_names and "build_normal_candidate_plan" in imported_entry_plan_symbols)
+    return results, summary
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []
