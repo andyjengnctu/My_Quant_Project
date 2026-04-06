@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from tools.debug.charting import build_debug_chart_payload, export_debug_chart_html
+from tools.debug.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
 
 
 def _emit_loss_summary(df_logs, colors):
@@ -22,6 +22,13 @@ def _emit_loss_summary(df_logs, colors):
             f"   ➤ 當下 ATR 為 {row['ATR(前日)']:.2f}，"
             f"停損/賣出參考價為 {row['設定停損價']:.2f}。"
         )
+
+
+def _chart_payload_has_bars(chart_payload):
+    if chart_payload is None:
+        return False
+    x_values = chart_payload.get("x") if isinstance(chart_payload, dict) else None
+    return x_values is not None and len(x_values) > 0
 
 
 def finalize_debug_analysis(
@@ -60,9 +67,14 @@ def finalize_debug_analysis(
             print(f"{colors['green']}📁 交易明細已成功匯出至：{excel_path}{colors['reset']}")
 
     if export_chart or return_chart_payload:
-        if price_df is None or chart_context is None:
-            raise ValueError("export_chart=True 或 return_chart_payload=True 時，必須提供 price_df 與 chart_context。")
-        chart_payload = build_debug_chart_payload(price_df, chart_context)
+        if price_df is None:
+            raise ValueError("export_chart=True 或 return_chart_payload=True 時，必須提供 price_df。")
+        effective_chart_context = chart_context if chart_context is not None else create_debug_chart_context(price_df)
+        chart_payload = build_debug_chart_payload(price_df, effective_chart_context)
+        if not _chart_payload_has_bars(chart_payload):
+            chart_payload = build_debug_chart_payload(price_df, create_debug_chart_context(price_df))
+        if not _chart_payload_has_bars(chart_payload) and len(price_df) > 0:
+            raise ValueError("chart_payload 建立失敗：price_df 非空但 payload 無任何 bar。")
 
     if export_chart:
         chart_path = export_debug_chart_html(
