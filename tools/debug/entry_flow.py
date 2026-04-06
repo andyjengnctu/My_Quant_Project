@@ -1,7 +1,8 @@
 import numpy as np
 
-from core.entry_plans import build_normal_entry_plan, execute_pre_market_entry_plan
+from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan, execute_pre_market_entry_plan
 from core.extended_signals import (
+    build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,
     create_signal_tracking_state,
     should_clear_extended_signal,
@@ -74,8 +75,9 @@ def process_debug_entry_for_day(
         if signal_state is not None:
             active_extended_signal = signal_state
 
+        preview_candidate_plan = build_normal_candidate_plan(buy_limit_prev, atr_prev, sizing_cap, params)
+        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params)
-        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=entry_plan)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,
@@ -166,8 +168,9 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
+        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
+        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
-        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=entry_plan)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,

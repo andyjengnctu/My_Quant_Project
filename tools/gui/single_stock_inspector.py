@@ -36,6 +36,13 @@ class _ConsoleWriter(io.TextIOBase):
         return None
 
 
+SIDEBAR_SIGNAL_CHIP_TEXT = "出現買入訊號"
+SIDEBAR_HISTORY_CHIP_TEXT = "符合歷史績效"
+SIDEBAR_CHIP_ACTIVE_BG = "#2090ff"
+SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
+SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
+
+
 class SingleStockBacktestInspectorPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=4, style="Workbench.TFrame")
@@ -49,8 +56,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._chart_canvas = None
         self._chart_figure = None
         self._console_writer = _ConsoleWriter(self)
-        self._sidebar_signal_var = tk.StringVar(value="出現買入訊號")
-        self._sidebar_history_var = tk.StringVar(value="符合歷史績效")
+        self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)
+        self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var = tk.StringVar(value="-")
         self._selected_date_var = tk.StringVar(value="選取日: -")
         self._selected_open_var = tk.StringVar(value="開: -")
@@ -291,28 +298,46 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
 
     def _apply_sidebar_chip_styles(self, signal_active, history_active):
-        self._signal_chip.configure(bg="#2090ff" if bool(signal_active) else "#04070c")
-        self._history_chip.configure(bg="#ff8a1c" if bool(history_active) else "#04070c")
+        self._signal_chip.configure(bg=SIDEBAR_CHIP_ACTIVE_BG if bool(signal_active) else SIDEBAR_CHIP_INACTIVE_BG)
+        self._history_chip.configure(bg=SIDEBAR_HISTORY_CHIP_ACTIVE_BG if bool(history_active) else SIDEBAR_CHIP_INACTIVE_BG)
+
+    @staticmethod
+    def _resolve_sidebar_chip_states(status_lines):
+        normalized_lines = [str(line).strip() for line in status_lines if str(line).strip()]
+        signal_active = any(line == SIDEBAR_SIGNAL_CHIP_TEXT for line in normalized_lines)
+        history_active = any(line in {SIDEBAR_HISTORY_CHIP_TEXT, "歷史績效符合", "歷績門檻符合"} for line in normalized_lines)
+        return signal_active, history_active
+
+    @staticmethod
+    def _resolve_chart_payload_value(chart_payload, key, idx):
+        values = chart_payload.get(key, [])
+        if values is None or len(values) <= idx:
+            return None
+        return values[idx]
 
     def _update_sidebar_from_result(self, result):
         chart_payload = dict(result.get("chart_payload") or {})
         status_lines = list(((chart_payload.get("status_box") or {}).get("lines") or []))
-        signal_text = next((line for line in status_lines if "買" in str(line) or "賣" in str(line) or "候選" in str(line)), "無買入訊號")
-        history_text = next((line for line in status_lines if "歷史績效" in str(line) or "歷績門檻" in str(line)), "未符合歷史績效")
-        self._sidebar_signal_var.set(signal_text)
-        self._sidebar_history_var.set(history_text)
+        signal_active, history_active = self._resolve_sidebar_chip_states(status_lines)
+        self._sidebar_signal_var.set(SIDEBAR_SIGNAL_CHIP_TEXT)
+        self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var.set("\n".join(str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()) or "-")
-        self._apply_sidebar_chip_styles(signal_text, history_text)
+        self._apply_sidebar_chip_styles(signal_active, history_active)
         dates = chart_payload.get("date_labels") or []
         if dates:
             idx = int((chart_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
             idx = max(0, min(idx, len(dates) - 1))
             snapshot = {
                 "date_label": dates[idx],
-                "tp_price": chart_payload.get("tp_line", [None])[idx] if len(chart_payload.get("tp_line", [])) > idx else None,
-                "limit_price": chart_payload.get("limit_line", [None])[idx] if len(chart_payload.get("limit_line", [])) > idx else None,
-                "entry_price": chart_payload.get("entry_line", [None])[idx] if len(chart_payload.get("entry_line", [])) > idx else None,
-                "stop_price": chart_payload.get("stop_line", [None])[idx] if len(chart_payload.get("stop_line", [])) > idx else None,
+                "open": self._resolve_chart_payload_value(chart_payload, "open", idx),
+                "high": self._resolve_chart_payload_value(chart_payload, "high", idx),
+                "low": self._resolve_chart_payload_value(chart_payload, "low", idx),
+                "close": self._resolve_chart_payload_value(chart_payload, "close", idx),
+                "volume": self._resolve_chart_payload_value(chart_payload, "volume", idx),
+                "tp_price": self._resolve_chart_payload_value(chart_payload, "tp_line", idx),
+                "limit_price": self._resolve_chart_payload_value(chart_payload, "limit_line", idx),
+                "entry_price": self._resolve_chart_payload_value(chart_payload, "entry_line", idx),
+                "stop_price": self._resolve_chart_payload_value(chart_payload, "stop_line", idx),
             }
             self._update_selected_value_sidebar(snapshot)
         else:

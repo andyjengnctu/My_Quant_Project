@@ -2088,14 +2088,76 @@ def validate_gui_single_stock_refined_visual_contract_case(_base_params):
     workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "single_stock_chart_uses_pure_black_bg", True, 'MATPLOTLIB_DARK_BG = "#000000"' in charting_source)
-    add_check(results, "output_contract", case_id, "single_stock_sidebar_signal_chip_uses_fixed_text", True, 'self._sidebar_signal_var = tk.StringVar(value="出現買入訊號")' in inspector_source)
-    add_check(results, "output_contract", case_id, "single_stock_sidebar_gate_chip_uses_fixed_text", True, 'self._sidebar_history_var = tk.StringVar(value="符合歷史績效")' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_signal_chip_uses_fixed_text", True, 'self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)' in inspector_source or 'self._sidebar_signal_var = tk.StringVar(value="出現買入訊號")' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_gate_chip_uses_fixed_text", True, 'self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source or 'self._sidebar_history_var = tk.StringVar(value="符合歷史績效")' in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_gui_removes_chart_hint_footer_label", False, 'textvariable=self._chart_hint_var' in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_gui_moves_ohlcv_to_sidebar", True, '_selected_open_var' in inspector_source and '_selected_volume_var' in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_hover_overlay_no_longer_repeats_top_left_text_box", True, 'hover_text_artist.set_visible(False)' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sell_trade_label_includes_max_drawdown", True, '最大回撤:' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_entry_preview_lines_start_next_day_before_fill", True, '_record_entry_plan_preview_levels(' in entry_flow_source and 'record_active_levels(' in entry_flow_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_fonts_enlarged", True, 'font=("Microsoft JhengHei", 16, "bold")' in workbench_source and 'font=("Microsoft JhengHei", 14)' in workbench_source)
+    return results, summary
+
+
+def validate_gui_extended_preview_continuity_contract_case(base_params):
+    case_id = "GUI_EXTENDED_PREVIEW_CONTINUITY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("tools", "debug", "entry_flow.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_signal_chip_runtime_text_stays_fixed", True, 'self._sidebar_signal_var.set(SIDEBAR_SIGNAL_CHIP_TEXT)' in inspector_source and 'self._sidebar_signal_var.set(signal_text)' not in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_history_chip_runtime_text_stays_fixed", True, 'self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source and 'self._sidebar_history_var.set(history_text)' not in inspector_source)
+    add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_new_signals", True, 'preview_candidate_plan = build_normal_candidate_plan' in entry_flow_source)
+    add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_extended_days", True, 'preview_candidate_plan = build_extended_candidate_plan_from_signal' in entry_flow_source)
+
+    params = make_synthetic_validation_params(base_params)
+    params.initial_capital = 0.0
+
+    signal_dates = pd.date_range("2024-01-01", periods=7, freq="D")
+    frame = pd.DataFrame(
+        {
+            "Open": [10.10, 10.20, 10.46, 10.44, 10.40, 10.36, 10.32],
+            "High": [10.20, 10.35, 10.58, 10.55, 10.51, 10.47, 10.42],
+            "Low": [10.00, 10.08, 10.45, 10.41, 10.37, 10.33, 10.29],
+            "Close": [10.12, 10.30, 10.44, 10.40, 10.36, 10.32, 10.28],
+            "Volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=signal_dates,
+    )
+    precomputed_signals = (
+        np.array([0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30], dtype=np.float64),
+        np.array([False, True, False, False, False, False, False], dtype=bool),
+        np.array([False, False, False, False, False, False, False], dtype=bool),
+        np.array([np.nan, 10.50, np.nan, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
+    )
+
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    with tempfile.TemporaryDirectory(prefix="gui_extended_preview_continuity_contract_") as temp_dir:
+        analysis_result = debug_module.run_debug_analysis(
+            frame.copy(),
+            "2330",
+            params,
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            precomputed_signals=precomputed_signals,
+            output_dir=temp_dir,
+        )
+    payload = analysis_result.get("chart_payload") or {}
+    limit_line = np.asarray(payload.get("limit_line", []), dtype=np.float64)
+    stop_line = np.asarray(payload.get("stop_line", []), dtype=np.float64)
+    tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
+    continued_preview_days = [2, 3, 4, 5]
+
+    add_check(results, "output_contract", case_id, "extended_preview_limit_line_continues_across_candidate_days", True, bool(limit_line.size > max(continued_preview_days) and np.isfinite(limit_line[continued_preview_days]).all()))
+    add_check(results, "output_contract", case_id, "extended_preview_stop_line_continues_across_candidate_days", True, bool(stop_line.size > max(continued_preview_days) and np.isfinite(stop_line[continued_preview_days]).all()))
+    add_check(results, "output_contract", case_id, "extended_preview_tp_line_continues_across_candidate_days", True, bool(tp_line.size > max(continued_preview_days) and np.isfinite(tp_line[continued_preview_days]).all()))
+    add_check(results, "output_contract", case_id, "extended_preview_stays_visual_even_when_entry_plan_not_orderable", 0, len((payload.get("marker_groups") or {}).get("買進", [])))
+
+    summary["continued_preview_days"] = [signal_dates[idx].strftime("%Y-%m-%d") for idx in continued_preview_days]
     return results, summary
 
 
