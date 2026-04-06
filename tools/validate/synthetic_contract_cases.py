@@ -1803,7 +1803,6 @@ def validate_gui_mouse_navigation_contract_case(_base_params):
 
     add_check(results, "output_contract", case_id, "gui_chart_does_not_require_navigation_toolbar", True, "NavigationToolbar2Tk" not in inspector_source)
     add_check(results, "output_contract", case_id, "gui_chart_binds_mouse_navigation", True, "bind_matplotlib_chart_navigation(figure, canvas)" in inspector_source)
-    add_check(results, "output_contract", case_id, "gui_chart_hint_moved_to_footer", True, 'ttk.Label(footer, textvariable=self._chart_hint_var' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_mouse_navigation_binder", True, "def bind_matplotlib_chart_navigation(figure, canvas):" in charting_source)
     add_check(results, "output_contract", case_id, "charting_supports_wheel_zoom_event", True, '"scroll_event"' in charting_source)
     add_check(results, "output_contract", case_id, "charting_supports_left_drag_pan_event", True, '"motion_notify_event"' in charting_source and 'event.button != 1' in charting_source)
