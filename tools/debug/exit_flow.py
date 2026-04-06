@@ -74,6 +74,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
+                'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0),
                 'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
@@ -114,6 +115,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
+                'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0),
                 'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )
@@ -177,5 +179,6 @@ def append_debug_forced_closeout(*, position, current_date, atr_last, params, tr
             'pnl_value': float(final_leg_pnl),
             'pnl_pct': float(((sell_net_price - float(position.get('entry', exec_sell_price))) / float(position.get('entry', exec_sell_price)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
             'sell_capital': float(sell_net_price * position['qty']),
+            'trade_count': None,
         },
     )

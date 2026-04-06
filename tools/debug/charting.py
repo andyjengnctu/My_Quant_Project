@@ -31,7 +31,8 @@ MATPLOTLIB_MUTED_TEXT_COLOR = "#e4edf6"
 MATPLOTLIB_UP_COLOR = "#ff5b6e"
 MATPLOTLIB_DOWN_COLOR = "#18b26b"
 MATPLOTLIB_STOP_COLOR = "#ff4d4f"
-MATPLOTLIB_TP_COLOR = "#22c55e"
+MATPLOTLIB_TP_COLOR = "#facc15"
+MATPLOTLIB_INDICATOR_SELL_COLOR = "#22c55e"
 MATPLOTLIB_LIMIT_COLOR = "#4f86ff"
 MATPLOTLIB_ENTRY_COLOR = "#2f6df6"
 MATPLOTLIB_INFO_BOX_FACE = (0.02, 0.04, 0.06, 0.80)
@@ -95,7 +96,7 @@ ACTION_STYLE_MAP = {
     "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": "#68d8ff"},
     "半倉停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
     "停損殺出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
-    "指標賣出": {"plotly_symbol": "triangle-down", "mpl_marker": "v", "color": MATPLOTLIB_SIGNAL_SELL_COLOR},
+    "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#fbbf24"},
 }
@@ -478,7 +479,20 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
     marker_prices = []
     for markers in chart_payload["marker_groups"].values():
         marker_prices.extend(marker["price"] for marker in markers if start_idx <= int(marker["x"]) <= end_idx and not pd.isna(marker["price"]))
-    marker_prices.extend(item["anchor_price"] for item in chart_payload.get("signal_annotations", []) if start_idx <= int(item["x"]) <= end_idx and not pd.isna(item["anchor_price"]))
+    signal_annotation_prices = []
+    for item in chart_payload.get("signal_annotations", []):
+        if not (start_idx <= int(item["x"]) <= end_idx):
+            continue
+        anchor_price = item.get("anchor_price")
+        if anchor_price is not None and not pd.isna(anchor_price):
+            signal_annotation_prices.append(float(anchor_price))
+        meta = dict(item.get("meta") or {})
+        for key in ("tp_price", "limit_price", "stop_price", "entry_price"):
+            value = meta.get(key)
+            if value is not None and not pd.isna(value):
+                signal_annotation_prices.append(float(value))
+    if signal_annotation_prices:
+        marker_prices.extend(signal_annotation_prices)
     preview_prices = []
     last_actual_x = float(len(chart_payload["x"]) - 1)
     if float(end_idx) >= last_actual_x + 0.25:
@@ -693,6 +707,9 @@ def _build_trade_label_text(trace_name, marker):
         expected_value = meta.get("expected_value")
         if expected_value is not None:
             lines.append(f"EV: {float(expected_value):.2f} R")
+        trade_count = meta.get("trade_count")
+        if trade_count is not None:
+            lines.append(f"交易次數: {int(trade_count)}")
         max_drawdown = meta.get("max_drawdown")
         if max_drawdown is not None:
             lines.append(f"最大回撤: {float(max_drawdown):.2f}%")

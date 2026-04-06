@@ -118,6 +118,7 @@ def _build_pit_history_snapshot(stats_index, current_date, params, current_capit
 def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot, params):
     if chart_context is None:
         return
+    meta = dict(history_snapshot or {})
     if entry_plan is None:
         detail_lines = ['本次資金不足，無法掛單']
     else:
@@ -130,6 +131,14 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
             f"買入股數: {int(entry_plan['qty']):,}",
             f"買入資金: {buy_capital:,.0f}",
         ]
+        meta.update({
+            'tp_price': float(tp_line),
+            'limit_price': float(entry_plan['limit_price']),
+            'stop_price': float(entry_plan['init_sl']),
+            'entry_price': float(entry_plan['limit_price']),
+            'buy_capital': float(buy_capital),
+            'qty': int(entry_plan['qty']),
+        })
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
@@ -137,6 +146,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         anchor_price=signal_low,
         title='買訊',
         detail_lines=detail_lines,
+        meta=meta,
     )
 
 
@@ -145,17 +155,13 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         return
     entry_price = float(position.get('entry', signal_close))
     signal_trade_pct = ((float(signal_close) - entry_price) / entry_price * 100.0) if entry_price > 0 else 0.0
-    detail_lines = [
-        f"訊號日收盤: {float(signal_close):.2f}",
-        "僅代表賣訊，不代表已成交",
-    ]
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
         signal_type='sell',
         anchor_price=signal_low,
         title='賣訊',
-        detail_lines=detail_lines,
+        detail_lines=[],
         meta={'profit_pct': float(signal_trade_pct), 'max_drawdown': float(history_snapshot.get('max_drawdown', 0.0))},
     )
 
