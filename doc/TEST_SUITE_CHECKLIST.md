@@ -162,6 +162,7 @@
 | B95 | P1 | GUI | GUI 單股回測狀態晶片在 runtime 必須保持固定文案、僅以底色切換狀態；延續候選預掛線必須依候選資格跨多日連續顯示，不得因 entry plan 不可掛單或 qty=0 而提早消失 | DONE | 已補 direct contract，直接釘死右側「出現買入訊號」/「符合歷史績效」晶片不得被 runtime 文案覆寫，且 entry preview 必須走 candidate layer；即使 entry plan 因不可掛單而為 `None`，延續候選有效期間仍須連續顯示 limit / stop / tp 預掛線 | `tools/gui/single_stock_inspector.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B96 | P1 | GUI | GUI 單股回測圖例必須貼齊 K 線圖分頁上緣、價格軸數字不得因邊界裁切而缺字；延續候選若一路持續到最新一根，最新實際 K 棒與 next-day future preview 都必須維持預掛線一致顯示 | DONE | 已補 direct contract，直接釘死 matplotlib 左側 margin / legend top docking，不得再把價格軸數字裁切；並補 latest extended candidate preview contract，釘死延續候選走到最新一根時，最後一根實際 K 棒與 next-day future preview 都必須保留 limit / stop / tp 預掛線 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B97 | P1 | GUI | GUI 單股 latest raw-signal 買訊預覽路徑必須可直接執行；`tools/debug/backtest.py` 若引用 `build_normal_entry_plan` / `build_normal_candidate_plan`，必須同步自 `core.entry_plans` 明確 import，避免 GUI/coverage runtime 因未定義 helper 而在單股圖表路徑 NameError | DONE | 已補 direct contract，直接以 AST 掃描 `tools/debug/backtest.py`，釘死 latest raw-signal 預覽使用的 `build_normal_entry_plan` 與 tail preview 使用的 `build_normal_candidate_plan` 都必須被引用且已自 `core.entry_plans` 匯入，避免再次只改呼叫點卻漏同步 import | `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
+| B98 | P0 | 交易規格 | 延續候選 A2 必須在 signal day 凍結 `L/S/T`，未成交前僅能因 `fill`、`low<=S`、`high>=T` 或新 normal setup 取代而於次日盤前失效；`signal_valid` 與 `today_orderable` 必須分層，固定 `L` 若低於今日跌停價不得進 `orderable_candidates_today` | DONE | 已補 direct synthetic case，直接釘死延續候選不得再以 `reference_price` 每日重算 `L/S/T`；未成交前 target/stop barrier 觸發必須在日終清除 signal，且 valid signal 即使當日價格帶不可達也只能留在 candidate layer，不得擠進 orderable list | `tools/validate/synthetic_flow_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -376,6 +377,7 @@
 | T174 | `validate_gui_extended_preview_continuity_contract_case` | B95 |
 | T175 | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` | B96 |
 | T176 | `validate_gui_latest_raw_signal_preview_helper_contract_case` | B97 |
+| T177 | `validate_synthetic_extended_signal_a2_frozen_plan_case` | B98 |
 
 ## G. 逐項收斂紀錄
 
@@ -683,7 +685,9 @@
 | 2026-04-06 | B95 | 新增 GUI runtime 固定文案晶片 / 延續候選多日預掛線連續性 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B96 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B97 | 新增 latest raw-signal preview helper import contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B98 | 新增延續候選 A2 frozen plan / barrier expiry / today-orderable 分層 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
 | 2026-04-06 | T173 | 新增 GUI 單股 refined visual contract 並驗證 | NEW -> DONE | `validate_gui_single_stock_refined_visual_contract_case` |
 | 2026-04-06 | T174 | 新增 GUI 延續候選多日預掛線連續性與固定晶片文案 contract 並驗證 | NEW -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-06 | T175 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 並驗證 | NEW -> DONE | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` |
 | 2026-04-06 | T176 | 新增 latest raw-signal preview helper import contract 並驗證 | NEW -> DONE | `validate_gui_latest_raw_signal_preview_helper_contract_case` |
+| 2026-04-06 | T177 | 新增延續候選 A2 frozen plan / barrier expiry / today-orderable 分層 contract 並驗證 | NEW -> DONE | `validate_synthetic_extended_signal_a2_frozen_plan_case` |

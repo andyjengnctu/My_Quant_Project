@@ -108,7 +108,12 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
-            entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, C[j - 1], sizing_cap, params)
+            entry_plan = build_extended_entry_plan_from_signal(
+                active_extended_signal,
+                sizing_cap,
+                params,
+                y_close=C[j - 1],
+            )
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
                 t_open=O[j],
@@ -127,7 +132,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             elif entry_result['count_as_missed_buy']:
                 missedBuyCount += 1
 
-        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j]):
+        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j]):
             active_extended_signal = None
 
         currentEquity = currentCapital

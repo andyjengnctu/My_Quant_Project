@@ -13,6 +13,7 @@ from core.extended_signals import (
     build_extended_entry_plan_from_signal,
     create_signal_tracking_state,
     evaluate_extended_candidate_eligibility,
+    is_extended_signal_orderable_for_day,
     should_clear_extended_signal,
 )
 from core.history_filters import evaluate_history_candidate_metrics
@@ -33,4 +34,5 @@ __all__ = [
     "build_extended_candidate_plan_from_signal",
     "build_extended_entry_plan_from_signal",
     "evaluate_extended_candidate_eligibility",
+    "is_extended_signal_orderable_for_day",
 ]

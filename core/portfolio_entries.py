@@ -61,6 +61,8 @@ def execute_reserved_entries_for_day(
                 break
 
         cand = remaining_orderable_candidates.pop(chosen_idx)
+        if not cand.get('is_orderable', False):
+            continue
         if chosen_entry_plan is None:
             chosen_entry_plan = build_cash_capped_entry_plan(
                 {
@@ -155,5 +157,6 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
             continue
 
         t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
-        if should_clear_extended_signal(active_extended_signals[ticker], t_low):
+        t_high = get_fast_value(fast_df, 'High', pos=t_pos)
+        if should_clear_extended_signal(active_extended_signals[ticker], t_low, t_high):
             del active_extended_signals[ticker]

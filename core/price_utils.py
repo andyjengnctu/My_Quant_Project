@@ -204,6 +204,16 @@ def calc_limit_down_price(reference_price):
     return adjust_price_up_to_tick(reference_price * 0.90)
 
 
+# # (AI註: 單一真理來源 - 盤前固定限價單今日是否仍有法定價格帶可達性統一由此判斷)
+def is_limit_buy_price_reachable_for_day(limit_price, y_close):
+    if pd.isna(limit_price) or limit_price <= 0 or pd.isna(y_close) or y_close <= 0:
+        return False
+    limit_down_price = calc_limit_down_price(y_close)
+    if pd.isna(limit_down_price):
+        return False
+    return limit_price >= limit_down_price
+
+
 def is_single_price_bar(t_open, t_high, t_low, t_close):
     if pd.isna(t_open) or pd.isna(t_high) or pd.isna(t_low) or pd.isna(t_close):
         return False

@@ -53,10 +53,13 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
         return ('buy', proj_cost, stats['expected_value'], sort_value, msg, ticker, sanitize_issue)
 
     extended_candidate = stats.get('extended_candidate_today')
+    extended_orderable_today = bool(stats.get('extended_orderable_today', extended_candidate is not None))
     if extended_candidate is not None:
         limit_price = extended_candidate.get('limit_price')
         init_sl = extended_candidate.get('init_sl')
         if limit_price is None or init_sl is None:
+            return ('candidate', None, None, None, None, ticker, sanitize_issue)
+        if not extended_orderable_today:
             return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
         proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)

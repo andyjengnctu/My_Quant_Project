@@ -1,6 +1,7 @@
 from .synthetic_flow_cases import (
     validate_synthetic_competing_candidates_case,
     validate_synthetic_extended_miss_buy_case,
+    validate_synthetic_extended_signal_a2_frozen_plan_case,
     validate_synthetic_candidate_order_fill_layer_separation_case,
     validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case,
     validate_synthetic_intraday_reprice_forbidden_case,
@@ -23,6 +24,7 @@ from .synthetic_take_profit_cases import (
 __all__ = [
     "validate_synthetic_competing_candidates_case",
     "validate_synthetic_extended_miss_buy_case",
+    "validate_synthetic_extended_signal_a2_frozen_plan_case",
     "validate_synthetic_candidate_order_fill_layer_separation_case",
     "validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case",
     "validate_synthetic_intraday_reprice_forbidden_case",

@@ -96,6 +96,8 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
 
     extended_candidate_today = scanner_ref_stats.get("extended_candidate_today")
     if extended_candidate_today is not None:
+        if not bool(scanner_ref_stats.get("extended_orderable_today", True)):
+            return "candidate"
         limit_price = extended_candidate_today.get("limit_price")
         init_sl = extended_candidate_today.get("init_sl")
         if limit_price is None or init_sl is None:

@@ -55,7 +55,7 @@ def _resolve_chart_tp_line(position):
 def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     if chart_context is None or preview_plan is None:
         return False
-    preview_tp = preview_plan['limit_price'] + (preview_plan['limit_price'] - preview_plan['init_sl'])
+    preview_tp = preview_plan.get('target_price', preview_plan['limit_price'] + (preview_plan['limit_price'] - preview_plan['init_sl']))
     set_chart_future_preview(
         chart_context,
         stop_price=preview_plan['init_sl'],
@@ -313,7 +313,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)
         elif chart_context is not None and position.get('qty', 0) == 0 and active_extended_signal is not None:
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, c[-1], latest_sizing_cap, params)
+            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params)
             if latest_history_snapshot.get('is_candidate', False):
                 _apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)
         if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):

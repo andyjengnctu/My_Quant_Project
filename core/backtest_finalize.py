@@ -8,6 +8,7 @@ from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     evaluate_history_candidate_metrics,
+    is_extended_signal_orderable_for_day,
 )
 
 
@@ -146,9 +147,11 @@ def build_backtest_stats(
     stop_loss_today = adjust_long_stop_price(buy_limit_today - atr_last * params.atr_times_init) if is_setup_today else float('nan')
 
     extended_candidate_today = None
+    extended_orderable_today = False
     if (not had_open_position_at_end) and active_extended_signal is not None:
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, close_last, sizing_cap, params)
+        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)
+        extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last)
 
     return {
         'asset_growth': total_net_profit_pct,
@@ -167,6 +170,7 @@ def build_backtest_stats(
         'buy_limit': buy_limit_today,
         'stop_loss': stop_loss_today,
         'extended_candidate_today': extended_candidate_today,
+        'extended_orderable_today': extended_orderable_today,
         'current_position': end_position_qty,
         'avg_bars_held': avg_bars_held,
     }

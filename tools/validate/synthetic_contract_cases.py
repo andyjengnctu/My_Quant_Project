@@ -2111,6 +2111,7 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     add_check(results, "output_contract", case_id, "single_stock_history_chip_runtime_text_stays_fixed", True, 'self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source and 'self._sidebar_history_var.set(history_text)' not in inspector_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_new_signals", True, 'preview_candidate_plan = build_normal_candidate_plan' in entry_flow_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_extended_days", True, 'preview_candidate_plan = build_extended_candidate_plan_from_signal' in entry_flow_source)
+    add_check(results, "output_contract", case_id, "entry_preview_uses_frozen_extended_candidate_plan_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)' in entry_flow_source)
 
     params = make_synthetic_validation_params(base_params)
     params.initial_capital = 0.0
@@ -2173,7 +2174,7 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
 
     add_check(results, "output_contract", case_id, "single_stock_chart_restores_left_margin_for_price_axis", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.055' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_legend_docks_into_tab_gap", True, 'bbox_to_anchor=(0.0, 1.022)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
-    add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, c[-1], latest_sizing_cap, params)' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
+    add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params)' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
 
     params = make_synthetic_validation_params(base_params)
     params.initial_capital = 2_000_000.0

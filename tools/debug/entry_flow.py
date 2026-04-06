@@ -36,7 +36,7 @@ def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_
 def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan):
     if chart_context is None or entry_plan is None:
         return
-    tp_price = float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))
+    tp_price = float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])))
     record_active_levels(
         chart_context,
         current_date=current_date,
@@ -130,7 +130,7 @@ def process_debug_entry_for_day(
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                    'tp_price': float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
@@ -168,9 +168,14 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
-        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
+        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
-        entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
+        entry_plan = build_extended_entry_plan_from_signal(
+            active_extended_signal,
+            sizing_cap,
+            params,
+            y_close=close_prev,
+        )
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,
@@ -223,7 +228,7 @@ def process_debug_entry_for_day(
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])),
+                    'tp_price': float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
@@ -260,7 +265,7 @@ def process_debug_entry_for_day(
                 note="不計 miss buy",
             )
 
-    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low):
+    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low, t_high):
         active_extended_signal = None
 
     return position, active_extended_signal

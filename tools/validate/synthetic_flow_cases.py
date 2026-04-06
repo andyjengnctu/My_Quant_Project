@@ -4,7 +4,7 @@ import tempfile
 import pandas as pd
 
 from core.portfolio_candidates import build_daily_candidates
-from core.portfolio_entries import execute_reserved_entries_for_day
+from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
 from core.trade_plans import create_signal_tracking_state
 
@@ -262,6 +262,86 @@ def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(ba
     summary["day2_candidate_count"] = len(day2_candidates)
     summary["day2_active_signal_retained"] = ticker in active_extended_signals
     summary["day3_candidate_count"] = len(day3_candidates)
+    return results, summary
+
+
+def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.0)
+    case_id = "SYNTH_EXTENDED_SIGNAL_A2_FROZEN_PLAN"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"])
+    ticker = "9818"
+    frame = pd.DataFrame(
+        {
+            "Open": [120.0, 108.5, 105.0, 104.0],
+            "High": [121.0, 109.0, 110.1, 104.5],
+            "Low": [119.0, 108.0, 99.0, 89.5],
+            "Close": [120.0, 105.0, 104.0, 90.0],
+            "Volume": [1000.0, 1000.0, 1000.0, 1000.0],
+            "ATR": [5.0, 5.0, 5.0, 5.0],
+            "buy_limit": [100.0, 100.0, 100.0, 100.0],
+            "is_setup": [False, False, False, False],
+            "ind_sell_signal": [False, False, False, False],
+        },
+        index=dates,
+    )
+    all_dfs_fast = {ticker: pack_prepared_stock_data(frame)}
+    pit_stats_index = {
+        ticker: build_trade_stats_index([
+            {"exit_date": pd.Timestamp("2023-12-31"), "pnl": 1.0, "r_mult": 1.0},
+            {"exit_date": pd.Timestamp("2024-01-01"), "pnl": 1.0, "r_mult": 1.0},
+        ])
+    }
+    signal_state = create_signal_tracking_state(100.0, 5.0, params)
+
+    active_extended_signals = {ticker: dict(signal_state)}
+    day2_candidates, day2_orderable, day2_normal_setup_tickers = build_daily_candidates(
+        normal_setup_index={},
+        active_extended_signals=active_extended_signals,
+        portfolio={},
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        pit_stats_index=pit_stats_index,
+        today=dates[1],
+        sizing_equity=1_000_000.0,
+        params=params,
+    )
+    day2_plan = day2_candidates[0] if day2_candidates else None
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_no_new_normal_setup", [], sorted(day2_normal_setup_tickers))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_keeps_valid_extended_candidate_even_when_unreachable", 1, len(day2_candidates))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_unreachable_extended_signal_not_in_orderable_list", 0, len(day2_orderable))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_limit_stays_signal_day_limit", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_stop_stays_signal_day_stop", 90.0, None if day2_plan is None else float(day2_plan["init_sl"]))
+
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1])
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_target_not_hit_signal_remains_active", True, ticker in active_extended_signals)
+
+    day3_candidates, day3_orderable, _day3_normal_setup_tickers = build_daily_candidates(
+        normal_setup_index={},
+        active_extended_signals=active_extended_signals,
+        portfolio={},
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        pit_stats_index=pit_stats_index,
+        today=dates[2],
+        sizing_equity=1_000_000.0,
+        params=params,
+    )
+    day3_plan = day3_candidates[0] if day3_candidates else None
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_target_hit_day_still_uses_same_frozen_limit", 100.0, None if day3_plan is None else float(day3_plan["limit_px"]))
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2])
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_target_hit_clears_signal_next_day", False, ticker in active_extended_signals)
+
+    stop_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 5.0, params)}
+    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, all_dfs_fast, dates[3])
+    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day4_stop_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
+
+    summary["day2_orderable_count"] = len(day2_orderable)
+    summary["day3_orderable_count"] = len(day3_orderable)
+    summary["frozen_target_price"] = None if signal_state is None else float(signal_state["target_price"])
     return results, summary
 
 

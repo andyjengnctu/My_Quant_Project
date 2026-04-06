@@ -5,6 +5,7 @@ from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     build_normal_candidate_plan,
     create_signal_tracking_state,
+    is_extended_signal_orderable_for_day,
 )
 from core.portfolio_fast_data import (
     get_fast_close,
@@ -155,15 +156,20 @@ def _collect_extended_candidates(
         if not is_candidate:
             continue
 
-        reference_price = get_fast_close(fast_df, pos=y_pos)
+        y_close = get_fast_close(fast_df, pos=y_pos)
         candidate_plan = build_extended_candidate_plan_from_signal(
             active_extended_signals[ticker],
-            reference_price,
             sizing_equity,
             params,
         )
         if candidate_plan is None:
             continue
+
+        today_orderable = is_extended_signal_orderable_for_day(
+            active_extended_signals[ticker],
+            candidate_plan,
+            y_close,
+        )
 
         candidate_row = _make_candidate_row(
             ticker=ticker,
@@ -178,7 +184,7 @@ def _collect_extended_candidates(
             trade_count=trade_count,
             est_init_sl=candidate_plan['init_sl'],
             est_init_trail=candidate_plan['init_trail'],
-            is_orderable=candidate_plan['is_orderable'],
+            is_orderable=today_orderable,
             params=params,
             signal_state=active_extended_signals[ticker],
         )
