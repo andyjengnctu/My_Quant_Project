@@ -109,8 +109,15 @@ ORDER_STATUS_LABELS = {
 }
 
 
+MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR = ""
+
+
 def get_matplotlib_cjk_font_candidates():
     return MATPLOTLIB_CJK_FONT_CANDIDATES
+
+
+def get_matplotlib_font_manager_import_error():
+    return MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR
 
 
 def create_debug_chart_context(df):
@@ -576,10 +583,13 @@ def _resolve_event_data_x(axis, event):
 
 
 def _resolve_matplotlib_font_family():
+    global MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR
     try:
         from matplotlib import font_manager
-    except ImportError:
+    except ImportError as exc:
+        MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
         return None
+    MATPLOTLIB_FONT_MANAGER_IMPORT_ERROR = ""
     available_font_names = {entry.name for entry in font_manager.fontManager.ttflist}
     for font_name in MATPLOTLIB_CJK_FONT_CANDIDATES:
         if font_name in available_font_names:

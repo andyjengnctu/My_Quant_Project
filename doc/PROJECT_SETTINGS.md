@@ -39,7 +39,7 @@
 1. 單一真理來源：相同邏輯不得重複實作。
 2. 統計口徑必須完全一致：成交、未成交、miss buy、EV、勝率、Round-Trip PnL 不得分叉。
 3. 避免 magic number；公式與參數必須可解釋。
-4. 禁止裸 except；所有異常必須可追蹤。
+4. 禁止裸 except；所有被捕捉且非純 control-flow / feature probe 的異常都必須可追蹤，連 optional dependency / GUI fallback 也不得 silent swallow。
 5. 架構調整不得明顯犧牲效率；若提高未來策略修改或 ML / DRL / LLM 升級複雜度，必須先明確說明。
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。

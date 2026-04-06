@@ -37,12 +37,12 @@ OUTPUT_DIR = build_output_dir(BASE_DIR, 'smart_downloader')
 def _get_optional_curl_request_exceptions():
     try:
         from curl_cffi.requests.exceptions import RequestException as CurlRequestException
-    except (ImportError, ModuleNotFoundError):
-        return ()
-    return (CurlRequestException,)
+    except (ImportError, ModuleNotFoundError) as exc:
+        return (), f"{type(exc).__name__}: {exc}"
+    return (CurlRequestException,), ""
 
 
-OPTIONAL_CURL_REQUEST_EXCEPTIONS = _get_optional_curl_request_exceptions()
+OPTIONAL_CURL_REQUEST_EXCEPTIONS, OPTIONAL_CURL_REQUEST_EXCEPTIONS_IMPORT_ERROR = _get_optional_curl_request_exceptions()
 
 
 EXPECTED_MARKET_DATE_EXCEPTIONS = (

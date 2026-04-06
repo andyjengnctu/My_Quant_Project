@@ -102,7 +102,8 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
 
     try:
         import coverage
-    except ImportError:
+    except ImportError as exc:
+        print(f"⚠️ coverage 未安裝，略過 synthetic coverage artifact 輸出: {type(exc).__name__}: {exc}", file=sys.stderr)
         return validator_runner(base_params)
 
     coverage_dir = os.path.join(run_dir, "coverage_artifacts")

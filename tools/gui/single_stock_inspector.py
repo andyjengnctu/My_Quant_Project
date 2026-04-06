@@ -17,8 +17,11 @@ from tools.scanner.scan_runner import run_daily_scanner
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-except ImportError:  # pragma: no cover - GUI runtime fallback
+except ImportError as exc:  # pragma: no cover - GUI runtime fallback
     FigureCanvasTkAgg = None
+    FIGURE_CANVAS_TKAGG_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+else:
+    FIGURE_CANVAS_TKAGG_IMPORT_ERROR = ""
 
 
 class _ConsoleWriter(io.TextIOBase):
@@ -388,6 +391,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
         if FigureCanvasTkAgg is None:
             self._clear_embedded_chart()
+            backend_error_text = "缺少 matplotlib TkAgg backend，無法內嵌圖表。"
+            if FIGURE_CANVAS_TKAGG_IMPORT_ERROR:
+                backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
+            self._status_var.set(backend_error_text)
             return
         try:
             figure = create_matplotlib_debug_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
