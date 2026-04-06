@@ -17,9 +17,9 @@ CHART_MIN_WINDOW_BARS = 40
 CHART_PRICE_PADDING_RATIO = 0.035
 CHART_VOLUME_PADDING_RATIO = 0.10
 MATPLOTLIB_DEBUG_CHART_FIGSIZE = (18.2, 10.6)
-MATPLOTLIB_SUBPLOT_LEFT = 0.012
+MATPLOTLIB_SUBPLOT_LEFT = 0.055
 MATPLOTLIB_SUBPLOT_RIGHT = 0.988
-MATPLOTLIB_SUBPLOT_TOP = 0.952
+MATPLOTLIB_SUBPLOT_TOP = 0.986
 MATPLOTLIB_SUBPLOT_BOTTOM = 0.072
 MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 172
@@ -859,7 +859,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     figure.subplots_adjust(left=MATPLOTLIB_SUBPLOT_LEFT, right=MATPLOTLIB_SUBPLOT_RIGHT, top=MATPLOTLIB_SUBPLOT_TOP, bottom=MATPLOTLIB_SUBPLOT_BOTTOM)
     axis_price.set_facecolor(MATPLOTLIB_DARK_BG)
     axis_price.grid(True, color=MATPLOTLIB_GRID_COLOR, alpha=0.12, linewidth=0.68)
-    axis_price.tick_params(colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
+    axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)
+    axis_price.tick_params(axis="x", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11)
     axis_price.spines["top"].set_visible(False)
     axis_price.spines["right"].set_visible(False)
     axis_price.spines["left"].set_color(MATPLOTLIB_GRID_COLOR)
@@ -939,7 +940,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
     line_handles, line_labels = axis_price.get_legend_handles_labels()
     if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.0), borderaxespad=0.0, handlelength=2.2)
+        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.022), borderaxespad=0.0, handlelength=2.2)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)

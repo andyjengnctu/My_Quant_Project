@@ -2161,6 +2161,83 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     return results, summary
 
 
+
+
+def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_params):
+    case_id = "GUI_CHART_MARGIN_AND_LATEST_EXTENDED_PREVIEW_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_chart_restores_left_margin_for_price_axis", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.055' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_legend_docks_into_tab_gap", True, 'bbox_to_anchor=(0.0, 1.022)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, c[-1], latest_sizing_cap, params)' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
+
+    params = make_synthetic_validation_params(base_params)
+    params.initial_capital = 2_000_000.0
+
+    signal_dates = pd.date_range("2024-01-01", periods=7, freq="D")
+    frame = pd.DataFrame(
+        {
+            "Open": [10.10, 10.20, 10.55, 10.48, 10.42, 10.36, 10.32],
+            "High": [10.18, 10.36, 10.60, 10.52, 10.46, 10.40, 10.36],
+            "Low": [10.02, 10.12, 10.52, 10.44, 10.38, 10.34, 10.30],
+            "Close": [10.12, 10.30, 10.48, 10.42, 10.36, 10.32, 10.30],
+            "Volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=signal_dates,
+    )
+    precomputed_signals = (
+        np.array([0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30], dtype=np.float64),
+        np.array([False, True, False, False, False, False, False], dtype=bool),
+        np.array([False, False, False, False, False, False, False], dtype=bool),
+        np.array([np.nan, 10.50, np.nan, np.nan, np.nan, np.nan, np.nan], dtype=np.float64),
+    )
+
+    debug_module = importlib.import_module("tools.debug.trade_log")
+    backtest_module = importlib.import_module("tools.debug.backtest")
+    forced_history_snapshot = {
+        'trade_count': 12,
+        'win_rate': 58.0,
+        'expected_value': 0.35,
+        'payoff_ratio': 1.6,
+        'is_candidate': True,
+        'asset_growth_pct': 8.0,
+        'max_drawdown': 4.2,
+    }
+    with tempfile.TemporaryDirectory(prefix="gui_chart_margin_latest_extended_preview_contract_") as temp_dir:
+        with patch.object(backtest_module, '_build_pit_history_snapshot', return_value=forced_history_snapshot):
+            analysis_result = debug_module.run_debug_analysis(
+                frame.copy(),
+                "2330",
+                params,
+                export_excel=False,
+                export_chart=False,
+                return_chart_payload=True,
+                verbose=False,
+                precomputed_signals=precomputed_signals,
+                output_dir=temp_dir,
+            )
+    payload = analysis_result.get("chart_payload") or {}
+    future_preview = dict(payload.get("future_preview") or {})
+    limit_line = np.asarray(payload.get("limit_line", []), dtype=np.float64)
+    stop_line = np.asarray(payload.get("stop_line", []), dtype=np.float64)
+    tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
+
+    add_check(results, "output_contract", case_id, "extended_preview_limit_line_reaches_latest_actual_bar", True, bool(limit_line.size > 6 and np.isfinite(limit_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_stop_line_reaches_latest_actual_bar", True, bool(stop_line.size > 6 and np.isfinite(stop_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_tp_line_reaches_latest_actual_bar", True, bool(tp_line.size > 6 and np.isfinite(tp_line[6])))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_limit_exists", True, bool(np.isfinite(float(future_preview.get("limit_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_stop_exists", True, bool(np.isfinite(float(future_preview.get("stop_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_tp_exists", True, bool(np.isfinite(float(future_preview.get("tp_half_price", np.nan)))))
+
+    summary["latest_future_preview"] = {
+        key: float(value) for key, value in future_preview.items() if value is not None and np.isfinite(value)
+    }
+    return results, summary
+
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     case_id = "GUI_CHART_OVERLAY_LAYOUT_AND_PAN_CONTRACT"
     results = []

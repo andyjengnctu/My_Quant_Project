@@ -5,7 +5,8 @@ import pandas as pd
 
 from core.backtest_core import run_v16_backtest
 from core.capital_policy import resolve_single_backtest_sizing_capital
-from core.entry_plans import build_normal_entry_plan
+from core.entry_plans import build_normal_candidate_plan
+from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
 from core.price_utils import calc_entry_price, calc_net_sell_price
 from core.portfolio_fast_data import build_trade_stats_index
@@ -49,6 +50,20 @@ def _resolve_chart_tp_line(position):
     if position.get('_debug_tp_preview_done', False):
         return np.nan
     return position.get('tp_half', np.nan)
+
+
+def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
+    if chart_context is None or preview_plan is None:
+        return False
+    preview_tp = preview_plan['limit_price'] + (preview_plan['limit_price'] - preview_plan['init_sl'])
+    set_chart_future_preview(
+        chart_context,
+        stop_price=preview_plan['init_sl'],
+        tp_half_price=preview_tp,
+        limit_price=preview_plan['limit_price'],
+        entry_price=np.nan,
+    )
+    return True
 
 
 def _compute_payoff_ratio_from_trade_index(stats_index, cutoff):
@@ -285,7 +300,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_entry_plan_preview = build_normal_entry_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
+            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=dates[-1],
@@ -294,15 +309,13 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 history_snapshot=latest_history_snapshot,
                 params=params,
             )
-            if latest_entry_plan_preview is not None and latest_history_snapshot.get('is_candidate', False):
-                preview_tp = latest_entry_plan_preview['limit_price'] + (latest_entry_plan_preview['limit_price'] - latest_entry_plan_preview['init_sl'])
-                set_chart_future_preview(
-                    chart_context,
-                    stop_price=latest_entry_plan_preview['init_sl'],
-                    tp_half_price=preview_tp,
-                    limit_price=latest_entry_plan_preview['limit_price'],
-                    entry_price=np.nan,
-                )
+            if latest_history_snapshot.get('is_candidate', False):
+                _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)
+        elif chart_context is not None and position.get('qty', 0) == 0 and active_extended_signal is not None:
+            latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
+            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, c[-1], latest_sizing_cap, params)
+            if latest_history_snapshot.get('is_candidate', False):
+                _apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)
         if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):
             _record_sell_signal_annotation(
                 chart_context=chart_context,

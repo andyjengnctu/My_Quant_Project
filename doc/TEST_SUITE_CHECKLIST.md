@@ -160,6 +160,7 @@
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 符合歷史績效 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後右側留白約 1/6 版面，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，且最新 K 線後的右側留白需壓到約 1/6 版面，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B94 | P1 | GUI | GUI 單股回測檢視必須使用純黑 K 線底色、固定文案的右側狀態晶片、右側 OHLCV / 線值單一資訊來源、移除 chart hint footer 以擴大主圖高度，且買訊預掛線必須自訊號次日開始預覽；賣出/停損資訊框需包含最大回撤 | DONE | 已補 refined visual contract，直接釘死 pure-black chart background、固定「出現買入訊號」/「符合歷史績效」晶片文案、右側 sidebar 必須承接 OHLCV 與線值、footer 不得再保留 chart hint 空間、賣出框需列出最大回撤，且 entry preview lines 必須在次日預先畫出 | `tools/gui/single_stock_inspector.py`, `tools/gui/workbench.py`, `tools/debug/charting.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B95 | P1 | GUI | GUI 單股回測狀態晶片在 runtime 必須保持固定文案、僅以底色切換狀態；延續候選預掛線必須依候選資格跨多日連續顯示，不得因 entry plan 不可掛單或 qty=0 而提早消失 | DONE | 已補 direct contract，直接釘死右側「出現買入訊號」/「符合歷史績效」晶片不得被 runtime 文案覆寫，且 entry preview 必須走 candidate layer；即使 entry plan 因不可掛單而為 `None`，延續候選有效期間仍須連續顯示 limit / stop / tp 預掛線 | `tools/gui/single_stock_inspector.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
+| B96 | P1 | GUI | GUI 單股回測圖例必須貼齊 K 線圖分頁上緣、價格軸數字不得因邊界裁切而缺字；延續候選若一路持續到最新一根，最新實際 K 棒與 next-day future preview 都必須維持預掛線一致顯示 | DONE | 已補 direct contract，直接釘死 matplotlib 左側 margin / legend top docking，不得再把價格軸數字裁切；並補 latest extended candidate preview contract，釘死延續候選走到最新一根時，最後一根實際 K 棒與 next-day future preview 都必須保留 limit / stop / tp 預掛線 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -372,6 +373,7 @@
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
 | T173 | `validate_gui_single_stock_refined_visual_contract_case` | B94 |
 | T174 | `validate_gui_extended_preview_continuity_contract_case` | B95 |
+| T175 | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` | B96 |
 
 ## G. 逐項收斂紀錄
 
@@ -677,5 +679,7 @@
 | 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |
 | 2026-04-06 | B94 | 新增單股 refined visual / next-day preview contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | B95 | 新增 GUI runtime 固定文案晶片 / 延續候選多日預掛線連續性 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | B96 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T173 | 新增 GUI 單股 refined visual contract 並驗證 | NEW -> DONE | `validate_gui_single_stock_refined_visual_contract_case` |
 | 2026-04-06 | T174 | 新增 GUI 延續候選多日預掛線連續性與固定晶片文案 contract 並驗證 | NEW -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
+| 2026-04-06 | T175 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 並驗證 | NEW -> DONE | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` |
