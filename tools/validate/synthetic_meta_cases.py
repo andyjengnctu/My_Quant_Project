@@ -8,6 +8,7 @@ import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
+from .module_loader import build_project_absolute_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1037,6 +1038,48 @@ def validate_synthetic_case_non_error_initial_capital_contract_case(_base_params
     add_check(results, "meta_contract", case_id, "non_error_synthetic_cases_forbid_nonpositive_initial_capital_literals", [], invalid_assignments)
     summary["scanned_modules"] = scanned_modules
     summary["invalid_assignments"] = invalid_assignments
+    return results, summary
+
+
+def validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_META_CASES_BUILD_PROJECT_ABSOLUTE_PATH_IMPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_meta_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    uses_helper_symbol = any(
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "build_project_absolute_path"
+        for node in ast.walk(parsed)
+    )
+    has_explicit_import = _parsed_module_declares_specific_from_import(
+        parsed,
+        module_name="module_loader",
+        imported_name="build_project_absolute_path",
+    )
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_meta_cases_uses_build_project_absolute_path_symbol",
+        True,
+        uses_helper_symbol,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_meta_cases_imports_build_project_absolute_path",
+        True,
+        has_explicit_import,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["uses_build_project_absolute_path"] = uses_helper_symbol
+    summary["has_explicit_import"] = has_explicit_import
     return results, summary
 
 
