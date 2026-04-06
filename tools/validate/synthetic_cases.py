@@ -22,7 +22,6 @@ from .synthetic_portfolio_cases import (
     validate_synthetic_exit_orders_only_for_held_positions_case,
     validate_synthetic_extended_miss_buy_case,
     validate_synthetic_extended_signal_a2_frozen_plan_case,
-    validate_synthetic_empty_backtest_df_contract_case,
     validate_synthetic_init_sl_single_source_runtime_case,
     validate_synthetic_fee_tax_net_equity_case,
     validate_synthetic_half_tp_full_year_case,
@@ -61,6 +60,7 @@ from .synthetic_meta_cases import (
     validate_synthetic_case_chart_navigation_binder_import_contract_case,
     validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case,
     validate_synthetic_case_normalize_chart_payload_literal_x_contract_case,
+    validate_synthetic_cases_import_target_resolution_contract_case,
     validate_synthetic_case_non_error_initial_capital_contract_case,
     validate_cmd_document_contract_case,
     validate_core_trading_modules_in_coverage_targets_case,
@@ -194,6 +194,9 @@ from .synthetic_regression_cases import (
     validate_run_all_repeatability_case,
     validate_scan_runner_repeatability_case,
     validate_scanner_worker_repeatability_case,
+)
+from .synthetic_flow_cases import (
+    validate_synthetic_empty_backtest_df_contract_case,
 )
 
 

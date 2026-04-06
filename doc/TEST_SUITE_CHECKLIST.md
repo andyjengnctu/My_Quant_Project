@@ -173,6 +173,7 @@
 | B106 | P1 | GUI / Debug 契約 | 只要 debug analysis 要求 `return_chart_payload=True` 或 `export_chart=True`，即使輸入 `price_df` 為空，也必須回傳可正規化的 placeholder chart payload，不得把空 payload 延後到 GUI figure / normalize 路徑才以 runtime 方式爆炸 | DONE | 已補 direct contract，直接釘死空 `price_df` 路徑仍須回傳單根 placeholder payload，避免 synthetic GUI / chart coverage 因空 payload 在 figure / normalize 階段 runtime 失敗而掩蓋真正規格檢查 | `tools/debug/reporting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B107 | P1 | Meta / GUI 契約 | synthetic contract 若直接以 dict literal 呼叫 `normalize_chart_payload_contract(...)`，payload 必須明確提供 `x` 軸欄位；不得再以缺少 `x` 的假 payload 讓 coverage synthetic suite 在 contract 自身 runtime 失敗 | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py` 中所有對 `normalize_chart_payload_contract(...)` 的 dict-literal 呼叫，逐一要求 payload 含 `x` 欄位；並同步修正兩個 GUI visual contract 的合成 payload | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B108 | P1 | 核心韌性 / 空輸入契約 | 單股回測核心在空 `price_df` 下必須直接回傳零交易、零 miss buy/sell、`is_candidate=False` 的穩定 stats，不得在尾端索引 `C[-1]` / `Dates[-1]` / `buyCondition[-1]` 才 runtime 失敗 | DONE | 已補 direct synthetic case，直接釘死空 `price_df` 進入 `run_v16_backtest()` 時必須 early-return 穩定 stats 與空 logs；避免 GUI / debug 空資料 placeholder 路徑再次在 backtest core 尾端索引炸出 `IndexError` | `tools/validate/synthetic_flow_cases.py`, `core/backtest_core.py` |
+| B109 | P1 | Meta / Registry 契約 | `tools/validate/synthetic_cases.py` 對各 `synthetic_*` 模組的 from-import 必須指向實際存在該 validator symbol 的模組；不得把 validator 匯錯模組，導致 coverage synthetic suite 在 import 時直接 `ImportError` | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_cases.py` 對各 `synthetic_*` 模組的 from-import，逐一驗證被匯入 symbol 確實存在於目標模組；避免再發生 validator 實作位於 `synthetic_flow_cases.py` 卻誤從 `synthetic_portfolio_cases.py` 匯入的 registry import 回歸 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -398,6 +399,7 @@
 | T185 | `validate_debug_empty_price_df_chart_payload_contract_case` | B106 |
 | T186 | `validate_synthetic_case_normalize_chart_payload_literal_x_contract_case` | B107 |
 | T187 | `validate_synthetic_empty_backtest_df_contract_case` | B108 |
+| T188 | `validate_synthetic_cases_import_target_resolution_contract_case` | B109 |
 
 ## G. 逐項收斂紀錄
 
@@ -726,8 +728,10 @@
 | 2026-04-07 | B106 | 新增空 `price_df` 仍需回傳可正規化 placeholder chart payload 的 GUI / debug 契約後主表收斂為 DONE | NEW -> DONE | `tools/debug/reporting.py` |
 | 2026-04-07 | B107 | 新增 normalize chart payload dict-literal 必須顯式提供 `x` 欄位的 meta / GUI 契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B108 | 新增空 `price_df` 單股回測核心必須 early-return 穩定 stats 的韌性契約後主表收斂為 DONE | NEW -> DONE | `core/backtest_core.py` |
+| 2026-04-07 | B109 | 新增 synthetic registry import 目標模組必須實際存在對應 validator symbol 的 meta 契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
 | 2026-04-07 | T186 | 新增 normalize chart payload dict-literal `x` 欄位 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_case_normalize_chart_payload_literal_x_contract_case` |
 | 2026-04-07 | T187 | 新增空 `price_df` 單股回測核心 direct synthetic contract 並驗證 | NEW -> DONE | `validate_synthetic_empty_backtest_df_contract_case` |
+| 2026-04-07 | T188 | 新增 synthetic registry import 目標解析 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_cases_import_target_resolution_contract_case` |

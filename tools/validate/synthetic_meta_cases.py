@@ -1142,6 +1142,61 @@ def validate_synthetic_case_normalize_chart_payload_literal_x_contract_case(_bas
     return results, summary
 
 
+def validate_synthetic_cases_import_target_resolution_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CASES_IMPORT_TARGET_RESOLUTION_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    invalid_imports = []
+    for node in parsed.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level != 1 or not (node.module or "").startswith("synthetic_"):
+            continue
+        target_path = SYNTHETIC_VALIDATE_DIR / f"{node.module}.py"
+        if not target_path.exists():
+            invalid_imports.append(f"{node.module}:missing_module")
+            continue
+        target_parsed = ast.parse(target_path.read_text(encoding="utf-8"), filename=str(target_path))
+        exported = set()
+        for target_node in target_parsed.body:
+            if isinstance(target_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                exported.add(target_node.name)
+            elif isinstance(target_node, ast.Assign):
+                for target in target_node.targets:
+                    if isinstance(target, ast.Name):
+                        exported.add(target.id)
+            elif isinstance(target_node, ast.ImportFrom):
+                for alias in target_node.names:
+                    exported.add(alias.asname or alias.name)
+            elif isinstance(target_node, ast.Import):
+                for alias in target_node.names:
+                    exported.add(alias.asname or alias.name.split(".")[-1])
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            imported_name = alias.name
+            if imported_name not in exported:
+                invalid_imports.append(f"{node.module}:{imported_name}")
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_cases_import_targets_resolve_to_declaring_module",
+        [],
+        invalid_imports,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["invalid_imports"] = invalid_imports
+    return results, summary
+
+
 def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
     case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"
     results = []
