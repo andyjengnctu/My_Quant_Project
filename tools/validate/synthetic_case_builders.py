@@ -163,7 +163,9 @@ def build_synthetic_rotation_t_plus_one_case(base_params, make_params):
 
     set_synthetic_bar(df_strong, 100, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
     set_synthetic_bar(df_strong, 101, open_price=103.8, high_price=104.0, low_price=103.7, close_price=103.9, volume=0)
-    set_synthetic_bar(df_strong, 102, open_price=103.9, high_price=104.1, low_price=103.8, close_price=104.0)
+    # # (AI註: rotation T+1 case 需要在汰弱賣出後的首個可評估交易日先產生一次延續候選 miss buy，
+    # #        再於後一日成功延後買進；因此 day 102 必須保持 reachable 但 volume=0。)
+    set_synthetic_bar(df_strong, 102, open_price=103.9, high_price=104.1, low_price=103.8, close_price=104.0, volume=0)
     set_synthetic_bar(df_strong, 103, open_price=104.2, high_price=104.6, low_price=104.0, close_price=104.4)
     set_synthetic_bar(df_strong, 104, open_price=104.3, high_price=104.7, low_price=104.1, close_price=104.4)
     for idx in range(105, len(df_strong)):
