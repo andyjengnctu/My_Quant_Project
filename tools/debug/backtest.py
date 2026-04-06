@@ -8,7 +8,7 @@ from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
 from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
-from core.price_utils import calc_entry_price, calc_net_sell_price
+from core.price_utils import calc_entry_price, calc_frozen_target_price, calc_net_sell_price
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
 from tools.debug.charting import (
@@ -55,7 +55,7 @@ def _resolve_chart_tp_line(position):
 def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     if chart_context is None or preview_plan is None:
         return False
-    preview_tp = preview_plan.get('target_price', preview_plan['limit_price'] + (preview_plan['limit_price'] - preview_plan['init_sl']))
+    preview_tp = preview_plan.get('target_price', calc_frozen_target_price(preview_plan['limit_price'], preview_plan['init_sl']))
     set_chart_future_preview(
         chart_context,
         stop_price=preview_plan['init_sl'],
@@ -122,7 +122,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     if entry_plan is None:
         detail_lines = ['本次資金不足，無法掛單']
     else:
-        tp_line = entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])
+        tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
         buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
         detail_lines = [
             f"停利: {tp_line:.2f}",

@@ -3,7 +3,7 @@ import pandas as pd
 from core.entry_plans import resize_candidate_plan_to_capital
 from core.price_utils import (
     adjust_long_stop_price,
-    adjust_long_target_price,
+    calc_frozen_target_price,
     is_limit_buy_price_reachable_for_day,
 )
 
@@ -26,7 +26,7 @@ def create_signal_tracking_state(original_limit, atr, params):
 
     init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
     init_trail = adjust_long_stop_price(original_limit - atr * params.atr_times_trail)
-    target_price = adjust_long_target_price(original_limit + (original_limit - init_sl))
+    target_price = calc_frozen_target_price(original_limit, init_sl)
     return {
         "orig_limit": original_limit,
         "orig_atr": atr,

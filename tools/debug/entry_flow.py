@@ -1,6 +1,7 @@
 import numpy as np
 
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan, execute_pre_market_entry_plan
+from core.price_utils import calc_frozen_target_price
 from core.extended_signals import (
     build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,
@@ -36,7 +37,7 @@ def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_
 def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan):
     if chart_context is None or entry_plan is None:
         return
-    tp_price = float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl'])))
+    tp_price = float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])))
     record_active_levels(
         chart_context,
         current_date=current_date,
@@ -130,7 +131,7 @@ def process_debug_entry_for_day(
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))),
+                    'tp_price': float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl']))),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
@@ -228,7 +229,7 @@ def process_debug_entry_for_day(
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan.get('target_price', entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))),
+                    'tp_price': float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl']))),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )

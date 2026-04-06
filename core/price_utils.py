@@ -65,6 +65,13 @@ def adjust_long_target_price(price):
     return adjust_price_up_to_tick(price)
 
 
+# # (AI註: 單一真理來源 - frozen target 一律由盤前 limit 與 init_sl 決定，不得依實際成交價重算)
+def calc_frozen_target_price(limit_price, init_sl):
+    if pd.isna(limit_price) or pd.isna(init_sl):
+        return np.nan
+    return adjust_long_target_price(limit_price + (limit_price - init_sl))
+
+
 def adjust_long_buy_fill_price(price):
     return adjust_price_up_to_tick(price)
 

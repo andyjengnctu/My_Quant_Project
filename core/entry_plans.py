@@ -4,11 +4,11 @@ import pandas as pd
 from core.price_utils import (
     adjust_long_buy_fill_price,
     adjust_long_stop_price,
-    adjust_long_target_price,
     calc_entry_price,
     calc_initial_risk_total,
     calc_net_sell_price,
     calc_position_size,
+    calc_frozen_target_price,
     is_locked_limit_up_bar,
 )
 
@@ -51,10 +51,12 @@ def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
 
     init_sl = adjust_long_stop_price(limit_price - atr * params.atr_times_init)
     init_trail = adjust_long_stop_price(limit_price - atr * params.atr_times_trail)
+    target_price = calc_frozen_target_price(limit_price, init_sl)
     base_plan = {
         "limit_price": limit_price,
         "init_sl": init_sl,
         "init_trail": init_trail,
+        "target_price": target_price,
     }
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
@@ -81,22 +83,25 @@ def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
 
 
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
-def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, entry_type="normal"):
+def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, entry_type="normal", *, target_price=None, limit_price=None):
     if pd.isna(buy_price) or buy_price <= 0 or qty <= 0:
         raise ValueError(f"build_position_from_entry_fill 需要有效 buy_price/qty，收到 buy_price={buy_price!r}, qty={qty!r}")
 
     entry_price = calc_entry_price(buy_price, qty, params)
     net_sl = calc_net_sell_price(init_sl, qty, params)
-    tp_half = adjust_long_target_price(buy_price + (entry_price - net_sl))
+    frozen_target_price = target_price
+    if frozen_target_price is None or pd.isna(frozen_target_price):
+        target_basis_limit = limit_price if limit_price is not None else buy_price
+        frozen_target_price = calc_frozen_target_price(target_basis_limit, init_sl)
     init_risk = calc_initial_risk_total(entry_price, net_sl, qty, params)
 
     return {
         "qty": qty,
         "entry": entry_price,
-        "sl": max(init_sl, init_trail),
+        "sl": init_sl,
         "initial_stop": init_sl,
         "trailing_stop": init_trail,
-        "tp_half": tp_half,
+        "tp_half": frozen_target_price,
         "sold_half": False,
         "pure_buy_price": buy_price,
         "realized_pnl": 0.0,
@@ -154,6 +159,8 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         init_trail=init_trail,
         params=params,
         entry_type=entry_type,
+        target_price=entry_plan.get("target_price"),
+        limit_price=limit_price,
     )
     result["filled"] = True
     result["count_as_missed_buy"] = False

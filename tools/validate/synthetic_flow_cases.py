@@ -6,7 +6,7 @@ import pandas as pd
 from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
-from core.trade_plans import create_signal_tracking_state
+from core.trade_plans import build_normal_candidate_plan, create_signal_tracking_state, execute_pre_market_entry_plan
 
 from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -342,6 +342,51 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     summary["day2_orderable_count"] = len(day2_orderable)
     summary["day3_orderable_count"] = len(day3_orderable)
     summary["frozen_target_price"] = None if signal_state is None else float(signal_state["target_price"])
+    return results, summary
+
+
+def validate_synthetic_init_sl_single_source_runtime_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.atr_times_init = 2.0
+    params.atr_times_trail = 1.0
+
+    case_id = "SYNTH_INIT_SL_SINGLE_SOURCE_RUNTIME"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    limit_price = 100.0
+    atr = 5.0
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, 1_000_000.0, params)
+    signal_state = create_signal_tracking_state(limit_price, atr, params)
+    entry_result = execute_pre_market_entry_plan(
+        entry_plan=candidate_plan,
+        t_open=98.0,
+        t_high=100.0,
+        t_low=97.5,
+        t_close=99.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type='normal',
+    )
+    position = entry_result.get('position')
+
+    expected_init_sl = 90.0
+    expected_init_trail = 95.0
+    expected_target = 110.0
+
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_init_sl_is_single_initial_stop_basis", expected_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_trailing_stop_kept_separate", expected_init_trail, None if candidate_plan is None else float(candidate_plan['init_trail']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_target_uses_limit_and_init_sl_only", expected_target, None if candidate_plan is None else float(candidate_plan['target_price']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_initial_stop_stays_init_sl", expected_init_sl, None if position is None else float(position['initial_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_current_sl_starts_from_init_sl_not_trailing", expected_init_sl, None if position is None else float(position['sl']), note="trailing_stop 僅屬持倉後動態保護；成交建立部位時 initial stop 不得被較高 init_trail 覆蓋。")
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_trailing_stop_remains_separate_field", expected_init_trail, None if position is None else float(position['trailing_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_frozen_limit_not_actual_fill", expected_target, None if position is None else float(position['tp_half']), note="T 必須盤前由 L 與 init_sl 決定，不得因實際成交價 98.0 而改成較低停利。")
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_stop_barrier_uses_init_sl", expected_init_sl, None if signal_state is None else float(signal_state['init_sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_target_uses_limit_and_init_sl_only", expected_target, None if signal_state is None else float(signal_state['target_price']))
+
+    summary['candidate_target_price'] = None if candidate_plan is None else float(candidate_plan['target_price'])
+    summary['filled_tp_half'] = None if position is None else float(position['tp_half'])
     return results, summary
 
 

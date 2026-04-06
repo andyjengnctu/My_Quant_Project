@@ -10,9 +10,6 @@
     - 目前GUI這個名稱怪怪，應改叫viewer
     - Debug也是，要取一個正式名稱，目的是支援viewer
 
-
-
-
 - R-based Trailing Stop update
 - 先提升訓練分數
 - 訓練/測試樣本分離
