@@ -241,6 +241,30 @@ def _parsed_module_declares_numpy_alias_import(parsed_module: ast.AST) -> bool:
     return False
 
 
+def _find_nonpositive_initial_capital_assignments(parsed_module: ast.AST):
+    hits = []
+    for node in ast.walk(parsed_module):
+        target = None
+        value = None
+        if isinstance(node, ast.Assign):
+            value = node.value
+            for candidate in node.targets:
+                if isinstance(candidate, ast.Attribute) and candidate.attr == "initial_capital":
+                    target = candidate
+                    break
+        elif isinstance(node, ast.AnnAssign):
+            value = node.value
+            if isinstance(node.target, ast.Attribute) and node.target.attr == "initial_capital":
+                target = node.target
+        if target is None or value is None:
+            continue
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, (int, float)):
+            continue
+        if float(value.value) <= 0.0:
+            hits.append({"lineno": getattr(node, "lineno", None), "value": float(value.value)})
+    return hits
+
+
 def _parsed_module_declares_specific_from_import(parsed_module: ast.AST, *, module_name: str, imported_name: str) -> bool:
     for node in getattr(parsed_module, "body", []):
         if isinstance(node, ast.ImportFrom) and node.module == module_name:
@@ -993,6 +1017,28 @@ def make_array():
     summary["string_literal_only_detected_as_usage"] = _parsed_module_uses_numpy_alias(parsed_string_only)
     summary["actual_ast_usage_detected"] = _parsed_module_uses_numpy_alias(parsed_actual_usage)
     return results, summary
+
+def validate_synthetic_case_non_error_initial_capital_contract_case(_base_params):
+    case_id = "SYNTHETIC_CASE_NON_ERROR_INITIAL_CAPITAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_paths = sorted(build_project_absolute_path("tools", "validate").glob("synthetic_*cases.py"))
+    invalid_assignments = []
+    scanned_modules = []
+    for source_path in source_paths:
+        if source_path.name == "synthetic_error_cases.py":
+            continue
+        scanned_modules.append(source_path.name)
+        parsed = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for hit in _find_nonpositive_initial_capital_assignments(parsed):
+            invalid_assignments.append(f"{source_path.name}:{hit['lineno']}={hit['value']}")
+
+    add_check(results, "meta_contract", case_id, "non_error_synthetic_cases_forbid_nonpositive_initial_capital_literals", [], invalid_assignments)
+    summary["scanned_modules"] = scanned_modules
+    summary["invalid_assignments"] = invalid_assignments
+    return results, summary
+
 
 def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
     case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"

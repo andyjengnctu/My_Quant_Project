@@ -2114,7 +2114,7 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     add_check(results, "output_contract", case_id, "entry_preview_uses_frozen_extended_candidate_plan_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)' in entry_flow_source)
 
     params = make_synthetic_validation_params(base_params)
-    params.initial_capital = 0.0
+    params.initial_capital = 1.0
 
     signal_dates = pd.date_range("2024-01-01", periods=7, freq="D")
     frame = pd.DataFrame(
