@@ -5,6 +5,22 @@ import pandas as pd
 from tools.debug.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
 
 
+def _build_placeholder_price_df(chart_context=None):
+    context = chart_context or {}
+    context_dates = pd.DatetimeIndex(pd.to_datetime(context.get("dates", [])))
+    placeholder_ts = context_dates[-1] if len(context_dates) > 0 else pd.Timestamp("1970-01-01")
+    return pd.DataFrame(
+        {
+            "Open": [0.0],
+            "High": [0.0],
+            "Low": [0.0],
+            "Close": [0.0],
+            "Volume": [0.0],
+        },
+        index=pd.DatetimeIndex([placeholder_ts]),
+    )
+
+
 def _emit_loss_summary(df_logs, colors):
     losses = df_logs[df_logs['單筆實質損益'] < 0]
     if losses.empty:
@@ -69,11 +85,14 @@ def finalize_debug_analysis(
     if export_chart or return_chart_payload:
         if price_df is None:
             raise ValueError("export_chart=True 或 return_chart_payload=True 時，必須提供 price_df。")
-        effective_chart_context = chart_context if chart_context is not None else create_debug_chart_context(price_df)
-        chart_payload = build_debug_chart_payload(price_df, effective_chart_context)
+        effective_price_df = price_df if len(price_df) > 0 else _build_placeholder_price_df(chart_context)
+        effective_chart_context = chart_context if chart_context is not None and len(effective_price_df) == len(price_df) else create_debug_chart_context(effective_price_df)
+        chart_payload = build_debug_chart_payload(effective_price_df, effective_chart_context)
         if not _chart_payload_has_bars(chart_payload):
-            chart_payload = build_debug_chart_payload(price_df, create_debug_chart_context(price_df))
-        if not _chart_payload_has_bars(chart_payload) and len(price_df) > 0:
+            chart_payload = build_debug_chart_payload(effective_price_df, create_debug_chart_context(effective_price_df))
+        if not _chart_payload_has_bars(chart_payload):
+            if len(price_df) == 0:
+                raise ValueError("chart_payload 建立失敗：price_df 為空且 placeholder payload 無任何 bar。")
             raise ValueError("chart_payload 建立失敗：price_df 非空但 payload 無任何 bar。")
 
     if export_chart:

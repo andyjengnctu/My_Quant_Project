@@ -170,6 +170,7 @@
 | B103 | P1 | GUI | GUI 右側停利圖示顏色必須與主圖停利線同步為黃色；停損/賣出/結算資訊框中的交易次數必須置於最後一行，且其值必須對齊最新完成 round-trip 交易次數，不得與右側歷史績效表不一致 | DONE | 已補 direct contract，直接釘死 sidebar 停利圖示需為黃色、停損/賣出/結算資訊框的交易次數必須是最後一行，且最終出場事件需以 completed round-trip 口徑顯示最新交易次數，避免與右側歷史績效表分叉 | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/debug/exit_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B104 | P0 | 交易規格 | `PROJECT_SETTINGS.md` 必須明確宣告：全專案唯一初始停損基準為 `init_sl`、盤前 frozen plan 一律以 `L / init_sl / T` 定義、`T` 不得依實際成交價重算，且不得另引入 `S0` 或其他第二套初始風險基準 | DONE | 已補 meta contract，直接釘死 `PROJECT_SETTINGS.md` 必須明載 `init_sl` 為唯一初始停損基準、`L / init_sl / T` 盤前 frozen plan 與禁止引入 `S0` 第二口徑，避免後續再次在上層原則分叉 | `doc/PROJECT_SETTINGS.md`, `tools/validate/synthetic_meta_cases.py` |
 | B105 | P0 | 交易規格 | runtime 必須以 `init_sl` 為唯一初始停損基準；正常候選/延續候選的 frozen `T` 必須由 `L` 與 `init_sl` 盤前決定，成交後 `position.initial_stop` / `position.sl` 起始值 / `tp_half` / A2 stop barrier 均不得改用實際成交價、`trailing_stop` 或 `S0` 第二口徑 | DONE | 已補 direct synthetic case，直接釘死 candidate plan / filled position / extended signal 都必須共用 `init_sl`；即使 `init_trail` 較高也只能留在獨立 trailing 欄位，不得覆蓋成交建立當下的初始 stop 或把 `T` 改成依實際成交價重算 | `tools/validate/synthetic_flow_cases.py`, `core/entry_plans.py`, `core/extended_signals.py`, `core/position_step.py` |
+| B106 | P1 | GUI / Debug 契約 | 只要 debug analysis 要求 `return_chart_payload=True` 或 `export_chart=True`，即使輸入 `price_df` 為空，也必須回傳可正規化的 placeholder chart payload，不得把空 payload 延後到 GUI figure / normalize 路徑才以 runtime 方式爆炸 | DONE | 已補 direct contract，直接釘死空 `price_df` 路徑仍須回傳單根 placeholder payload，避免 synthetic GUI / chart coverage 因空 payload 在 figure / normalize 階段 runtime 失敗而掩蓋真正規格檢查 | `tools/debug/reporting.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -392,6 +393,7 @@
 | T182 | `validate_gui_trade_count_and_sidebar_sync_contract_case` | B103 |
 | T183 | `validate_project_settings_init_sl_frozen_plan_principle_case` | B104 |
 | T184 | `validate_synthetic_init_sl_single_source_runtime_case` | B105 |
+| T185 | `validate_debug_empty_price_df_chart_payload_contract_case` | B106 |
 
 ## G. 逐項收斂紀錄
 
@@ -719,3 +721,5 @@
 | 2026-04-07 | B105 | 新增 runtime `init_sl` 單一真理來源 / trailing 與初始停損脫鉤 / `T` 不得依實際成交價重算的交易規格後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
+| 2026-04-07 | B106 | 新增空 `price_df` 仍需回傳可正規化 placeholder chart payload 的 GUI / debug 契約後主表收斂為 DONE | NEW -> DONE | `tools/debug/reporting.py` |
+| 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |

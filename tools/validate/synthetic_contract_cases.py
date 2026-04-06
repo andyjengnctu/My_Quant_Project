@@ -1659,6 +1659,36 @@ def validate_debug_chart_payload_without_html_export_contract_case(base_params):
     return results, summary
 
 
+def validate_debug_empty_price_df_chart_payload_contract_case(base_params):
+    case_id = "DEBUG_EMPTY_PRICE_DF_CHART_PAYLOAD_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    params = case["params"]
+    empty_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    with tempfile.TemporaryDirectory(prefix="debug_empty_price_df_chart_payload_contract_") as temp_dir:
+        analysis_result = importlib.import_module("tools.debug.trade_log").run_debug_analysis(
+            empty_df.copy(),
+            "EMPTY",
+            params,
+            export_excel=False,
+            export_chart=False,
+            return_chart_payload=True,
+            verbose=False,
+            output_dir=temp_dir,
+        )
+
+    chart_payload = analysis_result.get("chart_payload")
+    add_check(results, "output_contract", case_id, "debug_empty_price_df_chart_payload_exists", True, chart_payload is not None)
+    add_check(results, "output_contract", case_id, "debug_empty_price_df_chart_payload_is_placeholder_single_bar", 1, 0 if chart_payload is None else len(chart_payload.get("x", [])))
+    if chart_payload is not None:
+        add_check(results, "output_contract", case_id, "debug_empty_price_df_chart_payload_volume_zero", 0.0, float(chart_payload["volume"][0]))
+        add_check(results, "output_contract", case_id, "debug_empty_price_df_chart_payload_open_zero", 0.0, float(chart_payload["open"][0]))
+    summary["payload_bar_count"] = 0 if chart_payload is None else len(chart_payload.get("x", []))
+    return results, summary
+
+
 def validate_gui_embedded_chart_contract_case(base_params):
     case_id = "GUI_EMBEDDED_CHART_VIEWPORT_CONTRACT"
     results = []
