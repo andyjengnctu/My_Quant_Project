@@ -64,6 +64,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             end_position_qty=0,
             avg_bars_held=0,
         )
+        stats_dict['is_candidate'] = False
         if return_logs:
             return stats_dict, trade_logs
         return stats_dict

@@ -81,7 +81,7 @@ def process_debug_position_step(
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
-                'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=False),
+                'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0),
                 'max_drawdown': None if history_snapshot is None else float(history_snapshot.get('max_drawdown', 0.0)),
             },
         )

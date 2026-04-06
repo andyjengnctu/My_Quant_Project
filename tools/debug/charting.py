@@ -466,6 +466,7 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
     total_bars = int(len(chart_payload["x"]))
     if total_bars <= 0:
         return {"price_min": 0.0, "price_max": 1.0, "volume_min": 0.0, "volume_max": 1.0}
+    requested_end_idx = float(end_idx)
     start_idx = max(0, min(int(np.floor(start_idx)), total_bars - 1))
     end_idx = max(start_idx, min(int(np.ceil(end_idx)), total_bars - 1))
     candidate_price_arrays = [
@@ -495,7 +496,7 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
         marker_prices.extend(signal_annotation_prices)
     preview_prices = []
     last_actual_x = float(len(chart_payload["x"]) - 1)
-    if float(end_idx) >= last_actual_x + 0.25:
+    if requested_end_idx >= last_actual_x + 0.25:
         preview = dict(chart_payload.get("future_preview") or {})
         for key in ("tp_half_price", "limit_price", "entry_price", "stop_price"):
             value = preview.get(key)
