@@ -2174,8 +2174,8 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     sell_fn_end = backtest_source.index('\n\ndef _apply_chart_sidebars', sell_fn_start)
     sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
 
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_title_only", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source)
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '賣出股數:' not in sell_fn_source and '賣出資金:' not in sell_fn_source and '本次損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_signal_day_only_copy", True, '訊號日收盤:' in sell_fn_source and '僅代表賣訊，不代表已成交' in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '賣出股數:' not in sell_fn_source and '賣出資金:' not in sell_fn_source and '本次損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
     add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
@@ -2206,58 +2206,6 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     return results, summary
 
 
-
-
-def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
-    case_id = "GUI_TRADE_MARKER_AND_TP_VISUAL_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
-    exit_flow_source = build_project_absolute_path("tools", "debug", "exit_flow.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
-
-    add_check(results, "output_contract", case_id, "indicator_sell_marker_uses_green_horizontal_line", True, '"指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR}' in charting_source)
-    add_check(results, "output_contract", case_id, "tp_visual_uses_yellow_color", True, 'MATPLOTLIB_TP_COLOR = "#facc15"' in charting_source)
-    add_check(results, "output_contract", case_id, "exit_trade_labels_include_trade_count", True, 'lines.append(f"交易次數: {int(trade_count)}")' in charting_source and "'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0)" in exit_flow_source)
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_exports_preview_prices_for_autoscale", True, "'tp_price': float(tp_line)" in backtest_source and "'limit_price': float(entry_plan['limit_price'])" in backtest_source and "'stop_price': float(entry_plan['init_sl'])" in backtest_source)
-
-    dates = pd.date_range("2024-01-01", periods=4, freq="D")
-    chart_payload = normalize_chart_payload_contract(
-        {
-            "dates": dates,
-            "open": np.array([100.0, 101.0, 102.0, 103.0], dtype=np.float32),
-            "high": np.array([101.0, 102.0, 103.0, 104.0], dtype=np.float32),
-            "low": np.array([99.0, 100.0, 101.0, 102.0], dtype=np.float32),
-            "close": np.array([100.5, 101.5, 102.5, 103.5], dtype=np.float32),
-            "volume": np.array([1000.0, 1000.0, 1000.0, 1000.0], dtype=np.float32),
-            "stop_line": np.full(4, np.nan, dtype=np.float32),
-            "tp_line": np.full(4, np.nan, dtype=np.float32),
-            "limit_line": np.full(4, np.nan, dtype=np.float32),
-            "entry_line": np.full(4, np.nan, dtype=np.float32),
-            "marker_groups": {},
-            "signal_annotations": [
-                {
-                    "date": dates[3],
-                    "x": 3,
-                    "anchor_price": 103.0,
-                    "signal_type": "buy",
-                    "title": "買訊",
-                    "detail_text": "停利: 155.00",
-                    "meta": {"tp_price": 155.0, "limit_price": 132.0, "stop_price": 94.0, "entry_price": 132.0},
-                }
-            ],
-            "future_preview": {},
-            "summary_box": [],
-            "status_box": {"lines": [], "ok": True},
-            "default_view": {"start_idx": 0, "end_idx": 3},
-        }
-    )
-    visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=0.0, end_idx=3.0)
-    add_check(results, "output_contract", case_id, "buy_signal_preview_prices_participate_in_visible_price_range", True, float(visible_ranges.get("price_max", 0.0)) > 150.0)
-
-    summary["price_max_with_signal_meta"] = float(visible_ranges.get("price_max", 0.0))
-    return results, summary
 def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_params):
     case_id = "GUI_CHART_MARGIN_AND_LATEST_EXTENDED_PREVIEW_CONTRACT"
     results = []

@@ -166,7 +166,6 @@
 | B99 | P1 | Meta | 非 error-path 的 synthetic validator 不得寫入違反 `strategy_params` 驗證契約的常值；`initial_capital` 等 strict-gt 參數若需測錯，只能留在 explicit error-path case，避免 coverage synthetic suite 因測試自身非法參數而假失敗 | DONE | 已補 meta contract，直接 AST 掃描非 `synthetic_error_cases.py` 的 synthetic validators，不得再寫入 `initial_capital<=0` 這類非法常值；並同步修正 GUI continuity contract 改以極小正資金維持 qty=0 測意 | `tools/validate/synthetic_meta_cases.py` |
 | B100 | P1 | Meta | `tools/validate/synthetic_meta_cases.py` 若引用 shared path helper `build_project_absolute_path`，必須顯式自 `.module_loader` import，避免 synthetic coverage suite 因 helper 未定義而在 runtime 才 NameError | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_meta_cases.py`：只要使用 `build_project_absolute_path`，就必須有顯式 from-import；避免 coverage synthetic suite 再因 shared path helper 漏 import 而假失敗 | `tools/validate/synthetic_meta_cases.py` |
 | B101 | P1 | GUI | GUI 單股回測賣訊註記必須僅表達 signal day 資訊，不得冒充已成交賣出；future preview 線若超出當前 K 棒高低範圍仍必須納入可視價格範圍；期末強制結算圖示需以黃色區分 | DONE | 已補 direct contract，直接釘死賣訊框只能顯示訊號日收盤與未成交提示，不得再混入賣出股數/資金/損益；並以 chart range case 驗證 future preview 的停利線會參與 autoscale，另釘死期末強制結算 marker color 為黃色 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
-| B102 | P1 | GUI | GUI 單股回測賣訊註記必須只顯示「賣訊」，指標賣出 marker 必須為綠色橫線，停損/賣出/結算資訊框需顯示交易次數，且買訊框中的 frozen 停利/限價/停損價格即使未畫出 future preview 線也必須納入可視價格範圍；停利線需以黃色顯示 | DONE | 已補 direct contract，直接釘死賣訊註記不得再附任何 detail 文案、指標賣出 marker 改為綠色水平線、停損/賣出資訊框加入交易次數，並以 signal annotation meta 驗證買訊框內的 frozen 停利價格會參與 autoscale；另釘死停利線顏色為黃色 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/debug/exit_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -385,7 +384,6 @@
 | T178 | `validate_synthetic_case_non_error_initial_capital_contract_case` | B99 |
 | T179 | `validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case` | B100 |
 | T180 | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` | B101 |
-| T181 | `validate_gui_trade_marker_and_tp_visual_contract_case` | B102 |
 
 ## G. 逐項收斂紀錄
 
@@ -697,7 +695,6 @@
 | 2026-04-06 | B99 | 新增 non-error synthetic validator 非法初始資金常值 guard，釘死 `initial_capital<=0` 只能留在 explicit error-path case | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-06 | B100 | 新增 synthetic meta shared path helper 顯式 import guard，避免 `build_project_absolute_path` 漏 import 直到 coverage suite runtime 才 NameError | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-06 | B101 | 新增 GUI 賣訊註記限縮 / future preview autoscale / 黃色強制結算圖示 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-06 | B102 | 新增 GUI 賣訊 title-only / 綠色指標賣出 marker / 停損賣出框交易次數 / 買訊 frozen 價格 autoscale / 黃色停利線 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T173 | 新增 GUI 單股 refined visual contract 並驗證 | NEW -> DONE | `validate_gui_single_stock_refined_visual_contract_case` |
 | 2026-04-06 | T174 | 新增 GUI 延續候選多日預掛線連續性與固定晶片文案 contract 並驗證 | NEW -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-06 | T175 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 並驗證 | NEW -> DONE | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` |
@@ -706,4 +703,3 @@
 | 2026-04-06 | T178 | 新增 non-error synthetic validator 非法初始資金常值 contract 並驗證 | NEW -> DONE | `validate_synthetic_case_non_error_initial_capital_contract_case` |
 | 2026-04-06 | T179 | 新增 synthetic meta shared path helper 顯式 import contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case` |
 | 2026-04-06 | T180 | 新增 GUI 賣訊註記限縮 / future preview autoscale / 黃色強制結算圖示 contract 並驗證 | NEW -> DONE | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` |
-| 2026-04-06 | T181 | 新增 GUI 賣訊 title-only / 綠色指標賣出 marker / 停損賣出框交易次數 / 買訊 frozen 價格 autoscale / 黃色停利線 contract 並驗證 | NEW -> DONE | `validate_gui_trade_marker_and_tp_visual_contract_case` |
