@@ -111,9 +111,9 @@ def configure_workbench_theme(root):
     style.configure(WORKBENCH_HSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
     style.configure(WORKBENCH_SIDEBAR_SIGNAL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
     style.configure(WORKBENCH_SIDEBAR_GATE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=("Microsoft JhengHei", 20, "bold"))
-    style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 13, "bold"))
-    style.configure(WORKBENCH_SIDEBAR_SUMMARY_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 12), anchor="nw")
-    style.configure(WORKBENCH_SIDEBAR_VALUE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 12))
+    style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 16, "bold"))
+    style.configure(WORKBENCH_SIDEBAR_SUMMARY_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 14), anchor="nw")
+    style.configure(WORKBENCH_SIDEBAR_VALUE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=("Microsoft JhengHei", 14))
 
 def _maximize_root_window(root):
     try:

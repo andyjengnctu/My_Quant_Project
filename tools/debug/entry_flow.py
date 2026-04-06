@@ -7,7 +7,7 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.price_utils import calc_entry_price
-from tools.debug.charting import record_limit_order, record_trade_marker
+from tools.debug.charting import record_active_levels, record_limit_order, record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
 
@@ -29,6 +29,20 @@ def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_
         entry_type=entry_type,
         status=status,
         note=note,
+    )
+
+
+def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan):
+    if chart_context is None or entry_plan is None:
+        return
+    tp_price = float(entry_plan['limit_price'] + (entry_plan['limit_price'] - entry_plan['init_sl']))
+    record_active_levels(
+        chart_context,
+        current_date=current_date,
+        stop_price=entry_plan['init_sl'],
+        tp_half_price=tp_price,
+        limit_price=entry_plan['limit_price'],
+        entry_price=np.nan,
     )
 
 
@@ -61,6 +75,7 @@ def process_debug_entry_for_day(
             active_extended_signal = signal_state
 
         entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params)
+        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=entry_plan)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,
@@ -152,6 +167,7 @@ def process_debug_entry_for_day(
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
         entry_plan = build_extended_entry_plan_from_signal(active_extended_signal, close_prev, sizing_cap, params)
+        _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=entry_plan)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,

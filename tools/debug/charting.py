@@ -8,7 +8,7 @@ import pandas as pd
 
 CHART_SIGNAL_BOX_ALPHA = 0.44
 CHART_RIGHT_PADDING_BARS = 8
-CHART_RIGHT_PADDING_RATIO = 0.22
+CHART_RIGHT_PADDING_RATIO = 0.1666666667
 CHART_DEFAULT_LOOKBACK_MONTHS = 18
 CHART_DEFAULT_LOOKBACK_FALLBACK_BARS = 380
 CHART_FOCUS_PADDING_BARS = 15
@@ -20,8 +20,8 @@ MATPLOTLIB_DEBUG_CHART_FIGSIZE = (18.2, 10.6)
 MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 172
 MATPLOTLIB_VOLUME_ALPHA = 0.32
-MATPLOTLIB_DARK_BG = "#02050a"
-MATPLOTLIB_GRID_COLOR = "#10263a"
+MATPLOTLIB_DARK_BG = "#000000"
+MATPLOTLIB_GRID_COLOR = "#0a1824"
 MATPLOTLIB_TEXT_COLOR = "#fbfdff"
 MATPLOTLIB_MUTED_TEXT_COLOR = "#e4edf6"
 MATPLOTLIB_UP_COLOR = "#ff5b6e"
@@ -37,7 +37,7 @@ MATPLOTLIB_SIGNAL_TEXT_COLOR = "#f8fafc"
 MATPLOTLIB_VOLUME_OVERLAY_HEIGHT_RATIO = 0.14
 MATPLOTLIB_VOLUME_OVERLAY_BOTTOM_GAP = 0.015
 MATPLOTLIB_CROSSHAIR_COLOR = "#b8d1e8"
-MATPLOTLIB_HOVER_BOX_FACE = (0.01, 0.03, 0.06, 0.82)
+MATPLOTLIB_HOVER_BOX_FACE = (0.00, 0.00, 0.00, 0.00)
 MATPLOTLIB_CJK_FONT_CANDIDATES = (
     "Microsoft JhengHei",
     "Microsoft JhengHei UI",
@@ -679,6 +679,9 @@ def _build_trade_label_text(trace_name, marker):
         expected_value = meta.get("expected_value")
         if expected_value is not None:
             lines.append(f"EV: {float(expected_value):.2f} R")
+        max_drawdown = meta.get("max_drawdown")
+        if max_drawdown is not None:
+            lines.append(f"最大回撤: {float(max_drawdown):.2f}%")
         return "\n".join(lines)
     return trace_name
 
@@ -689,13 +692,13 @@ def _build_status_chip_specs(status_box):
     for line in status_lines:
         if "買訊" in line or "買入訊號" in line or "候選" in line:
             is_active = all(token not in line for token in ("無", "否", "未", "不"))
-            chips.append({"text": "出現買入訊號" if is_active else "無買入訊號", "face": MATPLOTLIB_STATUS_CHIP_BUY_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+            chips.append({"text": "出現買入訊號", "face": MATPLOTLIB_STATUS_CHIP_BUY_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         elif "賣訊" in line:
             is_active = all(token not in line for token in ("無", "否", "未", "不"))
-            chips.append({"text": "出現賣出訊號" if is_active else "無賣出訊號", "face": MATPLOTLIB_STATUS_CHIP_SELL_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+            chips.append({"text": "出現賣出訊號", "face": MATPLOTLIB_STATUS_CHIP_SELL_FACE if is_active else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         elif "歷史績效" in line or "歷績門檻" in line:
             is_ok = any(token in line for token in ("合格", "符合"))
-            chips.append({"text": "符合歷史績效" if is_ok else "未符合歷史績效", "face": MATPLOTLIB_STATUS_CHIP_GATE_FACE if is_ok else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
+            chips.append({"text": "符合歷史績效", "face": MATPLOTLIB_STATUS_CHIP_GATE_FACE if is_ok else MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
         else:
             chips.append({"text": line, "face": MATPLOTLIB_STATUS_CHIP_MUTED_FACE})
     return chips[:3]
@@ -932,9 +935,9 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
     line_handles, line_labels = axis_price.get_legend_handles_labels()
     if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.01), handlelength=2.2)
-    hover_text_artist = axis_price.text(0.01, 0.995, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, bbox={"boxstyle": "round,pad=0.20", "fc": MATPLOTLIB_HOVER_BOX_FACE, "ec": "none"}, zorder=8)
-    hover_text_artist.set_text(_build_hover_text(chart_payload, chart_payload["default_view"]["end_idx"]))
+        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.002), handlelength=2.2)
+    hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
+    hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
     crosshair_hline = axis_price.axhline(y=chart_payload["close"][chart_payload["default_view"]["end_idx"]], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.35, zorder=1)
     rendered_signal_annotations = []

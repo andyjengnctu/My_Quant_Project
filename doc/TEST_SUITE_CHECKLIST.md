@@ -157,7 +157,8 @@
 | B86 | P1 | GUI | GUI 單股 K 線圖必須消除重複買訊資訊框、將買訊/歷績門檻狀態晶片固定於右下角、滑鼠拖曳平移採 pixel-anchor 避免左右平移時上下跳動，並以 explicit dark widget styles 真正套用 deep-dark 佈景；同時背景網格需維持低對比、賣出虧損資訊框必須半透明 | DONE | 已補 direct contract，直接釘死 panel 必須顯式套用 `Workbench.*` dark styles、mouse pan 必須使用 pixel-anchor、status chip layout 必須是 `right_bottom`、買進 trade label 不得再與買訊框重複渲染，並用 synthetic figure 驗證僅保留賣出績效框與淡化 grid alpha；dark-style contract 只驗顯式 `Workbench.*` 行為，不得再綁死已移除容器類型如 `Workbench.TLabelframe` | `tools/gui/workbench.py`, `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B87 | P1 | GUI | GUI workbench deep-dark theme 供 palette/style 使用的 theme token 必須完整宣告；`configure_workbench_theme()` 不得引用未定義 accent 常數而在啟動入口直接 NameError | DONE | 已補 direct contract，直接釘死 `WORKBENCH_ACCENT` 必須存在且為 hex 色碼，避免 `apps/gui.py` 於 theme 初始化階段即失敗 | `tools/gui/workbench.py`, `tools/validate/synthetic_contract_cases.py` |
 | B88 | P1 | GUI | GUI 單股工作台必須固定使用完整資料集、提供候選股掃描下拉選單 / Console 分頁 / 一鍵回到最新 K 線，且 latest-bar 買訊預覽、右側狀態晶片與滑鼠互動不得與單股圖表契約分叉 | DONE | 已補 direct contract，直接釘死 panel 不得再顯示資料集選項，必須提供 scanner button、candidate combobox、Console tab、latest button，scanner runner 必須回傳 candidate rows，chart helper 必須提供 `scroll_chart_to_latest()` 與右側留白契約 | `tools/gui/single_stock_inspector.py`, `tools/scanner/scan_runner.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
-| B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 符合歷史績效 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後右側留白約 1/5 版面，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，且最新 K 線後的右側留白需壓到約 1/5 版面，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
+| B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 符合歷史績效 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後右側留白約 1/6 版面，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，且最新 K 線後的右側留白需壓到約 1/6 版面，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
+| B94 | P1 | GUI | GUI 單股回測檢視必須使用純黑 K 線底色、固定文案的右側狀態晶片、右側 OHLCV / 線值單一資訊來源、移除 chart hint footer 以擴大主圖高度，且買訊預掛線必須自訊號次日開始預覽；賣出/停損資訊框需包含最大回撤 | DONE | 已補 refined visual contract，直接釘死 pure-black chart background、固定「出現買入訊號」/「符合歷史績效」晶片文案、右側 sidebar 必須承接 OHLCV 與線值、footer 不得再保留 chart hint 空間、賣出框需列出最大回撤，且 entry preview lines 必須在次日預先畫出 | `tools/gui/single_stock_inspector.py`, `tools/gui/workbench.py`, `tools/debug/charting.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -368,6 +369,7 @@
 | T166 | `validate_workbench_theme_accent_symbol_contract_case` | B87 |
 | T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
 | T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
+| T173 | `validate_gui_single_stock_refined_visual_contract_case` | B94 |
 
 ## G. 逐項收斂紀錄
 
@@ -671,3 +673,5 @@
 | 2026-04-05 | T166 | 新增 GUI workbench theme accent token contract 並驗證 | NEW -> DONE | `validate_workbench_theme_accent_symbol_contract_case` |
 | 2026-04-05 | T167 | 新增 GUI scanner / Console / latest-view contract 並驗證 | NEW -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-05 | T168 | 新增 GUI 右側 sidebar / latest next-day preview contract 並驗證 | NEW -> DONE | `validate_gui_sidebar_latest_preview_contract_case` |
+| 2026-04-06 | B94 | 新增單股 refined visual / next-day preview contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-06 | T173 | 新增 GUI 單股 refined visual contract 並驗證 | NEW -> DONE | `validate_gui_single_stock_refined_visual_contract_case` |

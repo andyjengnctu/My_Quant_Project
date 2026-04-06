@@ -2074,7 +2074,29 @@ def validate_gui_sidebar_latest_preview_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "charting_declares_future_preview_contract", True, 'future_preview' in charting_source and '_render_future_preview_lines' in charting_source)
     add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source and 'CHART_RIGHT_PADDING_RATIO' in charting_source)
     add_check(results, "output_contract", case_id, "backtest_uses_future_preview_for_latest_signal", True, 'set_chart_future_preview(' in backtest_source)
-    add_check(results, "output_contract", case_id, "charting_reduces_latest_blank_space_to_about_one_fifth", True, "CHART_RIGHT_PADDING_RATIO = 0.22" in charting_source)
+    add_check(results, "output_contract", case_id, "charting_reduces_latest_blank_space_to_about_one_sixth", True, "CHART_RIGHT_PADDING_RATIO = 0.1666666667" in charting_source)
+    return results, summary
+
+
+def validate_gui_single_stock_refined_visual_contract_case(_base_params):
+    case_id = "GUI_SINGLE_STOCK_REFINED_VISUAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    entry_flow_source = build_project_absolute_path("tools", "debug", "entry_flow.py").read_text(encoding="utf-8")
+    workbench_source = build_project_absolute_path("tools", "gui", "workbench.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "single_stock_chart_uses_pure_black_bg", True, 'MATPLOTLIB_DARK_BG = "#000000"' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_signal_chip_uses_fixed_text", True, 'self._sidebar_signal_var = tk.StringVar(value="出現買入訊號")' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_gate_chip_uses_fixed_text", True, 'self._sidebar_history_var = tk.StringVar(value="符合歷史績效")' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_gui_removes_chart_hint_footer_label", False, 'textvariable=self._chart_hint_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_gui_moves_ohlcv_to_sidebar", True, '_selected_open_var' in inspector_source and '_selected_volume_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_hover_overlay_no_longer_repeats_top_left_text_box", True, 'hover_text_artist.set_visible(False)' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_trade_label_includes_max_drawdown", True, '最大回撤:' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_entry_preview_lines_start_next_day_before_fill", True, '_record_entry_plan_preview_levels(' in entry_flow_source and 'record_active_levels(' in entry_flow_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_fonts_enlarged", True, 'font=("Microsoft JhengHei", 16, "bold")' in workbench_source and 'font=("Microsoft JhengHei", 14)' in workbench_source)
     return results, summary
 
 
