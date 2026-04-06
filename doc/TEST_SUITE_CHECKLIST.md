@@ -160,11 +160,12 @@
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 符合歷史績效 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後右側留白約 1/6 版面，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，且最新 K 線後的右側留白需壓到約 1/6 版面，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B94 | P1 | GUI | GUI 單股回測檢視必須使用純黑 K 線底色、固定文案的右側狀態晶片、右側 OHLCV / 線值單一資訊來源、移除 chart hint footer 以擴大主圖高度，且買訊預掛線必須自訊號次日開始預覽；賣出/停損資訊框需包含最大回撤 | DONE | 已補 refined visual contract，直接釘死 pure-black chart background、固定「出現買入訊號」/「符合歷史績效」晶片文案、右側 sidebar 必須承接 OHLCV 與線值、footer 不得再保留 chart hint 空間、賣出框需列出最大回撤，且 entry preview lines 必須在次日預先畫出 | `tools/gui/single_stock_inspector.py`, `tools/gui/workbench.py`, `tools/debug/charting.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B95 | P1 | GUI | GUI 單股回測狀態晶片在 runtime 必須保持固定文案、僅以底色切換狀態；延續候選預掛線必須依候選資格跨多日連續顯示，不得因 entry plan 不可掛單或 qty=0 而提早消失 | DONE | 已補 direct contract，直接釘死右側「出現買入訊號」/「符合歷史績效」晶片不得被 runtime 文案覆寫，且 entry preview 必須走 candidate layer；即使 entry plan 因不可掛單而為 `None`，延續候選有效期間仍須連續顯示 limit / stop / tp 預掛線 | `tools/gui/single_stock_inspector.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
-| B96 | P1 | GUI | GUI 單股回測圖例必須貼齊 K 線圖分頁上緣、價格軸數字不得因邊界裁切而缺字；延續候選若一路持續到最新一根，最新實際 K 棒與 next-day future preview 都必須維持預掛線一致顯示 | DONE | 已補 direct contract，直接釘死 matplotlib 左側 margin / legend top docking，不得再把價格軸數字裁切；並補 latest extended candidate preview contract，釘死延續候選走到最新一根時，最後一根實際 K 棒與 next-day future preview 都必須保留 limit / stop / tp 預掛線 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
+| B96 | P1 | GUI | GUI 單股回測圖例必須貼近 K 線圖分頁上緣但仍保留小幅左上 inset gap、價格軸數字不得因邊界裁切而缺字，且主圖左/下邊界需盡量收小以保留更多 K 線可視區；延續候選若一路持續到最新一根，最新實際 K 棒與 next-day future preview 都必須維持預掛線一致顯示 | DONE | 已補 direct contract，直接釘死 matplotlib 左/下 margin 收小、legend 需保留小幅 top-left inset gap 且不得裁切價格軸；並補 latest extended candidate preview contract，釘死延續候選走到最新一根時，最後一根實際 K 棒與 next-day future preview 都必須保留 limit / stop / tp 預掛線 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B97 | P1 | GUI | GUI 單股 latest raw-signal 買訊預覽路徑必須可直接執行；`tools/debug/backtest.py` 若引用 `build_normal_entry_plan` / `build_normal_candidate_plan`，必須同步自 `core.entry_plans` 明確 import，避免 GUI/coverage runtime 因未定義 helper 而在單股圖表路徑 NameError | DONE | 已補 direct contract，直接以 AST 掃描 `tools/debug/backtest.py`，釘死 latest raw-signal 預覽使用的 `build_normal_entry_plan` 與 tail preview 使用的 `build_normal_candidate_plan` 都必須被引用且已自 `core.entry_plans` 匯入，避免再次只改呼叫點卻漏同步 import | `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B98 | P0 | 交易規格 | 延續候選 A2 必須在 signal day 凍結 `L/S/T`，未成交前僅能因 `fill`、`low<=S`、`high>=T` 或新 normal setup 取代而於次日盤前失效；`signal_valid` 與 `today_orderable` 必須分層，固定 `L` 若低於今日跌停價不得進 `orderable_candidates_today` | DONE | 已補 direct synthetic case，直接釘死延續候選不得再以 `reference_price` 每日重算 `L/S/T`；未成交前 target/stop barrier 觸發必須在日終清除 signal，且 valid signal 即使當日價格帶不可達也只能留在 candidate layer，不得擠進 orderable list | `tools/validate/synthetic_flow_cases.py` |
 | B99 | P1 | Meta | 非 error-path 的 synthetic validator 不得寫入違反 `strategy_params` 驗證契約的常值；`initial_capital` 等 strict-gt 參數若需測錯，只能留在 explicit error-path case，避免 coverage synthetic suite 因測試自身非法參數而假失敗 | DONE | 已補 meta contract，直接 AST 掃描非 `synthetic_error_cases.py` 的 synthetic validators，不得再寫入 `initial_capital<=0` 這類非法常值；並同步修正 GUI continuity contract 改以極小正資金維持 qty=0 測意 | `tools/validate/synthetic_meta_cases.py` |
 | B100 | P1 | Meta | `tools/validate/synthetic_meta_cases.py` 若引用 shared path helper `build_project_absolute_path`，必須顯式自 `.module_loader` import，避免 synthetic coverage suite 因 helper 未定義而在 runtime 才 NameError | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_meta_cases.py`：只要使用 `build_project_absolute_path`，就必須有顯式 from-import；避免 coverage synthetic suite 再因 shared path helper 漏 import 而假失敗 | `tools/validate/synthetic_meta_cases.py` |
+| B101 | P1 | GUI | GUI 單股回測賣訊註記必須僅表達 signal day 資訊，不得冒充已成交賣出；future preview 線若超出當前 K 棒高低範圍仍必須納入可視價格範圍；期末強制結算圖示需以黃色區分 | DONE | 已補 direct contract，直接釘死賣訊框只能顯示訊號日收盤與未成交提示，不得再混入賣出股數/資金/損益；並以 chart range case 驗證 future preview 的停利線會參與 autoscale，另釘死期末強制結算 marker color 為黃色 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -382,6 +383,7 @@
 | T177 | `validate_synthetic_extended_signal_a2_frozen_plan_case` | B98 |
 | T178 | `validate_synthetic_case_non_error_initial_capital_contract_case` | B99 |
 | T179 | `validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case` | B100 |
+| T180 | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` | B101 |
 
 ## G. 逐項收斂紀錄
 
@@ -692,6 +694,7 @@
 | 2026-04-06 | B98 | 新增延續候選 A2 frozen plan / barrier expiry / today-orderable 分層 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
 | 2026-04-06 | B99 | 新增 non-error synthetic validator 非法初始資金常值 guard，釘死 `initial_capital<=0` 只能留在 explicit error-path case | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-06 | B100 | 新增 synthetic meta shared path helper 顯式 import guard，避免 `build_project_absolute_path` 漏 import 直到 coverage suite runtime 才 NameError | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-06 | B101 | 新增 GUI 賣訊註記限縮 / future preview autoscale / 黃色強制結算圖示 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-06 | T173 | 新增 GUI 單股 refined visual contract 並驗證 | NEW -> DONE | `validate_gui_single_stock_refined_visual_contract_case` |
 | 2026-04-06 | T174 | 新增 GUI 延續候選多日預掛線連續性與固定晶片文案 contract 並驗證 | NEW -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-06 | T175 | 新增 GUI 圖例頂部貼齊 / 價格軸防裁切 / latest extended preview contract 並驗證 | NEW -> DONE | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` |
@@ -699,3 +702,4 @@
 | 2026-04-06 | T177 | 新增延續候選 A2 frozen plan / barrier expiry / today-orderable 分層 contract 並驗證 | NEW -> DONE | `validate_synthetic_extended_signal_a2_frozen_plan_case` |
 | 2026-04-06 | T178 | 新增 non-error synthetic validator 非法初始資金常值 contract 並驗證 | NEW -> DONE | `validate_synthetic_case_non_error_initial_capital_contract_case` |
 | 2026-04-06 | T179 | 新增 synthetic meta shared path helper 顯式 import contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case` |
+| 2026-04-06 | T180 | 新增 GUI 賣訊註記限縮 / future preview autoscale / 黃色強制結算圖示 contract 並驗證 | NEW -> DONE | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` |

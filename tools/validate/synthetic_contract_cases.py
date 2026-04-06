@@ -2162,6 +2162,48 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     return results, summary
 
 
+def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_params):
+    case_id = "GUI_SIGNAL_ANNOTATION_AND_FORCED_CLOSE_VISUAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
+
+    sell_fn_start = backtest_source.index('def _record_sell_signal_annotation(')
+    sell_fn_end = backtest_source.index('\n\ndef _apply_chart_sidebars', sell_fn_start)
+    sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
+
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_signal_day_only_copy", True, '訊號日收盤:' in sell_fn_source and '僅代表賣訊，不代表已成交' in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '賣出股數:' not in sell_fn_source and '賣出資金:' not in sell_fn_source and '本次損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
+    add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
+
+    dates = pd.date_range("2024-01-01", periods=4, freq="D")
+    chart_payload = normalize_chart_payload_contract(
+        {
+            "dates": dates,
+            "open": np.array([100.0, 101.0, 102.0, 103.0], dtype=np.float32),
+            "high": np.array([101.0, 102.0, 103.0, 104.0], dtype=np.float32),
+            "low": np.array([99.0, 100.0, 101.0, 102.0], dtype=np.float32),
+            "close": np.array([100.5, 101.5, 102.5, 103.5], dtype=np.float32),
+            "volume": np.array([1000.0, 1000.0, 1000.0, 1000.0], dtype=np.float32),
+            "stop_line": np.full(4, np.nan, dtype=np.float32),
+            "tp_line": np.full(4, np.nan, dtype=np.float32),
+            "limit_line": np.full(4, np.nan, dtype=np.float32),
+            "entry_line": np.full(4, np.nan, dtype=np.float32),
+            "marker_groups": {},
+            "signal_annotations": [],
+            "future_preview": {"limit_price": 103.0, "stop_price": 99.0, "tp_half_price": 132.0, "entry_price": 103.0},
+            "summary_box": [],
+            "status_box": {"lines": [], "ok": True},
+            "default_view": {"start_idx": 0, "end_idx": 3},
+        }
+    )
+    visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=0.0, end_idx=4.8)
+    add_check(results, "output_contract", case_id, "future_preview_tp_participates_in_visible_price_range", True, float(visible_ranges.get("price_max", 0.0)) > 130.0)
+
+    summary["future_preview_price_max"] = float(visible_ranges.get("price_max", 0.0))
+    return results, summary
 
 
 def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_params):
@@ -2172,8 +2214,8 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
     charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
     backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
 
-    add_check(results, "output_contract", case_id, "single_stock_chart_restores_left_margin_for_price_axis", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.055' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
-    add_check(results, "output_contract", case_id, "single_stock_legend_docks_into_tab_gap", True, 'bbox_to_anchor=(0.0, 1.022)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_chart_tightens_left_bottom_margins_for_more_candle_space", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.046' in charting_source and 'MATPLOTLIB_SUBPLOT_BOTTOM = 0.058' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_legend_keeps_small_inset_gap_from_top_left_boundary", True, 'bbox_to_anchor=(0.012, 1.012)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params)' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
 
     params = make_synthetic_validation_params(base_params)

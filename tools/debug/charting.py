@@ -17,10 +17,10 @@ CHART_MIN_WINDOW_BARS = 40
 CHART_PRICE_PADDING_RATIO = 0.035
 CHART_VOLUME_PADDING_RATIO = 0.10
 MATPLOTLIB_DEBUG_CHART_FIGSIZE = (18.2, 10.6)
-MATPLOTLIB_SUBPLOT_LEFT = 0.055
+MATPLOTLIB_SUBPLOT_LEFT = 0.046
 MATPLOTLIB_SUBPLOT_RIGHT = 0.988
 MATPLOTLIB_SUBPLOT_TOP = 0.986
-MATPLOTLIB_SUBPLOT_BOTTOM = 0.072
+MATPLOTLIB_SUBPLOT_BOTTOM = 0.058
 MATPLOTLIB_CANDLE_WIDTH = 0.72
 MATPLOTLIB_MARKER_SIZE = 172
 MATPLOTLIB_VOLUME_ALPHA = 0.32
@@ -96,7 +96,7 @@ ACTION_STYLE_MAP = {
     "半倉停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
     "停損殺出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
     "指標賣出": {"plotly_symbol": "triangle-down", "mpl_marker": "v", "color": MATPLOTLIB_SIGNAL_SELL_COLOR},
-    "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#cbd5e1"},
+    "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#fbbf24"},
 }
 
@@ -479,8 +479,18 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
     for markers in chart_payload["marker_groups"].values():
         marker_prices.extend(marker["price"] for marker in markers if start_idx <= int(marker["x"]) <= end_idx and not pd.isna(marker["price"]))
     marker_prices.extend(item["anchor_price"] for item in chart_payload.get("signal_annotations", []) if start_idx <= int(item["x"]) <= end_idx and not pd.isna(item["anchor_price"]))
+    preview_prices = []
+    last_actual_x = float(len(chart_payload["x"]) - 1)
+    if float(end_idx) >= last_actual_x + 0.25:
+        preview = dict(chart_payload.get("future_preview") or {})
+        for key in ("tp_half_price", "limit_price", "entry_price", "stop_price"):
+            value = preview.get(key)
+            if value is not None and not pd.isna(value):
+                preview_prices.append(float(value))
     if marker_prices:
         candidate_price_arrays.append(np.asarray(marker_prices, dtype=np.float32))
+    if preview_prices:
+        candidate_price_arrays.append(np.asarray(preview_prices, dtype=np.float32))
     finite_prices = []
     for values in candidate_price_arrays:
         finite_values = values[np.isfinite(values)]
@@ -940,7 +950,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
     line_handles, line_labels = axis_price.get_legend_handles_labels()
     if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.0, 1.022), borderaxespad=0.0, handlelength=2.2)
+        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.2)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)

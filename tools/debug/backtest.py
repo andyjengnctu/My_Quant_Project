@@ -145,17 +145,9 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         return
     entry_price = float(position.get('entry', signal_close))
     signal_trade_pct = ((float(signal_close) - entry_price) / entry_price * 100.0) if entry_price > 0 else 0.0
-    sell_capital = calc_net_sell_price(signal_close, position['qty'], params) * position['qty']
-    pnl_value = (calc_net_sell_price(signal_close, position['qty'], params) - entry_price) * position['qty']
     detail_lines = [
-        f"賣出股數: {int(position['qty']):,}",
-        f"賣出資金: {sell_capital:,.0f}",
-        f"本次損益: {pnl_value:+,.0f}",
-        f"本次報酬率: {signal_trade_pct:+.2f}%",
-        f"風報比: {history_snapshot['payoff_ratio']:.2f}",
-        f"勝率: {history_snapshot['win_rate']:.1f}%",
-        f"EV: {history_snapshot['expected_value']:.2f} R",
-        f"最大回撤: {history_snapshot.get('max_drawdown', 0.0):.2f}%",
+        f"訊號日收盤: {float(signal_close):.2f}",
+        "僅代表賣訊，不代表已成交",
     ]
     record_signal_annotation(
         chart_context,
