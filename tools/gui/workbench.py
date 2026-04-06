@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import warnings
 from tkinter import ttk
 
 from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
@@ -31,6 +32,10 @@ WORKBENCH_SIDEBAR_GATE_STYLE = "Workbench.SidebarGate.TLabel"
 WORKBENCH_SIDEBAR_HEADER_STYLE = "Workbench.SidebarHeader.TLabel"
 WORKBENCH_SIDEBAR_SUMMARY_STYLE = "Workbench.SidebarSummary.TLabel"
 WORKBENCH_SIDEBAR_VALUE_STYLE = "Workbench.SidebarValue.TLabel"
+
+
+def _warn_gui_fallback(action, exc):
+    warnings.warn(f"GUI fallback {action}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
 PANEL_SPECS = (
@@ -76,13 +81,13 @@ def configure_workbench_theme(root):
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _warn_gui_fallback('style.theme_use("clam")', exc)
     root.configure(bg=WORKBENCH_BG)
     try:
         root.tk_setPalette(background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, activeBackground=WORKBENCH_SURFACE_ALT, activeForeground=WORKBENCH_TEXT, highlightColor=WORKBENCH_ACCENT, selectColor=WORKBENCH_ACCENT, selectBackground=WORKBENCH_ACCENT, selectForeground=WORKBENCH_TEXT)
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _warn_gui_fallback('root.tk_setPalette(...)', exc)
     root.option_add("*Background", WORKBENCH_BG)
     root.option_add("*Foreground", WORKBENCH_TEXT)
     root.option_add("*TCombobox*Listbox.background", WORKBENCH_SURFACE)
@@ -119,14 +124,14 @@ def _maximize_root_window(root):
     try:
         root.state("zoomed")
         return "zoomed"
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _warn_gui_fallback('root.state("zoomed")', exc)
 
     try:
         root.attributes("-zoomed", True)
         return "attributes-zoomed"
-    except tk.TclError:
-        pass
+    except tk.TclError as exc:
+        _warn_gui_fallback('root.attributes("-zoomed", True)', exc)
 
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()

@@ -176,6 +176,7 @@
 | B109 | P1 | Meta / Registry 契約 | `tools/validate/synthetic_cases.py` 對各 `synthetic_*` 模組的 from-import 必須指向實際存在該 validator symbol 的模組；不得把 validator 匯錯模組，導致 coverage synthetic suite 在 import 時直接 `ImportError` | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_cases.py` 對各 `synthetic_*` 模組的 from-import，逐一驗證被匯入 symbol 確實存在於目標模組；避免再發生 validator 實作位於 `synthetic_flow_cases.py` 卻誤從 `synthetic_portfolio_cases.py` 匯入的 registry import 回歸 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B110 | P1 | 錯誤處理 / Meta 契約 | 專案內廣義例外處理（`except Exception` / `except BaseException`）必須綁定例外物件並可追蹤；若非直接 re-raise，handler 內必須使用綁定的例外，禁止 silent swallow | DONE | 已補 meta contract，直接 AST 掃描 `apps/`、`config/`、`core/`、`strategies/`、`tools/` 的 broad exception handler；逐一要求 handler 必須綁定例外名稱，且若非 re-raise 就必須在 body 內實際使用該例外，避免再次出現 GUI / chart runtime 失敗被靜默吞掉而無法定位 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/charting.py`, `tools/gui/single_stock_inspector.py` |
 | B111 | P1 | 錯誤處理 / Meta 契約 | optional dependency fallback（如 `ImportError` / `ModuleNotFoundError`）不得 silent swallow；若選擇降級或略過，必須綁定例外並保留可追蹤 detail | DONE | 已補 meta contract，直接 AST 掃描 GUI / debug / validate / downloader 的 optional dependency fallback handler；逐一要求 handler 必須綁定例外名稱，且若非 re-raise 就必須在 body 內實際使用該例外，避免 TkAgg / coverage / curl_cffi 缺失時只默默降級而無法定位 | `tools/validate/synthetic_meta_cases.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/main.py`, `tools/downloader/runtime.py` |
+| B112 | P1 | 錯誤處理 / GUI 契約 | GUI TclError fallback 不得 silent swallow；若因 theme / palette / maximize 相容性而降級，必須綁定例外並保留可追蹤 detail | DONE | 已補 meta contract，直接 AST 掃描 `tools/gui/*.py` 的 `TclError` fallback handler；逐一要求 handler 必須綁定例外名稱，且若非 re-raise 就必須在 body 內實際使用該例外，避免 GUI 啟動時 theme / zoom fallback 靜默吞錯而無法定位 | `tools/validate/synthetic_meta_cases.py`, `tools/gui/workbench.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -404,6 +405,7 @@
 | T188 | `validate_synthetic_cases_import_target_resolution_contract_case` | B109 |
 | T189 | `validate_broad_exception_traceability_contract_case` | B110 |
 | T190 | `validate_optional_dependency_fallback_traceability_contract_case` | B111 |
+| T191 | `validate_gui_tcl_fallback_traceability_contract_case` | B112 |
 
 ## G. 逐項收斂紀錄
 
@@ -735,6 +737,7 @@
 | 2026-04-07 | B109 | 新增 synthetic registry import 目標模組必須實際存在對應 validator symbol 的 meta 契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B110 | 新增 broad exception handler 綁定例外且可追蹤的錯誤處理 / meta 契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B111 | 新增 optional dependency fallback traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-07 | B112 | 新增 GUI TclError fallback traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
@@ -743,3 +746,4 @@
 | 2026-04-07 | T188 | 新增 synthetic registry import 目標解析 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_cases_import_target_resolution_contract_case` |
 | 2026-04-07 | T189 | 新增 broad exception traceability meta contract 並驗證 | NEW -> DONE | `validate_broad_exception_traceability_contract_case` |
 | 2026-04-07 | T190 | 新增 optional dependency fallback traceability meta contract 並驗證 | NEW -> DONE | `validate_optional_dependency_fallback_traceability_contract_case` |
+| 2026-04-07 | T191 | 新增 GUI TclError fallback traceability meta contract 並驗證 | NEW -> DONE | `validate_gui_tcl_fallback_traceability_contract_case` |

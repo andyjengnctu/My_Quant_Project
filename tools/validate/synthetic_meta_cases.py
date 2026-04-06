@@ -434,6 +434,65 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     return results, summary
 
 
+def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
+    case_id = "META_GUI_TCL_FALLBACK_TRACEABILITY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    scan_targets = sorted((PROJECT_ROOT / "tools" / "gui").rglob("*.py"))
+    syntax_errors = []
+    gui_tcl_fallback_traceability_failures = []
+    scanned_files = []
+
+    def _is_gui_tcl_exception_type(node):
+        if isinstance(node, ast.Name):
+            return node.id == "TclError"
+        if isinstance(node, ast.Attribute):
+            return ast.unparse(node) in {"tk.TclError", "tkinter.TclError"}
+        if isinstance(node, ast.Tuple):
+            return any(_is_gui_tcl_exception_type(element) for element in node.elts)
+        return False
+
+    def _handler_uses_exception_name(handler, exception_name):
+        handler_module = ast.Module(body=handler.body, type_ignores=[])
+        return any(
+            isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load) and child.id == exception_name
+            for child in ast.walk(handler_module)
+        )
+
+    def _handler_reraises(handler):
+        return any(isinstance(child, ast.Raise) for child in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
+
+    for path in scan_targets:
+        rel_path = path.relative_to(PROJECT_ROOT).as_posix()
+        scanned_files.append(rel_path)
+        try:
+            source_text = path.read_text(encoding="utf-8")
+            parsed = ast.parse(source_text, filename=str(path))
+        except SyntaxError as exc:
+            syntax_errors.append(f"{rel_path}:{exc.lineno}: {exc.msg}")
+            continue
+
+        for node in ast.walk(parsed):
+            if not isinstance(node, ast.ExceptHandler) or node.type is None or not _is_gui_tcl_exception_type(node.type):
+                continue
+            if not node.name:
+                gui_tcl_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: GUI TclError fallback must bind exception name")
+                continue
+            if _handler_reraises(node):
+                continue
+            if not _handler_uses_exception_name(node, node.name):
+                gui_tcl_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: GUI TclError fallback must use bound exception or re-raise")
+
+    add_check(results, "meta_contract", case_id, "gui_tcl_fallback_handler_files_parse", [], syntax_errors)
+    add_check(results, "meta_contract", case_id, "gui_tcl_fallbacks_bind_and_trace_or_reraise", [], gui_tcl_fallback_traceability_failures)
+
+    summary["scanned_file_count"] = len(scanned_files)
+    summary["failure_count"] = len(gui_tcl_fallback_traceability_failures)
+    summary["syntax_error_count"] = len(syntax_errors)
+    return results, summary
+
+
 def validate_optional_dependency_fallback_traceability_contract_case(_base_params):
     case_id = "META_OPTIONAL_DEPENDENCY_FALLBACK_TRACEABILITY_CONTRACT"
     results = []
