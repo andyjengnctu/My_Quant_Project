@@ -413,6 +413,27 @@ def validate_project_settings_dynamic_test_boundary_case(_base_params):
     return results, summary
 
 
+
+def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
+    case_id = "META_PROJECT_SETTINGS_INIT_SL_FROZEN_PLAN"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_settings_text = (PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
+    init_sl_single_source_text = "全專案唯一初始停損基準為 `init_sl`"
+    frozen_plan_text = "盤前 frozen plan 一律以 `L / init_sl / T` 定義"
+    no_s0_text = "不得另引入 `S0` 或其他第二套初始風險基準"
+
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_init_sl_single_source", True, init_sl_single_source_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_frozen_plan_uses_l_init_sl_t", True, frozen_plan_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_second_initial_risk_basis", True, no_s0_text in project_settings_text)
+
+    summary["project_settings_declares_init_sl_single_source"] = init_sl_single_source_text in project_settings_text
+    summary["project_settings_declares_frozen_plan_uses_l_init_sl_t"] = frozen_plan_text in project_settings_text
+    summary["project_settings_forbids_second_initial_risk_basis"] = no_s0_text in project_settings_text
+    return results, summary
+
+
 def validate_no_legacy_app_entry_doc_references_case(_base_params):
     case_id = "META_NO_LEGACY_APP_ENTRY_DOC_REFERENCES"
     results = []
