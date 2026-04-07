@@ -2,8 +2,9 @@ import pandas as pd
 
 from core.entry_plans import resize_candidate_plan_to_capital
 from core.price_utils import (
-    adjust_long_stop_price,
     calc_frozen_target_price,
+    calc_initial_stop_from_reference,
+    calc_initial_trailing_stop_from_reference,
     is_limit_buy_price_reachable_for_day,
 )
 
@@ -24,8 +25,8 @@ def create_signal_tracking_state(original_limit, atr, params):
     if pd.isna(original_limit) or pd.isna(atr):
         return None
 
-    init_sl = adjust_long_stop_price(original_limit - atr * params.atr_times_init)
-    init_trail = adjust_long_stop_price(original_limit - atr * params.atr_times_trail)
+    init_sl = calc_initial_stop_from_reference(original_limit, atr, params)
+    init_trail = calc_initial_trailing_stop_from_reference(original_limit, atr, params)
     target_price = calc_frozen_target_price(original_limit, init_sl)
     return {
         "orig_limit": original_limit,
@@ -48,6 +49,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "orig_limit": signal_state["orig_limit"],
         "orig_atr": signal_state["orig_atr"],
         "target_price": signal_state["target_price"],
+        "entry_atr": signal_state["orig_atr"],
     }
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 

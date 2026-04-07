@@ -65,11 +65,25 @@ def adjust_long_target_price(price):
     return adjust_price_up_to_tick(price)
 
 
-# # (AI註: 單一真理來源 - frozen target 一律由盤前 limit 與 init_sl 決定，不得依實際成交價重算)
-def calc_frozen_target_price(limit_price, init_sl):
-    if pd.isna(limit_price) or pd.isna(init_sl):
+# # (AI註: 單一真理來源 - 首個可執行停損價格一律由入場基準價與 ATR 倍數計算)
+def calc_initial_stop_from_reference(reference_price, atr, params):
+    if pd.isna(reference_price) or pd.isna(atr):
         return np.nan
-    return adjust_long_target_price(limit_price + (limit_price - init_sl))
+    return adjust_long_stop_price(reference_price - atr * params.atr_times_init)
+
+
+# # (AI註: 單一真理來源 - 初始 trailing 基準價一律由入場基準價與 ATR 倍數計算)
+def calc_initial_trailing_stop_from_reference(reference_price, atr, params):
+    if pd.isna(reference_price) or pd.isna(atr):
+        return np.nan
+    return adjust_long_stop_price(reference_price - atr * params.atr_times_trail)
+
+
+# # (AI註: 單一真理來源 - 目標價一律由入場基準價與停損價差推導；可用於盤前 sizing 基準或實際成交後首個可執行停利)
+def calc_frozen_target_price(entry_reference_price, stop_price):
+    if pd.isna(entry_reference_price) or pd.isna(stop_price):
+        return np.nan
+    return adjust_long_target_price(entry_reference_price + (entry_reference_price - stop_price))
 
 
 def adjust_long_buy_fill_price(price):
@@ -221,31 +235,32 @@ def is_limit_buy_price_reachable_for_day(limit_price, y_close):
     return limit_price >= limit_down_price
 
 
-def is_single_price_bar(t_open, t_high, t_low, t_close):
-    if pd.isna(t_open) or pd.isna(t_high) or pd.isna(t_low) or pd.isna(t_close):
+def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+    if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    return (
-        np.isclose(t_open, t_high)
-        and np.isclose(t_high, t_low)
-        and np.isclose(t_low, t_close)
-    )
-
-
-def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
     limit_up_price = calc_limit_up_price(y_close)
     if pd.isna(limit_up_price):
         return False
-    return is_single_price_bar(t_open, t_high, t_low, t_close) and np.isclose(t_close, limit_up_price)
+    return t_open == limit_up_price and t_high == limit_up_price and t_low == limit_up_price and t_close == limit_up_price
 
 
-def is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+def is_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+    if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
+        return False
     limit_down_price = calc_limit_down_price(y_close)
     if pd.isna(limit_down_price):
         return False
-    return is_single_price_bar(t_open, t_high, t_low, t_close) and np.isclose(t_close, limit_down_price)
+    return t_open == limit_down_price and t_high == limit_down_price and t_low == limit_down_price and t_close == limit_down_price
 
 
-# # (AI註: 單一真理來源 - 賣出被阻塞的原因統一由此判斷，避免零量 / 一字跌停口徑分裂)
+def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+    return is_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
+
+
+def is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+    return is_limit_down_bar(t_open, t_high, t_low, t_close, y_close)
+
+
 def get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close):
     if pd.isna(t_volume) or t_volume <= 0:
         return 'NO_VOLUME'

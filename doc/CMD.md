@@ -97,7 +97,7 @@ python apps/gui.py
 # core/signal_utils.py：技術指標與訊號生成
 # core/trade_plans.py：候選/掛單/延續訊號 façade
 # core/history_filters.py：歷史績效候選門檻
-# core/entry_plans.py：候選規格、盤前掛單規格、成交後部位建立
+# core/entry_plans.py：候選規格、盤前掛單規格、成交後 first-actionable stop/tp 與 entry-day trigger queue 建立
 # core/extended_signals.py：延續訊號 frozen plan / barrier expiry / today-orderable 規格
 
 - validate 子模組已再拆分：`synthetic_history_cases.py`、`synthetic_guardrail_cases.py`、`synthetic_frame_utils.py`、`synthetic_case_builders.py`。

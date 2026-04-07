@@ -7,6 +7,7 @@ from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
 from core.trade_plans import build_normal_candidate_plan, create_signal_tracking_state, execute_pre_market_entry_plan
+from core.position_step import execute_bar_step
 
 from .checks import add_check, add_fail_result, build_expected_scanner_payload, make_synthetic_validation_params, run_scanner_reference_check
 from .synthetic_fixtures import write_synthetic_csv_bundle
@@ -358,10 +359,10 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     atr = 5.0
     candidate_plan = build_normal_candidate_plan(limit_price, atr, 1_000_000.0, params)
     signal_state = create_signal_tracking_state(limit_price, atr, params)
-    entry_result = execute_pre_market_entry_plan(
+    tp_entry_result = execute_pre_market_entry_plan(
         entry_plan=candidate_plan,
         t_open=98.0,
-        t_high=100.0,
+        t_high=109.0,
         t_low=97.5,
         t_close=99.0,
         t_volume=1000.0,
@@ -369,24 +370,82 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
         params=params,
         entry_type='normal',
     )
-    position = entry_result.get('position')
+    tp_position = tp_entry_result.get('position')
 
-    expected_init_sl = 90.0
-    expected_init_trail = 95.0
-    expected_target = 110.0
+    stop_entry_result = execute_pre_market_entry_plan(
+        entry_plan=candidate_plan,
+        t_open=98.0,
+        t_high=100.0,
+        t_low=87.5,
+        t_close=89.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type='normal',
+    )
+    stop_position = stop_entry_result.get('position')
 
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_init_sl_is_single_initial_stop_basis", expected_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_trailing_stop_kept_separate", expected_init_trail, None if candidate_plan is None else float(candidate_plan['init_trail']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_target_uses_limit_and_init_sl_only", expected_target, None if candidate_plan is None else float(candidate_plan['target_price']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_initial_stop_stays_init_sl", expected_init_sl, None if position is None else float(position['initial_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_current_sl_starts_from_init_sl_not_trailing", expected_init_sl, None if position is None else float(position['sl']), note="trailing_stop 僅屬持倉後動態保護；成交建立部位時 initial stop 不得被較高 init_trail 覆蓋。")
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_trailing_stop_remains_separate_field", expected_init_trail, None if position is None else float(position['trailing_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_frozen_limit_not_actual_fill", expected_target, None if position is None else float(position['tp_half']), note="T 必須盤前由 L 與 init_sl 決定，不得因實際成交價 98.0 而改成較低停利。")
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_stop_barrier_uses_init_sl", expected_init_sl, None if signal_state is None else float(signal_state['init_sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_target_uses_limit_and_init_sl_only", expected_target, None if signal_state is None else float(signal_state['target_price']))
+    expected_candidate_init_sl = 90.0
+    expected_candidate_init_trail = 95.0
+    expected_candidate_target = 110.0
+    expected_filled_init_sl = 88.0
+    expected_filled_init_trail = 93.0
+    expected_filled_target = 108.0
+
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_keeps_limit_based_worst_case_stop_for_sizing", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_keeps_limit_based_target_for_preview", expected_candidate_target, None if candidate_plan is None else float(candidate_plan['target_price']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "candidate_plan_trailing_stop_kept_separate", expected_candidate_init_trail, None if candidate_plan is None else float(candidate_plan['init_trail']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_filled_init_sl, None if tp_position is None else float(tp_position['initial_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_current_sl_starts_from_actual_fill_stop", expected_filled_init_sl, None if tp_position is None else float(tp_position['sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_filled_init_trail, None if tp_position is None else float(tp_position['trailing_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_filled_target, None if tp_position is None else float(tp_position['tp_half']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_tp_hit_is_queued_for_next_open", "TP_HALF", None if tp_position is None else tp_position.get('pending_exit_action'))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_stop_hit_is_queued_for_next_open", "STOP", None if stop_position is None else stop_position.get('pending_exit_action'))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_stop_barrier_stays_limit_based", expected_candidate_init_sl, None if signal_state is None else float(signal_state['init_sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_target_stays_limit_based", expected_candidate_target, None if signal_state is None else float(signal_state['target_price']))
+
+    if tp_position is None or stop_position is None:
+        raise ValueError("validate_synthetic_init_sl_single_source_runtime_case 需要有效成交部位")
+
+    updated_tp_position, tp_freed_cash, tp_pnl_realized, tp_events = execute_bar_step(
+        tp_position,
+        y_atr=atr,
+        y_ind_sell=False,
+        y_close=99.0,
+        t_open=95.0,
+        t_high=96.0,
+        t_low=94.5,
+        t_close=95.5,
+        t_volume=1000.0,
+        params=params,
+    )
+    tp_exec_context = next((ctx for ctx in updated_tp_position.get('_last_exec_contexts', []) if ctx.get('event') == 'TP_HALF'), None)
+
+    updated_stop_position, stop_freed_cash, stop_pnl_realized, stop_events = execute_bar_step(
+        stop_position,
+        y_atr=atr,
+        y_ind_sell=False,
+        y_close=89.0,
+        t_open=92.0,
+        t_high=93.0,
+        t_low=91.5,
+        t_close=92.5,
+        t_volume=1000.0,
+        params=params,
+    )
+    stop_exec_context = next((ctx for ctx in updated_stop_position.get('_last_exec_contexts', []) if ctx.get('event') == 'STOP'), None)
+
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_tp_executes_on_next_open_without_retouch", True, 'TP_HALF' in tp_events)
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_tp_records_open_execution_context", 95.0, None if tp_exec_context is None else float(tp_exec_context['exec_price']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_tp_marks_half_as_sold", True, bool(updated_tp_position['sold_half']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_stop_executes_on_next_open_without_rebreak", True, 'STOP' in stop_events)
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_stop_records_open_execution_context", 92.0, None if stop_exec_context is None else float(stop_exec_context['exec_price']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "queued_stop_closes_position_even_if_next_day_above_stop", 0, int(updated_stop_position['qty']))
 
     summary['candidate_target_price'] = None if candidate_plan is None else float(candidate_plan['target_price'])
-    summary['filled_tp_half'] = None if position is None else float(position['tp_half'])
+    summary['filled_tp_half'] = None if tp_position is None else float(tp_position['tp_half'])
+    summary['queued_tp_exec_price'] = None if tp_exec_context is None else float(tp_exec_context['exec_price'])
+    summary['queued_stop_exec_price'] = None if stop_exec_context is None else float(stop_exec_context['exec_price'])
     return results, summary
 
 

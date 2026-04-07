@@ -420,17 +420,17 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     project_settings_text = (PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
-    init_sl_single_source_text = "全專案唯一初始停損基準為 `init_sl`"
-    frozen_plan_text = "盤前 frozen plan 一律以 `L / init_sl / T` 定義"
-    no_s0_text = "不得另引入 `S0` 或其他第二套初始風險基準"
+    l_only_text = "`L` 只作盤前最高可接受買入價、資金占用估算與最壞情境風險 sizing 上界"
+    pfill_text = "其基準為 `P_fill` 與盤前已知波動尺度，預設使用 `ATR_t`，並自 `t+2` 起生效"
+    trigger_split_text = "`t+1` 只記 trigger，`t+2` 起於第一個可執行時點強制執行"
 
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_init_sl_single_source", True, init_sl_single_source_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_frozen_plan_uses_l_init_sl_t", True, frozen_plan_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_second_initial_risk_basis", True, no_s0_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_l_is_entry_and_sizing_only", True, l_only_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_first_actionable_stop_uses_pfill_and_atr", True, pfill_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_trigger_execution_split", True, trigger_split_text in project_settings_text)
 
-    summary["project_settings_declares_init_sl_single_source"] = init_sl_single_source_text in project_settings_text
-    summary["project_settings_declares_frozen_plan_uses_l_init_sl_t"] = frozen_plan_text in project_settings_text
-    summary["project_settings_forbids_second_initial_risk_basis"] = no_s0_text in project_settings_text
+    summary["project_settings_declares_l_is_entry_and_sizing_only"] = l_only_text in project_settings_text
+    summary["project_settings_declares_first_actionable_stop_uses_pfill_and_atr"] = pfill_text in project_settings_text
+    summary["project_settings_declares_trigger_execution_split"] = trigger_split_text in project_settings_text
     return results, summary
 
 

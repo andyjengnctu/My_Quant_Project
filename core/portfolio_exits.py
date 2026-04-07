@@ -15,6 +15,13 @@ from core.portfolio_fast_data import (
 )
 
 
+def _first_exec_context(position, event_name):
+    for ctx in position.get('_last_exec_contexts', []):
+        if ctx.get('event') == event_name:
+            return ctx
+    return None
+
+
 def try_rotate_weakest_position(
     portfolio,
     orderable_candidates_today,
@@ -167,13 +174,17 @@ def settle_portfolio_positions(
         )
         cash += freed_cash
 
+        tp_context = _first_exec_context(pos, 'TP_HALF')
+        stop_context = _first_exec_context(pos, 'STOP')
+        ind_sell_context = _first_exec_context(pos, 'IND_SELL')
+
         if 'TP_HALF' in events and not is_training:
             trade_history.append(
                 {
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': ticker,
                     'Type': '半倉停利',
-                    '單筆損益': pnl_realized,
+                    '單筆損益': 0.0 if tp_context is None else float(tp_context['pnl']),
                     'R_Multiple': 0.0,
                     'Risk': params.fixed_risk,
                 }
@@ -192,12 +203,13 @@ def settle_portfolio_positions(
 
             if not is_training:
                 t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
+                exit_context = stop_context if 'STOP' in events else ind_sell_context
                 trade_history.append(
                     {
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': ticker,
                         'Type': t_type,
-                        '單筆損益': pnl_realized,
+                        '單筆損益': pnl_realized if exit_context is None else float(exit_context['pnl']),
                         '該筆總損益': total_pnl,
                         'R_Multiple': total_r,
                         'Risk': params.fixed_risk,

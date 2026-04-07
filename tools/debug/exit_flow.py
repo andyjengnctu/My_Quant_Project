@@ -7,6 +7,13 @@ from tools.debug.history_snapshot import build_pit_history_snapshot
 from tools.debug.log_rows import append_debug_trade_row
 
 
+def _first_exec_context(position, event_name):
+    for ctx in position.get('_last_exec_contexts', []):
+        if ctx.get('event') == event_name:
+            return ctx
+    return None
+
+
 def _resolve_completed_trade_count(history_snapshot, *, include_current_round_trip):
     if history_snapshot is None:
         return None
@@ -73,12 +80,16 @@ def process_debug_position_step(
     realized_delta = position.get('realized_pnl', 0.0) - prev_realized
     active_stop_after_update = position.get('sl', np.nan)
     date_str = current_date.strftime('%Y-%m-%d')
+    tp_context = _first_exec_context(position, 'TP_HALF')
+    stop_context = _first_exec_context(position, 'STOP')
+    ind_sell_context = _first_exec_context(position, 'IND_SELL')
 
-    if 'TP_HALF' in events and realized_delta != 0:
-        sold_qty = prev_qty - position['qty']
-        exec_sell_price_half = adjust_long_sell_fill_price(max(prev_tp_half, t_open))
-        sell_net_price_half = calc_net_sell_price(exec_sell_price_half, sold_qty, params)
-        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + float(realized_delta)
+    if 'TP_HALF' in events and tp_context is not None:
+        sold_qty = int(tp_context['qty'])
+        exec_sell_price_half = float(tp_context['exec_price'])
+        sell_net_price_half = float(tp_context['net_price'])
+        tp_leg_pnl = float(tp_context['pnl'])
+        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_leg_pnl
         append_debug_trade_row(
             trade_logs,
             date_str=date_str,
@@ -90,7 +101,7 @@ def process_debug_position_step(
             stop_price=active_stop_after_update,
             tp_half_price=np.nan,
             atr_prev=atr_prev,
-            pnl=realized_delta,
+            pnl=tp_leg_pnl,
         )
         record_trade_marker(
             chart_context,
@@ -100,7 +111,7 @@ def process_debug_position_step(
             qty=sold_qty,
             meta={
                 'current_capital': current_capital_after_tp,
-                'pnl_value': float(realized_delta),
+                'pnl_value': tp_leg_pnl,
                 'pnl_pct': float(((sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
                 'sell_capital': float(sell_net_price_half * sold_qty),
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
@@ -112,16 +123,13 @@ def process_debug_position_step(
         )
 
     if 'STOP' in events or 'IND_SELL' in events:
-        half_qty = prev_qty - position['qty'] if 'TP_HALF' in events else 0
-        final_exit_qty = prev_qty - half_qty
+        exit_context = stop_context if 'STOP' in events else ind_sell_context
+        final_exit_qty = prev_qty if exit_context is None else int(exit_context['qty'])
         action_str = "停損殺出" if 'STOP' in events else "指標賣出"
-        sell_price = (
-            adjust_long_sell_fill_price(min(active_stop_after_update, t_open))
-            if 'STOP' in events else adjust_long_sell_fill_price(t_open)
-        )
-        sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params)
-        final_leg_pnl = pnl_realized - realized_delta if 'TP_HALF' in events else pnl_realized
-        current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(pnl_realized)
+        sell_price = adjust_long_sell_fill_price(t_open) if exit_context is None else float(exit_context['exec_price'])
+        sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
+        final_leg_pnl = pnl_realized if exit_context is None else float(exit_context['pnl'])
+        current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(realized_delta)
         completed_trade_snapshot = _build_completed_trade_snapshot(
             stats_index,
             current_date,
