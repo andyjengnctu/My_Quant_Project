@@ -1455,6 +1455,52 @@ def validate_synthetic_cases_import_target_resolution_contract_case(_base_params
     return results, summary
 
 
+def validate_debug_backtest_history_snapshot_patch_seam_contract_case(_base_params):
+    case_id = "META_DEBUG_BACKTEST_HISTORY_SNAPSHOT_PATCH_SEAM_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    top_level_names = set()
+    for node in parsed.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            top_level_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    top_level_names.add(target.id)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                top_level_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                top_level_names.add(alias.asname or alias.name.split(".")[-1])
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "debug_backtest_exports_history_snapshot_patch_seam",
+        True,
+        "_build_pit_history_snapshot" in top_level_names,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "debug_backtest_run_debug_analysis_uses_history_snapshot_patch_seam",
+        True,
+        "signal_history_snapshot = _build_pit_history_snapshot(" in source_text
+        and "latest_history_snapshot = _build_pit_history_snapshot(" in source_text,
+    )
+
+    summary["source_file"] = source_path.name
+    return results, summary
+
+
 def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
     case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"
     results = []

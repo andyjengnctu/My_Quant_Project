@@ -23,6 +23,10 @@ from tools.debug.history_snapshot import build_pit_history_snapshot
 from tools.debug.reporting import finalize_debug_analysis
 
 
+# 保留 stable patch seam 供 synthetic contract / GUI coverage 路徑覆寫 PIT history snapshot。
+_build_pit_history_snapshot = build_pit_history_snapshot
+
+
 def _extract_precomputed_signals(df):
     required_columns = {'ATR', 'is_setup', 'ind_sell_signal', 'buy_limit'}
     if not required_columns.issubset(df.columns):
@@ -177,7 +181,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             continue
         pos_qty_start_of_bar = position['qty']
         signal_date = dates[j - 1]
-        signal_history_snapshot = build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
+        signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params)
@@ -254,7 +258,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             if position.get('qty', 0) > 0 and not pd.isna(tp_half_value) and h[j] >= tp_half_value:
                 position['_debug_tp_preview_done'] = True
     if len(c) > 0:
-        latest_history_snapshot = build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
+        latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
