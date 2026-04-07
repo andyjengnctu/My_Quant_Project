@@ -2247,7 +2247,9 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_uses_limit_price_when_entry_plan_exists", True, "anchor_price = float(entry_plan['limit_price'])" in backtest_source and "anchor_price=anchor_price" in backtest_source)
+    entry_flow_source = build_project_absolute_path("tools", "debug", "entry_flow.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_keeps_signal_low_even_when_entry_plan_exists", True, "anchor_price = float(signal_low)" in backtest_source and "anchor_price = float(entry_plan['limit_price'])" not in backtest_source)
+    add_check(results, "output_contract", case_id, "buy_trade_marker_uses_fill_price", True, 'action="買進"' in entry_flow_source and "price=entry_result['buy_price']" in entry_flow_source)
 
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
     frame = case["price_df"].copy()
@@ -2259,17 +2261,31 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
         "init_sl": 20.65,
     }
     history_snapshot = {"current_capital": 2110780.0}
+    expected_signal_low = float(frame.iloc[2]["Low"])
     _record_buy_signal_annotation(
         chart_context=chart_context,
         signal_date=frame.index[2],
-        signal_low=float(frame.iloc[2]["Low"]),
+        signal_low=expected_signal_low,
         entry_plan=entry_plan,
         history_snapshot=history_snapshot,
         params=params,
     )
     annotation = (chart_context.get("signal_annotations") or [None])[0]
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_matches_limit_price", float(entry_plan["limit_price"]), None if annotation is None else float(annotation.get("anchor_price")))
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_matches_signal_low", expected_signal_low, None if annotation is None else float(annotation.get("anchor_price")))
     add_check(results, "output_contract", case_id, "buy_signal_annotation_meta_keeps_entry_price_preview", float(entry_plan["limit_price"]), None if annotation is None else float((annotation.get("meta") or {}).get("entry_price", np.nan)))
+
+    from tools.debug.charting import record_trade_marker
+    fill_price = 21.85
+    record_trade_marker(
+        chart_context,
+        current_date=frame.index[2],
+        action="買進",
+        price=fill_price,
+        qty=entry_plan["qty"],
+        meta={"entry_price": fill_price},
+    )
+    trade_marker = (chart_context.get("trade_markers") or [None])[0]
+    add_check(results, "output_contract", case_id, "buy_trade_marker_price_matches_fill_price", fill_price, None if trade_marker is None else float(trade_marker.get("price")))
 
     _record_buy_signal_annotation(
         chart_context=chart_context,
@@ -2280,10 +2296,11 @@ def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
         params=params,
     )
     fallback_annotation = (chart_context.get("signal_annotations") or [None, None])[1]
-    expected_signal_low = float(frame.iloc[3]["Low"])
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_without_entry_plan_falls_back_to_signal_low", expected_signal_low, None if fallback_annotation is None else float(fallback_annotation.get("anchor_price")))
+    expected_fallback_signal_low = float(frame.iloc[3]["Low"])
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_without_entry_plan_falls_back_to_signal_low", expected_fallback_signal_low, None if fallback_annotation is None else float(fallback_annotation.get("anchor_price")))
 
-    summary["entry_plan_anchor_price"] = None if annotation is None else float(annotation.get("anchor_price"))
+    summary["entry_plan_signal_anchor_price"] = None if annotation is None else float(annotation.get("anchor_price"))
+    summary["buy_trade_marker_price"] = None if trade_marker is None else float(trade_marker.get("price"))
     summary["fallback_signal_low_anchor_price"] = None if fallback_annotation is None else float(fallback_annotation.get("anchor_price"))
     return results, summary
 def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):

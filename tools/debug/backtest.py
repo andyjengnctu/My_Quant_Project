@@ -83,7 +83,6 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     else:
         tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
         buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
-        anchor_price = float(entry_plan['limit_price'])
         detail_lines.extend([
             f"股數: {int(entry_plan['qty']):,}",
             f"金額: {buy_capital:,.0f}",
