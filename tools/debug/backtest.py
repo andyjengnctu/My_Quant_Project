@@ -74,6 +74,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         return
     meta = dict(history_snapshot or {})
     current_capital = meta.get('current_capital')
+    anchor_price = float(signal_low)
     detail_lines = []
     if current_capital is not None:
         detail_lines.append(f"資金: {float(current_capital):,.0f}")
@@ -82,6 +83,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     else:
         tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
         buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+        anchor_price = float(entry_plan['limit_price'])
         detail_lines.extend([
             f"股數: {int(entry_plan['qty']):,}",
             f"金額: {buy_capital:,.0f}",
@@ -102,7 +104,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         chart_context,
         current_date=signal_date,
         signal_type='buy',
-        anchor_price=signal_low,
+        anchor_price=anchor_price,
         title='買訊',
         detail_lines=detail_lines,
         meta=meta,

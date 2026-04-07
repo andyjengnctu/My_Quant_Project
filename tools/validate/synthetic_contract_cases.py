@@ -2239,6 +2239,53 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
 
 
 
+
+
+def validate_gui_buy_signal_annotation_anchor_price_contract_case(base_params):
+    case_id = "GUI_BUY_SIGNAL_ANNOTATION_ANCHOR_PRICE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_uses_limit_price_when_entry_plan_exists", True, "anchor_price = float(entry_plan['limit_price'])" in backtest_source and "anchor_price=anchor_price" in backtest_source)
+
+    case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
+    frame = case["price_df"].copy()
+    params = case["params"]
+    chart_context = create_debug_chart_context(frame)
+    entry_plan = {
+        "qty": 1000,
+        "limit_price": 22.2,
+        "init_sl": 20.65,
+    }
+    history_snapshot = {"current_capital": 2110780.0}
+    _record_buy_signal_annotation(
+        chart_context=chart_context,
+        signal_date=frame.index[2],
+        signal_low=float(frame.iloc[2]["Low"]),
+        entry_plan=entry_plan,
+        history_snapshot=history_snapshot,
+        params=params,
+    )
+    annotation = (chart_context.get("signal_annotations") or [None])[0]
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_anchor_matches_limit_price", float(entry_plan["limit_price"]), None if annotation is None else float(annotation.get("anchor_price")))
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_meta_keeps_entry_price_preview", float(entry_plan["limit_price"]), None if annotation is None else float((annotation.get("meta") or {}).get("entry_price", np.nan)))
+
+    _record_buy_signal_annotation(
+        chart_context=chart_context,
+        signal_date=frame.index[3],
+        signal_low=float(frame.iloc[3]["Low"]),
+        entry_plan=None,
+        history_snapshot=history_snapshot,
+        params=params,
+    )
+    fallback_annotation = (chart_context.get("signal_annotations") or [None, None])[1]
+    expected_signal_low = float(frame.iloc[3]["Low"])
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_without_entry_plan_falls_back_to_signal_low", expected_signal_low, None if fallback_annotation is None else float(fallback_annotation.get("anchor_price")))
+
+    summary["entry_plan_anchor_price"] = None if annotation is None else float(annotation.get("anchor_price"))
+    summary["fallback_signal_low_anchor_price"] = None if fallback_annotation is None else float(fallback_annotation.get("anchor_price"))
+    return results, summary
 def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
     case_id = "GUI_TRADE_MARKER_AND_TP_VISUAL_CONTRACT"
     results = []
