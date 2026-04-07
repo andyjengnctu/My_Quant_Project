@@ -736,7 +736,7 @@ def _build_trade_label_text(trace_name, marker):
             lines.append(f"總損益: {float(total_pnl):+,.0f}")
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is not None:
-            lines.append(f"本次報酬率: {float(pnl_pct):+.2f}%")
+            lines.append(f"報酬率: {float(pnl_pct):+.2f}%")
         payoff_ratio = meta.get("payoff_ratio")
         if payoff_ratio is not None:
             lines.append(f"風報比: {float(payoff_ratio):.2f}")

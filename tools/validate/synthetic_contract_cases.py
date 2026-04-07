@@ -2205,7 +2205,7 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
 
     add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_title_only", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source)
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '股數:' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '股數:' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '報酬率:' not in sell_fn_source)
     add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
