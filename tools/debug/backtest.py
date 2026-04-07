@@ -72,15 +72,15 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     current_capital = meta.get('current_capital')
     detail_lines = []
     if current_capital is not None:
-        detail_lines.append(f"目前資金: {float(current_capital):,.0f}")
+        detail_lines.append(f"資金: {float(current_capital):,.0f}")
     if entry_plan is None:
         detail_lines.append('本次資金不足，無法掛單')
     else:
         tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
         buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
         detail_lines.extend([
-            f"買入股數: {int(entry_plan['qty']):,}",
-            f"買入金額: {buy_capital:,.0f}",
+            f"股數: {int(entry_plan['qty']):,}",
+            f"金額: {buy_capital:,.0f}",
             f"停利: {tp_line:.2f}",
             f"限價: {entry_plan['limit_price']:.2f}",
             f"停損: {entry_plan['init_sl']:.2f}",

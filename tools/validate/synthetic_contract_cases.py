@@ -2205,7 +2205,7 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
 
     add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_title_only", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source)
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '賣出股數:' not in sell_fn_source and '賣出資金:' not in sell_fn_source and '本次損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '股數:' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '本次報酬率:' not in sell_fn_source)
     add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
@@ -2305,7 +2305,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     trade_log_source = build_project_absolute_path("tools", "debug", "trade_log.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "debug_view_initial_capital_uses_scanner_live_capital_basis", True, 'cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)' in trade_log_source)
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_buy_amount", True, '目前資金:' in backtest_source and '買入金額:' in backtest_source)
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_buy_amount", True, '資金:' in backtest_source and '金額:' in backtest_source)
     add_check(results, "output_contract", case_id, "final_exit_marker_uses_completed_snapshot_after_same_day_exits", True, 'include_current_date_exits=True' in exit_flow_source)
 
     charting_module = importlib.import_module("tools.debug.charting")
@@ -2353,11 +2353,11 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    add_check(results, "output_contract", case_id, "buy_trade_label_includes_current_capital", True, "目前資金: 2,000,000" in buy_label_text)
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_buy_amount_wording", True, "買入金額: 123,456" in buy_label_text)
-    add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "賣出金額: 32,100" in tp_label_text and "本次損益: +4,567" in tp_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_includes_current_capital", True, "資金: 2,000,000" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_buy_amount_wording", True, "金額: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
-    add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "目前資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
+    add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text

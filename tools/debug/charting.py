@@ -686,13 +686,13 @@ def _build_trade_label_text(trace_name, marker):
         lines = ["買進"]
         current_capital = meta.get("current_capital")
         if current_capital is not None and not pd.isna(current_capital):
-            lines.append(f"目前資金: {float(current_capital):,.0f}")
+            lines.append(f"資金: {float(current_capital):,.0f}")
         qty = marker.get("qty", 0)
         if qty:
-            lines.append(f"買入股數: {int(qty):,}")
+            lines.append(f"股數: {int(qty):,}")
         buy_capital = meta.get("buy_capital")
         if buy_capital is not None and not pd.isna(buy_capital):
-            lines.append(f"買入金額: {float(buy_capital):,.0f}")
+            lines.append(f"金額: {float(buy_capital):,.0f}")
         for key in ("tp_price", "limit_price", "stop_price"):
             value = meta.get(key)
             if value is None or pd.isna(value):
@@ -708,29 +708,29 @@ def _build_trade_label_text(trace_name, marker):
         lines = ["停利"]
         sell_qty = marker.get("qty", 0)
         if sell_qty:
-            lines.append(f"賣出股數: {int(sell_qty):,}")
+            lines.append(f"股數: {int(sell_qty):,}")
         sell_capital = meta.get("sell_capital")
         if sell_capital is not None and not pd.isna(sell_capital):
-            lines.append(f"賣出金額: {float(sell_capital):,.0f}")
+            lines.append(f"金額: {float(sell_capital):,.0f}")
         pnl_value = meta.get("pnl_value")
         if pnl_value is not None:
-            lines.append(f"本次損益: {float(pnl_value):+,.0f}")
+            lines.append(f"損益: {float(pnl_value):+,.0f}")
         return "\n".join(lines)
     if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
         action_label = "停損" if trace_name == "停損殺出" else ("賣出" if trace_name == "指標賣出" else "結算")
         lines = [action_label]
         current_capital = meta.get("current_capital")
         if current_capital is not None and not pd.isna(current_capital):
-            lines.append(f"目前資金: {float(current_capital):,.0f}")
+            lines.append(f"資金: {float(current_capital):,.0f}")
         sell_qty = marker.get("qty", 0)
         if sell_qty:
-            lines.append(f"賣出股數: {int(sell_qty):,}")
+            lines.append(f"股數: {int(sell_qty):,}")
         sell_capital = meta.get("sell_capital")
         if sell_capital is not None and not pd.isna(sell_capital):
-            lines.append(f"賣出金額: {float(sell_capital):,.0f}")
+            lines.append(f"金額: {float(sell_capital):,.0f}")
         pnl_value = meta.get("pnl_value")
         if pnl_value is not None:
-            lines.append(f"本次損益: {float(pnl_value):+,.0f}")
+            lines.append(f"損益: {float(pnl_value):+,.0f}")
         total_pnl = meta.get("total_pnl")
         if total_pnl is not None:
             lines.append(f"總損益: {float(total_pnl):+,.0f}")
