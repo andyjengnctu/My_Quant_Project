@@ -749,7 +749,7 @@
 | 2026-04-07 | B113 | 新增 specific pass-only exception traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B114 | 新增 GUI / debug trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-07 | B115 | 新增 debug backtest PIT history snapshot patch seam 穩定契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-07 | B116 | 新增 GUI 買訊 annotation 箭頭尖點需貼齊買進價位的 visual contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-07 | B116 | 新增 GUI 買訊 annotation 錨定訊號低點、買進三角錨定成交價的 visual contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
@@ -762,4 +762,4 @@
 | 2026-04-07 | T192 | 新增 specific pass-only exception traceability meta contract 並驗證 | NEW -> DONE | `validate_specific_pass_only_exception_traceability_contract_case` |
 | 2026-04-07 | T193 | 新增 GUI trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 並驗證 | NEW -> DONE | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
 | 2026-04-07 | T194 | 新增 debug backtest PIT history snapshot patch seam meta contract 並驗證 | NEW -> DONE | `validate_debug_backtest_history_snapshot_patch_seam_contract_case` |
-| 2026-04-07 | T195 | 新增 GUI 買訊 annotation 箭頭尖點貼齊買進價位 contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_anchor_price_contract_case` |
+| 2026-04-07 | T195 | 新增 GUI 買訊 annotation 錨定訊號低點且買進三角錨定成交價 contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_anchor_price_contract_case` |
