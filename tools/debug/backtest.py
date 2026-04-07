@@ -1,5 +1,3 @@
-import bisect
-
 import numpy as np
 import pandas as pd
 
@@ -21,6 +19,7 @@ from tools.debug.charting import (
 )
 from tools.debug.entry_flow import process_debug_entry_for_day
 from tools.debug.exit_flow import append_debug_forced_closeout, process_debug_position_step
+from tools.debug.history_snapshot import build_pit_history_snapshot
 from tools.debug.reporting import finalize_debug_analysis
 
 
@@ -66,72 +65,28 @@ def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     return True
 
 
-def _compute_payoff_ratio_from_trade_index(stats_index, cutoff):
-    if cutoff <= 0:
-        return 0.0
-    trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
-    win_count = int(stats_index['cum_win_count'][cutoff - 1])
-    loss_count = max(0, trade_count - win_count)
-    win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
-    loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
-    avg_win_r = (win_r_sum / win_count) if win_count > 0 else 0.0
-    avg_loss_r = abs(loss_r_sum / loss_count) if loss_count > 0 else 0.0
-    if avg_loss_r > 0:
-        return avg_win_r / avg_loss_r
-    return 99.9 if avg_win_r > 0 else 0.0
-
-
-def _build_pit_history_snapshot(stats_index, current_date, params, current_capital, overall_max_drawdown=0.0):
-    cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date) if stats_index['exit_dates'] else 0
-    trade_count = 0
-    win_rate = 0.0
-    expected_value = 0.0
-    payoff_ratio = 0.0
-    is_candidate = False
-    if cutoff > 0:
-        trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
-        win_count = int(stats_index['cum_win_count'][cutoff - 1])
-        total_r_sum = float(stats_index['cum_total_r_sum'][cutoff - 1])
-        win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
-        loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
-        is_candidate, expected_value, win_rate, _ = evaluate_history_candidate_metrics(
-            trade_count,
-            win_count,
-            total_r_sum,
-            win_r_sum,
-            loss_r_sum,
-            params,
-        )
-        payoff_ratio = _compute_payoff_ratio_from_trade_index(stats_index, cutoff)
-    asset_growth_pct = ((float(current_capital) - float(params.initial_capital)) / float(params.initial_capital) * 100.0) if float(params.initial_capital) > 0 else 0.0
-    return {
-        'trade_count': trade_count,
-        'win_rate': float(win_rate) * 100.0,
-        'expected_value': float(expected_value),
-        'payoff_ratio': float(payoff_ratio),
-        'is_candidate': bool(is_candidate),
-        'asset_growth_pct': float(asset_growth_pct),
-        'max_drawdown': float(overall_max_drawdown),
-    }
-
-
 def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, entry_plan, history_snapshot, params):
     if chart_context is None:
         return
     meta = dict(history_snapshot or {})
+    current_capital = meta.get('current_capital')
+    detail_lines = []
+    if current_capital is not None:
+        detail_lines.append(f"目前資金: {float(current_capital):,.0f}")
     if entry_plan is None:
-        detail_lines = ['本次資金不足，無法掛單']
+        detail_lines.append('本次資金不足，無法掛單')
     else:
         tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
         buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
-        detail_lines = [
+        detail_lines.extend([
+            f"買入股數: {int(entry_plan['qty']):,}",
+            f"買入金額: {buy_capital:,.0f}",
             f"停利: {tp_line:.2f}",
             f"限價: {entry_plan['limit_price']:.2f}",
             f"停損: {entry_plan['init_sl']:.2f}",
-            f"買入股數: {int(entry_plan['qty']):,}",
-            f"買入資金: {buy_capital:,.0f}",
-        ]
+        ])
         meta.update({
+            'current_capital': None if current_capital is None else float(current_capital),
             'tp_price': float(tp_line),
             'limit_price': float(entry_plan['limit_price']),
             'stop_price': float(entry_plan['init_sl']),
@@ -222,7 +177,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             continue
         pos_qty_start_of_bar = position['qty']
         signal_date = dates[j - 1]
-        signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
+        signal_history_snapshot = build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params)
@@ -260,6 +215,9 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 trade_logs=trade_logs,
                 chart_context=chart_context,
                 history_snapshot=signal_history_snapshot,
+                stats_index=stats_index,
+                current_capital_before_event=current_capital,
+                overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
             )
             current_capital += pnl_realized
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
@@ -281,6 +239,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             params=params,
             trade_logs=trade_logs,
             chart_context=chart_context,
+            current_capital=current_capital,
         )
         if chart_context is not None and position['qty'] > 0:
             record_active_levels(
@@ -295,7 +254,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             if position.get('qty', 0) > 0 and not pd.isna(tp_half_value) and h[j] >= tp_half_value:
                 position['_debug_tp_preview_done'] = True
     if len(c) > 0:
-        latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
+        latest_history_snapshot = build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
             latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
@@ -333,7 +292,9 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             params=params,
             trade_logs=trade_logs,
             chart_context=chart_context,
-            history_snapshot=latest_history_snapshot,
+            current_capital_before_event=current_capital,
+            stats_index=stats_index,
+            overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
         )
     _apply_chart_sidebars(chart_context=chart_context, stats_dict=stats_dict, sell_condition=sell_condition)
     return finalize_debug_analysis(

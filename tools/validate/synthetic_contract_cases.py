@@ -2292,6 +2292,78 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
     return results, summary
 
 
+
+
+def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
+    case_id = "GUI_TRADE_BOX_CAPITAL_AND_ROUND_TRIP_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
+    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
+    exit_flow_source = build_project_absolute_path("tools", "debug", "exit_flow.py").read_text(encoding="utf-8")
+    trade_log_source = build_project_absolute_path("tools", "debug", "trade_log.py").read_text(encoding="utf-8")
+
+    add_check(results, "output_contract", case_id, "debug_view_initial_capital_uses_scanner_live_capital_basis", True, 'cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)' in trade_log_source)
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_buy_amount", True, '目前資金:' in backtest_source and '買入金額:' in backtest_source)
+    add_check(results, "output_contract", case_id, "final_exit_marker_uses_completed_snapshot_after_same_day_exits", True, 'include_current_date_exits=True' in exit_flow_source)
+
+    charting_module = importlib.import_module("tools.debug.charting")
+    build_trade_label_text = getattr(charting_module, "_build_trade_label_text")
+
+    buy_label_text = build_trade_label_text(
+        "買進",
+        {
+            "qty": 1000,
+            "meta": {
+                "current_capital": 2000000.0,
+                "buy_capital": 123456.0,
+                "tp_price": 62.4,
+                "limit_price": 55.0,
+                "stop_price": 47.65,
+            },
+        },
+    )
+    tp_label_text = build_trade_label_text(
+        "半倉停利",
+        {
+            "qty": 520,
+            "meta": {
+                "sell_capital": 32100.0,
+                "pnl_value": 4567.0,
+            },
+        },
+    )
+    exit_label_text = build_trade_label_text(
+        "停損殺出",
+        {
+            "qty": 480,
+            "meta": {
+                "current_capital": 2012345.0,
+                "sell_capital": 28000.0,
+                "pnl_value": -1234.0,
+                "total_pnl": 3333.0,
+                "pnl_pct": 4.56,
+                "payoff_ratio": 3.21,
+                "win_rate": 66.6,
+                "expected_value": 0.78,
+                "max_drawdown": 5.43,
+                "trade_count": 11,
+            },
+        },
+    )
+
+    add_check(results, "output_contract", case_id, "buy_trade_label_includes_current_capital", True, "目前資金: 2,000,000" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_buy_amount_wording", True, "買入金額: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "賣出金額: 32,100" in tp_label_text and "本次損益: +4,567" in tp_label_text)
+    add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
+    add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "目前資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
+
+    summary["buy_label"] = buy_label_text
+    summary["tp_label"] = tp_label_text
+    summary["exit_label_last_line"] = exit_label_text.split("\n")[-1] if exit_label_text else ""
+    return results, summary
+
 def validate_gui_trade_count_and_sidebar_sync_contract_case(_base_params):
     case_id = "GUI_TRADE_COUNT_AND_SIDEBAR_SYNC_CONTRACT"
     results = []

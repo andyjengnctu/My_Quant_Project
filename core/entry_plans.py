@@ -97,7 +97,9 @@ def build_position_from_entry_fill(buy_price, qty, init_sl, init_trail, params, 
 
     return {
         "qty": qty,
+        "initial_qty": qty,
         "entry": entry_price,
+        "entry_capital_total": entry_price * qty,
         "sl": init_sl,
         "initial_stop": init_sl,
         "trailing_stop": init_trail,

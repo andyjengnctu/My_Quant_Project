@@ -67,6 +67,7 @@ def process_debug_entry_for_day(
     params,
     trade_logs,
     chart_context=None,
+    current_capital=None,
 ):
     buy_triggered = False
     date_str = current_date.strftime('%Y-%m-%d')
@@ -128,6 +129,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
+                    'current_capital': None if current_capital is None else float(current_capital),
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),
@@ -226,6 +228,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
+                    'current_capital': None if current_capital is None else float(current_capital),
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(entry_plan['init_sl']),

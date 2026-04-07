@@ -16,7 +16,9 @@ from core.dataset_profiles import (
     normalize_dataset_profile_key,
     resolve_dataset_profile_from_cli_env,
 )
+from core.capital_policy import resolve_scanner_live_capital
 from core.params_io import load_params_from_json
+from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from core.output_paths import build_output_dir
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
@@ -47,6 +49,17 @@ def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), 
         print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
     return params
 
+
+
+
+def build_debug_view_params(params):
+    param_payload = strategy_params_to_dict(params, include_runtime=True)
+    cloned_params = V16StrategyParams(**strategy_params_to_dict(params, include_runtime=False))
+    for runtime_field in ("optimizer_max_workers", "scanner_max_workers", "scanner_live_capital"):
+        if runtime_field in param_payload:
+            setattr(cloned_params, runtime_field, param_payload[runtime_field])
+    cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)
+    return cloned_params
 
 def resolve_debug_data_dir(dataset_profile_key=DEFAULT_DATASET_PROFILE):
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
@@ -159,10 +172,11 @@ def run_debug_ticker_analysis(
 ):
     load_result = load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
     resolved_params = load_result["params"] if params is None else params
+    debug_params = build_debug_view_params(resolved_params)
     analysis_result = run_debug_analysis(
         load_result["clean_df"],
         ticker,
-        resolved_params,
+        debug_params,
         export_excel=export_excel,
         export_chart=export_chart,
         return_chart_payload=return_chart_payload,

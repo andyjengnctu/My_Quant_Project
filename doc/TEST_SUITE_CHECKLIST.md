@@ -178,6 +178,7 @@
 | B111 | P1 | 錯誤處理 / Meta 契約 | optional dependency fallback（如 `ImportError` / `ModuleNotFoundError`）不得 silent swallow；若選擇降級或略過，必須綁定例外並保留可追蹤 detail | DONE | 已補 meta contract，直接 AST 掃描 GUI / debug / validate / downloader 的 optional dependency fallback handler；逐一要求 handler 必須綁定例外名稱，且若非 re-raise 就必須在 body 內實際使用該例外，避免 TkAgg / coverage / curl_cffi 缺失時只默默降級而無法定位 | `tools/validate/synthetic_meta_cases.py`, `tools/gui/single_stock_inspector.py`, `tools/validate/main.py`, `tools/downloader/runtime.py` |
 | B112 | P1 | 錯誤處理 / GUI 契約 | GUI TclError fallback 不得 silent swallow；若因 theme / palette / maximize 相容性而降級，必須綁定例外並保留可追蹤 detail | DONE | 已補 meta contract，直接 AST 掃描 `tools/gui/*.py` 的 `TclError` fallback handler；逐一要求 handler 必須綁定例外名稱，且若非 re-raise 就必須在 body 內實際使用該例外，避免 GUI 啟動時 theme / zoom fallback 靜默吞錯而無法定位 | `tools/validate/synthetic_meta_cases.py`, `tools/gui/workbench.py` |
 | B113 | P1 | 錯誤處理 / Meta 契約 | 非 broad / optional-import / GUI TclError 的 specific exception 若採 pass-only silent fallback，必須被 formal suite 直接禁止；僅允許明確列為 control-flow 的例外（目前 `FileNotFoundError` cleanup）保留 pass-only | DONE | 已補 meta contract，直接 AST 掃描 `apps/`、`config/`、`core/`、`strategies/`、`tools/` 的 specific pass-only exception handler，排除 synthetic 測試檔與允許的 `FileNotFoundError` cleanup；逐一禁止 `ValueError` / `OSError` 等非 control-flow 例外以 `pass` 靜默吞掉，避免 shared runtime / chart helper 降級路徑失去可追蹤性 | `tools/validate/synthetic_meta_cases.py`, `core/runtime_utils.py`, `tools/debug/charting.py` |
+| B114 | P1 | GUI / Debug 顯示契約 | 單股 GUI / debug 的買訊、停利、賣出 / 停損 / 結算資訊框，必須顯示同一口徑的目前資金、腿損益 / 整筆總損益與 completed-trade 統計；debug view 的起始資金基準需與 scanner `scanner_live_capital` 對齊，避免買訊預估與 GUI round-trip 顯示再次分叉 | DONE | 已補 output contract，直接驗證 debug view params 需以 `scanner_live_capital` 正規化起始資金、買訊框需顯示目前資金 / 買入金額、停利框需顯示賣出金額 / 本次損益、賣出 / 停損 / 結算框需顯示目前資金 / 本次損益 / 總損益且交易次數必須使用 completed snapshot；避免 GUI 再把尾倉單腿損益誤當整筆結果或把 pre-exit / post-exit 統計混寫 | `tools/validate/synthetic_contract_cases.py`, `tools/debug/trade_log.py`, `tools/debug/exit_flow.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -408,6 +409,7 @@
 | T190 | `validate_optional_dependency_fallback_traceability_contract_case` | B111 |
 | T191 | `validate_gui_tcl_fallback_traceability_contract_case` | B112 |
 | T192 | `validate_specific_pass_only_exception_traceability_contract_case` | B113 |
+| T193 | `validate_gui_trade_box_capital_and_round_trip_contract_case` | B114 |
 
 ## G. 逐項收斂紀錄
 
@@ -741,6 +743,7 @@
 | 2026-04-07 | B111 | 新增 optional dependency fallback traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B112 | 新增 GUI TclError fallback traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B113 | 新增 specific pass-only exception traceability contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-07 | B114 | 新增 GUI / debug trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
@@ -751,3 +754,4 @@
 | 2026-04-07 | T190 | 新增 optional dependency fallback traceability meta contract 並驗證 | NEW -> DONE | `validate_optional_dependency_fallback_traceability_contract_case` |
 | 2026-04-07 | T191 | 新增 GUI TclError fallback traceability meta contract 並驗證 | NEW -> DONE | `validate_gui_tcl_fallback_traceability_contract_case` |
 | 2026-04-07 | T192 | 新增 specific pass-only exception traceability meta contract 並驗證 | NEW -> DONE | `validate_specific_pass_only_exception_traceability_contract_case` |
+| 2026-04-07 | T193 | 新增 GUI trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 並驗證 | NEW -> DONE | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
