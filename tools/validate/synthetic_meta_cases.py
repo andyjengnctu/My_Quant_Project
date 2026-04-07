@@ -1543,6 +1543,48 @@ def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_p
     return results, summary
 
 
+def validate_gui_buy_signal_annotation_helper_import_contract_case(_base_params):
+    case_id = "META_GUI_BUY_SIGNAL_ANNOTATION_HELPER_IMPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    uses_helper_symbol = any(
+        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "_record_buy_signal_annotation"
+        for node in ast.walk(parsed)
+    )
+    has_explicit_import = _parsed_module_declares_specific_from_import(
+        parsed,
+        module_name="tools.debug.backtest",
+        imported_name="_record_buy_signal_annotation",
+    )
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_uses_buy_signal_annotation_helper_symbol",
+        True,
+        uses_helper_symbol,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_imports_buy_signal_annotation_helper",
+        True,
+        has_explicit_import,
+    )
+
+    summary["source_file"] = source_path.name
+    summary["uses_helper_symbol"] = uses_helper_symbol
+    summary["has_explicit_import"] = has_explicit_import
+    return results, summary
+
+
 def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
     case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"
     results = []

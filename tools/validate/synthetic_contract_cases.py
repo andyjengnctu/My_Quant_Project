@@ -41,6 +41,7 @@ from tools.debug.charting import (
     set_chart_status_box,
     set_chart_summary_box,
 )
+from tools.debug.backtest import _record_buy_signal_annotation
 from tools.debug.entry_flow import _record_entry_plan_marker
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
