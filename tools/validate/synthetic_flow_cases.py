@@ -449,6 +449,101 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     return results, summary
 
 
+def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.atr_times_init = 2.0
+    params.atr_times_trail = 1.0
+
+    case_id = "SYNTH_PORTFOLIO_ENTRY_PRESERVES_FILL_BASED_FIRST_ACTIONABLE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 98.0],
+            "High": [101.0, 109.0],
+            "Low": [99.0, 97.5],
+            "Close": [100.0, 99.0],
+            "Volume": [1000.0, 1000.0],
+            "ATR": [5.0, 5.0],
+            "buy_limit": [100.0, 100.0],
+            "is_setup": [True, False],
+            "ind_sell_signal": [False, False],
+        },
+        index=dates,
+    )
+
+    ticker = "9832"
+    all_dfs_fast = {ticker: pack_prepared_stock_data(df)}
+    normal_setup_index = build_normal_setup_index(all_dfs_fast)
+    pit_stats_index = {
+        ticker: build_trade_stats_index(
+            [
+                {
+                    "exit_date": pd.Timestamp("2024-01-02"),
+                    "pnl": 1.0,
+                    "r_mult": 1.0,
+                }
+            ]
+        )
+    }
+
+    candidates_today, orderable_candidates_today, _ = build_daily_candidates(
+        normal_setup_index=normal_setup_index,
+        active_extended_signals={},
+        portfolio={},
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        pit_stats_index=pit_stats_index,
+        today=dates[1],
+        sizing_equity=1_000_000.0,
+        params=params,
+    )
+
+    candidate = None if not orderable_candidates_today else orderable_candidates_today[0]
+    portfolio = {}
+    trade_history = []
+    cash, total_missed_buys = execute_reserved_entries_for_day(
+        portfolio=portfolio,
+        active_extended_signals={},
+        orderable_candidates_today=orderable_candidates_today,
+        sold_today=set(),
+        all_dfs_fast=all_dfs_fast,
+        today=dates[1],
+        params=params,
+        cash=1_000_000.0,
+        available_cash=1_000_000.0,
+        max_positions=1,
+        trade_history=trade_history,
+        is_training=False,
+        total_missed_buys=0,
+    )
+
+    position = portfolio.get(ticker)
+    expected_candidate_target = 110.0
+    expected_position_stop = 88.0
+    expected_position_trail = 93.0
+    expected_position_target = 108.0
+
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_count", 1, len(candidates_today))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "orderable_candidate_row_count", 1, len(orderable_candidates_today))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_carries_target_price", expected_candidate_target, None if candidate is None else float(candidate['target_price']))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "candidate_row_carries_entry_atr", 5.0, None if candidate is None else float(candidate['entry_atr']))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "portfolio_fill_creates_position", 1, len(portfolio))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "portfolio_fill_has_no_missed_buy", 0, int(total_missed_buys))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_position_target, None if position is None else float(position['tp_half']))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "entry_day_tp_hit_is_queued_for_next_open", "TP_HALF", None if position is None else position.get('pending_exit_action'))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "cash_uses_actual_entry_cost_not_reserved_limit_cost", True, float(cash) > (1_000_000.0 - (100.0 * (position['initial_qty'] if position else 0))))
+
+    summary['candidate_target_price'] = None if candidate is None else float(candidate['target_price'])
+    summary['filled_position_initial_stop'] = None if position is None else float(position['initial_stop'])
+    summary['filled_position_tp_half'] = None if position is None else float(position['tp_half'])
+    return results, summary
+
+
 def validate_synthetic_candidate_order_fill_layer_separation_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
     case_id = "SYNTH_CANDIDATE_ORDER_FILL_LAYER_SEPARATION"

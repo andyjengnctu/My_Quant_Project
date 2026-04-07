@@ -8,6 +8,16 @@ from core.trade_plans import (
 from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
 
 
+def _build_candidate_plan_seed(candidate_row):
+    return {
+        'limit_price': candidate_row['limit_px'],
+        'init_sl': candidate_row['init_sl'],
+        'init_trail': candidate_row['init_trail'],
+        'target_price': candidate_row.get('target_price'),
+        'entry_atr': candidate_row.get('entry_atr'),
+    }
+
+
 def execute_reserved_entries_for_day(
     portfolio,
     active_extended_signals,
@@ -40,11 +50,7 @@ def execute_reserved_entries_for_day(
             chosen_key = None
             for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
                 probe_entry_plan = build_cash_capped_entry_plan(
-                    {
-                        'limit_price': probe_cand['limit_px'],
-                        'init_sl': probe_cand['init_sl'],
-                        'init_trail': probe_cand['init_trail'],
-                    },
+                    _build_candidate_plan_seed(probe_cand),
                     effective_entry_budget,
                     params,
                 )
@@ -65,11 +71,7 @@ def execute_reserved_entries_for_day(
             continue
         if chosen_entry_plan is None:
             chosen_entry_plan = build_cash_capped_entry_plan(
-                {
-                    'limit_price': cand['limit_px'],
-                    'init_sl': cand['init_sl'],
-                    'init_trail': cand['init_trail'],
-                },
+                _build_candidate_plan_seed(cand),
                 effective_entry_budget,
                 params,
             )

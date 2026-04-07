@@ -29,6 +29,8 @@ def _make_candidate_row(
     trade_count,
     est_init_sl,
     est_init_trail,
+    est_target_price,
+    entry_atr,
     is_orderable,
     params,
     signal_state=None,
@@ -50,6 +52,8 @@ def _make_candidate_row(
         'hist_trade_count': trade_count,
         'init_sl': est_init_sl,
         'init_trail': est_init_trail,
+        'target_price': est_target_price,
+        'entry_atr': entry_atr,
         'is_orderable': is_orderable,
     }
     if signal_state is not None:
@@ -112,6 +116,8 @@ def _collect_normal_candidates(
             trade_count=trade_count,
             est_init_sl=candidate_plan['init_sl'],
             est_init_trail=candidate_plan['init_trail'],
+            est_target_price=candidate_plan['target_price'],
+            entry_atr=candidate_plan['entry_atr'],
             is_orderable=candidate_plan['is_orderable'],
             params=params,
         )
@@ -184,6 +190,8 @@ def _collect_extended_candidates(
             trade_count=trade_count,
             est_init_sl=candidate_plan['init_sl'],
             est_init_trail=candidate_plan['init_trail'],
+            est_target_price=candidate_plan['target_price'],
+            entry_atr=candidate_plan['entry_atr'],
             is_orderable=today_orderable,
             params=params,
             signal_state=active_extended_signals[ticker],

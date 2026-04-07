@@ -18,6 +18,7 @@ from .synthetic_history_cases import (
 )
 from .synthetic_portfolio_cases import (
     validate_synthetic_candidate_order_fill_layer_separation_case,
+    validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case,
     validate_synthetic_competing_candidates_case,
     validate_synthetic_exit_orders_only_for_held_positions_case,
     validate_synthetic_extended_miss_buy_case,
@@ -247,6 +248,7 @@ def get_synthetic_validator_entries():
         _entry(validate_synthetic_empty_backtest_df_contract_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/backtest_core.py", "core/backtest_finalize.py", "tools/validate/synthetic_flow_cases.py")),
         _entry(validate_synthetic_init_sl_single_source_runtime_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/entry_plans.py", "core/extended_signals.py", "core/position_step.py", "core/portfolio_exits.py", "core/price_utils.py", "tools/scanner/stock_processor.py", "tools/debug/entry_flow.py", "tools/debug/exit_flow.py", "tools/debug/backtest.py")),
         _entry(validate_synthetic_candidate_order_fill_layer_separation_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_entries.py", "tools/scanner/stock_processor.py")),
+        _entry(validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/portfolio_entries.py", "core/entry_plans.py")),
         _entry(validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/extended_signals.py", "core/portfolio_fast_data.py")),
         _entry(validate_synthetic_extended_miss_buy_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/extended_signals.py", "tools/scanner/stock_processor.py")),
         _entry(validate_synthetic_competing_candidates_case, layer="core_invariant", cost_class="fast", impacted_modules=("core/portfolio_candidates.py", "core/portfolio_entries.py")),

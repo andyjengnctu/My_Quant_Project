@@ -184,6 +184,7 @@
 | B117 | P1 | Meta / Fixture Schema 契約 | `tools/validate/synthetic_contract_cases.py` 對 multi-ticker synthetic case 不得再直接讀取過時的 `case["price_df"]`；必須改由 `case["frames"][case["primary_ticker"]]` 取得主 frame，避免 synthetic coverage suite 因 fixture schema 漂移在 contract 自身 runtime 提早 `KeyError` | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py`，禁止 `case["price_df"]` 舊存取；並同步修正 GUI visual contract 改從 `frames[primary_ticker]` 取主 frame，避免 coverage synthetic suite 再因 validator 自己的 fixture schema 假設過時而提早中斷 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B118 | P1 | Meta / Helper Import 契約 | `tools/validate/synthetic_contract_cases.py` 若直接呼叫 `tools.debug.backtest._record_buy_signal_annotation`，必須顯式 import 該 helper；不得引用未定義名稱，否則 synthetic coverage suite 會先以 `NameError` 中斷，並連帶造成 coverage target 缺漏假失敗 | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py`，釘死檔案若使用 `_record_buy_signal_annotation` 符號就必須顯式自 `tools.debug.backtest` import；並同步補上 validator 實際 import，避免 GUI visual contract 再因未定義名稱提早炸掉 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B119 | P1 | Meta / GUI 契約 | `validate_gui_trade_count_and_sidebar_sync_contract_case` 必須以強制結算行為 probe 驗證 completed round-trip 交易次數，不得再把過時的 `history_snapshot=latest_history_snapshot` / `_resolve_completed_trade_count(history_snapshot, include_current_round_trip=True)` 字串當成唯一正確實作，否則 synthetic suite 會把已正確的 GUI 交易次數語意誤判成 FAIL | DONE | 已補 meta contract，直接掃描 `synthetic_contract_cases.py` 的 GUI trade-count validator，禁止舊 exit snippet literal，並強制 validator 必須使用 `append_debug_forced_closeout(...)` 與 `build_trade_stats_index(...)` 做行為驗證；避免 contract 再因綁死過時實作細節而製造假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
+| B120 | P0 | 交易規格 / 一致性 | 投組 cash-capped entry 路徑不得丟失 candidate plan 的 `entry_atr` / `target_price` 等成交後 first-actionable stop/tp 所需欄位；否則單股與投組會在新 `P_fill + ATR_t` 規格下分叉 | DONE | 已補 direct synthetic case，直接釘死 `build_daily_candidates()` 產生的 orderable candidate 必須保留 `target_price` / `entry_atr`，且 `execute_reserved_entries_for_day()` 經 cash-capped entry 後建立的 filled position 仍須以實際成交價建構 `initial_stop` / `trailing_stop` / `tp_half` 與 entry-day queued action；避免投組在資金重算路徑悄悄退回舊 `L / init_sl / T` 語意 | `tools/validate/synthetic_flow_cases.py`, `core/portfolio_candidates.py`, `core/portfolio_entries.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -420,6 +421,7 @@
 | T196 | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` | B117 |
 | T197 | `validate_gui_buy_signal_annotation_helper_import_contract_case` | B118 |
 | T198 | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` | B119 |
+| T199 | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` | B120 |
 
 ## G. 逐項收斂紀錄
 
@@ -775,3 +777,5 @@
 | 2026-04-07 | T196 | 新增 synthetic contract 禁止舊 `case["price_df"]` key 存取的 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` |
 | 2026-04-07 | T197 | 新增 GUI 買訊 annotation helper 顯式 import meta contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_helper_import_contract_case` |
 | 2026-04-07 | T198 | 新增 GUI trade-count validator 禁止綁死過時 exit snippet 的 meta contract 並驗證 | NEW -> DONE | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` |
+| 2026-04-08 | B120 | 新增投組 cash-capped entry 不得丟失 fill-based first-actionable stop/tp 所需欄位的一致性規格後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
+| 2026-04-08 | T199 | 新增投組 cash-capped entry 保留 fill-based first-actionable 欄位 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` |
