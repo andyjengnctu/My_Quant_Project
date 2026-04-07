@@ -1965,6 +1965,43 @@ def validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case(
     return results, summary
 
 
+def validate_gui_trade_count_contract_no_legacy_exit_snippet_case(_base_params):
+    case_id = "META_GUI_TRADE_COUNT_CONTRACT_NO_LEGACY_EXIT_SNIPPET"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    function_node = None
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "validate_gui_trade_count_and_sidebar_sync_contract_case":
+            function_node = node
+            break
+
+    if function_node is None:
+        function_source = ""
+        legacy_literals = ["missing_validate_gui_trade_count_and_sidebar_sync_contract_case"]
+    else:
+        function_source = "\n".join(source_text.splitlines()[function_node.lineno - 1:function_node.end_lineno])
+        legacy_literals = []
+        for legacy_literal in (
+            "'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=True)",
+            '"history_snapshot=latest_history_snapshot"',
+            "history_snapshot=latest_history_snapshot",
+        ):
+            if legacy_literal in function_source:
+                legacy_literals.append(legacy_literal)
+
+    add_check(results, "meta_contract", case_id, "gui_trade_count_contract_has_no_legacy_exit_snippet_literals", [], legacy_literals)
+    add_check(results, "meta_contract", case_id, "gui_trade_count_contract_uses_forced_close_behavior_probe", True, "append_debug_forced_closeout(" in function_source and "build_trade_stats_index(" in function_source)
+
+    summary["legacy_literals"] = legacy_literals
+    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []

@@ -183,6 +183,7 @@
 | B116 | P1 | GUI / Visual 契約 | 單股 GUI / debug 的買訊藍色 annotation 箭頭，其尖點必須錨定訊號 K 棒低點；實際買進三角箭頭則必須錨定成交價，兩者不得混用成同一價位 | DONE | 已補 output contract，直接驗證 `_record_buy_signal_annotation(...)` 即使存在 entry plan 仍必須以 `signal_low` 作為 `anchor_price`，並驗證買進 trade marker 必須使用 `buy_price`；避免 GUI 把買訊位置與實際成交位置畫成同一點而失真 | `tools/validate/synthetic_contract_cases.py`, `tools/debug/backtest.py` |
 | B117 | P1 | Meta / Fixture Schema 契約 | `tools/validate/synthetic_contract_cases.py` 對 multi-ticker synthetic case 不得再直接讀取過時的 `case["price_df"]`；必須改由 `case["frames"][case["primary_ticker"]]` 取得主 frame，避免 synthetic coverage suite 因 fixture schema 漂移在 contract 自身 runtime 提早 `KeyError` | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py`，禁止 `case["price_df"]` 舊存取；並同步修正 GUI visual contract 改從 `frames[primary_ticker]` 取主 frame，避免 coverage synthetic suite 再因 validator 自己的 fixture schema 假設過時而提早中斷 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 | B118 | P1 | Meta / Helper Import 契約 | `tools/validate/synthetic_contract_cases.py` 若直接呼叫 `tools.debug.backtest._record_buy_signal_annotation`，必須顯式 import 該 helper；不得引用未定義名稱，否則 synthetic coverage suite 會先以 `NameError` 中斷，並連帶造成 coverage target 缺漏假失敗 | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py`，釘死檔案若使用 `_record_buy_signal_annotation` 符號就必須顯式自 `tools.debug.backtest` import；並同步補上 validator 實際 import，避免 GUI visual contract 再因未定義名稱提早炸掉 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
+| B119 | P1 | Meta / GUI 契約 | `validate_gui_trade_count_and_sidebar_sync_contract_case` 必須以強制結算行為 probe 驗證 completed round-trip 交易次數，不得再把過時的 `history_snapshot=latest_history_snapshot` / `_resolve_completed_trade_count(history_snapshot, include_current_round_trip=True)` 字串當成唯一正確實作，否則 synthetic suite 會把已正確的 GUI 交易次數語意誤判成 FAIL | DONE | 已補 meta contract，直接掃描 `synthetic_contract_cases.py` 的 GUI trade-count validator，禁止舊 exit snippet literal，並強制 validator 必須使用 `append_debug_forced_closeout(...)` 與 `build_trade_stats_index(...)` 做行為驗證；避免 contract 再因綁死過時實作細節而製造假失敗 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -418,6 +419,7 @@
 | T195 | `validate_gui_buy_signal_annotation_anchor_price_contract_case` | B116 |
 | T196 | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` | B117 |
 | T197 | `validate_gui_buy_signal_annotation_helper_import_contract_case` | B118 |
+| T198 | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` | B119 |
 
 ## G. 逐項收斂紀錄
 
@@ -756,6 +758,7 @@
 | 2026-04-07 | B116 | 新增 GUI 買訊 annotation 錨定訊號低點、買進三角錨定成交價的 visual contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-07 | B117 | 新增 synthetic contract multi-ticker fixture 不得再讀取舊 `case["price_df"]` key 的 meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B118 | 新增 GUI 買訊 annotation helper 顯式 import meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-07 | B119 | 新增 GUI trade-count validator 禁止綁死過時 exit snippet 的 meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
@@ -771,3 +774,4 @@
 | 2026-04-07 | T195 | 新增 GUI 買訊 annotation 錨定訊號低點且買進三角錨定成交價 contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_anchor_price_contract_case` |
 | 2026-04-07 | T196 | 新增 synthetic contract 禁止舊 `case["price_df"]` key 存取的 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` |
 | 2026-04-07 | T197 | 新增 GUI 買訊 annotation helper 顯式 import meta contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_helper_import_contract_case` |
+| 2026-04-07 | T198 | 新增 GUI trade-count validator 禁止綁死過時 exit snippet 的 meta contract 並驗證 | NEW -> DONE | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` |

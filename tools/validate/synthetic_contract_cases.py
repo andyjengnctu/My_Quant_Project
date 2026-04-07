@@ -26,7 +26,7 @@ from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOO
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
-from core.portfolio_fast_data import prep_stock_data_and_trades
+from core.portfolio_fast_data import prep_stock_data_and_trades, build_trade_stats_index
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
 from tools.scanner.stock_processor import build_scanner_response_from_stats
 from tools.debug.charting import (
@@ -43,6 +43,7 @@ from tools.debug.charting import (
 )
 from tools.debug.backtest import _record_buy_signal_annotation
 from tools.debug.entry_flow import _record_entry_plan_marker
+from tools.debug.exit_flow import append_debug_forced_closeout
 
 from .checks import add_check, make_synthetic_validation_params, run_scanner_reference_check, run_scanner_reference_check_on_clean_df
 from .synthetic_case_builders import build_synthetic_competing_candidates_case
@@ -2428,19 +2429,53 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     summary["tp_label"] = tp_label_text
     summary["exit_label_last_line"] = exit_label_text.split("\n")[-1] if exit_label_text else ""
     return results, summary
-
-def validate_gui_trade_count_and_sidebar_sync_contract_case(_base_params):
+def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     case_id = "GUI_TRADE_COUNT_AND_SIDEBAR_SYNC_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
-    exit_flow_source = build_project_absolute_path("tools", "debug", "exit_flow.py").read_text(encoding="utf-8")
-    backtest_source = build_project_absolute_path("tools", "debug", "backtest.py").read_text(encoding="utf-8")
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
-
     add_check(results, "output_contract", case_id, "sidebar_tp_icon_uses_yellow_color", True, 'self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#facc15"' in inspector_source)
-    add_check(results, "output_contract", case_id, "final_exit_trade_count_uses_completed_round_trip_index", True, "'trade_count': _resolve_completed_trade_count(history_snapshot, include_current_round_trip=True)" in exit_flow_source and "history_snapshot=latest_history_snapshot" in backtest_source)
+
+    params = make_synthetic_validation_params(base_params)
+    forced_close_date = pd.Timestamp("2024-01-03")
+    stats_index = build_trade_stats_index([
+        {
+            "exit_date": pd.Timestamp("2024-01-02"),
+            "pnl": 1000.0,
+            "r_mult": 1.0,
+        },
+        {
+            "exit_date": forced_close_date,
+            "pnl": 500.0,
+            "r_mult": 0.5,
+        },
+    ])
+    trade_logs = []
+    chart_context = {"trade_markers": []}
+    append_debug_forced_closeout(
+        position={
+            "entry": 100.0,
+            "qty": 100,
+            "initial_qty": 100,
+            "realized_pnl": 0.0,
+            "close_price": 105.0,
+            "sl": 95.0,
+        },
+        current_date=forced_close_date,
+        atr_last=1.5,
+        params=params,
+        trade_logs=trade_logs,
+        chart_context=chart_context,
+        current_capital_before_event=float(params.initial_capital),
+        stats_index=stats_index,
+        overall_max_drawdown=6.78,
+    )
+    forced_close_marker = chart_context["trade_markers"][-1] if chart_context.get("trade_markers") else {}
+    forced_close_meta = forced_close_marker.get("meta") or {}
+    expected_trade_count = int(stats_index["cum_trade_count"][-1]) if len(stats_index.get("cum_trade_count", [])) > 0 else 0
+    add_check(results, "output_contract", case_id, "final_exit_trade_count_uses_completed_round_trip_index", expected_trade_count, forced_close_meta.get("trade_count"))
+    add_check(results, "output_contract", case_id, "final_exit_marker_action_is_forced_close", "期末強制結算", forced_close_marker.get("trace_name"))
 
     charting_module = importlib.import_module("tools.debug.charting")
     build_trade_label_text = getattr(charting_module, "_build_trade_label_text")
@@ -2464,7 +2499,10 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "exit_trade_label_places_trade_count_last", "交易次數: 14", exit_lines[-1] if exit_lines else "")
     add_check(results, "output_contract", case_id, "exit_trade_label_trade_count_matches_latest_completed_trade", True, "交易次數: 14" in exit_label_text)
 
+    summary["expected_trade_count"] = expected_trade_count
+    summary["forced_close_trade_count"] = forced_close_meta.get("trade_count")
     summary["exit_label_last_line"] = exit_lines[-1] if exit_lines else ""
+    return results, summary
     return results, summary
 
 
