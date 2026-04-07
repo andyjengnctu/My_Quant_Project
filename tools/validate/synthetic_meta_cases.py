@@ -1897,6 +1897,32 @@ def validate_peak_traced_memory_tracker_context_management_case(_base_params):
     return results, summary
 
 
+def validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CONTRACT_CASES_NO_LEGACY_PRICE_DF_CASE_KEY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    legacy_hits = []
+    for node in ast.walk(parsed):
+        if not isinstance(node, ast.Subscript):
+            continue
+        if not isinstance(node.value, ast.Name) or node.value.id != "case":
+            continue
+        slice_node = node.slice
+        if isinstance(slice_node, ast.Constant) and slice_node.value == "price_df":
+            legacy_hits.append(f"L{node.lineno}")
+
+    add_check(results, "meta_contract", case_id, "synthetic_contract_cases_no_legacy_case_price_df_access", [], legacy_hits)
+
+    summary["legacy_hits"] = legacy_hits
+    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []

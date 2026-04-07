@@ -181,6 +181,7 @@
 | B114 | P1 | GUI / Debug 顯示契約 | 單股 GUI / debug 的買訊、停利、賣出 / 停損 / 結算資訊框，必須顯示同一口徑的資金、腿損益 / 整筆總損益與 completed-trade 統計；debug view 的起始資金基準需與 scanner `scanner_live_capital` 對齊，避免買訊預估與 GUI round-trip 顯示再次分叉 | DONE | 已補 output contract，直接驗證 debug view params 需以 `scanner_live_capital` 正規化起始資金、買訊框需顯示資金 / 金額、停利框需顯示金額 / 損益、賣出 / 停損 / 結算框需顯示資金 / 損益 / 總損益 / 報酬率且交易次數必須使用 completed snapshot；避免 GUI 再把尾倉單腿損益誤當整筆結果或把 pre-exit / post-exit 統計混寫 | `tools/validate/synthetic_contract_cases.py`, `tools/debug/trade_log.py`, `tools/debug/exit_flow.py` |
 | B115 | P1 | Meta / GUI 契約 | synthetic GUI / debug contract 若需 patch `tools.debug.backtest` 的 PIT history snapshot seam，`tools/debug/backtest.py` 必須穩定暴露 `_build_pit_history_snapshot`，且 `run_debug_analysis()` 必須經由該 seam 取用；不得只保留直接 import helper，否則 formal synthetic suite 會在 patch 階段提早 `AttributeError`，並連帶造成 coverage target 缺漏假失敗 | DONE | 已補 meta contract，直接 AST 掃描 `tools/debug/backtest.py`，釘死模組必須暴露 `_build_pit_history_snapshot` 且 `run_debug_analysis()` 的 signal-day / latest-day snapshot 都必須經由該 seam；並同步在 backtest 模組恢復 stable alias，避免 helper 重構時再次把 synthetic coverage suite 在 patch 階段炸掉 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B116 | P1 | GUI / Visual 契約 | 單股 GUI / debug 的買訊藍色 annotation 箭頭，其尖點必須錨定訊號 K 棒低點；實際買進三角箭頭則必須錨定成交價，兩者不得混用成同一價位 | DONE | 已補 output contract，直接驗證 `_record_buy_signal_annotation(...)` 即使存在 entry plan 仍必須以 `signal_low` 作為 `anchor_price`，並驗證買進 trade marker 必須使用 `buy_price`；避免 GUI 把買訊位置與實際成交位置畫成同一點而失真 | `tools/validate/synthetic_contract_cases.py`, `tools/debug/backtest.py` |
+| B117 | P1 | Meta / Fixture Schema 契約 | `tools/validate/synthetic_contract_cases.py` 對 multi-ticker synthetic case 不得再直接讀取過時的 `case["price_df"]`；必須改由 `case["frames"][case["primary_ticker"]]` 取得主 frame，避免 synthetic coverage suite 因 fixture schema 漂移在 contract 自身 runtime 提早 `KeyError` | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py`，禁止 `case["price_df"]` 舊存取；並同步修正 GUI visual contract 改從 `frames[primary_ticker]` 取主 frame，避免 coverage synthetic suite 再因 validator 自己的 fixture schema 假設過時而提早中斷 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -414,6 +415,7 @@
 | T193 | `validate_gui_trade_box_capital_and_round_trip_contract_case` | B114 |
 | T194 | `validate_debug_backtest_history_snapshot_patch_seam_contract_case` | B115 |
 | T195 | `validate_gui_buy_signal_annotation_anchor_price_contract_case` | B116 |
+| T196 | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` | B117 |
 
 ## G. 逐項收斂紀錄
 
@@ -750,6 +752,7 @@
 | 2026-04-07 | B114 | 新增 GUI / debug trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-07 | B115 | 新增 debug backtest PIT history snapshot patch seam 穩定契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B116 | 新增 GUI 買訊 annotation 錨定訊號低點、買進三角錨定成交價的 visual contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-07 | B117 | 新增 synthetic contract multi-ticker fixture 不得再讀取舊 `case["price_df"]` key 的 meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | T183 | 新增專案設定 `init_sl` frozen plan principle meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
@@ -763,3 +766,4 @@
 | 2026-04-07 | T193 | 新增 GUI trade-box current-capital / round-trip total-pnl / scanner-capital-basis contract 並驗證 | NEW -> DONE | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
 | 2026-04-07 | T194 | 新增 debug backtest PIT history snapshot patch seam meta contract 並驗證 | NEW -> DONE | `validate_debug_backtest_history_snapshot_patch_seam_contract_case` |
 | 2026-04-07 | T195 | 新增 GUI 買訊 annotation 錨定訊號低點且買進三角錨定成交價 contract 並驗證 | NEW -> DONE | `validate_gui_buy_signal_annotation_anchor_price_contract_case` |
+| 2026-04-07 | T196 | 新增 synthetic contract 禁止舊 `case["price_df"]` key 存取的 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` |
