@@ -268,6 +268,51 @@ def load_imported_validate_names_from_synthetic_main_entry(project_root: Path) -
     return imported_names
 
 
+def summarize_synthetic_cases_import_target_resolution_contract(project_root: Path) -> Dict[str, Any]:
+    source_path = project_root / "tools" / "validate" / "synthetic_cases.py"
+    tree = _read_python_ast(source_path)
+    validate_dir = project_root / "tools" / "validate"
+
+    invalid_imports: List[str] = []
+    checked_imports: List[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level != 1 or not (node.module or "").startswith("synthetic_"):
+            continue
+        target_path = validate_dir / f"{node.module}.py"
+        checked_imports.append(node.module or "")
+        if not target_path.exists():
+            invalid_imports.append(f"{node.module}:missing_module")
+            continue
+        target_tree = _read_python_ast(target_path)
+        exported: Set[str] = set()
+        for target_node in target_tree.body:
+            if isinstance(target_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                exported.add(target_node.name)
+            elif isinstance(target_node, ast.Assign):
+                for target in target_node.targets:
+                    if isinstance(target, ast.Name):
+                        exported.add(target.id)
+            elif isinstance(target_node, ast.ImportFrom):
+                for alias in target_node.names:
+                    exported.add(alias.asname or alias.name)
+            elif isinstance(target_node, ast.Import):
+                for alias in target_node.names:
+                    exported.add(alias.asname or alias.name.split(".")[-1])
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            if alias.name not in exported:
+                invalid_imports.append(f"{node.module}:{alias.name}")
+
+    return {
+        "source_path": str(source_path.relative_to(project_root)).replace("\\", "/"),
+        "checked_module_imports": checked_imports,
+        "invalid_imports": invalid_imports,
+    }
+
+
 def _extract_constant_string(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value

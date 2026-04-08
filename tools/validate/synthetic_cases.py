@@ -18,7 +18,6 @@ from .synthetic_history_cases import (
 )
 from .synthetic_portfolio_cases import (
     validate_synthetic_candidate_order_fill_layer_separation_case,
-    validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case,
     validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case,
     validate_synthetic_competing_candidates_case,
     validate_synthetic_exit_orders_only_for_held_positions_case,
@@ -209,6 +208,7 @@ from .synthetic_regression_cases import (
 )
 from .synthetic_flow_cases import (
     validate_synthetic_empty_backtest_df_contract_case,
+    validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case,
 )
 
 

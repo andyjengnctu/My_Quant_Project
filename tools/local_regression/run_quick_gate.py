@@ -21,6 +21,7 @@ from core.dataset_profiles import DATASET_PROFILE_SPECS, DEFAULT_VALIDATE_DATASE
 from core.output_paths import build_output_dir
 from core.log_utils import append_issue_log, build_timestamped_log_path, resolve_log_dir
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, MANIFEST_DEFAULTS, build_bundle_zip, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, summarize_result, write_json, write_text
+from tools.validate.meta_contracts import summarize_synthetic_cases_import_target_resolution_contract
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
@@ -185,6 +186,19 @@ def run_static_checks() -> List[Dict[str, Any]]:
                 f"重複 symbol {len(synthetic_registry_contract['duplicate_registry_names'])} 筆"
             ),
             extra=synthetic_registry_contract,
+        )
+    )
+
+    synthetic_import_target_contract = summarize_synthetic_cases_import_target_resolution_contract(PROJECT_ROOT)
+    results.append(
+        summarize_result(
+            "synthetic_registry_import_targets",
+            not synthetic_import_target_contract["invalid_imports"],
+            detail=(
+                f"檢查模組 {len(synthetic_import_target_contract['checked_module_imports'])} 個；"
+                f"錯誤 import target {len(synthetic_import_target_contract['invalid_imports'])} 筆"
+            ),
+            extra=synthetic_import_target_contract,
         )
     )
     return results
