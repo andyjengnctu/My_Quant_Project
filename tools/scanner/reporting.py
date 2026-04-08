@@ -9,8 +9,24 @@ def print_scanner_start_banner(now_label):
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
 
+def _sort_rows(rows):
+    rows.sort(key=lambda x: (x.get('sort_value') or 0.0, x.get('ticker') or ""), reverse=True)
+
+
+def _print_issue_log_notice(scanner_issue_log_path, count_sanitized_candidates):
+    if scanner_issue_log_path:
+        print(
+            f"\n{C_YELLOW}⚠️ 清洗摘要已寫入: {scanner_issue_log_path} "
+            f"(候選清洗 {count_sanitized_candidates} 檔){C_RESET}"
+        )
+
+
+def _print_scan_footer():
+    print(f"{C_CYAN}================================================================================{C_RESET}")
+
+
 def print_scanner_summary(*, count_scanned, elapsed_time, count_history_qualified, count_skipped_insufficient, count_sanitized_candidates, max_workers, pool_start_method, candidate_rows, scanner_issue_log_path):
-    candidate_rows.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+    _sort_rows(candidate_rows)
     sort_title = get_buy_sort_title(get_buy_sort_method())
 
     print(" " * 160, end="\r")
@@ -35,10 +51,46 @@ def print_scanner_summary(*, count_scanned, elapsed_time, count_history_qualifie
     else:
         print(f"\n{C_GREEN}💤 今日無符合實戰買點的標的，保留現金，明日再戰！{C_RESET}")
 
-    if scanner_issue_log_path:
-        print(
-            f"\n{C_YELLOW}⚠️ 清洗摘要已寫入: {scanner_issue_log_path} "
-            f"(候選清洗 {count_sanitized_candidates} 檔){C_RESET}"
-        )
+    _print_issue_log_notice(scanner_issue_log_path, count_sanitized_candidates)
+    _print_scan_footer()
 
+
+def print_history_qualified_summary(*, count_scanned, elapsed_time, count_history_qualified, count_skipped_insufficient, count_sanitized_candidates, max_workers, pool_start_method, history_qualified_rows, scanner_issue_log_path):
+    _sort_rows(history_qualified_rows)
+    sort_title = get_buy_sort_title(get_buy_sort_method())
+
+    print(" " * 160, end="\r")
     print(f"{C_CYAN}================================================================================{C_RESET}")
+    print(
+        f"⚡ 掃描完畢！共掃描 {count_scanned} 檔標的，耗時 {elapsed_time:.2f} 秒。"
+        f"歷史績效符合: {count_history_qualified} 檔 | 資料不足跳過: {count_skipped_insufficient} 檔 | "
+        f"候選清洗: {count_sanitized_candidates} 檔 | max_workers: {max_workers}"
+        f" | start_method: {pool_start_method or 'default'}"
+    )
+
+    if history_qualified_rows:
+        new_count = sum(1 for x in history_qualified_rows if x['kind'] == 'buy')
+        extended_count = sum(1 for x in history_qualified_rows if x['kind'] == 'extended')
+        history_only_count = sum(1 for x in history_qualified_rows if x['kind'] == 'candidate')
+        print(f"\n{C_GREEN}🔥 【歷史績效股清單：全資料集排序】 {sort_title} 🔥{C_RESET}")
+        print(
+            f"{C_GRAY}   類型統計：{C_RED}新訊號 {new_count} 檔{C_GRAY} | "
+            f"{C_YELLOW}延續候選 {extended_count} 檔{C_GRAY} | {C_GREEN}僅歷績符合 {history_only_count} 檔{C_RESET}"
+        )
+        for item in history_qualified_rows:
+            kind = item['kind']
+            if kind == 'buy':
+                prefix = '[新訊號]'
+                color = C_RED
+            elif kind == 'extended':
+                prefix = '[延續候選]'
+                color = C_YELLOW
+            else:
+                prefix = '[歷績符合]'
+                color = C_GREEN
+            print(f"   {color}➤ {prefix} {item['text']}{C_RESET}")
+    else:
+        print(f"\n{C_GREEN}💤 今日無符合歷史績效門檻的標的。{C_RESET}")
+
+    _print_issue_log_notice(scanner_issue_log_path, count_sanitized_candidates)
+    _print_scan_footer()

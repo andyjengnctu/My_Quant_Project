@@ -2078,12 +2078,16 @@ def validate_gui_scanner_console_and_latest_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "gui_panel_uses_full_dataset_only", False, 'text="資料集"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_scanner_button", True, 'text="計算候選股"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_candidate_dropdown", True, '_candidate_combo' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_history_button", True, 'text="計算歷史績效股"' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_exposes_history_dropdown", True, '_history_combo' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_console_tab", True, 'text="Console"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_exposes_latest_button", True, 'text="回到最新K線"' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_calls_scanner_runner", True, 'run_daily_scanner(' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_calls_history_scanner_runner", True, 'run_history_qualified_scanner(' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_scroll_to_latest_helper", True, 'def scroll_chart_to_latest(' in charting_source)
     add_check(results, "output_contract", case_id, "charting_declares_right_padding_bars", True, 'CHART_RIGHT_PADDING_BARS' in charting_source)
     add_check(results, "output_contract", case_id, "scanner_runner_returns_candidate_rows_payload", True, '"candidate_rows": list(candidate_rows)' in scanner_source or "'candidate_rows': list(candidate_rows)" in scanner_source)
+    add_check(results, "output_contract", case_id, "scanner_runner_returns_history_rows_payload", True, '"history_qualified_rows": list(scan_state[\'rows\'])' in scanner_source or "'history_qualified_rows': list(scan_state['rows'])" in scanner_source)
     return results, summary
 
 

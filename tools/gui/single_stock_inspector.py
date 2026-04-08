@@ -13,7 +13,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
 from tools.debug.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
 from tools.debug.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
-from tools.scanner.scan_runner import run_daily_scanner
+from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -55,6 +55,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._show_volume_var = tk.BooleanVar(value=False)
         self._candidate_display_var = tk.StringVar()
         self._candidate_map = {}
+        self._history_display_var = tk.StringVar()
+        self._history_map = {}
         self._columns = []
         self._chart_canvas = None
         self._chart_figure = None
@@ -95,9 +97,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._candidate_combo.grid(row=0, column=3, padx=(0, 12), sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=4, padx=(0, 12), sticky="w")
-        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=5, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=6, sticky="w")
+        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
+        self._history_combo = ttk.Combobox(controls, state="readonly", width=46, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._history_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
+        self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
+
+        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=6, padx=(0, 12), sticky="w")
+        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=7, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=8, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -194,8 +201,42 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._ticker_var.set(ticker)
             self.after_idle(self._run_analysis)
 
+    def _on_history_selected(self, _event=None):
+        selected = self._history_display_var.get().strip()
+        ticker = self._history_map.get(selected)
+        if ticker:
+            self._ticker_var.set(ticker)
+            self.after_idle(self._run_analysis)
+
     def _on_ticker_enter(self, _event=None):
         self._run_analysis()
+
+    def _format_history_display_label(self, item):
+        ticker = str(item.get("ticker") or "").strip()
+        kind = str(item.get("kind") or "candidate").strip()
+        if kind == "buy":
+            kind_label = "新訊號"
+        elif kind == "extended":
+            kind_label = "延續候選"
+        else:
+            kind_label = "歷績符合"
+        ev = item.get("expected_value")
+        win_rate = item.get("win_rate")
+        trade_count = item.get("trade_count")
+        ev_text = "-" if ev is None or pd.isna(ev) else f"{float(ev):.2f}R"
+        win_rate_text = "-" if win_rate is None or pd.isna(win_rate) else f"{float(win_rate):.1f}%"
+        trade_count_text = "-" if trade_count is None or pd.isna(trade_count) else f"{int(trade_count)}次"
+        return f"{ticker} | {kind_label} | EV {ev_text} | 勝率 {win_rate_text} | 交易 {trade_count_text}"
+
+    def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values):
+        mapping.clear()
+        combo.configure(values=display_values)
+        if display_values:
+            value_var.set(display_values[0])
+            mapping.update({label: label.split(" | ", 1)[0].strip() for label in display_values})
+            self._ticker_var.set(mapping[display_values[0]])
+            return
+        value_var.set("")
 
     def _run_scanner(self):
         self._clear_console()
@@ -214,17 +255,43 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
         candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
-        display_values = []
-        self._candidate_map = {}
-        for item in candidate_rows:
-            label = f"{item.get('ticker', '')} | {'新訊號' if item.get('kind') == 'buy' else '延續候選'}"
-            display_values.append(label)
-            self._candidate_map[label] = item.get("ticker")
-        self._candidate_combo.configure(values=display_values)
-        if display_values:
-            self._candidate_display_var.set(display_values[0])
-            self._ticker_var.set(self._candidate_map[display_values[0]])
+        display_values = [
+            f"{item.get('ticker', '')} | {'新訊號' if item.get('kind') == 'buy' else '延續候選'}"
+            for item in candidate_rows
+        ]
+        self._apply_scan_dropdown(
+            combo=self._candidate_combo,
+            value_var=self._candidate_display_var,
+            mapping=self._candidate_map,
+            display_values=display_values,
+        )
         self._status_var.set(f"掃描完成：候選股 {len(display_values)} 檔")
+
+    def _run_history_scanner(self):
+        self._clear_console()
+        self._notebook.select(2)
+        self._status_var.set("執行中：掃描歷史績效股")
+        self.update_idletasks()
+        try:
+            data_dir = resolve_debug_data_dir(DEFAULT_DATASET_PROFILE)
+            params = load_params(verbose=False)
+            with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
+                scan_result = run_history_qualified_scanner(data_dir, params)
+        except Exception as exc:
+            self._status_var.set(f"掃描失敗：{type(exc).__name__}: {exc}")
+            messagebox.showerror("股票工具工作台", str(exc))
+            return
+
+        history_rows = list((scan_result or {}).get("history_qualified_rows") or [])
+        history_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
+        display_values = [self._format_history_display_label(item) for item in history_rows]
+        self._apply_scan_dropdown(
+            combo=self._history_combo,
+            value_var=self._history_display_var,
+            mapping=self._history_map,
+            display_values=display_values,
+        )
+        self._status_var.set(f"掃描完成：歷史績效股 {len(display_values)} 檔")
 
     def _run_analysis(self):
         ticker = self._ticker_var.get().strip()

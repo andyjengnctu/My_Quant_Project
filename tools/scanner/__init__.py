@@ -13,6 +13,12 @@ def run_daily_scanner(*args, **kwargs):
     return _run_daily_scanner(*args, **kwargs)
 
 
+def run_history_qualified_scanner(*args, **kwargs):
+    from .scan_runner import run_history_qualified_scanner as _run_history_qualified_scanner
+
+    return _run_history_qualified_scanner(*args, **kwargs)
+
+
 def __getattr__(name):
     if name in {"ensure_runtime_dirs", "is_insufficient_data_error", "load_strict_params", "process_single_stock", "resolve_scanner_max_workers"}:
         from . import worker as worker_module
@@ -38,5 +44,6 @@ __all__ = [
     "build_scanner_response_from_stats",
     "resolve_scanner_max_workers",
     "run_daily_scanner",
+    "run_history_qualified_scanner",
     "main",
 ]
