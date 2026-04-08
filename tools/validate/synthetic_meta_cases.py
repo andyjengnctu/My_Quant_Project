@@ -1645,6 +1645,17 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     done_test_name_set = set(done_test_names)
     add_check(results, "meta_registry", case_id, "done_test_names_unique", len(done_test_names), len(done_test_name_set))
 
+    formal_step_commands = [spec.command for spec in FORMAL_STEP_SPECS]
+    missing_formal_step_commands = sorted(command for command in formal_step_commands if command not in done_test_name_set)
+    add_check(
+        results,
+        "meta_registry",
+        case_id,
+        "all_formal_step_commands_listed_in_done_t_summary",
+        [],
+        missing_formal_step_commands,
+    )
+
     done_test_validate_name_set = {
         row["name"].split()[0]
         for row in done_test_rows
