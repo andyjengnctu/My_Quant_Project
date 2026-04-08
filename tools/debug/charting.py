@@ -612,7 +612,32 @@ def _apply_axis_text_font(axis, font_properties):
         label.set_fontproperties(font_properties)
 
 
-def _build_hover_snapshot(chart_payload, index):
+def _resolve_index_signal_annotation_meta(chart_payload, idx, *, signal_type=None):
+    signal_type_normalized = None if signal_type is None else str(signal_type).strip().lower()
+    for item in reversed(list(chart_payload.get("signal_annotations") or [])):
+        if int(item.get("x", -1)) != int(idx):
+            continue
+        current_signal_type = str(item.get("signal_type", "")).strip().lower()
+        if signal_type_normalized is not None and current_signal_type != signal_type_normalized:
+            continue
+        return dict(item.get("meta") or {})
+    return {}
+
+
+
+def _resolve_index_marker_meta(chart_payload, idx, *, trace_names):
+    marker_groups = dict(chart_payload.get("marker_groups") or {})
+    for trace_name in trace_names:
+        markers = marker_groups.get(trace_name) or []
+        for marker in reversed(list(markers)):
+            if int(marker.get("x", -1)) != int(idx):
+                continue
+            return dict(marker.get("meta") or {}), marker
+    return {}, None
+
+
+
+def build_chart_hover_snapshot(chart_payload, index):
     idx = int(np.clip(int(index), 0, len(chart_payload["x"]) - 1))
     line_values = {
         "limit_price": float(chart_payload["limit_line"][idx]) if np.isfinite(chart_payload["limit_line"][idx]) else None,
@@ -620,6 +645,8 @@ def _build_hover_snapshot(chart_payload, index):
         "stop_price": float(chart_payload["stop_line"][idx]) if np.isfinite(chart_payload["stop_line"][idx]) else None,
         "tp_price": float(chart_payload["tp_line"][idx]) if np.isfinite(chart_payload["tp_line"][idx]) else None,
     }
+    buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
+    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)"))
     return {
         "index": idx,
         "date_label": chart_payload["date_labels"][idx],
@@ -628,8 +655,18 @@ def _build_hover_snapshot(chart_payload, index):
         "low": float(chart_payload["low"][idx]),
         "close": float(chart_payload["close"][idx]),
         "volume": float(chart_payload["volume"][idx]),
+        "signal_capital": buy_signal_meta.get("current_capital"),
+        "signal_qty": buy_signal_meta.get("qty"),
+        "reserved_capital": buy_signal_meta.get("reserved_capital"),
+        "buy_capital": buy_trade_meta.get("buy_capital"),
+        "buy_qty": None if buy_trade_marker is None else int(buy_trade_marker.get("qty", 0) or 0),
         **line_values,
     }
+
+
+
+def _build_hover_snapshot(chart_payload, index):
+    return build_chart_hover_snapshot(chart_payload, index)
 
 
 def _build_hover_text(chart_payload, index):

@@ -11,7 +11,7 @@ from tkinter import messagebox, ttk
 import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
-from tools.debug.charting import bind_matplotlib_chart_navigation, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
+from tools.debug.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
 from tools.debug.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner
 
@@ -68,10 +68,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_low_var = tk.StringVar(value="低: -")
         self._selected_close_var = tk.StringVar(value="收: -")
         self._selected_volume_var = tk.StringVar(value="量: -")
-        self._selected_tp_var = tk.StringVar(value="停利: -")
+        self._selected_signal_capital_var = tk.StringVar(value="資金: -")
+        self._selected_signal_qty_var = tk.StringVar(value="股數: -")
         self._selected_limit_var = tk.StringVar(value="限價: -")
+        self._selected_reserved_var = tk.StringVar(value="預留: -")
+        self._selected_tp_var = tk.StringVar(value="停利: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
+        self._selected_spend_var = tk.StringVar(value="實支: -")
         self._build_ui()
 
     def destroy(self):
@@ -142,20 +146,26 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=8, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=9, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#facc15", font=("Microsoft JhengHei", 13, "bold"))
-        self._tp_icon.grid(row=11, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=11, column=1, sticky="w")
+        ttk.Label(sidebar, text="買訊資訊", style="Workbench.SidebarHeader.TLabel").grid(row=11, column=0, columnspan=2, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_signal_capital_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=12, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        ttk.Label(sidebar, textvariable=self._selected_signal_qty_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=13, column=0, columnspan=2, sticky="w")
         self._limit_icon = tk.Label(sidebar, text="┅┅", bg="#05090e", fg="#4f86ff", font=("Microsoft JhengHei", 13, "bold"))
-        self._limit_icon.grid(row=12, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=12, column=1, sticky="w")
+        self._limit_icon.grid(row=14, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=14, column=1, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_reserved_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=15, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(sidebar, text="買入資訊", style="Workbench.SidebarHeader.TLabel").grid(row=16, column=0, columnspan=2, sticky="w")
+        self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#facc15", font=("Microsoft JhengHei", 13, "bold"))
+        self._tp_icon.grid(row=17, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=17, column=1, sticky="w", pady=(4, 0))
         self._entry_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#2f6df6", font=("Microsoft JhengHei", 13, "bold"))
-        self._entry_icon.grid(row=13, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=13, column=1, sticky="w")
+        self._entry_icon.grid(row=18, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=18, column=1, sticky="w")
         self._stop_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#ff4d4f", font=("Microsoft JhengHei", 13, "bold"))
-        self._stop_icon.grid(row=14, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=14, column=1, sticky="w", pady=(0, 12))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=15, column=0, columnspan=2, sticky="ew")
-        sidebar.rowconfigure(16, weight=1)
+        self._stop_icon.grid(row=19, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=19, column=1, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_spend_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=20, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=21, column=0, columnspan=2, sticky="ew")
+        sidebar.rowconfigure(22, weight=1)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         notebook.add(table_tab, text="交易明細")
@@ -269,6 +279,12 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _format_sidebar_line_value(self, label, value):
         return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
 
+    def _format_sidebar_amount_value(self, label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):,.0f}"
+
+    def _format_sidebar_qty_value(self, label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {int(value):,}"
+
     def _format_sidebar_ohlcv_value(self, label, value, *, volume=False):
         if value is None or pd.isna(value):
             return f"{label}: -"
@@ -284,10 +300,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._selected_low_var.set("低: -")
             self._selected_close_var.set("收: -")
             self._selected_volume_var.set("量: -")
-            self._selected_tp_var.set("停利: -")
+            self._selected_signal_capital_var.set("資金: -")
+            self._selected_signal_qty_var.set("股數: -")
             self._selected_limit_var.set("限價: -")
+            self._selected_reserved_var.set("預留: -")
+            self._selected_tp_var.set("停利: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
+            self._selected_spend_var.set("實支: -")
             return
         self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
         self._selected_open_var.set(self._format_sidebar_ohlcv_value("開", snapshot.get("open")))
@@ -295,10 +315,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_low_var.set(self._format_sidebar_ohlcv_value("低", snapshot.get("low")))
         self._selected_close_var.set(self._format_sidebar_ohlcv_value("收", snapshot.get("close")))
         self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
-        self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))
+        self._selected_signal_capital_var.set(self._format_sidebar_amount_value("資金", snapshot.get("signal_capital")))
+        self._selected_signal_qty_var.set(self._format_sidebar_qty_value("股數", snapshot.get("signal_qty")))
         self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
+        self._selected_reserved_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
+        self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))
         self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
+        self._selected_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
 
     def _apply_sidebar_chip_styles(self, signal_active, history_active):
         self._signal_chip.configure(bg=SIDEBAR_CHIP_ACTIVE_BG if bool(signal_active) else SIDEBAR_CHIP_INACTIVE_BG)
@@ -330,18 +354,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if dates:
             idx = int((chart_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
             idx = max(0, min(idx, len(dates) - 1))
-            snapshot = {
-                "date_label": dates[idx],
-                "open": self._resolve_chart_payload_value(chart_payload, "open", idx),
-                "high": self._resolve_chart_payload_value(chart_payload, "high", idx),
-                "low": self._resolve_chart_payload_value(chart_payload, "low", idx),
-                "close": self._resolve_chart_payload_value(chart_payload, "close", idx),
-                "volume": self._resolve_chart_payload_value(chart_payload, "volume", idx),
-                "tp_price": self._resolve_chart_payload_value(chart_payload, "tp_line", idx),
-                "limit_price": self._resolve_chart_payload_value(chart_payload, "limit_line", idx),
-                "entry_price": self._resolve_chart_payload_value(chart_payload, "entry_line", idx),
-                "stop_price": self._resolve_chart_payload_value(chart_payload, "stop_line", idx),
-            }
+            snapshot = build_chart_hover_snapshot(chart_payload, idx)
             self._update_selected_value_sidebar(snapshot)
         else:
             self._update_selected_value_sidebar(None)

@@ -2434,7 +2434,12 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
     add_check(results, "output_contract", case_id, "sidebar_tp_icon_uses_yellow_color", True, 'self._tp_icon = tk.Label(sidebar, text="━━", bg="#05090e", fg="#facc15"' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_declares_buy_signal_info_block", True, 'text="買訊資訊"' in inspector_source and '_selected_reserved_var' in inspector_source and '_selected_signal_capital_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_declares_buy_trade_info_block", True, 'text="買入資訊"' in inspector_source and '_selected_spend_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_buy_trade_box_uses_execution_first_fields", True, 'self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))' in inspector_source and 'self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))' in inspector_source and 'self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))' in inspector_source and 'self._selected_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))' in inspector_source)
+    add_check(results, "output_contract", case_id, "chart_hover_snapshot_exports_buy_trade_spend_for_sidebar", True, '"buy_capital": buy_trade_meta.get("buy_capital")' in charting_source and '"reserved_capital": buy_signal_meta.get("reserved_capital")' in charting_source)
 
     params = make_synthetic_validation_params(base_params)
     forced_close_date = pd.Timestamp("2024-01-03")
