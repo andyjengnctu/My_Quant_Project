@@ -721,14 +721,11 @@ def _build_trade_label_text(trace_name, marker):
     meta = marker.get("meta") or {}
     if trace_name in {"買進", "買進(延續候選)"}:
         lines = ["買進"]
-        for key, label in (("tp_price", "停利"), ("entry_price", "成交"), ("stop_price", "停損")):
+        for key, label in (("tp_price", "停利"), ("limit_price", "限價"), ("entry_price", "成交"), ("stop_price", "停損")):
             value = meta.get(key)
             if value is None or pd.isna(value):
                 continue
             lines.append(f"{label}: {float(value):.2f}")
-        buy_capital = meta.get("buy_capital")
-        if buy_capital is not None and not pd.isna(buy_capital):
-            lines.append(f"實支: {float(buy_capital):,.0f}")
         return "\n".join(lines)
     if trace_name == "半倉停利":
         lines = ["停利"]
@@ -844,6 +841,33 @@ def _resolve_annotation_slot_x_offset(slot_index, *, step=62):
     return magnitude if slot_index % 2 == 1 else -magnitude
 
 
+def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, collision_window):
+    return sum(
+        1
+        for item in occupied_positions
+        if item.get("placement") == placement and abs(int(item.get("x", -10**9)) - int(x_value)) <= int(collision_window)
+    )
+
+
+def _resolve_trade_label_offsets(slot_index, *, placement, trace_name):
+    if trace_name in {"買進", "買進(延續候選)"}:
+        base_y = -64
+        step_x = 94
+        step_y = 28
+    elif placement == "below":
+        base_y = -82
+        step_x = 82
+        step_y = 24
+    else:
+        base_y = 18
+        step_x = 74
+        step_y = 22
+    x_offset = _resolve_annotation_slot_x_offset(slot_index, step=step_x)
+    tier = 0 if slot_index <= 0 else ((slot_index + 1) // 2)
+    y_offset = base_y - (tier * step_y) if placement == "below" else base_y + (tier * step_y)
+    return x_offset, y_offset
+
+
 def _render_signal_annotations(axis_price, signal_annotations, label_font, *, start_idx=None, end_idx=None):
     rendered = []
     for item in signal_annotations:
@@ -880,7 +904,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
     supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
-    occupied_slots = {}
+    occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))
         if start_idx is not None and x_value < int(start_idx):
@@ -888,45 +912,46 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annota
         if end_idx is not None and x_value > int(end_idx):
             continue
         placement = "below" if item.get("signal_type") == "buy" else "above"
-        occupied_slots[(x_value, placement)] = occupied_slots.get((x_value, placement), 0) + 1
+        occupied_positions.append({"x": x_value, "placement": placement})
+
+    trade_items = []
     for trace_name, markers in marker_groups.items():
+        if trace_name not in supported_traces:
+            continue
         for marker in markers:
             x_value = int(marker["x"])
             if start_idx is not None and x_value < int(start_idx):
                 continue
             if end_idx is not None and x_value > int(end_idx):
                 continue
-            if trace_name not in supported_traces:
-                continue
-            face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
-            if trace_name in {"買進", "買進(延續候選)"}:
-                y_offset = -64
-            elif placement == "below":
-                y_offset = -82
-            else:
-                y_offset = 18
-            slot_key = (x_value, placement)
-            slot_index = occupied_slots.get(slot_key, 0)
-            x_offset = _resolve_annotation_slot_x_offset(slot_index)
-            occupied_slots[slot_key] = slot_index + 1
-            va = "top" if placement == "below" else "bottom"
-            rendered.append(
-                axis_price.annotate(
-                    _build_trade_label_text(trace_name, marker),
-                    xy=(marker["x"], marker["price"]),
-                    xytext=(x_offset, y_offset),
-                    textcoords="offset points",
-                    ha="center",
-                    va=va,
-                    color=MATPLOTLIB_TEXT_COLOR if placement == "below" else text_color,
-                    fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
-                    fontproperties=label_font,
-                    bbox={"boxstyle": "round,pad=0.38", "fc": face_color, "ec": "none"},
-                    arrowprops={"arrowstyle": "-|>", "color": text_color, "lw": 1.45, "alpha": 0.94, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
-                    zorder=6,
-                    annotation_clip=True,
-                )
+            _, _, placement = _resolve_trade_box_style(trace_name, marker)
+            trade_items.append((x_value, 0 if placement == "below" else 1, trace_name, marker))
+
+    trade_items.sort(key=lambda item: (item[0], item[1], item[2]))
+    for x_value, _, trace_name, marker in trade_items:
+        face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
+        collision_window = 5 if placement == "below" else 4
+        slot_index = _count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)
+        x_offset, y_offset = _resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)
+        occupied_positions.append({"x": x_value, "placement": placement})
+        va = "top" if placement == "below" else "bottom"
+        rendered.append(
+            axis_price.annotate(
+                _build_trade_label_text(trace_name, marker),
+                xy=(marker["x"], marker["price"]),
+                xytext=(x_offset, y_offset),
+                textcoords="offset points",
+                ha="center",
+                va=va,
+                color=MATPLOTLIB_TEXT_COLOR if placement == "below" else text_color,
+                fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
+                fontproperties=label_font,
+                bbox={"boxstyle": "round,pad=0.38", "fc": face_color, "ec": "none"},
+                arrowprops={"arrowstyle": "-|>", "color": text_color, "lw": 1.45, "alpha": 0.94, "mutation_scale": MATPLOTLIB_SIGNAL_ARROW_MUTATION_SCALE},
+                zorder=6,
+                annotation_clip=True,
             )
+        )
     return rendered
 
 
