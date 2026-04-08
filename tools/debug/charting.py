@@ -837,6 +837,13 @@ def _compute_dynamic_linewidths(axis_price, figure):
     return body_px * pt_scale, wick_px * pt_scale
 
 
+def _resolve_annotation_slot_x_offset(slot_index, *, step=62):
+    if slot_index <= 0:
+        return 0
+    magnitude = ((slot_index + 1) // 2) * step
+    return magnitude if slot_index % 2 == 1 else -magnitude
+
+
 def _render_signal_annotations(axis_price, signal_annotations, label_font, *, start_idx=None, end_idx=None):
     rendered = []
     for item in signal_annotations:
@@ -870,14 +877,24 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
     return rendered
 
 
-def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=None, end_idx=None):
+def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
     supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
+    occupied_slots = {}
+    for item in signal_annotations or []:
+        x_value = int(item.get("x", -10**9))
+        if start_idx is not None and x_value < int(start_idx):
+            continue
+        if end_idx is not None and x_value > int(end_idx):
+            continue
+        placement = "below" if item.get("signal_type") == "buy" else "above"
+        occupied_slots[(x_value, placement)] = occupied_slots.get((x_value, placement), 0) + 1
     for trace_name, markers in marker_groups.items():
         for marker in markers:
-            if start_idx is not None and int(marker["x"]) < int(start_idx):
+            x_value = int(marker["x"])
+            if start_idx is not None and x_value < int(start_idx):
                 continue
-            if end_idx is not None and int(marker["x"]) > int(end_idx):
+            if end_idx is not None and x_value > int(end_idx):
                 continue
             if trace_name not in supported_traces:
                 continue
@@ -888,12 +905,16 @@ def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=Non
                 y_offset = -82
             else:
                 y_offset = 18
+            slot_key = (x_value, placement)
+            slot_index = occupied_slots.get(slot_key, 0)
+            x_offset = _resolve_annotation_slot_x_offset(slot_index)
+            occupied_slots[slot_key] = slot_index + 1
             va = "top" if placement == "below" else "bottom"
             rendered.append(
                 axis_price.annotate(
                     _build_trade_label_text(trace_name, marker),
                     xy=(marker["x"], marker["price"]),
-                    xytext=(0, y_offset),
+                    xytext=(x_offset, y_offset),
                     textcoords="offset points",
                     ha="center",
                     va=va,
@@ -1074,8 +1095,9 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     def _refresh_overlay_annotations(start_idx, end_idx):
         render_start = max(0, int(start_idx) - 2)
         render_end = min(len(chart_payload["x"]) - 1, int(end_idx) + 2)
-        _replace_artist_list(rendered_signal_annotations, _render_signal_annotations(axis_price, chart_payload.get("signal_annotations", []), legend_font, start_idx=render_start, end_idx=render_end))
-        _replace_artist_list(rendered_trade_labels, _render_trade_labels(axis_price, chart_payload["marker_groups"], legend_font, start_idx=render_start, end_idx=render_end))
+        visible_signal_annotations = chart_payload.get("signal_annotations", [])
+        _replace_artist_list(rendered_signal_annotations, _render_signal_annotations(axis_price, visible_signal_annotations, legend_font, start_idx=render_start, end_idx=render_end))
+        _replace_artist_list(rendered_trade_labels, _render_trade_labels(axis_price, chart_payload["marker_groups"], legend_font, signal_annotations=visible_signal_annotations, start_idx=render_start, end_idx=render_end))
 
     def _refresh_candle_widths():
         body_width, wick_width = _compute_dynamic_linewidths(axis_price, figure)
@@ -1148,7 +1170,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         "status_chip_layout": "right_bottom",
         "signal_annotation_count": int(len(chart_payload.get("signal_annotations", []))),
         "dynamic_candle_width_enabled": True,
-        "buy_trade_label_boxes_enabled": False,
+        "buy_trade_label_boxes_enabled": True,
         "mouse_drag_pan_mode": "pixel_anchor",
         "grid_alpha": 0.12,
     }

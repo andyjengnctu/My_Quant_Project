@@ -2101,7 +2101,7 @@ def validate_gui_sidebar_latest_preview_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "gui_panel_runs_backtest_on_candidate_select", True, 'self.after_idle(self._run_analysis)' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_declares_right_sidebar_signal_chip", True, '_signal_chip' in inspector_source and '歷史績效表' in inspector_source)
     add_check(results, "output_contract", case_id, "gui_panel_omits_html_button", False, '開啟 HTML K 線圖' in inspector_source)
-    add_check(results, "output_contract", case_id, "gui_panel_declares_selected_date_value_block", True, '選取日線值' in inspector_source and '_selected_tp_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_panel_declares_selected_date_value_block", True, '選取日線值' in inspector_source and '_selected_open_var' in inspector_source and '_selected_high_var' in inspector_source and '_selected_low_var' in inspector_source and '_selected_close_var' in inspector_source and '_selected_volume_var' in inspector_source)
     add_check(results, "output_contract", case_id, "charting_declares_future_preview_contract", True, 'future_preview' in charting_source and '_render_future_preview_lines' in charting_source)
     add_check(results, "output_contract", case_id, "charting_declares_dynamic_right_padding", True, 'extra_right_padding = max(' in charting_source and 'CHART_RIGHT_PADDING_RATIO' in charting_source)
     add_check(results, "output_contract", case_id, "backtest_uses_future_preview_for_latest_signal", True, 'set_chart_future_preview(' in backtest_source)
@@ -2382,6 +2382,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         {
             "qty": 1000,
             "meta": {
+                "limit_price": 56.0,
                 "buy_capital": 123456.0,
                 "tp_price": 62.4,
                 "entry_price": 55.2,
@@ -2418,10 +2419,11 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_execution_first_wording", True, "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "停利: 62.40" in buy_label_text)
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_actual_spend_wording", True, "實支: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_omits_actual_spend_wording", True, "實支:" not in buy_label_text)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, 'if trace_name in {"買進", "買進(延續候選)"}:' in charting_source and 'y_offset = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
+    add_check(results, "output_contract", case_id, "buy_trade_label_overlay_offsets_when_signal_box_shares_same_kbar", True, 'slot_index = occupied_slots.get(slot_key, 0)' in charting_source and 'x_offset = _resolve_annotation_slot_x_offset(slot_index)' in charting_source and 'signal_annotations=visible_signal_annotations' in charting_source)
     add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
@@ -2659,10 +2661,10 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
     contract = getattr(figure, "_stock_chart_contract", {})
     state = getattr(figure, "_stock_chart_navigation_state", {})
     add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout_right_bottom", "right_bottom", contract.get("status_chip_layout"))
-    add_check(results, "output_contract", case_id, "figure_contract_buy_trade_label_boxes_disabled", False, contract.get("buy_trade_label_boxes_enabled"))
+    add_check(results, "output_contract", case_id, "figure_contract_buy_trade_label_boxes_enabled", True, contract.get("buy_trade_label_boxes_enabled"))
     add_check(results, "output_contract", case_id, "figure_contract_mouse_drag_pan_mode_pixel_anchor", "pixel_anchor", contract.get("mouse_drag_pan_mode"))
     add_check(results, "output_contract", case_id, "figure_contract_grid_alpha_subtle", True, float(contract.get("grid_alpha", 1.0)) <= 0.40)
-    add_check(results, "output_contract", case_id, "figure_trade_labels_skip_buy_markers", 1, len(state.get("trade_label_artists") or []))
+    add_check(results, "output_contract", case_id, "figure_trade_labels_include_buy_and_sell_markers", 2, len(state.get("trade_label_artists") or []))
     figure.clear()
     return results, summary
 

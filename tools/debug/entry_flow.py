@@ -127,6 +127,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
+                    'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
@@ -224,6 +225,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
+                    'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
