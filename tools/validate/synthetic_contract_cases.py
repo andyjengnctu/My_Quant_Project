@@ -2439,9 +2439,9 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
 
     inspector_source = build_project_absolute_path("tools", "gui", "single_stock_inspector.py").read_text(encoding="utf-8")
     charting_source = build_project_absolute_path("tools", "debug", "charting.py").read_text(encoding="utf-8")
-    add_check(results, "output_contract", case_id, "single_stock_sidebar_declares_buy_signal_info_block", True, 'text="買訊資訊"' in inspector_source and '_selected_reserved_var' in inspector_source and '_selected_signal_capital_var' in inspector_source)
-    add_check(results, "output_contract", case_id, "single_stock_sidebar_does_not_duplicate_buy_trade_info_block", True, 'text="買入資訊"' not in inspector_source and '_selected_spend_var' not in inspector_source)
-    add_check(results, "output_contract", case_id, "chart_hover_snapshot_keeps_reserved_capital_for_signal_sidebar", True, '"reserved_capital": buy_signal_meta.get("reserved_capital")' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_declares_trade_info_block", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_omits_buy_signal_info_block", True, 'text="買訊資訊"' not in inspector_source and '_selected_reserved_var' not in inspector_source and '_selected_signal_capital_var' not in inspector_source)
+    add_check(results, "output_contract", case_id, "chart_hover_snapshot_keeps_trade_line_values_for_sidebar", True, '"tp_price": float(chart_payload["tp_line"][idx])' in charting_source and '"limit_price": float(chart_payload["limit_line"][idx])' in charting_source and '"entry_price": float(chart_payload["entry_line"][idx])' in charting_source and '"stop_price": float(chart_payload["stop_line"][idx])' in charting_source)
 
     params = make_synthetic_validation_params(base_params)
     forced_close_date = pd.Timestamp("2024-01-03")
