@@ -169,14 +169,15 @@ def validate_synthetic_pit_same_day_exit_excluded_case(base_params):
         "cum_win_r_sum": np.array([1.0, 1.0], dtype=np.float64),
         "cum_loss_r_sum": np.array([0.0, -1.0], dtype=np.float64),
         "cum_total_r_sum": np.array([1.0, 0.0], dtype=np.float64),
+        "cum_pnl_sum": np.array([100.0, 0.0], dtype=np.float64),
     }
 
-    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count, _same_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 2),
         params,
     )
-    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count, _next_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 3),
         params,
@@ -350,17 +351,17 @@ def validate_synthetic_pit_multiple_same_day_exits_case(base_params):
     ]
     stats_index = build_trade_stats_index(trade_logs)
 
-    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count, _same_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 2),
         params,
     )
-    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count, _next_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 3),
         params,
     )
-    after_all_candidate, after_all_ev, after_all_win_rate, after_all_trade_count = get_pit_stats_from_index(
+    after_all_candidate, after_all_ev, after_all_win_rate, after_all_trade_count, _after_all_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 4),
         params,
@@ -406,14 +407,15 @@ def validate_synthetic_lookahead_prev_day_only_case(base_params):
         "cum_win_r_sum": np.array([1.0, 1.0], dtype=np.float64),
         "cum_loss_r_sum": np.array([0.0, 0.0], dtype=np.float64),
         "cum_total_r_sum": np.array([1.0, 1.0], dtype=np.float64),
+        "cum_pnl_sum": np.array([100.0, 100.0], dtype=np.float64),
     }
 
-    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count = get_pit_stats_from_index(
+    same_day_candidate, same_day_ev, same_day_win_rate, same_day_trade_count, _same_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 2),
         params,
     )
-    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count = get_pit_stats_from_index(
+    next_day_candidate, next_day_ev, next_day_win_rate, next_day_trade_count, _next_day_asset_growth = get_pit_stats_from_index(
         stats_index,
         datetime(2024, 1, 3),
         params,

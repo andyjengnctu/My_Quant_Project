@@ -166,6 +166,7 @@ def build_trade_stats_index(trade_logs):
             'cum_win_r_sum': np.array([], dtype=np.float64),
             'cum_loss_r_sum': np.array([], dtype=np.float64),
             'cum_total_r_sum': np.array([], dtype=np.float64),
+            'cum_pnl_sum': np.array([], dtype=np.float64),
         }
 
     ordered_logs = sorted(trade_logs, key=lambda t: t['exit_date'])
@@ -176,12 +177,14 @@ def build_trade_stats_index(trade_logs):
     cum_win_r_sum = []
     cum_loss_r_sum = []
     cum_total_r_sum = []
+    cum_pnl_sum = []
 
     trade_count = 0
     win_count = 0
     win_r_sum = 0.0
     loss_r_sum = 0.0
     total_r_sum = 0.0
+    pnl_sum = 0.0
 
     for trade in ordered_logs:
         trade_count += 1
@@ -189,6 +192,7 @@ def build_trade_stats_index(trade_logs):
         pnl = float(trade.get('pnl', 0.0))
         r_mult = float(trade.get('r_mult', 0.0))
         total_r_sum += r_mult
+        pnl_sum += pnl
 
         if pnl > 0:
             win_count += 1
@@ -202,6 +206,7 @@ def build_trade_stats_index(trade_logs):
         cum_win_r_sum.append(win_r_sum)
         cum_loss_r_sum.append(loss_r_sum)
         cum_total_r_sum.append(total_r_sum)
+        cum_pnl_sum.append(pnl_sum)
 
     return {
         'exit_dates': exit_dates,
@@ -210,20 +215,30 @@ def build_trade_stats_index(trade_logs):
         'cum_win_r_sum': np.array(cum_win_r_sum, dtype=np.float64),
         'cum_loss_r_sum': np.array(cum_loss_r_sum, dtype=np.float64),
         'cum_total_r_sum': np.array(cum_total_r_sum, dtype=np.float64),
+        'cum_pnl_sum': np.array(cum_pnl_sum, dtype=np.float64),
     }
 
 
 def get_pit_stats_from_index(stats_index, current_date, params):
     cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date)
     if cutoff <= 0:
-        return evaluate_history_candidate_metrics(0, 0, 0.0, 0.0, 0.0, params)
+        is_candidate, expected_value, history_win_rate, history_trade_count = evaluate_history_candidate_metrics(
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+            params,
+        )
+        return is_candidate, expected_value, history_win_rate, history_trade_count, 0.0
 
     trade_count = int(stats_index['cum_trade_count'][cutoff - 1])
     win_count = int(stats_index['cum_win_count'][cutoff - 1])
     total_r_sum = float(stats_index['cum_total_r_sum'][cutoff - 1])
     win_r_sum = float(stats_index['cum_win_r_sum'][cutoff - 1])
     loss_r_sum = float(stats_index['cum_loss_r_sum'][cutoff - 1])
-    return evaluate_history_candidate_metrics(
+    pnl_sum = float(stats_index['cum_pnl_sum'][cutoff - 1])
+    is_candidate, expected_value, history_win_rate, history_trade_count = evaluate_history_candidate_metrics(
         trade_count,
         win_count,
         total_r_sum,
@@ -231,6 +246,8 @@ def get_pit_stats_from_index(stats_index, current_date, params):
         loss_r_sum,
         params,
     )
+    asset_growth_pct = (pnl_sum / float(params.initial_capital) * 100.0) if float(params.initial_capital) > 0 else 0.0
+    return is_candidate, expected_value, history_win_rate, history_trade_count, asset_growth_pct
 
 
 def is_extended_entry_type(entry_type):

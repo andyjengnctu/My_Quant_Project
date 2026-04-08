@@ -141,6 +141,7 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
         proj_cost,
         scanner_ref_stats["win_rate"] / 100.0,
         scanner_ref_stats["trade_count"],
+        scanner_ref_stats.get("asset_growth", 0.0),
     )
     payload.update({
         "expected_value": scanner_ref_stats["expected_value"],

@@ -8,6 +8,7 @@ EV_CALC_METHOD = 'A'
 # 'EV' = 優先買入期望值最高的標的 (單筆質量極大化)
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
+# 'ASSET_GROWTH' = 優先買入歷史資產成長最高的標的 (歷史複利成長極大化)
 BUY_SORT_METHOD = 'HIST_WIN_X_TRADES'  
 
 # 系統評分 (Score) 算法切換

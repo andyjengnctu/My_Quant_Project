@@ -229,6 +229,7 @@ def validate_model_io_schema_case(base_params):
             "expected_value": 1.25,
             "win_rate": 55.0,
             "trade_count": 12,
+            "asset_growth": 18.0,
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
@@ -298,6 +299,12 @@ def validate_ranking_scoring_sanity_case(base_params):
     hist_high = calc_buy_sort_value("HIST_WIN_X_TRADES", 0.5, 10000, 0.45, 9)
     add_check(results, "strategy_score", case_id, "buy_sort_hist_win_x_trades_monotonic", True, hist_high > hist_low)
 
+    growth_low = calc_buy_sort_value("ASSET_GROWTH", 0.5, 10000, 0.35, 8, 12.0)
+    growth_high = calc_buy_sort_value("ASSET_GROWTH", 0.5, 10000, 0.35, 8, 28.0)
+    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_monotonic", True, growth_high > growth_low)
+    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_type", True, isinstance(growth_high, float))
+    add_check(results, "strategy_score", case_id, "buy_sort_asset_growth_finite", True, math.isfinite(growth_high))
+
     with patch("config.training_policy.SCORE_CALC_METHOD", "RoMD"), patch("config.training_policy.SCORE_NUMERATOR_METHOD", "ANNUAL_RETURN"):
         score_low_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=10.0)
         score_high_return = calc_portfolio_score(sys_ret=10.0, sys_mdd=-20.0, m_win_rate=50.0, r_sq=0.8, annual_return_pct=20.0)
@@ -330,6 +337,7 @@ def validate_ranking_scoring_sanity_case(base_params):
             "expected_value": 1.25,
             "win_rate": 55.0,
             "trade_count": 12,
+            "asset_growth": 18.0,
             "max_drawdown": 9.5,
             "extended_candidate_today": None,
         }
@@ -344,6 +352,7 @@ def validate_ranking_scoring_sanity_case(base_params):
             buy_result["proj_cost"],
             buy_stats["win_rate"] / 100.0,
             buy_stats["trade_count"],
+            buy_stats["asset_growth"],
         )
         add_check(results, "strategy_score", case_id, "scanner_sort_value_matches_buy_sort_formula", expected_sort, buy_result["sort_value"])
         add_check(results, "strategy_score", case_id, "scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))

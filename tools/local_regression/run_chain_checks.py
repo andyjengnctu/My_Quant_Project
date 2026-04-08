@@ -152,7 +152,7 @@ def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, 
         if today.year < start_year:
             continue
         if bool(df["is_setup"].iloc[pos - 1]):
-            is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(pit_index, today, params)
+            is_candidate, ev, win_rate, trade_count, _asset_growth_pct = get_pit_stats_from_index(pit_index, today, params)
             setup_rows.append({
                 "date": today.strftime("%Y-%m-%d"),
                 "pit_pass": bool(is_candidate),

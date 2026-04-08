@@ -58,7 +58,7 @@ def try_rotate_weakest_position(
             ret = (pt_y_close - pos['entry']) / pos['entry']
 
             holding_cost = pos['entry'] * pos['qty']
-            _, holding_ev, holding_win_rate, holding_trade_count = get_pit_stats_from_index(
+            _, holding_ev, holding_win_rate, holding_trade_count, holding_asset_growth_pct = get_pit_stats_from_index(
                 pit_stats_index[pt],
                 today,
                 params,
@@ -69,6 +69,7 @@ def try_rotate_weakest_position(
                 holding_cost,
                 holding_win_rate,
                 holding_trade_count,
+                holding_asset_growth_pct,
             )
             is_strategically_better = cand['sort_value'] > holding_sort_value
 

@@ -27,6 +27,7 @@ def _make_candidate_row(
     est_qty,
     win_rate,
     trade_count,
+    asset_growth_pct,
     est_init_sl,
     est_init_trail,
     est_target_price,
@@ -39,7 +40,7 @@ def _make_candidate_row(
     entry_ref_price=None,
 ):
     est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
-    sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count)
+    sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
     row = {
         'ticker': ticker,
         'type': candidate_type,
@@ -53,6 +54,7 @@ def _make_candidate_row(
         'sort_value': sort_value,
         'hist_win_rate': win_rate,
         'hist_trade_count': trade_count,
+        'asset_growth_pct': asset_growth_pct,
         'init_sl': est_init_sl,
         'init_trail': est_init_trail,
         'target_price': est_target_price,
@@ -95,7 +97,7 @@ def _collect_normal_candidates(
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
 
-        is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params
         )
         if not is_candidate:
@@ -120,6 +122,7 @@ def _collect_normal_candidates(
             est_qty=candidate_plan['qty'],
             win_rate=win_rate,
             trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
             est_init_sl=candidate_plan['init_sl'],
             est_init_trail=candidate_plan['init_trail'],
             est_target_price=candidate_plan['target_price'],
@@ -162,7 +165,7 @@ def _collect_extended_candidates(
             continue
         y_pos = t_pos - 1
 
-        is_candidate, ev, win_rate, trade_count = get_pit_stats_from_index(
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params
         )
         if not is_candidate:
@@ -194,6 +197,7 @@ def _collect_extended_candidates(
             est_qty=candidate_plan['qty'],
             win_rate=win_rate,
             trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
             est_init_sl=candidate_plan['init_sl'],
             est_init_trail=candidate_plan['init_trail'],
             est_target_price=candidate_plan['target_price'],

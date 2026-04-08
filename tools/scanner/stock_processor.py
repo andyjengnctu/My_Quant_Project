@@ -29,13 +29,14 @@ def _build_stat_str(stats):
     )
 
 
-def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count):
+def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, asset_growth_pct):
     return calc_buy_sort_value(
         get_buy_sort_method(),
         expected_value,
         0.0 if proj_cost is None else proj_cost,
         win_rate_pct / 100.0,
         trade_count,
+        asset_growth_pct,
     )
 
 
@@ -48,6 +49,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     expected_value = float(stats['expected_value'])
     win_rate_pct = float(stats['win_rate'])
     trade_count = int(stats['trade_count'])
+    asset_growth_pct = float(stats.get('asset_growth', 0.0))
 
     if stats['is_setup_today']:
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params)
@@ -71,6 +73,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
                 proj_cost=proj_cost,
                 win_rate_pct=win_rate_pct,
                 trade_count=trade_count,
+                asset_growth_pct=asset_growth_pct,
             ),
             'text': f"{ticker:<6} | {stat_str} | {detail}",
             'sanitize_issue': sanitize_issue,
@@ -127,6 +130,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
                 proj_cost=proj_cost,
                 win_rate_pct=win_rate_pct,
                 trade_count=trade_count,
+                asset_growth_pct=asset_growth_pct,
             ),
             'text': f"{ticker:<6} | {stat_str} | {' | '.join(barrier_parts)}",
             'sanitize_issue': sanitize_issue,
@@ -145,6 +149,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             proj_cost=None,
             win_rate_pct=win_rate_pct,
             trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
         ),
         'text': f"{ticker:<6} | {stat_str} | 僅歷績符合：今日無新訊號 / 延續掛單",
         'sanitize_issue': sanitize_issue,
