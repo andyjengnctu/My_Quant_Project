@@ -157,6 +157,7 @@ def run_daily_scanner(data_dir, params):
         adapt_result_fn=_adapt_candidate_scan_result,
         progress_formatter=_format_candidate_progress,
     )
+    candidate_rows = list(scan_state['rows'])
     print_scanner_summary(
         count_scanned=scan_state['count_scanned'],
         elapsed_time=scan_state['elapsed_time'],
@@ -165,7 +166,7 @@ def run_daily_scanner(data_dir, params):
         count_sanitized_candidates=scan_state['count_sanitized_candidates'],
         max_workers=scan_state['max_workers'],
         pool_start_method=scan_state['pool_start_method'],
-        candidate_rows=scan_state['rows'],
+        candidate_rows=candidate_rows,
         scanner_issue_log_path=scan_state['scanner_issue_log_path'],
     )
     return {
@@ -176,7 +177,7 @@ def run_daily_scanner(data_dir, params):
         'count_sanitized_candidates': scan_state['count_sanitized_candidates'],
         'max_workers': scan_state['max_workers'],
         'pool_start_method': scan_state['pool_start_method'],
-        'candidate_rows': list(scan_state['rows']),
+        'candidate_rows': list(candidate_rows),
         'scanner_issue_log_path': scan_state['scanner_issue_log_path'],
     }
 
