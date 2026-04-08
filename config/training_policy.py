@@ -27,7 +27,7 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響
 # None = 由 optimizer 搜尋 tp_percent
 # 0.0 = 固定關閉停利
 # 其他數值 = 固定停利比例
-OPTIMIZER_FIXED_TP_PERCENT = 0.505
+OPTIMIZER_FIXED_TP_PERCENT = 0.51
 
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
