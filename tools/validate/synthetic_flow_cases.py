@@ -449,6 +449,54 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     return results, summary
 
 
+def validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.atr_times_init = 2.0
+    params.atr_times_trail = 1.0
+
+    case_id = "SYNTH_FILL_BELOW_LIMIT_BASED_SIZING_STOP_STILL_ENTERS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    limit_price = 100.0
+    atr = 5.0
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, 1_000_000.0, params)
+    entry_result = execute_pre_market_entry_plan(
+        entry_plan=candidate_plan,
+        t_open=89.0,
+        t_high=95.0,
+        t_low=88.5,
+        t_close=90.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type='normal',
+    )
+    position = entry_result.get('position')
+
+    expected_candidate_init_sl = 90.0
+    expected_buy_price = 89.0
+    expected_position_stop = 79.0
+    expected_position_trail = 84.0
+    expected_position_target = 99.0
+
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "candidate_plan_keeps_limit_based_stop_for_sizing_only", expected_candidate_init_sl, None if candidate_plan is None else float(candidate_plan['init_sl']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_low_reaches_limit_price", True, bool(88.5 <= limit_price))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "buy_price_is_below_candidate_limit_based_stop", True, bool(expected_buy_price <= expected_candidate_init_sl), note="此情境直接釘死不得再用 candidate_plan.init_sl 當成交否決下限。")
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_still_fills_when_price_is_below_candidate_limit_based_stop", True, bool(entry_result['filled']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_is_not_labeled_as_worse_than_initial_stop", False, bool(entry_result['is_worse_than_initial_stop']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "entry_does_not_count_as_missed_buy_after_fill", False, bool(entry_result['count_as_missed_buy']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_buy_price_uses_open_when_open_below_limit", expected_buy_price, None if pd.isna(entry_result['buy_price']) else float(entry_result['buy_price']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
+    add_check(results, "synthetic_fill_below_limit_based_sizing_stop_still_enters", case_id, "filled_position_tp_half_uses_actual_fill_basis", expected_position_target, None if position is None else float(position['tp_half']))
+
+    summary['candidate_init_sl'] = None if candidate_plan is None else float(candidate_plan['init_sl'])
+    summary['buy_price'] = None if pd.isna(entry_result['buy_price']) else float(entry_result['buy_price'])
+    summary['filled_initial_stop'] = None if position is None else float(position['initial_stop'])
+    return results, summary
+
+
 def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.5)
     params.atr_times_init = 2.0

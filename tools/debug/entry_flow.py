@@ -117,8 +117,8 @@ def process_debug_entry_for_day(
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
                 gross_amount=entry_result['entry_price'] * entry_plan['qty'],
-                stop_price=entry_plan['init_sl'],
-                tp_half_price=get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
+                stop_price=position['initial_stop'],
+                tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
                 pnl=0.0,
             )
@@ -132,8 +132,8 @@ def process_debug_entry_for_day(
                     'current_capital': None if current_capital is None else float(current_capital),
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
-                    'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl']))),
+                    'stop_price': float(position['initial_stop']),
+                    'tp_price': float(position['tp_half']),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )
@@ -216,8 +216,8 @@ def process_debug_entry_for_day(
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
                 gross_amount=entry_result['entry_price'] * entry_plan['qty'],
-                stop_price=entry_plan['init_sl'],
-                tp_half_price=get_debug_tp_half_price(entry_result['tp_half'], entry_plan['qty'], params),
+                stop_price=position['initial_stop'],
+                tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
                 pnl=0.0,
             )
@@ -231,8 +231,8 @@ def process_debug_entry_for_day(
                     'current_capital': None if current_capital is None else float(current_capital),
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
-                    'stop_price': float(entry_plan['init_sl']),
-                    'tp_price': float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl']))),
+                    'stop_price': float(position['initial_stop']),
+                    'tp_price': float(position['tp_half']),
                     'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
                 },
             )

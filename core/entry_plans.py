@@ -72,7 +72,7 @@ def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
     return candidate_plan
 
 
-# # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單，且不能是先達停損而放棄進場)
+# # (AI註: miss buy 正式定義單一真理來源 - 必須先有有效限價買單)
 def should_count_miss_buy(order_qty, is_worse_than_initial_stop=False):
     if order_qty is None or order_qty <= 0:
         return False
@@ -189,7 +189,7 @@ def build_position_from_entry_fill(
     }
 
 
-# # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy / 先達停損放棄進場邏輯統一由此判斷)
+# # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy 邏輯統一由此判斷)
 def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal"):
     result = {
         "filled": False,
@@ -220,18 +220,12 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         return result
 
     limit_price = entry_plan["limit_price"]
-    sizing_stop = entry_plan["init_sl"]
 
     if t_low > limit_price:
         return result
 
     buy_price = adjust_long_buy_fill_price(min(t_open, limit_price))
     result["buy_price"] = buy_price
-
-    if buy_price <= sizing_stop:
-        result["is_worse_than_initial_stop"] = True
-        result["count_as_missed_buy"] = False
-        return result
 
     position = build_position_from_entry_fill(
         buy_price=buy_price,
