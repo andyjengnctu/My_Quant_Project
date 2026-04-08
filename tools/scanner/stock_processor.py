@@ -5,6 +5,7 @@ from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.price_utils import calc_entry_price, calc_reference_candidate_qty, can_execute_half_take_profit
+from core.scanner_display import build_scanner_sort_probe_text
 from .runtime_common import is_insufficient_data_error
 
 
@@ -20,12 +21,13 @@ def _build_sanitize_issue(ticker, sanitize_stats):
     )
 
 
-def _build_stat_str(stats):
-    return (
-        f"勝率:{stats['win_rate']:>5.1f}% | "
-        f"期望值:{stats['expected_value']:>5.2f}R | "
-        f"交易:{stats['trade_count']:>3}次 | "
-        f"MDD:{stats['max_drawdown']:>5.1f}%"
+def _build_stat_str(*, expected_value, win_rate_pct, trade_count, asset_growth_pct, sort_value):
+    return build_scanner_sort_probe_text(
+        ev=expected_value,
+        win_rate=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+        sort_value=sort_value,
     )
 
 
@@ -45,7 +47,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
-    stat_str = _build_stat_str(stats)
     expected_value = float(stats['expected_value'])
     win_rate_pct = float(stats['win_rate'])
     trade_count = int(stats['trade_count'])
@@ -62,23 +63,32 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             proj_cost = 0.0
             detail = "新訊號成立 | 股數不足，今日不掛單"
             kind = 'candidate'
+        sort_value = _calc_sort_value(
+            expected_value=expected_value,
+            proj_cost=proj_cost,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+        )
+        stat_str = _build_stat_str(
+            expected_value=expected_value,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+            sort_value=sort_value,
+        )
         return {
             'kind': kind,
             'ticker': ticker,
             'proj_cost': proj_cost,
             'ev': expected_value,
             'expected_value': expected_value,
-            'sort_value': _calc_sort_value(
-                expected_value=expected_value,
-                proj_cost=proj_cost,
-                win_rate_pct=win_rate_pct,
-                trade_count=trade_count,
-                asset_growth_pct=asset_growth_pct,
-            ),
+            'sort_value': sort_value,
             'text': f"{ticker:<6} | {stat_str} | {detail}",
             'sanitize_issue': sanitize_issue,
             'win_rate': win_rate_pct,
             'trade_count': trade_count,
+            'asset_growth': asset_growth_pct,
         }
 
     extended_candidate = stats.get('extended_candidate_today')
@@ -119,42 +129,60 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             else:
                 barrier_parts.append("今日延續觀察")
 
+        sort_value = _calc_sort_value(
+            expected_value=expected_value,
+            proj_cost=proj_cost,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+        )
+        stat_str = _build_stat_str(
+            expected_value=expected_value,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+            sort_value=sort_value,
+        )
         return {
             'kind': kind,
             'ticker': ticker,
             'proj_cost': proj_cost,
             'ev': expected_value,
             'expected_value': expected_value,
-            'sort_value': _calc_sort_value(
-                expected_value=expected_value,
-                proj_cost=proj_cost,
-                win_rate_pct=win_rate_pct,
-                trade_count=trade_count,
-                asset_growth_pct=asset_growth_pct,
-            ),
+            'sort_value': sort_value,
             'text': f"{ticker:<6} | {stat_str} | {' | '.join(barrier_parts)}",
             'sanitize_issue': sanitize_issue,
             'win_rate': win_rate_pct,
             'trade_count': trade_count,
+            'asset_growth': asset_growth_pct,
         }
 
+    sort_value = _calc_sort_value(
+        expected_value=expected_value,
+        proj_cost=None,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+    )
+    stat_str = _build_stat_str(
+        expected_value=expected_value,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+        sort_value=sort_value,
+    )
     return {
         'kind': 'candidate',
         'ticker': ticker,
         'proj_cost': None,
         'ev': expected_value,
         'expected_value': expected_value,
-        'sort_value': _calc_sort_value(
-            expected_value=expected_value,
-            proj_cost=None,
-            win_rate_pct=win_rate_pct,
-            trade_count=trade_count,
-            asset_growth_pct=asset_growth_pct,
-        ),
+        'sort_value': sort_value,
         'text': f"{ticker:<6} | {stat_str} | 僅歷績符合：今日無新訊號 / 延續掛單",
         'sanitize_issue': sanitize_issue,
         'win_rate': win_rate_pct,
         'trade_count': trade_count,
+        'asset_growth': asset_growth_pct,
     }
 
 

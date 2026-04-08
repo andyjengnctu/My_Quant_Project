@@ -11,6 +11,7 @@ from tkinter import messagebox, ttk
 import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
+from core.scanner_display import build_scanner_sort_probe_text
 from tools.debug.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
 from tools.debug.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
@@ -98,7 +99,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
         ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
-        self._history_combo = ttk.Combobox(controls, state="readonly", width=46, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._history_combo = ttk.Combobox(controls, state="readonly", width=58, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
         self._history_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
@@ -220,13 +221,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             kind_label = "延續候選"
         else:
             kind_label = "歷績符合"
-        ev = item.get("expected_value")
-        win_rate = item.get("win_rate")
-        trade_count = item.get("trade_count")
-        ev_text = "-" if ev is None or pd.isna(ev) else f"{float(ev):.2f}R"
-        win_rate_text = "-" if win_rate is None or pd.isna(win_rate) else f"{float(win_rate):.1f}%"
-        trade_count_text = "-" if trade_count is None or pd.isna(trade_count) else f"{int(trade_count)}次"
-        return f"{ticker} | {kind_label} | EV {ev_text} | 勝率 {win_rate_text} | 交易 {trade_count_text}"
+        probe_text = build_scanner_sort_probe_text(
+            ev=float(item.get("expected_value") or 0.0),
+            win_rate=float(item.get("win_rate") or 0.0),
+            trade_count=int(item.get("trade_count") or 0),
+            asset_growth_pct=float(item.get("asset_growth") or 0.0),
+            sort_value=float(item.get("sort_value") or 0.0),
+        )
+        return f"{ticker} | {kind_label} | {probe_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values):
         mapping.clear()

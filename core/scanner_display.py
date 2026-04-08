@@ -38,13 +38,15 @@ def build_scanner_sort_probe_text(
 ):
     label = get_buy_sort_metric_label(method)
     sort_metric_text = format_buy_sort_metric_value(sort_value, method)
-    return (
+    base_text = (
         f'EV {float(ev):.2f}R | '
         f'勝率 {_normalize_history_win_rate_pct(win_rate):.2f}% | '
-        f'交易 {int(trade_count)} | '
         f'資產成長 {float(asset_growth_pct):.2f}% | '
-        f'{label} {sort_metric_text}'
+        f'交易 {int(trade_count)}'
     )
+    if label == '資產成長':
+        return base_text
+    return f"{base_text} | {label} {sort_metric_text}"
 
 
 def print_scanner_header(params):
