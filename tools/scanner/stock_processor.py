@@ -36,8 +36,9 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
             return ('candidate', None, None, None, None, ticker, sanitize_issue)
 
         proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
+        half_tp_note = " | 半倉停利:股數不足" if not can_execute_half_take_profit(proj_qty, params.tp_percent) else ""
 
-        buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 預留:{proj_cost:>7,.0f}"
+        buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
         sort_value = calc_buy_sort_value(get_buy_sort_method(), stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
@@ -66,7 +67,9 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
             barrier_parts.append(f"失效線:{float(invalidation_barrier):>6.2f}")
         if completion_barrier is not None and not pd.isna(completion_barrier):
             barrier_parts.append(f"達標線:{float(completion_barrier):>6.2f}")
-        barrier_parts.append(f"預留:{proj_cost:>7,.0f}")
+        barrier_parts.append(f"參考投入:{proj_cost:>7,.0f}")
+        if not can_execute_half_take_profit(proj_qty, params.tp_percent):
+            barrier_parts.append("半倉停利:股數不足")
         buy_str = " | ".join(barrier_parts)
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 

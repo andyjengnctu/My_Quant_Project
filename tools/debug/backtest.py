@@ -88,6 +88,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
         ])
         meta.update({
             'current_capital': None if current_capital is None else float(current_capital),
+            'entry_price': float(entry_plan['limit_price']),
             'limit_price': float(entry_plan['limit_price']),
             'reserved_capital': float(reserved_capital),
             'qty': int(entry_plan['qty']),

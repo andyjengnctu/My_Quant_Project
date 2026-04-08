@@ -425,7 +425,7 @@
 | T198 | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` | B119 |
 | T199 | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` | B120 |
 | T200 | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` | B121 |
-| T201 | `synthetic_registry_import_targets` | B122 |
+| T201 | `tools/local_regression/run_quick_gate.py` | B122 |
 
 ## G. 逐項收斂紀錄
 
@@ -783,5 +783,7 @@
 | 2026-04-07 | T198 | 新增 GUI trade-count validator 禁止綁死過時 exit snippet 的 meta contract 並驗證 | NEW -> DONE | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` |
 | 2026-04-08 | B120 | 新增投組 cash-capped entry 不得丟失 fill-based first-actionable stop/tp 所需欄位的一致性規格後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
 | 2026-04-08 | B121 | 新增 candidate-plan limit-based sizing stop 不得回頭否決成交的一致性規格後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
+| 2026-04-08 | B122 | 新增 quick gate 前置攔截 synthetic registry import target wiring 錯誤的契約後主表收斂為 DONE | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
 | 2026-04-08 | T199 | 新增投組 cash-capped entry 保留 fill-based first-actionable 欄位 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` |
 | 2026-04-08 | T200 | 新增實際成交價低於 candidate limit-based sizing stop 仍須成交 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` |
+| 2026-04-08 | T201 | 新增 quick gate synthetic registry import target static check 並驗證 | NEW -> DONE | `tools/local_regression/run_quick_gate.py` |
