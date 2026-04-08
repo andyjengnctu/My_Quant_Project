@@ -35,3 +35,30 @@ def get_buy_sort_title(method=None):
     if active_method == 'ASSET_GROWTH':
         return '按資產成長由大到小排序'
     raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
+
+
+def get_buy_sort_metric_label(method=None):
+    active_method = get_buy_sort_method() if method is None else method
+    if active_method == 'EV':
+        return 'EV'
+    if active_method == 'PROJ_COST':
+        return '預估投入'
+    if active_method == 'HIST_WIN_X_TRADES':
+        return '勝率×次數'
+    if active_method == 'ASSET_GROWTH':
+        return '資產成長'
+    raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")
+
+
+def format_buy_sort_metric_value(value, method=None):
+    active_method = get_buy_sort_method() if method is None else method
+    numeric_value = float(value)
+    if active_method == 'EV':
+        return f'{numeric_value:.2f}R'
+    if active_method == 'PROJ_COST':
+        return f'{numeric_value:,.0f}'
+    if active_method == 'HIST_WIN_X_TRADES':
+        return f'{numeric_value:.2f}'
+    if active_method == 'ASSET_GROWTH':
+        return f'{numeric_value:.2f}%'
+    raise ValueError(f"未知的 BUY_SORT_METHOD: {active_method}")

@@ -1,4 +1,8 @@
-from core.buy_sort import get_buy_sort_title
+from core.buy_sort import (
+    format_buy_sort_metric_value,
+    get_buy_sort_metric_label,
+    get_buy_sort_title,
+)
 from core.capital_policy import resolve_scanner_live_capital
 from core.config import (
     BUY_SORT_METHOD,
@@ -16,6 +20,33 @@ from core.config import (
 from core.display_common import C_RESET, C_YELLOW, get_p
 
 
+def _normalize_history_win_rate_pct(win_rate):
+    numeric_value = float(win_rate)
+    if numeric_value <= 1.0:
+        return numeric_value * 100.0
+    return numeric_value
+
+
+def build_scanner_sort_probe_text(
+    *,
+    ev,
+    win_rate,
+    trade_count,
+    asset_growth_pct,
+    sort_value,
+    method=BUY_SORT_METHOD,
+):
+    label = get_buy_sort_metric_label(method)
+    sort_metric_text = format_buy_sort_metric_value(sort_value, method)
+    return (
+        f'EV {float(ev):.2f}R | '
+        f'勝率 {_normalize_history_win_rate_pct(win_rate):.2f}% | '
+        f'交易 {int(trade_count)} | '
+        f'資產成長 {float(asset_growth_pct):.2f}% | '
+        f'{label} {sort_metric_text}'
+    )
+
+
 def print_scanner_header(params):
     bb_str = f"啟用 (長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x)" if get_p(params, 'use_bb', False) else "關閉"
     kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
@@ -26,6 +57,11 @@ def print_scanner_header(params):
         f"EV算法 [{C_YELLOW}{EV_CALC_METHOD}{C_RESET}] | "
         f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
         f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}]"
+    )
+    print(
+        f"   ➤ 排序探針: "
+        f"逐項輸出應顯示 EV / 勝率 / 交易次數 / 資產成長 / {get_buy_sort_metric_label(BUY_SORT_METHOD)}；"
+        f"目前排序欄位 = {get_buy_sort_metric_label(BUY_SORT_METHOD)}"
     )
     print(
         f"   ➤ 訓練參數: "
