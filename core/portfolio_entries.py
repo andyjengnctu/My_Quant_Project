@@ -144,7 +144,7 @@ def execute_reserved_entries_for_day(
 
     return cash, total_missed_buys
 
-def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today):
+def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params):
     for ticker in sorted(list(active_extended_signals.keys())):
         if ticker in portfolio:
             del active_extended_signals[ticker]
@@ -158,7 +158,8 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
         if t_pos < 0:
             continue
 
+        t_open = get_fast_value(fast_df, 'Open', pos=t_pos)
         t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
         t_high = get_fast_value(fast_df, 'High', pos=t_pos)
-        if should_clear_extended_signal(active_extended_signals[ticker], t_low, t_high):
+        if should_clear_extended_signal(active_extended_signals[ticker], t_low, t_high, t_open=t_open, params=params):
             del active_extended_signals[ticker]

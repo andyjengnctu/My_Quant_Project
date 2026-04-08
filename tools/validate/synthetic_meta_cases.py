@@ -415,22 +415,28 @@ def validate_project_settings_dynamic_test_boundary_case(_base_params):
 
 
 def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
-    case_id = "META_PROJECT_SETTINGS_INIT_SL_FROZEN_PLAN"
+    case_id = "META_PROJECT_SETTINGS_PHYSICAL_TRADING_PRINCIPLES"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     project_settings_text = (PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
+    minimal_constraint_text = "除「只能盤前掛單」與「持倉後才能設定 / 執行停損停利」這兩項最小物理限制外，不得另加非最小、非物理且非必要的交易限制"
     l_only_text = "`L` 只作盤前最高可接受買入價、資金占用估算與最壞情境風險 sizing 上界"
     pfill_text = "其基準為 `P_fill` 與盤前已知波動尺度，預設使用 `ATR_t`，並自 `t+2` 起生效"
-    trigger_split_text = "`t+1` 只記 trigger，`t+2` 起於第一個可執行時點強制執行"
+    continuation_barrier_text = "未成交延續候選不得預先具有可執行停損 / 停利；只有當首個待掛單日曾進入可買區時，才可用當日反事實進場價 `P' = min(Open, L)` 建立固定的失效 / 達標 barrier。"
+    inclusive_hit_text = "長倉一律採 inclusive 口徑：`Low <= line`、`High >= line`"
 
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_minimal_physical_constraint_priority", True, minimal_constraint_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_l_is_entry_and_sizing_only", True, l_only_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_first_actionable_stop_uses_pfill_and_atr", True, pfill_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_trigger_execution_split", True, trigger_split_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_extended_candidate_fixed_counterfactual_barrier", True, continuation_barrier_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_inclusive_hit_semantics", True, inclusive_hit_text in project_settings_text)
 
+    summary["project_settings_declares_minimal_physical_constraint_priority"] = minimal_constraint_text in project_settings_text
     summary["project_settings_declares_l_is_entry_and_sizing_only"] = l_only_text in project_settings_text
     summary["project_settings_declares_first_actionable_stop_uses_pfill_and_atr"] = pfill_text in project_settings_text
-    summary["project_settings_declares_trigger_execution_split"] = trigger_split_text in project_settings_text
+    summary["project_settings_declares_extended_candidate_fixed_counterfactual_barrier"] = continuation_barrier_text in project_settings_text
+    summary["project_settings_declares_inclusive_hit_semantics"] = inclusive_hit_text in project_settings_text
     return results, summary
 
 

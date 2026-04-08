@@ -6,7 +6,7 @@ from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
 from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
-from core.price_utils import calc_entry_price, calc_frozen_target_price, calc_net_sell_price
+from core.price_utils import calc_entry_price, calc_net_sell_price
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
 from tools.debug.charting import (
@@ -58,11 +58,10 @@ def _resolve_chart_tp_line(position):
 def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     if chart_context is None or preview_plan is None:
         return False
-    preview_tp = preview_plan.get('target_price', calc_frozen_target_price(preview_plan['limit_price'], preview_plan['init_sl']))
     set_chart_future_preview(
         chart_context,
-        stop_price=preview_plan['init_sl'],
-        tp_half_price=preview_tp,
+        stop_price=np.nan,
+        tp_half_price=np.nan,
         limit_price=preview_plan['limit_price'],
         entry_price=np.nan,
     )
@@ -81,22 +80,16 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     if entry_plan is None:
         detail_lines.append('本次資金不足，無法掛單')
     else:
-        tp_line = calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])
-        buy_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+        reserved_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
         detail_lines.extend([
             f"股數: {int(entry_plan['qty']):,}",
-            f"金額: {buy_capital:,.0f}",
-            f"停利: {tp_line:.2f}",
             f"限價: {entry_plan['limit_price']:.2f}",
-            f"停損: {entry_plan['init_sl']:.2f}",
+            f"預留: {reserved_capital:,.0f}",
         ])
         meta.update({
             'current_capital': None if current_capital is None else float(current_capital),
-            'tp_price': float(tp_line),
             'limit_price': float(entry_plan['limit_price']),
-            'stop_price': float(entry_plan['init_sl']),
-            'entry_price': float(entry_plan['limit_price']),
-            'buy_capital': float(buy_capital),
+            'reserved_capital': float(reserved_capital),
             'qty': int(entry_plan['qty']),
         })
     record_signal_annotation(

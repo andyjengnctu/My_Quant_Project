@@ -160,7 +160,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             elif entry_result['count_as_missed_buy']:
                 missedBuyCount += 1
 
-        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j]):
+        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j], t_open=O[j], params=params):
             active_extended_signal = None
 
         currentEquity = currentCapital

@@ -106,7 +106,7 @@ ACTION_STYLE_MAP = {
 ORDER_STATUS_LABELS = {
     "filled": "成交",
     "missed": "未成交",
-    "abandoned": "先達停損放棄",
+    "abandoned": "放棄進場",
 }
 
 
@@ -684,25 +684,14 @@ def _build_trade_label_text(trace_name, marker):
     meta = marker.get("meta") or {}
     if trace_name in {"買進", "買進(延續候選)"}:
         lines = ["買進"]
-        current_capital = meta.get("current_capital")
-        if current_capital is not None and not pd.isna(current_capital):
-            lines.append(f"資金: {float(current_capital):,.0f}")
-        qty = marker.get("qty", 0)
-        if qty:
-            lines.append(f"股數: {int(qty):,}")
-        buy_capital = meta.get("buy_capital")
-        if buy_capital is not None and not pd.isna(buy_capital):
-            lines.append(f"金額: {float(buy_capital):,.0f}")
-        for key in ("tp_price", "limit_price", "stop_price"):
+        for key, label in (("tp_price", "停利"), ("entry_price", "成交"), ("stop_price", "停損")):
             value = meta.get(key)
             if value is None or pd.isna(value):
                 continue
-            label = {
-                "limit_price": "限價",
-                "stop_price": "停損",
-                "tp_price": "停利",
-            }[key]
             lines.append(f"{label}: {float(value):.2f}")
+        buy_capital = meta.get("buy_capital")
+        if buy_capital is not None and not pd.isna(buy_capital):
+            lines.append(f"實支: {float(buy_capital):,.0f}")
         return "\n".join(lines)
     if trace_name == "半倉停利":
         lines = ["停利"]

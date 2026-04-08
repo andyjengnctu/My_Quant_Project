@@ -34,6 +34,9 @@ def _make_candidate_row(
     is_orderable,
     params,
     signal_state=None,
+    continuation_invalidation_barrier=None,
+    continuation_completion_barrier=None,
+    entry_ref_price=None,
 ):
     est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
     sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count)
@@ -55,6 +58,9 @@ def _make_candidate_row(
         'target_price': est_target_price,
         'entry_atr': entry_atr,
         'is_orderable': is_orderable,
+        'continuation_invalidation_barrier': continuation_invalidation_barrier,
+        'continuation_completion_barrier': continuation_completion_barrier,
+        'entry_ref_price': entry_ref_price,
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -195,6 +201,9 @@ def _collect_extended_candidates(
             is_orderable=today_orderable,
             params=params,
             signal_state=active_extended_signals[ticker],
+            continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
+            continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
+            entry_ref_price=candidate_plan.get('entry_ref_price'),
         )
         candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:

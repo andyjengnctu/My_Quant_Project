@@ -268,7 +268,8 @@ def validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case(ba
 
 def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.0)
-    case_id = "SYNTH_EXTENDED_SIGNAL_A2_FROZEN_PLAN"
+    params.atr_times_init = 1.0
+    case_id = "SYNTH_EXTENDED_SIGNAL_FIXED_COUNTERFACTUAL_BARRIER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -276,10 +277,10 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     ticker = "9818"
     frame = pd.DataFrame(
         {
-            "Open": [120.0, 108.5, 109.0, 104.0],
-            "High": [121.0, 109.0, 110.1, 104.5],
-            "Low": [119.0, 108.0, 100.2, 89.5],
-            "Close": [120.0, 108.5, 109.5, 90.0],
+            "Open": [120.0, 98.0, 99.0, 97.0],
+            "High": [121.0, 99.0, 99.5, 108.2],
+            "Low": [119.0, 97.5, 96.0, 89.0],
+            "Close": [120.0, 98.5, 98.8, 95.0],
             "Volume": [1000.0, 1000.0, 1000.0, 1000.0],
             "ATR": [10.0, 10.0, 10.0, 10.0],
             "buy_limit": [100.0, 100.0, 100.0, 100.0],
@@ -310,14 +311,16 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         params=params,
     )
     day2_plan = day2_candidates[0] if day2_candidates else None
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_no_new_normal_setup", [], sorted(day2_normal_setup_tickers))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_keeps_valid_extended_candidate_even_when_unreachable", 1, len(day2_candidates))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_unreachable_extended_signal_not_in_orderable_list", 0, len(day2_orderable))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_limit_stays_signal_day_limit", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_frozen_stop_stays_signal_day_stop", float(signal_state["init_sl"]), None if day2_plan is None else float(day2_plan["init_sl"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_no_new_normal_setup", [], sorted(day2_normal_setup_tickers))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_candidate_stays_valid_even_when_not_orderable", 1, len(day2_candidates))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_signal_day_limit_used_before_anchor_exists", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_limit_down_guard_keeps_candidate_out_of_orderable_list", 0, len(day2_orderable))
 
-    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1])
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day2_target_not_hit_signal_remains_active", True, ticker in active_extended_signals)
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1], params)
+    updated_signal_state = active_extended_signals.get(ticker)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_reachable_counterfactual_fill_freezes_entry_ref_from_open_vs_limit", 98.0, None if updated_signal_state is None else float(updated_signal_state.get("entry_ref_price", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_invalidation_barrier_uses_fixed_counterfactual_fill_basis", 88.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_invalidation_barrier", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_completion_barrier_uses_fixed_counterfactual_fill_basis", 108.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_completion_barrier", float("nan"))))
 
     day3_candidates, day3_orderable, _day3_normal_setup_tickers = build_daily_candidates(
         normal_setup_index={},
@@ -331,18 +334,26 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         params=params,
     )
     day3_plan = day3_candidates[0] if day3_candidates else None
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_target_hit_day_still_uses_same_frozen_limit", 100.0, None if day3_plan is None else float(day3_plan["limit_px"]))
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
-    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2])
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day3_target_hit_clears_signal_next_day", False, ticker in active_extended_signals)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_reuses_fixed_counterfactual_entry_ref", 98.0, None if day3_plan is None else float(day3_plan["limit_px"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
 
-    stop_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 5.0, params)}
-    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, all_dfs_fast, dates[3])
-    add_check(results, "synthetic_extended_signal_a2_frozen_plan", case_id, "day4_stop_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_hit_clears_signal_next_day", False, ticker in active_extended_signals)
+
+    stop_frame = frame.copy()
+    stop_frame.loc[dates[3], ["Open", "High", "Low", "Close"]] = [96.0, 97.0, 87.5, 90.0]
+    stop_dfs_fast = {ticker: pack_prepared_stock_data(stop_frame)}
+    stop_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 10.0, params)}
+    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[1], params)
+    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[3], params)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_invalidation_barrier_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
 
     summary["day2_orderable_count"] = len(day2_orderable)
     summary["day3_orderable_count"] = len(day3_orderable)
-    summary["frozen_target_price"] = None if signal_state is None else float(signal_state["target_price"])
+    summary["frozen_entry_ref"] = None if updated_signal_state is None else float(updated_signal_state.get("entry_ref_price", float("nan")))
     return results, summary
 
 
@@ -401,8 +412,9 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_filled_target, None if tp_position is None else float(tp_position['tp_half']))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_tp_hit_is_queued_for_next_open", "TP_HALF", None if tp_position is None else tp_position.get('pending_exit_action'))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_stop_hit_is_queued_for_next_open", "STOP", None if stop_position is None else stop_position.get('pending_exit_action'))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_stop_barrier_stays_limit_based", expected_candidate_init_sl, None if signal_state is None else float(signal_state['init_sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_target_stays_limit_based", expected_candidate_target, None if signal_state is None else float(signal_state['target_price']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_counterfactual_entry_ref_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_invalidation_barrier_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_completion_barrier_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_completion_barrier')))
 
     if tp_position is None or stop_position is None:
         raise ValueError("validate_synthetic_init_sl_single_source_runtime_case 需要有效成交部位")

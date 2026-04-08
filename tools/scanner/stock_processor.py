@@ -5,7 +5,6 @@ from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.price_utils import (
     calc_entry_price,
-    calc_frozen_target_price,
     calc_net_sell_price,
     calc_reference_candidate_qty,
     can_execute_half_take_profit,
@@ -38,13 +37,7 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
 
         proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
 
-        if can_execute_half_take_profit(proj_qty, params.tp_percent):
-            est_target = calc_frozen_target_price(stats['buy_limit'], stats['stop_loss'])
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 停利:{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-        elif params.tp_percent <= 0:
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 半倉停利:關閉 | 參考投入:{proj_cost:>7,.0f}"
-        else:
-            buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 停損:{stats['stop_loss']:>6.2f} | 半倉停利:股數不足 | 參考投入:{proj_cost:>7,.0f}"
+        buy_str = f"限價買進:{stats['buy_limit']:>6.2f} | 預留:{proj_cost:>7,.0f}"
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
         sort_value = calc_buy_sort_value(get_buy_sort_method(), stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])
@@ -66,13 +59,15 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
 
         proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
 
-        if can_execute_half_take_profit(proj_qty, params.tp_percent):
-            est_target = extended_candidate.get('target_price', calc_frozen_target_price(limit_price, init_sl))
-            buy_str = f"延續掛單:{limit_price:>6.2f} | 停損:{init_sl:>6.2f} | 停利:{est_target:>6.2f} | 參考投入:{proj_cost:>7,.0f}"
-        elif params.tp_percent <= 0:
-            buy_str = f"延續掛單:{limit_price:>6.2f} | 停損:{init_sl:>6.2f} | 半倉停利:關閉 | 參考投入:{proj_cost:>7,.0f}"
-        else:
-            buy_str = f"延續掛單:{limit_price:>6.2f} | 停損:{init_sl:>6.2f} | 半倉停利:股數不足 | 參考投入:{proj_cost:>7,.0f}"
+        barrier_parts = [f"延續掛單:{limit_price:>6.2f}"]
+        invalidation_barrier = extended_candidate.get('continuation_invalidation_barrier')
+        completion_barrier = extended_candidate.get('continuation_completion_barrier')
+        if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
+            barrier_parts.append(f"失效線:{float(invalidation_barrier):>6.2f}")
+        if completion_barrier is not None and not pd.isna(completion_barrier):
+            barrier_parts.append(f"達標線:{float(completion_barrier):>6.2f}")
+        barrier_parts.append(f"預留:{proj_cost:>7,.0f}")
+        buy_str = " | ".join(barrier_parts)
         msg = f"{ticker:<6} | {stat_str} | {buy_str}"
 
         sort_value = calc_buy_sort_value(get_buy_sort_method(), stats['expected_value'], proj_cost, stats['win_rate'] / 100.0, stats['trade_count'])

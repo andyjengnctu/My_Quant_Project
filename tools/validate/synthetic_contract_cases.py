@@ -2143,7 +2143,7 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     add_check(results, "output_contract", case_id, "single_stock_history_chip_runtime_text_stays_fixed", True, 'self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source and 'self._sidebar_history_var.set(history_text)' not in inspector_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_new_signals", True, 'preview_candidate_plan = build_normal_candidate_plan' in entry_flow_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_extended_days", True, 'preview_candidate_plan = build_extended_candidate_plan_from_signal' in entry_flow_source)
-    add_check(results, "output_contract", case_id, "entry_preview_uses_frozen_extended_candidate_plan_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)' in entry_flow_source)
+    add_check(results, "output_contract", case_id, "entry_preview_extended_candidate_plan_stays_counterfactual_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)' in entry_flow_source)
 
     params = make_synthetic_validation_params(base_params)
     params.initial_capital = 1.0
@@ -2186,8 +2186,8 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     continued_preview_days = [2, 3, 4, 5]
 
     add_check(results, "output_contract", case_id, "extended_preview_limit_line_continues_across_candidate_days", True, bool(limit_line.size > max(continued_preview_days) and np.isfinite(limit_line[continued_preview_days]).all()))
-    add_check(results, "output_contract", case_id, "extended_preview_stop_line_continues_across_candidate_days", True, bool(stop_line.size > max(continued_preview_days) and np.isfinite(stop_line[continued_preview_days]).all()))
-    add_check(results, "output_contract", case_id, "extended_preview_tp_line_continues_across_candidate_days", True, bool(tp_line.size > max(continued_preview_days) and np.isfinite(tp_line[continued_preview_days]).all()))
+    add_check(results, "output_contract", case_id, "extended_preview_stop_line_stays_absent_before_fill", True, bool(stop_line.size > max(continued_preview_days) and np.isnan(stop_line[continued_preview_days]).all()))
+    add_check(results, "output_contract", case_id, "extended_preview_tp_line_stays_absent_before_fill", True, bool(tp_line.size > max(continued_preview_days) and np.isnan(tp_line[continued_preview_days]).all()))
     add_check(results, "output_contract", case_id, "extended_preview_stays_visual_even_when_entry_plan_not_orderable", 0, len((payload.get("marker_groups") or {}).get("買進", [])))
 
     summary["continued_preview_days"] = [signal_dates[idx].strftime("%Y-%m-%d") for idx in continued_preview_days]
@@ -2317,7 +2317,7 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "indicator_sell_marker_uses_green_horizontal_line", True, '"指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR}' in charting_source)
     add_check(results, "output_contract", case_id, "tp_visual_uses_yellow_color", True, 'MATPLOTLIB_TP_COLOR = "#facc15"' in charting_source)
     add_check(results, "output_contract", case_id, "exit_trade_labels_include_trade_count", True, 'lines.append(f"交易次數: {int(trade_count)}")' in charting_source and "'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0)" in exit_flow_source)
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_exports_preview_prices_for_autoscale", True, "'tp_price': float(tp_line)" in backtest_source and "'limit_price': float(entry_plan['limit_price'])" in backtest_source and "'stop_price': float(entry_plan['init_sl'])" in backtest_source)
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_exports_limit_and_reserved_for_autoscale", True, "'limit_price': float(entry_plan['limit_price'])" in backtest_source and "'reserved_capital': float(reserved_capital)" in backtest_source and "'tp_price': float(tp_line)" not in backtest_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
     chart_payload = normalize_chart_payload_contract(
@@ -2341,8 +2341,8 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
                     "anchor_price": 103.0,
                     "signal_type": "buy",
                     "title": "買訊",
-                    "detail_text": "停利: 155.00",
-                    "meta": {"tp_price": 155.0, "limit_price": 132.0, "stop_price": 94.0, "entry_price": 132.0},
+                    "detail_text": "預留: 132,000",
+                    "meta": {"limit_price": 132.0, "reserved_capital": 132000.0},
                 }
             ],
             "future_preview": {},
@@ -2352,7 +2352,7 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
         }
     )
     visible_ranges = compute_visible_value_ranges(chart_payload, start_idx=0.0, end_idx=3.0)
-    add_check(results, "output_contract", case_id, "buy_signal_preview_prices_participate_in_visible_price_range", True, float(visible_ranges.get("price_max", 0.0)) > 150.0)
+    add_check(results, "output_contract", case_id, "buy_signal_limit_preview_participates_in_visible_price_range", True, float(visible_ranges.get("price_max", 0.0)) > 130.0)
 
     summary["price_max_with_signal_meta"] = float(visible_ranges.get("price_max", 0.0))
     return results, summary
@@ -2371,7 +2371,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     trade_log_source = build_project_absolute_path("tools", "debug", "trade_log.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "debug_view_initial_capital_uses_scanner_live_capital_basis", True, 'cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)' in trade_log_source)
-    add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_buy_amount", True, '資金:' in backtest_source and '金額:' in backtest_source)
+    add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_reserved_capital", True, '資金:' in backtest_source and '預留:' in backtest_source)
     add_check(results, "output_contract", case_id, "final_exit_marker_uses_completed_snapshot_after_same_day_exits", True, 'include_current_date_exits=True' in exit_flow_source)
 
     charting_module = importlib.import_module("tools.debug.charting")
@@ -2382,10 +2382,9 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         {
             "qty": 1000,
             "meta": {
-                "current_capital": 2000000.0,
                 "buy_capital": 123456.0,
                 "tp_price": 62.4,
-                "limit_price": 55.0,
+                "entry_price": 55.2,
                 "stop_price": 47.65,
             },
         },
@@ -2419,8 +2418,8 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    add_check(results, "output_contract", case_id, "buy_trade_label_includes_current_capital", True, "資金: 2,000,000" in buy_label_text)
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_buy_amount_wording", True, "金額: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_execution_first_wording", True, "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "停利: 62.40" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_actual_spend_wording", True, "實支: 123,456" in buy_label_text)
     add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
@@ -2570,11 +2569,11 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
     tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
 
     add_check(results, "output_contract", case_id, "extended_preview_limit_line_reaches_latest_actual_bar", True, bool(limit_line.size > 6 and np.isfinite(limit_line[6])))
-    add_check(results, "output_contract", case_id, "extended_preview_stop_line_reaches_latest_actual_bar", True, bool(stop_line.size > 6 and np.isfinite(stop_line[6])))
-    add_check(results, "output_contract", case_id, "extended_preview_tp_line_reaches_latest_actual_bar", True, bool(tp_line.size > 6 and np.isfinite(tp_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_stop_line_stays_absent_at_latest_actual_bar", True, bool(stop_line.size > 6 and np.isnan(stop_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_tp_line_stays_absent_at_latest_actual_bar", True, bool(tp_line.size > 6 and np.isnan(tp_line[6])))
     add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_limit_exists", True, bool(np.isfinite(float(future_preview.get("limit_price", np.nan)))))
-    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_stop_exists", True, bool(np.isfinite(float(future_preview.get("stop_price", np.nan)))))
-    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_tp_exists", True, bool(np.isfinite(float(future_preview.get("tp_half_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_stop_absent_before_fill", True, bool(np.isnan(float(future_preview.get("stop_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_tp_absent_before_fill", True, bool(np.isnan(float(future_preview.get("tp_half_price", np.nan)))))
 
     summary["latest_future_preview"] = {
         key: float(value) for key, value in future_preview.items() if value is not None and np.isfinite(value)
@@ -2689,7 +2688,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
         signal_type="buy",
         anchor_price=float(large_frame.iloc[-15]["Low"]),
         title="買訊",
-        detail_lines=["限價: 120.00", "停損: 115.00", "股數: 1,000"],
+        detail_lines=["股數: 1,000", "限價: 120.00", "預留: 120,000"],
     )
     set_chart_summary_box(large_chart_context, summary_lines=["資產成長: 10.0%", "交易次數: 5"])
     set_chart_status_box(large_chart_context, status_lines=["無賣訊", "出現買入訊號", "歷史績效符合"], ok=True)

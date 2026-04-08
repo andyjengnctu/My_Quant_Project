@@ -1,7 +1,6 @@
 import numpy as np
 
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan, execute_pre_market_entry_plan
-from core.price_utils import calc_frozen_target_price
 from core.extended_signals import (
     build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,
@@ -37,12 +36,11 @@ def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_
 def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan):
     if chart_context is None or entry_plan is None:
         return
-    tp_price = float(entry_plan.get('target_price', calc_frozen_target_price(entry_plan['limit_price'], entry_plan['init_sl'])))
     record_active_levels(
         chart_context,
         current_date=current_date,
-        stop_price=entry_plan['init_sl'],
-        tp_half_price=tp_price,
+        stop_price=np.nan,
+        tp_half_price=np.nan,
         limit_price=entry_plan['limit_price'],
         entry_price=np.nan,
     )
@@ -95,7 +93,7 @@ def process_debug_entry_for_day(
         if entry_result['count_as_missed_buy']:
             marker_note = f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
         elif entry_result['is_worse_than_initial_stop']:
-            marker_note = "先達停損，放棄進場"
+            marker_note = "放棄進場"
         _record_entry_plan_marker(
             chart_context,
             current_date=current_date,
@@ -129,8 +127,6 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
-                    'current_capital': None if current_capital is None else float(current_capital),
-                    'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
@@ -147,7 +143,7 @@ def process_debug_entry_for_day(
                 net_price=np.nan,
                 qty=entry_plan['qty'],
                 gross_amount=reserved_cost,
-                stop_price=entry_plan['init_sl'],
+                stop_price=np.nan,
                 tp_half_price=np.nan,
                 atr_prev=atr_prev,
                 pnl=0.0,
@@ -158,12 +154,12 @@ def process_debug_entry_for_day(
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
-                action="放棄進場(先達停損)",
+                action="放棄進場",
                 price=entry_result['buy_price'],
                 net_price=np.nan,
                 qty=entry_plan['qty'],
                 gross_amount=reserved_cost,
-                stop_price=entry_plan['init_sl'],
+                stop_price=np.nan,
                 tp_half_price=np.nan,
                 atr_prev=atr_prev,
                 pnl=0.0,
@@ -194,7 +190,7 @@ def process_debug_entry_for_day(
         if entry_result['count_as_missed_buy']:
             marker_note = f"預掛限價 {entry_plan['limit_price']:.2f} 未成交"
         elif entry_result['is_worse_than_initial_stop']:
-            marker_note = "延續候選先達停損，放棄進場"
+            marker_note = "放棄進場(延續候選)"
         _record_entry_plan_marker(
             chart_context,
             current_date=current_date,
@@ -228,8 +224,6 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 qty=entry_plan['qty'],
                 meta={
-                    'current_capital': None if current_capital is None else float(current_capital),
-                    'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
@@ -246,7 +240,7 @@ def process_debug_entry_for_day(
                 net_price=np.nan,
                 qty=entry_plan['qty'],
                 gross_amount=reserved_cost,
-                stop_price=entry_plan['init_sl'],
+                stop_price=np.nan,
                 tp_half_price=np.nan,
                 atr_prev=atr_prev,
                 pnl=0.0,
@@ -257,19 +251,19 @@ def process_debug_entry_for_day(
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
-                action="放棄進場(延續先達停損)",
+                action="放棄進場(延續候選)",
                 price=entry_result['buy_price'],
                 net_price=np.nan,
                 qty=entry_plan['qty'],
                 gross_amount=reserved_cost,
-                stop_price=entry_plan['init_sl'],
+                stop_price=np.nan,
                 tp_half_price=np.nan,
                 atr_prev=atr_prev,
                 pnl=0.0,
                 note="不計 miss buy",
             )
 
-    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low, t_high):
+    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low, t_high, t_open=t_open, params=params):
         active_extended_signal = None
 
     return position, active_extended_signal
