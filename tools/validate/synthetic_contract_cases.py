@@ -2420,6 +2420,8 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
 
     add_check(results, "output_contract", case_id, "buy_trade_label_uses_execution_first_wording", True, "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "停利: 62.40" in buy_label_text)
     add_check(results, "output_contract", case_id, "buy_trade_label_uses_actual_spend_wording", True, "實支: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}' in charting_source)
+    add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, 'if trace_name in {"買進", "買進(延續候選)"}:' in charting_source and 'y_offset = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)

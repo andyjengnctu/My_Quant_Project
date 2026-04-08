@@ -872,16 +872,22 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, start_idx=None, end_idx=None):
     rendered = []
+    supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
     for trace_name, markers in marker_groups.items():
         for marker in markers:
             if start_idx is not None and int(marker["x"]) < int(start_idx):
                 continue
             if end_idx is not None and int(marker["x"]) > int(end_idx):
                 continue
-            if trace_name not in {"半倉停利", "停損殺出", "指標賣出", "期末強制結算"}:
+            if trace_name not in supported_traces:
                 continue
             face_color, text_color, placement = _resolve_trade_box_style(trace_name, marker)
-            y_offset = -82 if placement == "below" else 18
+            if trace_name in {"買進", "買進(延續候選)"}:
+                y_offset = -64
+            elif placement == "below":
+                y_offset = -82
+            else:
+                y_offset = 18
             va = "top" if placement == "below" else "bottom"
             rendered.append(
                 axis_price.annotate(
