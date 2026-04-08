@@ -102,7 +102,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要維持單一測試入口欄位，但 formal step 類 script/CLI 必須以 `formal_pipeline.py` 註冊的完整 command string 原樣記錄，仍視為單一入口，不得裁成裸 script path；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱、檔案開頭第一個非空行漂移，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、formal command string 在 `T` 必須仍被視為單一測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱、檔案開頭第一個非空行漂移，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -427,6 +427,7 @@
 | T200 | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` | B121 |
 | T201 | `validate_quick_gate_synthetic_registry_import_targets_contract_case` | B122 |
 | T202 | `tools/validate/cli.py --dataset reduced` | B23 |
+| T203 | `validate_checklist_f2_formal_command_single_entry_case` | B26 |
 
 ## G. 逐項收斂紀錄
 
@@ -788,4 +789,7 @@
 | 2026-04-08 | T199 | 新增投組 cash-capped entry 保留 fill-based first-actionable 欄位 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` |
 | 2026-04-08 | T200 | 新增實際成交價低於 candidate limit-based sizing stop 仍須成交 synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` |
 | 2026-04-08 | T201 | 新增 quick gate synthetic registry import target static check 並驗證 | NEW -> DONE | `validate_quick_gate_synthetic_registry_import_targets_contract_case` |
+| 2026-04-09 | B26 | 檢出 checklist `T` 單列單入口 parser 未把 formal command string 視為單一測試入口，主表改回 PARTIAL | DONE -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-09 | B26 | 補上 formal command string 單列單入口 guard 並重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-09 | T202 | 新增 formal consistency step 完整 command string 必須列入 checklist `T` 摘要的 meta contract 並同步補齊映射 | NEW -> DONE | `tools/validate/cli.py --dataset reduced` |
+| 2026-04-09 | T203 | 新增 checklist `T` formal command string 單列單入口 contract 並驗證 | NEW -> DONE | `validate_checklist_f2_formal_command_single_entry_case` |

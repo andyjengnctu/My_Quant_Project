@@ -47,6 +47,7 @@ from .synthetic_unit_cases import (
 from .synthetic_meta_cases import (
     validate_checklist_no_legacy_d_section_case,
     validate_checklist_no_legacy_f1_section_case,
+    validate_checklist_f2_formal_command_single_entry_case,
     validate_checklist_f2_single_entry_delimiter_case,
     validate_checklist_g_single_note_entry_delimiter_case,
     validate_checklist_g_transition_format_case,
@@ -275,6 +276,7 @@ def get_synthetic_validator_entries():
         _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/validate/synthetic_cases.py")),
         _entry(validate_checklist_no_legacy_d_section_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_checklist_no_legacy_f1_section_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
+        _entry(validate_checklist_f2_formal_command_single_entry_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_checklist_f2_single_entry_delimiter_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_checklist_g_transition_format_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_checklist_g_ordering_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),

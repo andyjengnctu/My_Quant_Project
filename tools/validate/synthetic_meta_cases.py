@@ -862,6 +862,51 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
     return results, summary
 
 
+def validate_checklist_f2_formal_command_single_entry_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_F2_FORMAL_COMMAND_SINGLE_ENTRY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    command_entry = "tools/validate/cli.py --dataset reduced"
+    parsed_entries = meta_quality_module._extract_checklist_test_entries(f"`{command_entry}`")
+    add_check(results, "meta_checklist", case_id, "formal_command_entry_parses_as_single_entry", [command_entry], parsed_entries)
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="T. 目前所有 `DONE` 的建議測試項目摘要",
+            row_id="T107",
+            id_col_idx=0,
+            update_cols=lambda cols: [cols[0], f"`{command_entry}`", cols[2]],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_f2_formal_command_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    f2_result = result_by_name.get("checklist_f_rows_use_single_test_entry", {})
+    invalid_rows = f2_result.get("invalid_entries")
+    if invalid_rows is None:
+        invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_single_entry_guard_passes", "PASS", f2_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_not_reported_invalid", False, any(row.get("id") == "T107" for row in invalid_rows))
+
+    summary["guard_status"] = f2_result.get("status")
+    summary["parsed_entries"] = parsed_entries
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
 def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 

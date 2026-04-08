@@ -163,6 +163,27 @@ def _extract_checklist_note_entries(note: str) -> List[str]:
     return sorted(note_entries)
 
 
+def _normalize_checklist_test_entry_token(token: str) -> str | None:
+    normalized = str(token or "").strip().replace("\\", "/")
+    if not normalized:
+        return None
+    if re.fullmatch(r"validate_[A-Za-z0-9_]+", normalized):
+        return normalized
+
+    command_parts = normalized.split()
+    if not command_parts:
+        return None
+    first_token = command_parts[0]
+    if not re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py", first_token):
+        return None
+    for extra_part in command_parts[1:]:
+        if re.fullmatch(r"validate_[A-Za-z0-9_]+", extra_part):
+            return None
+        if re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py", extra_part):
+            return None
+    return normalized
+
+
 def _extract_checklist_test_entries(entry: str) -> List[str]:
     normalized = str(entry or "").strip()
     if not normalized:
@@ -170,10 +191,8 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
 
     test_entries: Set[str] = set()
     for raw_token in re.findall(r"`([^`]+)`", normalized):
-        token = raw_token.strip().replace("\\", "/")
-        if not token:
-            continue
-        if token.startswith("validate_") or re.fullmatch(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.py", token):
+        token = _normalize_checklist_test_entry_token(raw_token)
+        if token:
             test_entries.add(token)
 
     text_without_backticks = re.sub(r"`[^`]+`", " ", normalized)
@@ -181,7 +200,6 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
     test_entries.update(re.findall(r"\b(?:apps|core|tools)/[A-Za-z0-9_./-]+\.py\b", text_without_backticks))
     test_entries.update(re.findall(r"\brun_[A-Za-z0-9_.-]+\.py\b", text_without_backticks))
     return sorted(test_entries)
-
 
 def _checklist_has_legacy_d_section() -> bool:
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
