@@ -1430,6 +1430,39 @@ def validate_synthetic_cases_import_target_resolution_contract_case(_base_params
     return results, summary
 
 
+def validate_quick_gate_synthetic_registry_import_targets_contract_case(_base_params):
+    case_id = "META_QUICK_GATE_SYNTHETIC_REGISTRY_IMPORT_TARGETS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    quick_gate_path = PROJECT_ROOT / "tools" / "local_regression" / "run_quick_gate.py"
+    source_text = quick_gate_path.read_text(encoding="utf-8")
+    has_static_check_name = '"synthetic_registry_import_targets"' in source_text
+    uses_shared_helper = "summarize_synthetic_cases_import_target_resolution_contract" in source_text
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "quick_gate_registers_synthetic_registry_import_targets_static_check",
+        True,
+        has_static_check_name,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "quick_gate_reuses_shared_import_target_resolution_helper",
+        True,
+        uses_shared_helper,
+    )
+
+    summary["source_file"] = quick_gate_path.name
+    summary["has_static_check_name"] = has_static_check_name
+    summary["uses_shared_helper"] = uses_shared_helper
+    return results, summary
+
+
 def validate_debug_backtest_history_snapshot_patch_seam_contract_case(_base_params):
     case_id = "META_DEBUG_BACKTEST_HISTORY_SNAPSHOT_PATCH_SEAM_CONTRACT"
     results = []
