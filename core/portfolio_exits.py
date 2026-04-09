@@ -22,6 +22,12 @@ def _first_exec_context(position, event_name):
     return None
 
 
+def _round_money_for_history(value):
+    return round(float(value), 2)
+
+
+
+
 def try_rotate_weakest_position(
     portfolio,
     orderable_candidates_today,
@@ -126,8 +132,8 @@ def try_rotate_weakest_position(
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': weakest_ticker,
                     'Type': '汰弱賣出(Open, T+1再評估買進)',
-                    '單筆損益': milli_to_money(pnl_milli),
-                    '該筆總損益': total_pnl,
+                    '單筆損益': _round_money_for_history(milli_to_money(pnl_milli)),
+                    '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
                 }
@@ -188,7 +194,7 @@ def settle_portfolio_positions(
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': ticker,
                     'Type': '半倉停利',
-                    '單筆損益': 0.0 if tp_context is None else float(tp_context['pnl']),
+                    '單筆損益': 0.0 if tp_context is None else _round_money_for_history(tp_context['pnl']),
                     'R_Multiple': 0.0,
                     'Risk': params.fixed_risk,
                 }
@@ -213,8 +219,8 @@ def settle_portfolio_positions(
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': ticker,
                         'Type': t_type,
-                        '單筆損益': 0.0 if exit_context is None else float(exit_context['pnl']),
-                        '該筆總損益': total_pnl,
+                        '單筆損益': 0.0 if exit_context is None else _round_money_for_history(exit_context['pnl']),
+                        '該筆總損益': _round_money_for_history(total_pnl),
                         'R_Multiple': total_r,
                         'Risk': params.fixed_risk,
                     }
@@ -242,7 +248,7 @@ def settle_portfolio_positions(
                         'Ticker': ticker,
                         'Type': '錯失賣出',
                         '單筆損益': 0.0,
-                        '該筆總損益': pos['realized_pnl'],
+                        '該筆總損益': _round_money_for_history(pos['realized_pnl']),
                         'R_Multiple': 0.0,
                         'Risk': params.fixed_risk,
                         '備註': reason_note,
@@ -294,8 +300,8 @@ def closeout_open_positions(
                     'Date': last_date.strftime('%Y-%m-%d') if last_date else '',
                     'Ticker': ticker,
                     'Type': '期末強制結算',
-                    '單筆損益': milli_to_money(pnl_milli),
-                    '該筆總損益': total_pnl,
+                    '單筆損益': _round_money_for_history(milli_to_money(pnl_milli)),
+                    '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
                 }

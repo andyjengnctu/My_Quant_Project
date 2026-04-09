@@ -49,6 +49,7 @@
 11. 凡屬買入、停損、停利、漲跌停與一字鎖死等交易狀態判斷，必須經共享價格正規化 helper；不得以 raw float equality 或未正規化浮點值直接判定。
 12. 凡變更 `run_v16_backtest`、scanner reference 或其他跨工具共用 public payload / stats key 時，必須同輪檢索全部 consumer 與 formal contract，維持既有欄位相容或同步改完所有 caller；不得只改 producer。
 13. 單股 backtest 與 debug 路徑中的 `currentCapital` 一律代表可用現金；任何半倉、全倉或期末結算只能加回實際 `net sell total`，不得只加 `realized pnl`；持倉中的 `currentEquity` 一律以 `cash + 當前可變現淨值` 計。
+14. debug / GUI / 單股模擬凡重播 entry/exit 現金路徑時，買進當下也必須同步扣除實際 `net buy total`；不得只在賣出時更新現金，否則 sizing、trade log 與 completed-trade 重建都會分叉。
 
 ## E. 交易與策略原則
 

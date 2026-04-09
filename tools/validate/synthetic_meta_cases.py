@@ -2120,6 +2120,38 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
 
 
 
+
+
+def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
+    case_id = "META_DEBUG_BACKTEST_ENTRY_CASH_PATH_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    def _get_function_source(rel_path, func_name):
+        source_path = build_project_absolute_path(*rel_path.split('/'))
+        source_text = source_path.read_text(encoding="utf-8")
+        parsed = ast.parse(source_text, filename=str(source_path))
+        for node in parsed.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                func_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+                return source_path, func_source
+        return source_path, ""
+
+    debug_backtest_path, debug_backtest_source = _get_function_source("tools/debug/backtest.py", "run_debug_analysis")
+    debug_entry_path, debug_entry_source = _get_function_source("tools/debug/entry_flow.py", "process_debug_entry_for_day")
+
+    add_check(results, "meta_contract", case_id, "debug_backtest_entry_flow_returns_spent_cash", True, "position, active_extended_signal, spent_cash = process_debug_entry_for_day(" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_entry_cash_subtracts_spent_cash", True, "current_capital -= spent_cash" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_tracks_exact_entry_cost", True, "spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
+
+    summary["source_paths"] = [
+        str(debug_backtest_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(debug_entry_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+    ]
+    return results, summary
+
+
 def validate_single_backtest_exact_cash_path_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
     results = []

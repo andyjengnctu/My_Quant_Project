@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 from core.price_utils import can_execute_half_take_profit
@@ -5,6 +6,12 @@ from core.price_utils import can_execute_half_take_profit
 
 def get_debug_tp_half_price(tp_half, qty, params):
     return tp_half if can_execute_half_take_profit(qty, params.tp_percent) else np.nan
+
+
+def _round_money_for_log(value):
+    if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+        return value
+    return round(float(value), 2)
 
 
 def append_debug_trade_row(
@@ -28,11 +35,11 @@ def append_debug_trade_row(
         "成交價": price,
         "含息成本價": net_price,
         "股數": qty,
-        "投入總金額": gross_amount,
+        "投入總金額": _round_money_for_log(gross_amount),
         "設定停損價": stop_price,
         "半倉停利價": tp_half_price,
         "ATR(前日)": atr_prev,
-        "單筆實質損益": pnl,
+        "單筆實質損益": _round_money_for_log(pnl),
     }
     if note:
         row["備註"] = note

@@ -69,6 +69,7 @@ def process_debug_entry_for_day(
     current_capital=None,
 ):
     buy_triggered = False
+    spent_cash = 0.0
     date_str = current_date.strftime('%Y-%m-%d')
 
     if buy_condition_prev and pos_qty_start_of_bar == 0:
@@ -108,6 +109,7 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
+            spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -115,7 +117,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
-                gross_amount=entry_result['entry_price'] * entry_plan['qty'],
+                gross_amount=spent_cash,
                 stop_price=position['initial_stop'],
                 tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
@@ -132,7 +134,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
-                    'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
+                    'buy_capital': spent_cash,
                 },
             )
         elif entry_result['count_as_missed_buy']:
@@ -206,6 +208,7 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
+            spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -213,7 +216,7 @@ def process_debug_entry_for_day(
                 price=entry_result['buy_price'],
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
-                gross_amount=entry_result['entry_price'] * entry_plan['qty'],
+                gross_amount=spent_cash,
                 stop_price=position['initial_stop'],
                 tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
                 atr_prev=atr_prev,
@@ -230,7 +233,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
-                    'buy_capital': float(entry_result['entry_price'] * entry_plan['qty']),
+                    'buy_capital': spent_cash,
                 },
             )
         elif entry_result['count_as_missed_buy']:
@@ -269,4 +272,4 @@ def process_debug_entry_for_day(
     if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low, t_high, t_open=t_open, params=params):
         active_extended_signal = None
 
-    return position, active_extended_signal
+    return position, active_extended_signal, spent_cash

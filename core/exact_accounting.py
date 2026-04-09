@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
+from numbers import Integral
 from typing import Any, Dict
 
 MILLI_SCALE = 1000
@@ -32,6 +33,22 @@ def milli_to_price(price_milli: int) -> float:
 
 
 milli_to_money = milli_to_price
+
+
+def is_money_milli_input(value) -> bool:
+    return isinstance(value, Integral)
+
+
+def coerce_money_like_to_milli(value) -> int:
+    if is_money_milli_input(value):
+        return int(value)
+    return money_to_milli(value)
+
+
+def restore_money_like_from_milli(value_milli: int, template):
+    if is_money_milli_input(template):
+        return int(value_milli)
+    return milli_to_money(value_milli)
 
 
 def rate_to_ppm(rate) -> int:
@@ -174,12 +191,14 @@ def calc_net_sell_price_from_total(exec_price, qty: int, params) -> float:
 
 def calc_limit_up_price_milli(reference_price_milli: int) -> int:
     raw_price_milli = _round_decimal_to_int(Decimal(int(reference_price_milli)) * Decimal(110) / Decimal(100))
-    return round_price_milli_to_tick(raw_price_milli, direction="down")
+    tick_milli = get_tick_milli(int(reference_price_milli))
+    return (raw_price_milli // tick_milli) * tick_milli
 
 
 def calc_limit_down_price_milli(reference_price_milli: int) -> int:
     raw_price_milli = _round_decimal_to_int(Decimal(int(reference_price_milli)) * Decimal(90) / Decimal(100))
-    return round_price_milli_to_tick(raw_price_milli, direction="up")
+    tick_milli = get_tick_milli(int(reference_price_milli))
+    return ((raw_price_milli + tick_milli - 1) // tick_milli) * tick_milli
 
 
 def is_same_price_milli(a, b) -> bool:

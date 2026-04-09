@@ -190,6 +190,7 @@
 | B123 | P0 | 契約 / 一致性 | 正式帳務中的 `cash` / `pnl` / `equity` / `reserved_cost` / `risk`、partial-exit cost-basis allocation 與 tick/limit hit 判斷，必須收斂到整數 exact-accounting 單一真理來源；不得再以含費每股價或 per-share × qty 回推正式總額 | DONE | 已補 exact-accounting unit-like contract，直接釘死 ledger 守恆、partial-exit cost-basis 回沖、integer tick/limit hit、cash/risk boundary、單股/投組 closeout parity 與 display-derived 欄位；並同步把正式核心 cash/pnl/equity/reserved_cost 路徑收斂到 `core/exact_accounting.py` | `tools/validate/synthetic_unit_cases.py`, `core/exact_accounting.py` |
 | B124 | P1 | Meta / Schema 契約 | `build_backtest_stats()` / `run_v16_backtest()` 的 public stats payload 必須維持既有 snake_case 相容 key（如 `trade_count` / `expected_value` / `asset_growth` / `max_drawdown` / `missed_buys` / `is_setup_today` / `extended_candidate_today` / `current_position` / `score`）；重構 producer 時不得只保留 camelCase 內部欄位，導致 GUI / scanner / validate caller runtime `KeyError` | DONE | 已補 static meta contract，直接 AST 掃描 `core/backtest_finalize.py` 的 `build_backtest_stats()` dict key，釘死 legacy stats schema key 必須仍存在，避免 refactor 後只改 producer 就讓 GUI / scanner / consistency runtime 因缺 key 中斷 | `tools/validate/synthetic_meta_cases.py`, `core/backtest_finalize.py` |
 | B125 | P0 | 契約 / 一致性 | 單股 backtest / debug 的 `currentCapital` 必須固定代表可用現金；任何半倉、全倉與期末結算都只能加回 `net sell total`，`currentEquity` 必須以 `cash + 當前可變現淨值` 計；不得再沿用 `+ realized pnl` 或 `cash + floating pnl` 的舊路徑，否則會讓單股與投組 trade_count / asset_growth / completed-trade PnL 分叉 | DONE | 已補 static meta contract，直接掃描 `core/backtest_core.py`、`core/backtest_finalize.py`、`tools/debug/backtest.py` 與 `tools/debug/exit_flow.py`，釘死單股 / debug 現金更新必須使用 freed cash / net sell total，mark-to-market equity 必須使用 net liquidation value；避免 exact-accounting 遷移後把 `currentCapital` 誤當 accumulated pnl | `tools/validate/synthetic_meta_cases.py`, `core/backtest_core.py` |
+| B126 | P1 | Meta / 契約 | debug backtest / GUI 重播現金路徑時，買進當下也必須扣除實際 `net buy total`，不得只在賣出時更新 `current_capital`；否則會讓 debug trade log sizing、completed-trade PnL sequence 與核心單股回測分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/backtest.py` 與 `tools/debug/entry_flow.py`，釘死 debug entry flow 必須回傳 `spent_cash` 並由主流程扣減 `current_capital`，且買進 marker / trade row 必須使用實際 entry cost；避免重播路徑只補賣出現金、漏扣買進現金 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -439,6 +440,7 @@
 | T209 | `validate_exact_accounting_display_derived_case` | B123 |
 | T210 | `validate_single_backtest_stats_legacy_schema_contract_case` | B124 |
 | T211 | `validate_single_backtest_exact_cash_path_contract_case` | B125 |
+| T212 | `validate_debug_backtest_entry_cash_path_contract_case` | B126 |
 
 ## G. 逐項收斂紀錄
 
@@ -807,6 +809,7 @@
 | 2026-04-09 | B123 | 新增正式帳務必須以整數 exact-accounting ledger / cost-basis / tick-limit 單一真理來源收斂的契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_unit_cases.py` |
 | 2026-04-09 | B124 | 新增單股 backtest public stats legacy schema static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-09 | B125 | 新增單股 backtest / debug exact cash / equity path static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-09 | B126 | 新增 debug backtest 買進現金扣減 static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-09 | T167 | 檢出 GUI scanner / history dropdown contract 未覆蓋資產成長 sort probe 顯示 | DONE -> PARTIAL | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T167 | 補上 GUI scanner / history dropdown 資產成長 sort probe contract 並驗證 | PARTIAL -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T202 | 新增 formal consistency step 完整 command string 必須列入 checklist `T` 摘要的 meta contract 並同步補齊映射 | NEW -> DONE | `tools/validate/cli.py --dataset reduced` |
@@ -819,3 +822,4 @@
 | 2026-04-09 | T209 | 新增 exact-accounting display-derived field contract 並驗證 | NEW -> DONE | `validate_exact_accounting_display_derived_case` |
 | 2026-04-09 | T210 | 新增單股 backtest public stats legacy schema static contract 並驗證 | NEW -> DONE | `validate_single_backtest_stats_legacy_schema_contract_case` |
 | 2026-04-09 | T211 | 新增單股 backtest / debug exact cash / equity path static contract 並驗證 | NEW -> DONE | `validate_single_backtest_exact_cash_path_contract_case` |
+| 2026-04-09 | T212 | 新增 debug backtest 買進現金扣減 static contract 並驗證 | NEW -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |

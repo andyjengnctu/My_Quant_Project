@@ -1,6 +1,6 @@
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.config import get_buy_sort_method
-from core.exact_accounting import milli_to_money, money_to_milli
+from core.exact_accounting import coerce_money_like_to_milli, milli_to_money, restore_money_like_from_milli
 from core.trade_plans import (
     build_cash_capped_entry_plan,
     execute_pre_market_entry_plan,
@@ -36,13 +36,16 @@ def execute_reserved_entries_for_day(
 ):
     pre_market_occupied = len(portfolio) + len(sold_today)
     remaining_orderable_candidates = list(orderable_candidates_today)
+    cash_template = cash
+    cash_milli = coerce_money_like_to_milli(cash)
+    available_cash_milli = coerce_money_like_to_milli(available_cash)
 
     while remaining_orderable_candidates and pre_market_occupied < max_positions:
         chosen_idx = 0
         chosen_entry_plan = None
 
         effective_entry_budget = resolve_portfolio_entry_budget(
-            milli_to_money(available_cash),
+            milli_to_money(available_cash_milli),
             params.initial_capital,
             params,
         )
@@ -90,7 +93,7 @@ def execute_reserved_entries_for_day(
         y_close = get_fast_close(fast_df, pos=y_pos)
 
         reserved_cost_milli = chosen_entry_plan['reserved_cost_milli']
-        available_cash -= reserved_cost_milli
+        available_cash_milli -= reserved_cost_milli
         pre_market_occupied += 1
 
         entry_result = execute_pre_market_entry_plan(
@@ -107,7 +110,7 @@ def execute_reserved_entries_for_day(
 
         if entry_result['filled']:
             actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
-            cash -= actual_total_cost_milli
+            cash_milli -= actual_total_cost_milli
             portfolio[cand['ticker']] = entry_result['position']
 
             if cand['ticker'] in active_extended_signals:
@@ -142,7 +145,7 @@ def execute_reserved_entries_for_day(
                     }
                 )
 
-    return cash, total_missed_buys
+    return restore_money_like_from_milli(cash_milli, cash_template), total_missed_buys
 
 
 def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params):

@@ -157,8 +157,10 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     sell_fee_ppm = rate_to_ppm(params.sell_fee)
     tax_ppm = rate_to_ppm(params.tax_rate)
 
-    est_entry_unit_milli = buy_price_milli + max(1, (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000)
-    est_exit_unit_milli = stop_price_milli - ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
+    est_buy_fee_per_share_milli = 0 if buy_fee_ppm <= 0 else (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000
+    est_sell_cost_per_share_milli = 0 if (sell_fee_ppm + tax_ppm) <= 0 else ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
+    est_entry_unit_milli = buy_price_milli + est_buy_fee_per_share_milli
+    est_exit_unit_milli = stop_price_milli - est_sell_cost_per_share_milli
     risk_per_share_milli = est_entry_unit_milli - est_exit_unit_milli
     if risk_per_share_milli <= 0:
         return 0

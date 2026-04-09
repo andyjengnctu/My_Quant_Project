@@ -295,6 +295,7 @@ def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
     base_position = build_position_from_entry_fill(100.0, 10, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0, entry_type="normal")
     single_position = copy.deepcopy(base_position)
     portfolio_position = copy.deepcopy(base_position)
+    portfolio_position["last_px"] = 110.0
     initial_capital_milli = money_to_milli(params.initial_capital)
     starting_cash_milli = initial_capital_milli - base_position["net_buy_total_milli"]
 
