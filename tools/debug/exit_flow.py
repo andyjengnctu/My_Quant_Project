@@ -1,7 +1,7 @@
 import numpy as np
 
 from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
-from core.position_step import execute_bar_step
+from core.position_step import execute_bar_step, sum_last_exec_contexts_milli
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from tools.debug.charting import record_trade_marker
 from tools.debug.history_snapshot import build_pit_history_snapshot
@@ -78,7 +78,9 @@ def process_debug_position_step(
         params,
     )
 
-    realized_delta = position.get('realized_pnl', 0.0) - prev_realized
+    freed_cash_milli, pnl_realized_milli = sum_last_exec_contexts_milli(position)
+    freed_cash = milli_to_money(freed_cash_milli)
+    realized_delta = milli_to_money(pnl_realized_milli)
     active_stop_after_update = position.get('sl', np.nan)
     date_str = current_date.strftime('%Y-%m-%d')
     tp_context = _first_exec_context(position, 'TP_HALF')
@@ -90,7 +92,7 @@ def process_debug_position_step(
         exec_sell_price_half = float(tp_context['exec_price'])
         sell_net_price_half = float(tp_context['net_price'])
         tp_leg_pnl = float(tp_context['pnl'])
-        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_leg_pnl
+        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(int(tp_context.get('net_total_milli', 0)))
         append_debug_trade_row(
             trade_logs,
             date_str=date_str,
@@ -130,7 +132,7 @@ def process_debug_position_step(
         sell_price = adjust_long_sell_fill_price(t_open) if exit_context is None else float(exit_context['exec_price'])
         sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
         final_leg_pnl = pnl_realized if exit_context is None else float(exit_context['pnl'])
-        current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(realized_delta)
+        current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
         completed_trade_snapshot = _build_completed_trade_snapshot(
             stats_index,
             current_date,
@@ -203,7 +205,7 @@ def process_debug_position_step(
             note=reason_note,
         )
 
-    return position, pnl_realized
+    return position, freed_cash
 
 
 def append_debug_forced_closeout(
@@ -223,7 +225,7 @@ def append_debug_forced_closeout(
     sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
     final_leg_pnl = milli_to_money(sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0))
     total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_pnl)
-    current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(final_leg_pnl)
+    current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])
     completed_trade_snapshot = _build_completed_trade_snapshot(
         stats_index,
         current_date,

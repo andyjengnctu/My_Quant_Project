@@ -200,7 +200,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 params=params,
             )
         if pos_qty_start_of_bar > 0:
-            position, pnl_realized = process_debug_position_step(
+            position, freed_cash = process_debug_position_step(
                 position=position,
                 atr_prev=atr_main[j - 1],
                 sell_condition_prev=sell_condition[j - 1],
@@ -219,7 +219,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 current_capital_before_event=current_capital,
                 overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
             )
-            current_capital += pnl_realized
+            current_capital += freed_cash
         sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
         position, active_extended_signal = process_debug_entry_for_day(
             position=position,

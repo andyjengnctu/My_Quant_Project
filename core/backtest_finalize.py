@@ -75,7 +75,7 @@ def finalize_open_position_at_end(
         total_loss_milli += abs(total_pnl_milli)
         total_r_loss += abs(trade_r_mult)
 
-    current_capital_milli += pnl_milli
+    current_capital_milli += sell_ledger['net_sell_total_milli']
     current_equity_milli = current_capital_milli
     peak_capital_milli = max(peak_capital_milli, current_equity_milli)
     current_drawdown_pct = ((peak_capital_milli - current_equity_milli) / peak_capital_milli) * 100 if peak_capital_milli > 0 else 0.0

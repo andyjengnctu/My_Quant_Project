@@ -93,7 +93,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 V[j],
                 params,
             )
-            pnl_realized_milli = sum(int(ctx.get('pnl_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
+            freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
+            currentCapital_milli += freed_cash_milli
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
                 trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0
@@ -110,7 +111,6 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     total_r_loss += abs(trade_r_mult)
             elif 'MISSED_SELL' in events:
                 missedSellCount += 1
-            currentCapital_milli += pnl_realized_milli
 
         isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
@@ -174,8 +174,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         if position['qty'] > 0:
             floating_exec_price = adjust_long_sell_fill_price(C[j])
             floating_sell_ledger = build_sell_ledger_from_price(floating_exec_price, position['qty'], params)
-            floating_pnl_milli = floating_sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
-            currentEquity_milli = currentCapital_milli + floating_pnl_milli
+            currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
 
         peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
         currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0

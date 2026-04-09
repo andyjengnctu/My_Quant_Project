@@ -2119,6 +2119,48 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_single_backtest_exact_cash_path_contract_case(_base_params):
+    case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    def _get_function_source(rel_path, func_name):
+        source_path = build_project_absolute_path(*rel_path.split('/'))
+        source_text = source_path.read_text(encoding="utf-8")
+        parsed = ast.parse(source_text, filename=str(source_path))
+        for node in parsed.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                func_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+                return source_path, func_source
+        return source_path, ""
+
+    core_path, backtest_core_source = _get_function_source("core/backtest_core.py", "run_v16_backtest")
+    finalize_path, finalize_source = _get_function_source("core/backtest_finalize.py", "finalize_open_position_at_end")
+    debug_backtest_path, debug_backtest_source = _get_function_source("tools/debug/backtest.py", "run_debug_analysis")
+    debug_exit_path, debug_exit_source = _get_function_source("tools/debug/exit_flow.py", "process_debug_position_step")
+    forced_close_path, forced_close_source = _get_function_source("tools/debug/exit_flow.py", "append_debug_forced_closeout")
+
+    add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_adds_freed_cash", True, "currentCapital_milli += freed_cash_milli" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_has_no_legacy_pnl_addition", False, "currentCapital_milli += pnl_realized_milli" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_mark_to_market_equity_uses_net_liquidation_value", True, "currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_mark_to_market_equity_has_no_legacy_floating_pnl_path", False, "currentEquity_milli = currentCapital_milli + floating_pnl_milli" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_closeout_cash_adds_net_sell_total", True, "current_capital_milli += sell_ledger['net_sell_total_milli']" in finalize_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_closeout_cash_has_no_legacy_pnl_addition", False, "current_capital_milli += pnl_milli" in finalize_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_exit_cash_adds_freed_cash", True, "current_capital += freed_cash" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_snapshot_uses_freed_cash", True, "current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)" in debug_exit_source)
+    add_check(results, "meta_contract", case_id, "debug_forced_closeout_snapshot_uses_net_sell_total", True, "current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])" in forced_close_source)
+
+    summary["source_paths"] = [
+        str(core_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(finalize_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(debug_backtest_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(debug_exit_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(forced_close_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+    ]
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []
