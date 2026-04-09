@@ -52,6 +52,7 @@
 14. debug / GUI / 單股模擬凡重播 entry/exit 現金路徑時，買進當下也必須同步扣除實際 `net buy total`；不得只在賣出時更新現金，否則 sizing、trade log 與 completed-trade 重建都會分叉。
 15. 凡屬可見 trade log / history row 的金額欄位，若後續工具會以其重建 completed trades 或彙總損益，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 形成 0.01 級顯示口徑分叉。
 16. 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，也必須使用共享 money-rounding helper；不得混用內建 `round(..., 2)` 與 HALF_UP，否則會把顯示 rounding 口徑誤判成核心不一致。
+17. 凡以可見 trade log / history row 重建 completed trades 的 helper / consumer，也必須以共享 money-rounding helper 正規化逐列金額並累加；不得在重建路徑另用內建 `round(..., 2)`，否則會把顯示值重建成不同於核心 completed trades 的序列。
 
 ## E. 交易與策略原則
 

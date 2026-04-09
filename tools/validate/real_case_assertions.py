@@ -117,7 +117,8 @@ def append_real_case_checks(
     add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_count", len(standalone_logs), len(portfolio_sim_stats["portfolio_completed_trades"]), note="portfolio df_trades 必須能重建成與核心 completed trades 完全相同的筆數。")
     add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_exit_dates", expected_exit_dates, [trade["exit_date"] for trade in portfolio_sim_stats["portfolio_completed_trades"]], note="portfolio df_trades 重建出的逐筆最終出場日期，必須與核心 completed trades 完全一致。")
     add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_pnl_sequence", expected_trade_pnls, [trade["total_pnl"] for trade in portfolio_sim_stats["portfolio_completed_trades"]], note="portfolio df_trades 必須將半倉停利 + 尾倉賣出正確合併，逐筆總損益 sequence 與核心一致。")
-    add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_realized_pnl_sum", expected_realized_pnl_sum, round(sum(trade["total_pnl"] for trade in portfolio_sim_stats["portfolio_completed_trades"]), 2), tol=0.01, note="portfolio df_trades 重建後的 completed trades 總已實現損益，必須與核心一致。")
+    actual_portfolio_realized_pnl_sum = round_money_for_display(sum(trade["total_pnl"] for trade in portfolio_sim_stats["portfolio_completed_trades"]))
+    add_check(results, "portfolio_sim", ticker, "df_trades_completed_trade_realized_pnl_sum", expected_realized_pnl_sum, actual_portfolio_realized_pnl_sum, tol=0.01, note="portfolio df_trades 重建後的 completed trades 總已實現損益，必須與核心一致。")
     add_check(results, "portfolio_sim", ticker, "r_sq", portfolio_stats["r_sq"], portfolio_sim_stats["r_sq"])
     add_check(results, "portfolio_sim", ticker, "m_win_rate", portfolio_stats["m_win_rate"], portfolio_sim_stats["m_win_rate"])
     add_check(results, "portfolio_sim", ticker, "bm_r_sq", portfolio_stats["bm_r_sq"], portfolio_sim_stats["bm_r_sq"])
@@ -192,7 +193,7 @@ def append_real_case_checks(
         expected_exit_rows = len(standalone_logs)
         actual_trade_pnls = [trade["total_pnl"] for trade in debug_completed_trades]
         actual_exit_dates = [trade["exit_date"] for trade in debug_completed_trades]
-        actual_realized_pnl_sum = round(sum(actual_trade_pnls), 2)
+        actual_realized_pnl_sum = round_money_for_display(sum(actual_trade_pnls))
 
         add_check(results, "debug_trade_log", ticker, "buy_rows", expected_buy_rows, buy_rows, note="debug 已將期末強制結算列為完整賣出紀錄，買進筆數應等於 completed trades。")
         add_check(results, "debug_trade_log", ticker, "full_exit_rows", expected_exit_rows, exit_rows)

@@ -1,5 +1,7 @@
 import pandas as pd
 
+from core.exact_accounting import round_money_for_display
+
 
 def rebuild_completed_trades_from_event_log(
     df_logs,
@@ -29,7 +31,7 @@ def rebuild_completed_trades_from_event_log(
     for row in df_logs.itertuples(index=False):
         action = str(getattr(row, action_col))
         trade_date = pd.to_datetime(getattr(row, date_col)).strftime("%Y-%m-%d")
-        realized_pnl = float(getattr(row, pnl_col))
+        realized_pnl = round_money_for_display(getattr(row, pnl_col))
 
         if action.startswith(buy_prefix):
             if active_trade is not None:
@@ -52,7 +54,7 @@ def rebuild_completed_trades_from_event_log(
         if action == half_action:
             if active_trade is None:
                 raise ValueError(f"{tool_name} 出現{half_action}，但前面沒有對應買進。")
-            active_trade["total_pnl"] += realized_pnl
+            active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)
             active_trade["half_exit_count"] += 1
             continue
 
@@ -64,7 +66,7 @@ def rebuild_completed_trades_from_event_log(
         if action in full_exit_actions:
             if active_trade is None:
                 raise ValueError(f"{tool_name} 出現 {action}，但前面沒有對應買進。")
-            active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)
+            active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)
             active_trade["exit_date"] = trade_date
             active_trade["full_exit_action"] = action
             completed_trades.append(active_trade)

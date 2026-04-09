@@ -2198,6 +2198,23 @@ def validate_real_case_completed_trade_rounding_oracle_contract_case(_base_param
     summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
     return results, summary
 
+def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
+    case_id = "META_TRADE_REBUILD_ROUNDING_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "trade_rebuild.py")
+    source_text = source_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "trade_rebuild_imports_shared_rounding_helper", True, 'from core.exact_accounting import round_money_for_display' in source_text)
+    add_check(results, "meta_contract", case_id, "trade_rebuild_normalizes_row_pnl_with_shared_helper", True, 'realized_pnl = round_money_for_display(getattr(row, pnl_col))' in source_text)
+    add_check(results, "meta_contract", case_id, "trade_rebuild_half_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
+    add_check(results, "meta_contract", case_id, "trade_rebuild_full_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
+    add_check(results, "meta_contract", case_id, "trade_rebuild_has_no_legacy_builtin_round_total_pnl", False, 'active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)' in source_text)
+
+    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return results, summary
+
 
 def validate_single_backtest_exact_cash_path_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
