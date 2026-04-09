@@ -188,6 +188,7 @@
 | B121 | P0 | 交易規格 / 一致性 | 只要 `t+1` 已觸及 `L`、`qty > 0` 且資金條件成立，就不得僅因 `P_fill <= candidate_plan.init_sl` 而拒絕成交；`candidate_plan.init_sl` 只能作盤前 worst-case sizing，不得作成交否決下限 | DONE | 已補 direct synthetic case，直接釘死當實際成交價低於 candidate plan 的 limit-based sizing stop 時，`execute_pre_market_entry_plan()` 仍必須成交，且 filled position 之 `initial_stop` / `trailing_stop` / `tp_half` 必須改用實際成交價與 `ATR_t` 建立；避免 runtime 殘留舊 `先達停損放棄進場` 語意 | `tools/validate/synthetic_flow_cases.py`, `core/entry_plans.py` |
 | B122 | P1 | Meta / Quick Gate 契約 | `quick_gate` 必須在 CLI / formal 匯入前，以靜態方式驗證 `tools/validate/synthetic_cases.py` 的 from-import target 是否指向實際宣告該 validator symbol 的模組；不得等 runtime import `synthetic_cases` 時才以 `ImportError` 失敗，並連帶遮蔽原本應回報的 CLI / dataset guard | DONE | 已補 quick gate static contract，直接共用 synthetic import-target resolution helper，於 `run_static_checks()` 新增 `synthetic_registry_import_targets`；即使 `synthetic_cases.py` 尚未可 import，仍能在 quick gate 前置攔截匯錯模組的 validator import，避免同一個 wiring 錯誤同時拖垮 quick_gate / consistency / meta_quality | `tools/local_regression/run_quick_gate.py`, `tools/validate/meta_contracts.py` |
 | B123 | P0 | 契約 / 一致性 | 正式帳務中的 `cash` / `pnl` / `equity` / `reserved_cost` / `risk`、partial-exit cost-basis allocation 與 tick/limit hit 判斷，必須收斂到整數 exact-accounting 單一真理來源；不得再以含費每股價或 per-share × qty 回推正式總額 | DONE | 已補 exact-accounting unit-like contract，直接釘死 ledger 守恆、partial-exit cost-basis 回沖、integer tick/limit hit、cash/risk boundary、單股/投組 closeout parity 與 display-derived 欄位；並同步把正式核心 cash/pnl/equity/reserved_cost 路徑收斂到 `core/exact_accounting.py` | `tools/validate/synthetic_unit_cases.py`, `core/exact_accounting.py` |
+| B124 | P1 | Meta / Schema 契約 | `build_backtest_stats()` / `run_v16_backtest()` 的 public stats payload 必須維持既有 snake_case 相容 key（如 `trade_count` / `expected_value` / `asset_growth` / `max_drawdown` / `missed_buys` / `is_setup_today` / `extended_candidate_today` / `current_position` / `score`）；重構 producer 時不得只保留 camelCase 內部欄位，導致 GUI / scanner / validate caller runtime `KeyError` | DONE | 已補 static meta contract，直接 AST 掃描 `core/backtest_finalize.py` 的 `build_backtest_stats()` dict key，釘死 legacy stats schema key 必須仍存在，避免 refactor 後只改 producer 就讓 GUI / scanner / consistency runtime 因缺 key 中斷 | `tools/validate/synthetic_meta_cases.py`, `core/backtest_finalize.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -435,6 +436,7 @@
 | T207 | `validate_exact_accounting_cash_risk_boundary_case` | B123 |
 | T208 | `validate_exact_accounting_single_vs_portfolio_parity_case` | B123 |
 | T209 | `validate_exact_accounting_display_derived_case` | B123 |
+| T210 | `validate_single_backtest_stats_legacy_schema_contract_case` | B124 |
 
 ## G. 逐項收斂紀錄
 
@@ -801,6 +803,7 @@
 | 2026-04-09 | B88 | 檢出 GUI scanner 每檔輸出與歷史績效股下拉未顯示資產成長 / 排序探針，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-09 | B88 | 補上 scanner row / history dropdown 資產成長 sort probe contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-09 | B123 | 新增正式帳務必須以整數 exact-accounting ledger / cost-basis / tick-limit 單一真理來源收斂的契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_unit_cases.py` |
+| 2026-04-09 | B124 | 新增單股 backtest public stats legacy schema static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-09 | T167 | 檢出 GUI scanner / history dropdown contract 未覆蓋資產成長 sort probe 顯示 | DONE -> PARTIAL | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T167 | 補上 GUI scanner / history dropdown 資產成長 sort probe contract 並驗證 | PARTIAL -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T202 | 新增 formal consistency step 完整 command string 必須列入 checklist `T` 摘要的 meta contract 並同步補齊映射 | NEW -> DONE | `tools/validate/cli.py --dataset reduced` |
@@ -811,3 +814,4 @@
 | 2026-04-09 | T207 | 新增 exact-accounting cash / risk boundary contract 並驗證 | NEW -> DONE | `validate_exact_accounting_cash_risk_boundary_case` |
 | 2026-04-09 | T208 | 新增 exact-accounting single-stock / portfolio parity contract 並驗證 | NEW -> DONE | `validate_exact_accounting_single_vs_portfolio_parity_case` |
 | 2026-04-09 | T209 | 新增 exact-accounting display-derived field contract 並驗證 | NEW -> DONE | `validate_exact_accounting_display_derived_case` |
+| 2026-04-09 | T210 | 新增單股 backtest public stats legacy schema static contract 並驗證 | NEW -> DONE | `validate_single_backtest_stats_legacy_schema_contract_case` |

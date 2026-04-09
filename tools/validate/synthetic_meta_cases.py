@@ -2066,6 +2066,59 @@ def validate_gui_trade_count_contract_no_legacy_exit_snippet_case(_base_params):
     return results, summary
 
 
+def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
+    case_id = "META_SINGLE_BACKTEST_STATS_LEGACY_SCHEMA_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("core", "backtest_finalize.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    function_node = None
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "build_backtest_stats":
+            function_node = node
+            break
+
+    required_keys = {
+        "trade_count",
+        "win_rate",
+        "expected_value",
+        "asset_growth",
+        "max_drawdown",
+        "missed_buys",
+        "missed_sells",
+        "is_setup_today",
+        "buy_limit",
+        "stop_loss",
+        "extended_candidate_today",
+        "extended_orderable_today",
+        "current_position",
+        "payoff_ratio",
+        "score",
+    }
+
+    if function_node is None:
+        declared_keys = set()
+        missing_keys = sorted(required_keys)
+    else:
+        declared_keys = set()
+        for node in ast.walk(function_node):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key_node in node.keys:
+                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                    declared_keys.add(key_node.value)
+        missing_keys = sorted(required_keys - declared_keys)
+
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_declares_legacy_schema_keys", [], missing_keys)
+
+    summary["missing_keys"] = missing_keys
+    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []

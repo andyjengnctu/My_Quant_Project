@@ -140,11 +140,27 @@ def build_backtest_stats(
         params,
     )
 
+    total_net_profit = current_capital - params.initial_capital
+    total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
+    buy_next_day = bool(buy_condition_last)
+    buy_limit = adjust_long_buy_limit(close_last) if buy_next_day else 0.0
+    stop_loss = adjust_long_stop_price(close_last - atr_last * params.atr_times_init) if buy_next_day else 0.0
+    tp_price = close_last + (close_last - (close_last - atr_last * params.atr_times_init)) if buy_next_day else 0.0
+    current_position = int(end_position_qty)
+    score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
+
+    extended_candidate_today = None
+    extended_orderable_today = False
+    if active_extended_signal is not None:
+        sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
+        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_capital, params)
+        extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last)
+
     stats_dict = {
         'currentCapital': current_capital,
         'currentEquity': current_equity,
-        'totalNetProfit': current_capital - params.initial_capital,
-        'totalNetProfitPct': ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0,
+        'totalNetProfit': total_net_profit,
+        'totalNetProfitPct': total_net_profit_pct,
         'maxDrawdownPct': max_drawdown_pct,
         'tradeCount': trade_count,
         'winRate': win_rate,
@@ -152,10 +168,10 @@ def build_backtest_stats(
         'payoffRatio': payoff_ratio,
         'missedBuyCount': missed_buy_count,
         'missedSellCount': missed_sell_count,
-        'buyNextDay': bool(buy_condition_last),
-        'buyPrice': adjust_long_buy_limit(close_last) if buy_condition_last else 0.0,
-        'sellPrice': adjust_long_stop_price(close_last - atr_last * params.atr_times_init) if buy_condition_last else 0.0,
-        'tpPrice': close_last + (close_last - (close_last - atr_last * params.atr_times_init)) if buy_condition_last else 0.0,
+        'buyNextDay': buy_next_day,
+        'buyPrice': buy_limit,
+        'sellPrice': stop_loss,
+        'tpPrice': tp_price,
         'is_candidate': is_candidate,
         'history_ev': expected_value,
         'history_win_rate': _history_win_rate,
@@ -164,5 +180,21 @@ def build_backtest_stats(
         'activeExtendedSignal': active_extended_signal is not None,
         'endPositionQty': end_position_qty,
         'avgBarsHeld': avg_bars_held,
+        'trade_count': trade_count,
+        'win_rate': win_rate,
+        'expected_value': expected_value,
+        'asset_growth': total_net_profit_pct,
+        'max_drawdown': max_drawdown_pct,
+        'payoff_ratio': payoff_ratio,
+        'missed_buys': missed_buy_count,
+        'missed_sells': missed_sell_count,
+        'is_setup_today': buy_next_day,
+        'buy_limit': buy_limit,
+        'stop_loss': stop_loss,
+        'tp_price': tp_price,
+        'extended_candidate_today': extended_candidate_today,
+        'extended_orderable_today': extended_orderable_today,
+        'current_position': current_position,
+        'score': score,
     }
     return stats_dict
