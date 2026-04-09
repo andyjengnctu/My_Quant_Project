@@ -51,6 +51,7 @@
 13. 單股 backtest 與 debug 路徑中的 `currentCapital` 一律代表可用現金；任何半倉、全倉或期末結算只能加回實際 `net sell total`，不得只加 `realized pnl`；持倉中的 `currentEquity` 一律以 `cash + 當前可變現淨值` 計。
 14. debug / GUI / 單股模擬凡重播 entry/exit 現金路徑時，買進當下也必須同步扣除實際 `net buy total`；不得只在賣出時更新現金，否則 sizing、trade log 與 completed-trade 重建都會分叉。
 15. 凡屬可見 trade log / history row 的金額欄位，若後續工具會以其重建 completed trades 或彙總損益，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 形成 0.01 級顯示口徑分叉。
+16. 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，也必須使用共享 money-rounding helper；不得混用內建 `round(..., 2)` 與 HALF_UP，否則會把顯示 rounding 口徑誤判成核心不一致。
 
 ## E. 交易與策略原則
 

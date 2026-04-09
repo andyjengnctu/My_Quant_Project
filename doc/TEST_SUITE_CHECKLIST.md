@@ -193,6 +193,7 @@
 | B126 | P1 | Meta / 契約 | debug backtest / GUI 重播現金路徑時，買進當下也必須扣除實際 `net buy total`，不得只在賣出時更新 `current_capital`；否則會讓 debug trade log sizing、completed-trade PnL sequence 與核心單股回測分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/backtest.py` 與 `tools/debug/entry_flow.py`，釘死 debug entry flow 必須回傳 `spent_cash` 並由主流程扣減 `current_capital`，且買進 marker / trade row 必須使用實際 entry cost；避免重播路徑只補賣出現金、漏扣買進現金 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py` |
 | B127 | P1 | 契約 / 顯示一致性 | 使用者可見的 debug / portfolio trade log 若以 rounded 單筆損益重建 completed trades，則半倉停利 + 尾倉賣出後的逐列可見值加總必須精準回到 core completed-trade 總損益；不得只保證內部 exact pnl 一致，放任可見明細因 rounding residual 漂移 0.01 | DONE | 已補 exact-accounting display reconciliation unit case，並把 debug / portfolio full-exit 顯示損益改為吸收前序 rounded leg residual；避免 completed-trade sequence 與可見 trade log 因 0.01 rounding 差異而分叉 | `tools/validate/synthetic_unit_cases.py`, `core/portfolio_exits.py`, `tools/debug/exit_flow.py` |
 | B128 | P1 | Meta / 顯示一致性 契約 | 凡屬會被下游以可見金額欄位重建 completed trades 或彙總損益的 debug / portfolio trade log，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 造成 0.01 級可見口徑分叉 | DONE | 已補 static meta contract，直接掃描 `core/exact_accounting.py`、`core/portfolio_exits.py` 與 `tools/debug/log_rows.py`，釘死 shared display rounding 必須使用 Decimal HALF_UP，且 history/log row helper 必須委派共享 rounding helper；避免之後又在單一模組偷回內建 `round(..., 2)` 造成 completed-trade 顯示重建漂移 | `tools/validate/synthetic_meta_cases.py`, `core/exact_accounting.py`, `tools/debug/log_rows.py` |
+| B129 | P1 | Meta / 驗證 Oracle 契約 | 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，必須與共享 money-rounding helper 使用同一 HALF_UP 口徑；不得混用內建 `round(..., 2)` 將顯示 rounding 誤判成核心差異 | DONE | 已補 static meta contract，直接掃描 `tools/validate/real_case_assertions.py`，釘死 real-case completed-trade expected oracle 必須委派共享 rounding helper，且不得再用內建 `round(float(...), 2)` / `round(sum(...), 2)`；避免 consistency 因 validation consumer 與顯示層 rounding 規則分叉而虛假 FAIL | `tools/validate/synthetic_meta_cases.py`, `tools/validate/real_case_assertions.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -445,6 +446,7 @@
 | T212 | `validate_debug_backtest_entry_cash_path_contract_case` | B126 |
 | T213 | `validate_exact_accounting_display_leg_reconciliation_case` | B127 |
 | T214 | `validate_display_money_rounding_helper_contract_case` | B128 |
+| T215 | `validate_real_case_completed_trade_rounding_oracle_contract_case` | B129 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -828,4 +830,6 @@
 | 2026-04-09 | T212 | 新增 debug backtest 買進現金扣減 static contract 並驗證 | NEW -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-09 | T213 | 補 completed-trade 可見 rounded leg reconciliation contract，避免 debug / portfolio trade log 與 core completed trades 因 0.01 殘差分叉 | NEW -> DONE | `validate_exact_accounting_display_leg_reconciliation_case` |
 | 2026-04-10 | B128 | 新增 shared display money-rounding helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-10 | B129 | 新增 real-case completed-trade rounding oracle static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/real_case_assertions.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
+| 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |

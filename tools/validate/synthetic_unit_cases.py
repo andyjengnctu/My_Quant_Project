@@ -277,13 +277,15 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
     below_cash = milli_to_money(resized["reserved_cost_milli"] - 1)
 
     accepted = build_cash_capped_entry_plan(candidate_plan, exact_cash, params)
-    rejected = build_cash_capped_entry_plan(candidate_plan, below_cash, params)
+    resized_down = build_cash_capped_entry_plan(candidate_plan, below_cash, params)
 
     add_check(results, "unit_exact_accounting", case_id, "cash_cap_accepts_exact_reserved_total", True, accepted is not None)
-    add_check(results, "unit_exact_accounting", case_id, "cash_cap_rejects_one_milli_shortfall", True, rejected is None)
+    add_check(results, "unit_exact_accounting", case_id, "one_milli_shortfall_triggers_qty_resize", True, resized_down is not None and resized_down["qty"] < resized["qty"])
+    add_check(results, "unit_exact_accounting", case_id, "resized_plan_stays_within_one_milli_shortfall_cash_cap", True, resized_down is not None and resized_down["reserved_cost_milli"] <= money_to_milli(below_cash))
     add_check(results, "unit_exact_accounting", case_id, "reserved_cost_stored_as_integer_total", resized["reserved_cost_milli"], money_to_milli(resized["reserved_cost"]))
 
     summary["reserved_cost_milli"] = resized["reserved_cost_milli"]
+    summary["resized_down_qty"] = None if resized_down is None else resized_down["qty"]
     return results, summary
 
 

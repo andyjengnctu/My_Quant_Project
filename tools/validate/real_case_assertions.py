@@ -1,5 +1,6 @@
 import pandas as pd
 
+from core.exact_accounting import round_money_for_display
 from tools.validate.checks import (
     add_check,
     add_fail_result,
@@ -47,8 +48,8 @@ def append_real_case_checks(
         100.0, 100.0 * (1.0 + portfolio_stats["bm_ret"] / 100.0), sim_years
     )
     expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
-    expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]
-    expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)
+    expected_trade_pnls = [round_money_for_display(log["pnl"]) for log in standalone_logs]
+    expected_realized_pnl_sum = round_money_for_display(sum(expected_trade_pnls))
     expected_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["yearly_return_rows"])
     expected_bm_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["bm_yearly_return_rows"])
 

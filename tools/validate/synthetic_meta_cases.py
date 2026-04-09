@@ -2181,6 +2181,24 @@ def validate_display_money_rounding_helper_contract_case(_base_params):
     return results, summary
 
 
+def validate_real_case_completed_trade_rounding_oracle_contract_case(_base_params):
+    case_id = "META_REAL_CASE_COMPLETED_TRADE_ROUNDING_ORACLE_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "real_case_assertions.py")
+    source_text = source_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "real_case_assertions_imports_shared_rounding_helper", True, 'from core.exact_accounting import round_money_for_display' in source_text)
+    add_check(results, "meta_contract", case_id, "real_case_assertions_rounds_expected_trade_pnls_with_shared_helper", True, 'expected_trade_pnls = [round_money_for_display(log["pnl"]) for log in standalone_logs]' in source_text)
+    add_check(results, "meta_contract", case_id, "real_case_assertions_rounds_expected_realized_sum_with_shared_helper", True, 'expected_realized_pnl_sum = round_money_for_display(sum(expected_trade_pnls))' in source_text)
+    add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_trade_pnls", False, 'expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]' in source_text)
+    add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_realized_sum", False, 'expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)' in source_text)
+
+    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    return results, summary
+
+
 def validate_single_backtest_exact_cash_path_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
     results = []
