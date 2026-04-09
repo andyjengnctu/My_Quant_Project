@@ -1,8 +1,8 @@
+from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
     adjust_long_stop_price,
-    calc_net_sell_price,
 )
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
@@ -17,14 +17,14 @@ def finalize_open_position_at_end(
     position,
     final_close,
     final_date,
-    current_capital,
-    current_equity,
-    peak_capital,
+    current_capital_milli,
+    current_equity_milli,
+    peak_capital_milli,
     max_drawdown_pct,
     trade_count,
     full_wins,
-    total_profit,
-    total_loss,
+    total_profit_milli,
+    total_loss_milli,
     total_r_multiple,
     total_r_win,
     total_r_loss,
@@ -38,14 +38,14 @@ def finalize_open_position_at_end(
     if not had_open_position_at_end:
         return {
             'position': position,
-            'current_capital': current_capital,
-            'current_equity': current_equity,
-            'peak_capital': peak_capital,
+            'current_capital_milli': current_capital_milli,
+            'current_equity_milli': current_equity_milli,
+            'peak_capital_milli': peak_capital_milli,
             'max_drawdown_pct': max_drawdown_pct,
             'trade_count': trade_count,
             'full_wins': full_wins,
-            'total_profit': total_profit,
-            'total_loss': total_loss,
+            'total_profit_milli': total_profit_milli,
+            'total_loss_milli': total_loss_milli,
             'total_r_multiple': total_r_multiple,
             'total_r_win': total_r_win,
             'total_r_loss': total_r_loss,
@@ -55,9 +55,10 @@ def finalize_open_position_at_end(
         }
 
     exec_price = adjust_long_sell_fill_price(final_close)
-    net_price = calc_net_sell_price(exec_price, position['qty'], params)
-    pnl = (net_price - position['entry']) * position['qty']
-    total_pnl = position['realized_pnl'] + pnl
+    sell_ledger = build_sell_ledger_from_price(exec_price, position['qty'], params)
+    pnl_milli = sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
+    total_pnl_milli = position['realized_pnl_milli'] + pnl_milli
+    total_pnl = milli_to_money(total_pnl_milli)
     trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0.0
 
     total_r_multiple += trade_r_mult
@@ -66,31 +67,32 @@ def finalize_open_position_at_end(
     if return_logs:
         trade_logs.append({'exit_date': final_date, 'pnl': total_pnl, 'r_mult': trade_r_mult})
 
-    if total_pnl > 0:
+    if total_pnl_milli > 0:
         full_wins += 1
-        total_profit += total_pnl
+        total_profit_milli += total_pnl_milli
         total_r_win += trade_r_mult
     else:
-        total_loss += abs(total_pnl)
+        total_loss_milli += abs(total_pnl_milli)
         total_r_loss += abs(trade_r_mult)
 
-    current_capital += pnl
-    current_equity = current_capital
-    peak_capital = max(peak_capital, current_equity)
-    current_drawdown_pct = ((peak_capital - current_equity) / peak_capital) * 100 if peak_capital > 0 else 0.0
+    current_capital_milli += pnl_milli
+    current_equity_milli = current_capital_milli
+    peak_capital_milli = max(peak_capital_milli, current_equity_milli)
+    current_drawdown_pct = ((peak_capital_milli - current_equity_milli) / peak_capital_milli) * 100 if peak_capital_milli > 0 else 0.0
     max_drawdown_pct = max(max_drawdown_pct, current_drawdown_pct)
     position['qty'] = 0
+    position['remaining_cost_basis_milli'] = 0
 
     return {
         'position': position,
-        'current_capital': current_capital,
-        'current_equity': current_equity,
-        'peak_capital': peak_capital,
+        'current_capital_milli': current_capital_milli,
+        'current_equity_milli': current_equity_milli,
+        'peak_capital_milli': peak_capital_milli,
         'max_drawdown_pct': max_drawdown_pct,
         'trade_count': trade_count,
         'full_wins': full_wins,
-        'total_profit': total_profit,
-        'total_loss': total_loss,
+        'total_profit_milli': total_profit_milli,
+        'total_loss_milli': total_loss_milli,
         'total_r_multiple': total_r_multiple,
         'total_r_win': total_r_win,
         'total_r_loss': total_r_loss,
@@ -138,39 +140,29 @@ def build_backtest_stats(
         params,
     )
 
-    final_equity = current_equity
-    total_net_profit_pct = ((final_equity - params.initial_capital) / params.initial_capital) * 100
-    score = total_net_profit_pct / trade_count if trade_count > 0 else 0
-
-    is_setup_today = buy_condition_last and (not had_open_position_at_end)
-    buy_limit_today = adjust_long_buy_limit(close_last + atr_last * params.atr_buy_tol) if is_setup_today else float('nan')
-    stop_loss_today = adjust_long_stop_price(buy_limit_today - atr_last * params.atr_times_init) if is_setup_today else float('nan')
-
-    extended_candidate_today = None
-    extended_orderable_today = False
-    if (not had_open_position_at_end) and active_extended_signal is not None:
-        sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params)
-        extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last)
-
-    return {
-        'asset_growth': total_net_profit_pct,
-        'trade_count': trade_count,
-        'missed_buys': missed_buy_count,
-        'missed_sells': missed_sell_count,
-        'score': score,
-        'win_rate': win_rate,
-        'avg_win': avg_win,
-        'avg_loss': avg_loss,
-        'payoff_ratio': payoff_ratio,
-        'expected_value': expected_value,
-        'max_drawdown': max_drawdown_pct,
+    stats_dict = {
+        'currentCapital': current_capital,
+        'currentEquity': current_equity,
+        'totalNetProfit': current_capital - params.initial_capital,
+        'totalNetProfitPct': ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0,
+        'maxDrawdownPct': max_drawdown_pct,
+        'tradeCount': trade_count,
+        'winRate': win_rate,
+        'profitFactor': expected_value,
+        'payoffRatio': payoff_ratio,
+        'missedBuyCount': missed_buy_count,
+        'missedSellCount': missed_sell_count,
+        'buyNextDay': bool(buy_condition_last),
+        'buyPrice': adjust_long_buy_limit(close_last) if buy_condition_last else 0.0,
+        'sellPrice': adjust_long_stop_price(close_last - atr_last * params.atr_times_init) if buy_condition_last else 0.0,
+        'tpPrice': close_last + (close_last - (close_last - atr_last * params.atr_times_init)) if buy_condition_last else 0.0,
         'is_candidate': is_candidate,
-        'is_setup_today': is_setup_today,
-        'buy_limit': buy_limit_today,
-        'stop_loss': stop_loss_today,
-        'extended_candidate_today': extended_candidate_today,
-        'extended_orderable_today': extended_orderable_today,
-        'current_position': end_position_qty,
-        'avg_bars_held': avg_bars_held,
+        'history_ev': expected_value,
+        'history_win_rate': _history_win_rate,
+        'history_trade_count': _history_trade_count,
+        'hasOpenPositionAtEnd': had_open_position_at_end,
+        'activeExtendedSignal': active_extended_signal is not None,
+        'endPositionQty': end_position_qty,
+        'avgBarsHeld': avg_bars_held,
     }
+    return stats_dict

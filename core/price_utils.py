@@ -4,6 +4,23 @@ import numpy as np
 import pandas as pd
 
 from core.capital_policy import resolve_scanner_live_capital
+from core.exact_accounting import (
+    build_buy_ledger_from_price,
+    build_sell_ledger_from_price,
+    calc_average_price_from_total_milli,
+    calc_entry_total_cost,
+    calc_exit_net_total,
+    calc_initial_risk_total_milli,
+    calc_limit_down_price_milli,
+    calc_limit_up_price_milli,
+    get_tick_milli,
+    milli_to_money,
+    milli_to_price,
+    money_to_milli,
+    price_to_milli,
+    rate_to_ppm,
+    round_price_milli_to_tick,
+)
 
 
 def tv_round(number):
@@ -11,33 +28,14 @@ def tv_round(number):
 
 
 def get_tick_size(price):
-    if price < 1:
-        return 0.001
-    elif price < 10:
-        return 0.01
-    elif price < 50:
-        return 0.05
-    elif price < 100:
-        return 0.1
-    elif price < 500:
-        return 0.5
-    elif price < 1000:
-        return 1.0
-    else:
-        return 5.0
+    return milli_to_price(get_tick_milli(price_to_milli(price)))
 
 
 # # (AI註: 第12點 - 跳價取整方向統一收斂到單一函式，避免買/賣/停損/停利各自手寫)
 def round_to_tick(price, direction="nearest"):
     if pd.isna(price):
         return np.nan
-    tick = get_tick_size(price)
-    ratio = price / tick
-    if direction == "up":
-        return math.ceil(ratio - 1e-12) * tick
-    if direction == "down":
-        return math.floor(ratio + 1e-12) * tick
-    return tv_round(ratio) * tick
+    return milli_to_price(round_price_milli_to_tick(price_to_milli(price), direction=direction))
 
 
 def adjust_to_tick(price):
@@ -135,40 +133,46 @@ def adjust_long_buy_limit_array(prices):
 def calc_entry_price(bPrice, bQty, params):
     if pd.isna(bPrice) or pd.isna(bQty) or bPrice <= 0 or bQty <= 0:
         return np.nan
-    fee = max(bPrice * bQty * params.buy_fee, params.min_fee)
-    return bPrice + (fee / bQty)
+    ledger = build_buy_ledger_from_price(bPrice, int(bQty), params)
+    return calc_average_price_from_total_milli(ledger["net_buy_total_milli"], int(bQty))
 
 
 def calc_net_sell_price(sPrice, sQty, params):
     if pd.isna(sPrice) or pd.isna(sQty) or sPrice <= 0 or sQty <= 0:
         return np.nan
-    fee = max(sPrice * sQty * params.sell_fee, params.min_fee)
-    tax = sPrice * sQty * params.tax_rate
-    return sPrice - ((fee + tax) / sQty)
+    ledger = build_sell_ledger_from_price(sPrice, int(sQty), params)
+    return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], int(sQty))
 
 
 def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
         return 0
-    max_risk_amount = cap * riskPct
-    estEntryCost_unit = bPrice * (1 + params.buy_fee)
-    estExitNet_unit = stopPrice * (1 - params.sell_fee - params.tax_rate)
-    riskPerUnit = estEntryCost_unit - estExitNet_unit
 
-    if pd.isna(riskPerUnit) or riskPerUnit <= 0:
+    buy_price_milli = price_to_milli(bPrice)
+    stop_price_milli = price_to_milli(stopPrice)
+    cap_milli = money_to_milli(cap)
+    max_risk_milli = money_to_milli(cap * riskPct)
+
+    buy_fee_ppm = rate_to_ppm(params.buy_fee)
+    sell_fee_ppm = rate_to_ppm(params.sell_fee)
+    tax_ppm = rate_to_ppm(params.tax_rate)
+
+    est_entry_unit_milli = buy_price_milli + max(1, (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000)
+    est_exit_unit_milli = stop_price_milli - ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
+    risk_per_share_milli = est_entry_unit_milli - est_exit_unit_milli
+    if risk_per_share_milli <= 0:
         return 0
-    maxQty_by_cap = cap / estEntryCost_unit
-    qty = int(math.floor(min(max_risk_amount / riskPerUnit, maxQty_by_cap)))
+
+    qty = int(min(cap_milli // max(est_entry_unit_milli, 1), max_risk_milli // max(risk_per_share_milli, 1)))
 
     while qty > 0:
-        entry_fee = max(bPrice * qty * params.buy_fee, params.min_fee)
-        exact_entry_cost = bPrice * qty + entry_fee
-        sell_fee = max(stopPrice * qty * params.sell_fee, params.min_fee)
-        tax = stopPrice * qty * params.tax_rate
-        exact_exit_net = stopPrice * qty - sell_fee - tax
-        actual_risk = exact_entry_cost - exact_exit_net
+        buy_ledger = build_buy_ledger_from_price(bPrice, qty, params)
+        sell_ledger = build_sell_ledger_from_price(stopPrice, qty, params)
+        exact_entry_cost_milli = buy_ledger["net_buy_total_milli"]
+        exact_exit_net_milli = sell_ledger["net_sell_total_milli"]
+        actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
 
-        if exact_entry_cost <= cap and actual_risk <= max_risk_amount:
+        if exact_entry_cost_milli <= cap_milli and actual_risk_milli <= max_risk_milli:
             return qty
         qty -= 1
     return 0
@@ -204,25 +208,23 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:
         return 0.0
 
-    init_risk = (entry_price - net_stop_price) * qty
-    if init_risk > 0:
-        return init_risk
-
-    actual_total_cost = entry_price * qty
-    return max(actual_total_cost * params.fixed_risk, 0.0)
+    entry_total_milli = money_to_milli(entry_price * qty)
+    stop_net_total_milli = money_to_milli(net_stop_price * qty)
+    init_risk_milli = calc_initial_risk_total_milli(entry_total_milli, stop_net_total_milli, rate_to_ppm(params.fixed_risk))
+    return milli_to_money(init_risk_milli)
 
 
 # # (AI註: 單一真理來源 - 漲跌停價與一字漲/跌停判斷統一由此處理，避免 core / portfolio / tool 各寫各的)
 def calc_limit_up_price(reference_price):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    return adjust_price_down_to_tick(reference_price * 1.10)
+    return milli_to_price(calc_limit_up_price_milli(price_to_milli(reference_price)))
 
 
 def calc_limit_down_price(reference_price):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    return adjust_price_up_to_tick(reference_price * 0.90)
+    return milli_to_price(calc_limit_down_price_milli(price_to_milli(reference_price)))
 
 
 # # (AI註: 單一真理來源 - 盤前固定限價單今日是否仍有法定價格帶可達性統一由此判斷)
@@ -232,25 +234,21 @@ def is_limit_buy_price_reachable_for_day(limit_price, y_close):
     limit_down_price = calc_limit_down_price(y_close)
     if pd.isna(limit_down_price):
         return False
-    return limit_price >= limit_down_price
+    return price_to_milli(limit_price) >= price_to_milli(limit_down_price)
 
 
 def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    limit_up_price = calc_limit_up_price(y_close)
-    if pd.isna(limit_up_price):
-        return False
-    return t_open == limit_up_price and t_high == limit_up_price and t_low == limit_up_price and t_close == limit_up_price
+    limit_up_price_milli = calc_limit_up_price_milli(price_to_milli(y_close))
+    return all(price_to_milli(v) == limit_up_price_milli for v in (t_open, t_high, t_low, t_close))
 
 
 def is_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    limit_down_price = calc_limit_down_price(y_close)
-    if pd.isna(limit_down_price):
-        return False
-    return t_open == limit_down_price and t_high == limit_down_price and t_low == limit_down_price and t_close == limit_down_price
+    limit_down_price_milli = calc_limit_down_price_milli(price_to_milli(y_close))
+    return all(price_to_milli(v) == limit_down_price_milli for v in (t_open, t_high, t_low, t_close))
 
 
 def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):

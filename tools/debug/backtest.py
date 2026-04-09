@@ -6,6 +6,7 @@ from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
 from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_entry_price, calc_net_sell_price
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
@@ -80,7 +81,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     if entry_plan is None:
         detail_lines.append('本次資金不足，無法掛單')
     else:
-        reserved_capital = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+        reserved_capital = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
         detail_lines.extend([
             f"股數: {int(entry_plan['qty']):,}",
             f"限價: {entry_plan['limit_price']:.2f}",

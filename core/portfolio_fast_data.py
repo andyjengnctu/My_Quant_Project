@@ -5,13 +5,14 @@ import numpy as np
 
 from core.backtest_core import run_v16_backtest
 from core.history_filters import evaluate_history_candidate_metrics
-from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
+from core.exact_accounting import build_sell_ledger_from_price
+from core.price_utils import adjust_long_sell_fill_price
 from core.signal_utils import generate_signals
 
 
 # # (AI註: 單一真理來源 - 浮動權益估值與延續候選的 next-day sizing 共用同一口徑)
 def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
-    equity = cash
+    equity = int(cash)
 
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]
@@ -26,10 +27,10 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
         pos['last_px'] = px
 
         floating_exec_price = adjust_long_sell_fill_price(px)
-        net_px = calc_net_sell_price(floating_exec_price, pos['qty'], params)
-        equity += pos['qty'] * net_px
+        sell_ledger = build_sell_ledger_from_price(floating_exec_price, pos['qty'], params)
+        equity += sell_ledger['net_sell_total_milli']
 
-    return float(equity)
+    return int(equity)
 
 
 FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'Volume', 'ATR', 'buy_limit')

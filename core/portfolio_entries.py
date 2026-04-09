@@ -1,5 +1,6 @@
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.config import get_buy_sort_method
+from core.exact_accounting import milli_to_money, money_to_milli
 from core.trade_plans import (
     build_cash_capped_entry_plan,
     execute_pre_market_entry_plan,
@@ -41,7 +42,7 @@ def execute_reserved_entries_for_day(
         chosen_entry_plan = None
 
         effective_entry_budget = resolve_portfolio_entry_budget(
-            available_cash,
+            milli_to_money(available_cash),
             params.initial_capital,
             params,
         )
@@ -57,7 +58,7 @@ def execute_reserved_entries_for_day(
                 if probe_entry_plan is None:
                     continue
 
-                probe_key = (probe_entry_plan['reserved_cost'], probe_cand['ticker'])
+                probe_key = (probe_entry_plan['reserved_cost_milli'], probe_cand['ticker'])
                 if chosen_key is None or probe_key > chosen_key:
                     chosen_key = probe_key
                     chosen_idx = cand_idx
@@ -88,8 +89,8 @@ def execute_reserved_entries_for_day(
         t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
         y_close = get_fast_close(fast_df, pos=y_pos)
 
-        reserved_cost = chosen_entry_plan['reserved_cost']
-        available_cash -= reserved_cost
+        reserved_cost_milli = chosen_entry_plan['reserved_cost_milli']
+        available_cash -= reserved_cost_milli
         pre_market_occupied += 1
 
         entry_result = execute_pre_market_entry_plan(
@@ -105,9 +106,8 @@ def execute_reserved_entries_for_day(
         )
 
         if entry_result['filled']:
-            qty = chosen_entry_plan['qty']
-            actual_total_cost = entry_result['entry_price'] * qty
-            cash -= actual_total_cost
+            actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
+            cash -= actual_total_cost_milli
             portfolio[cand['ticker']] = entry_result['position']
 
             if cand['ticker'] in active_extended_signals:
@@ -138,11 +138,12 @@ def execute_reserved_entries_for_day(
                         'R_Multiple': 0.0,
                         'Risk': params.fixed_risk,
                         '備註': f"預掛限價 {chosen_entry_plan['limit_price']:.2f} 未成交",
-                        '投入總金額': reserved_cost,
+                        '投入總金額': milli_to_money(reserved_cost_milli),
                     }
                 )
 
     return cash, total_missed_buys
+
 
 def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params):
     for ticker in sorted(list(active_extended_signals.keys())):

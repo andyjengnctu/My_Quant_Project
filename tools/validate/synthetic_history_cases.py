@@ -6,6 +6,7 @@ import pandas as pd
 from core.backtest_core import run_v16_backtest
 from core.entry_plans import build_cash_capped_entry_plan, resize_candidate_plan_to_capital
 from core.history_filters import evaluate_history_candidate_metrics
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_entry_price
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data
@@ -70,7 +71,7 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
             sizing_equity,
             params,
         )
-        est_reserved_cost = calc_entry_price(est_plan["limit_price"], est_plan["qty"], params) * est_plan["qty"]
+        est_reserved_cost = calc_entry_total_cost(est_plan["limit_price"], est_plan["qty"], params)
         estimated_rank_rows.append({
             "ticker": cand["ticker"],
             "reserved_cost": est_reserved_cost,

@@ -1,6 +1,21 @@
+import copy
+
+import numpy as np
 import pandas as pd
 
+from core.backtest_finalize import finalize_open_position_at_end
 from core.config import V16StrategyParams
+from core.entry_plans import build_cash_capped_entry_plan, build_position_from_entry_fill
+from core.exact_accounting import (
+    build_buy_ledger_from_price,
+    build_sell_ledger_from_price,
+    calc_entry_total_cost,
+    calc_exit_net_total,
+    milli_to_money,
+    money_to_milli,
+    price_to_milli,
+    sync_position_display_fields,
+)
 from core.history_filters import evaluate_history_candidate_metrics
 from core.portfolio_stats import (
     build_full_year_return_stats,
@@ -9,14 +24,20 @@ from core.portfolio_stats import (
     calc_sim_years,
     find_sim_start_idx,
 )
+from core.portfolio_exits import closeout_open_positions
+from core.position_step import execute_bar_step
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
     calc_entry_price,
     calc_half_take_profit_sell_qty,
+    calc_limit_down_price,
+    calc_limit_up_price,
     calc_net_sell_price,
     calc_position_size,
     can_execute_half_take_profit,
+    is_limit_down_bar,
+    is_limit_up_bar,
 )
 
 from .checks import add_check
@@ -148,6 +169,194 @@ def validate_portfolio_stats_unit_case(_base_params):
     summary["full_year_count"] = full_year_stats["full_year_count"]
     return results, summary
 
+
+
+def validate_exact_accounting_ledger_conservation_case(_base_params):
+    params = V16StrategyParams()
+    case_id = "UNIT_EXACT_LEDGER"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    buy_ledger = build_buy_ledger_from_price(10.05, 3000, params)
+    sell_ledger = build_sell_ledger_from_price(10.95, 3000, params)
+
+    add_check(results, "unit_exact_accounting", case_id, "buy_ledger_gross_plus_fee_equals_net", buy_ledger["gross_buy_milli"] + buy_ledger["buy_fee_milli"], buy_ledger["net_buy_total_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "sell_ledger_gross_minus_fee_minus_tax_equals_net", sell_ledger["gross_sell_milli"] - sell_ledger["sell_fee_milli"] - sell_ledger["tax_milli"], sell_ledger["net_sell_total_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "entry_total_helper_matches_buy_ledger", milli_to_money(buy_ledger["net_buy_total_milli"]), calc_entry_total_cost(10.05, 3000, params), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "exit_total_helper_matches_sell_ledger", milli_to_money(sell_ledger["net_sell_total_milli"]), calc_exit_net_total(10.95, 3000, params), tol=1e-12)
+
+    summary["buy_net_total_milli"] = buy_ledger["net_buy_total_milli"]
+    return results, summary
+
+
+def validate_exact_accounting_cost_basis_allocation_case(_base_params):
+    params = V16StrategyParams()
+    params.tp_percent = 0.5
+    case_id = "UNIT_EXACT_COST_BASIS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    position = build_position_from_entry_fill(100.0, 3, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0)
+    original_cost_basis_milli = position["remaining_cost_basis_milli"]
+
+    position, _tp_freed_cash, _tp_pnl_realized, tp_events = execute_bar_step(
+        position,
+        y_atr=1.0,
+        y_ind_sell=False,
+        y_close=100.0,
+        t_open=100.0,
+        t_high=110.0,
+        t_low=99.0,
+        t_close=109.0,
+        t_volume=1000.0,
+        params=params,
+    )
+    tp_context = position.get("_last_exec_contexts", [])[0]
+
+    position, _stop_freed_cash, _stop_pnl_realized, stop_events = execute_bar_step(
+        position,
+        y_atr=1.0,
+        y_ind_sell=False,
+        y_close=109.0,
+        t_open=94.0,
+        t_high=96.0,
+        t_low=90.0,
+        t_close=92.0,
+        t_volume=1000.0,
+        params=params,
+    )
+    stop_context = position.get("_last_exec_contexts", [])[0]
+
+    add_check(results, "unit_exact_accounting", case_id, "tp_half_event_fired", True, "TP_HALF" in tp_events)
+    add_check(results, "unit_exact_accounting", case_id, "stop_event_fired", True, "STOP" in stop_events)
+    add_check(results, "unit_exact_accounting", case_id, "allocated_cost_basis_sums_back_to_original", original_cost_basis_milli, int(tp_context["allocated_cost_milli"]) + int(stop_context["allocated_cost_milli"]))
+    add_check(results, "unit_exact_accounting", case_id, "remaining_cost_basis_zero_after_tail_exit", 0, position["remaining_cost_basis_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "realized_pnl_tracks_sum_of_legs", int(tp_context["pnl_milli"]) + int(stop_context["pnl_milli"]), position["realized_pnl_milli"])
+
+    summary["original_cost_basis_milli"] = original_cost_basis_milli
+    return results, summary
+
+
+def validate_exact_accounting_tick_limit_integer_case(_base_params):
+    case_id = "UNIT_EXACT_TICK_LIMIT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    up_limit = calc_limit_up_price(95.1)
+    down_limit = calc_limit_down_price(95.1)
+    near_up = np.nextafter(up_limit, 0.0)
+    near_down = np.nextafter(down_limit, np.inf)
+
+    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.6, up_limit, tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_up_milli", price_to_milli(up_limit), price_to_milli(near_up))
+    add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_down_milli", price_to_milli(down_limit), price_to_milli(near_down))
+    add_check(results, "unit_exact_accounting", case_id, "limit_up_bar_uses_integer_price_comparison", True, is_limit_up_bar(near_up, near_up, near_up, near_up, 95.1))
+    add_check(results, "unit_exact_accounting", case_id, "limit_down_bar_uses_integer_price_comparison", True, is_limit_down_bar(near_down, near_down, near_down, near_down, 95.1))
+
+    summary["limit_up"] = up_limit
+    return results, summary
+
+
+def validate_exact_accounting_cash_risk_boundary_case(_base_params):
+    params = V16StrategyParams()
+    case_id = "UNIT_EXACT_CASH_RISK"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    candidate_plan = {
+        "limit_price": 100.0,
+        "init_sl": 95.0,
+        "init_trail": 95.0,
+        "target_price": 110.0,
+        "entry_atr": 1.0,
+    }
+    resized = build_cash_capped_entry_plan(candidate_plan, 10_000.0, params)
+    exact_cash = milli_to_money(resized["reserved_cost_milli"])
+    below_cash = milli_to_money(resized["reserved_cost_milli"] - 1)
+
+    accepted = build_cash_capped_entry_plan(candidate_plan, exact_cash, params)
+    rejected = build_cash_capped_entry_plan(candidate_plan, below_cash, params)
+
+    add_check(results, "unit_exact_accounting", case_id, "cash_cap_accepts_exact_reserved_total", True, accepted is not None)
+    add_check(results, "unit_exact_accounting", case_id, "cash_cap_rejects_one_milli_shortfall", True, rejected is None)
+    add_check(results, "unit_exact_accounting", case_id, "reserved_cost_stored_as_integer_total", resized["reserved_cost_milli"], money_to_milli(resized["reserved_cost"]))
+
+    summary["reserved_cost_milli"] = resized["reserved_cost_milli"]
+    return results, summary
+
+
+def validate_exact_accounting_single_vs_portfolio_parity_case(_base_params):
+    params = V16StrategyParams()
+    case_id = "UNIT_EXACT_SINGLE_PORTFOLIO_PARITY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    base_position = build_position_from_entry_fill(100.0, 10, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0, entry_type="normal")
+    single_position = copy.deepcopy(base_position)
+    portfolio_position = copy.deepcopy(base_position)
+    initial_capital_milli = money_to_milli(params.initial_capital)
+    starting_cash_milli = initial_capital_milli - base_position["net_buy_total_milli"]
+
+    single_state = finalize_open_position_at_end(
+        position=single_position,
+        final_close=110.0,
+        final_date=pd.Timestamp("2025-01-03"),
+        current_capital_milli=starting_cash_milli,
+        current_equity_milli=starting_cash_milli,
+        peak_capital_milli=initial_capital_milli,
+        max_drawdown_pct=0.0,
+        trade_count=0,
+        full_wins=0,
+        total_profit_milli=0,
+        total_loss_milli=0,
+        total_r_multiple=0.0,
+        total_r_win=0.0,
+        total_r_loss=0.0,
+        trade_logs=[],
+        return_logs=False,
+        params=params,
+    )
+    closed_trades_stats = []
+    portfolio_cash_milli, normal_trade_count, extended_trade_count = closeout_open_positions(
+        portfolio={"2330": portfolio_position},
+        cash=starting_cash_milli,
+        params=params,
+        trade_history=[],
+        is_training=True,
+        closed_trades_stats=closed_trades_stats,
+        normal_trade_count=0,
+        extended_trade_count=0,
+        last_date=pd.Timestamp("2025-01-03"),
+    )
+
+    add_check(results, "unit_exact_accounting", case_id, "single_and_portfolio_closeout_final_cash_match", single_state["current_capital_milli"], portfolio_cash_milli)
+    add_check(results, "unit_exact_accounting", case_id, "single_and_portfolio_closeout_trade_pnl_match", milli_to_money(single_state["total_profit_milli"]), closed_trades_stats[0]["pnl"], tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "portfolio_closeout_counts_normal_trade", 1, normal_trade_count)
+    add_check(results, "unit_exact_accounting", case_id, "portfolio_closeout_keeps_extended_trade_count_zero", 0, extended_trade_count)
+
+    summary["final_cash_milli"] = portfolio_cash_milli
+    return results, summary
+
+
+def validate_exact_accounting_display_derived_case(_base_params):
+    params = V16StrategyParams()
+    case_id = "UNIT_EXACT_DISPLAY_DERIVED"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    position = build_position_from_entry_fill(100.0, 10, init_sl=95.0, init_trail=95.0, params=params, target_price=110.0)
+    position["entry"] = -1.0
+    position["entry_capital_total"] = -1.0
+    position["realized_pnl"] = -1.0
+    sync_position_display_fields(position)
+
+    add_check(results, "unit_exact_accounting", case_id, "entry_display_is_derived_from_integer_ledger", milli_to_money(position["net_buy_total_milli"]) / position["initial_qty"], position["entry"], tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "entry_capital_display_is_derived_from_integer_ledger", milli_to_money(position["net_buy_total_milli"]), position["entry_capital_total"], tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "realized_pnl_display_is_derived_from_integer_ledger", milli_to_money(position["realized_pnl_milli"]), position["realized_pnl"], tol=1e-12)
+
+    summary["entry_capital_total"] = position["entry_capital_total"]
+    return results, summary
 
 
 def _oracle_net_sell_price(price: float, qty: int, params) -> float:

@@ -44,6 +44,7 @@ python apps/ml_optimizer.py --dataset full            # 正式入口
 # strategies/breakout/search_space.py：breakout optimizer 搜尋空間
 # core/strategy_params.py：聚合 breakout + selection + execution 的共用參數契約
 # core/capital_policy.py：單股/投組/scanner 共用資金與 sizing 規則
+# core/exact_accounting.py：正式整數 ledger / cost-basis allocation / tick-limit 正規化單一真理來源
 # core/config.py：相容 façade；保留既有匯入路徑
 
 # validate 架構
@@ -52,7 +53,7 @@ python tools/validate/cli.py --dataset reduced        # validate standalone CLI
 # tools/validate/check_result_utils.py / portfolio_payloads.py / scanner_expectations.py / reporting.py 分別負責檢查結果記錄、投組 payload/年度欄位摘要、scanner 預期 payload/reference check、validate console summary / issue Excel / local regression summary JSON
 # tools/validate/module_loader.py / tool_check_common.py / portfolio_tool_checks.py / external_tool_checks.py 分別負責模組動態載入、smoke check 共用工具、portfolio_sim smoke checks、scanner/downloader/debug smoke checks；checks.py / tool_adapters.py / tool_checks.py 僅保留 façade
 # tools/validate/real_case_io.py / real_case_runners.py / real_case_assertions.py 分別負責真實 ticker 的 CSV/清洗、執行/掃描協調、cross-check 規則；real_cases.py 僅保留 façade
-# synthetic_cases.py 負責 suite 入口、validator registry 與相容 façade；synthetic_portfolio_common.py / synthetic_take_profit_cases.py / synthetic_flow_cases.py / synthetic_portfolio_cases.py 分別負責 synthetic 投組共用 helper、半倉停利案例、流程/rotation 案例與 façade；synthetic_unit_cases.py 負責 price_utils / history_filters / portfolio_stats 邊界案例；synthetic_meta_cases.py 負責 checklist / registry / synthetic 主入口一致性、project import graph cycle guard 與 `doc/CMD.md` 指令契約案例；synthetic_error_cases.py 負責 params_io / module_loader / preflight / downloader 的 fail-fast 錯誤路徑；synthetic_data_quality_cases.py 負責髒資料清洗 expected behavior / fail-fast / `load_clean_df` 整合；synthetic_cli_cases.py 負責 dataset wrapper / local regression / no-arg CLI / 剩餘直接入口 CLI 契約；synthetic_display_cases.py 負責 scanner header / start banner / summary、strategy dashboard 與 core.display re-export output sanity；synthetic_contract_cases.py 負責 validate summary / optimizer profile / issue report 的 CSV/XLSX/JSON contract；synthetic_strategy_cases.py 另補 model I/O schema、ranking / scoring sanity、optimizer objective / export contract、strategy repeatability、minimum viability 與 reporting schema compatibility；synthetic_history_cases.py / synthetic_guardrail_cases.py / synthetic_param_cases.py 分別負責歷史門檻案例、guardrail 案例與 façade
+# synthetic_cases.py 負責 suite 入口、validator registry 與相容 façade；synthetic_portfolio_common.py / synthetic_take_profit_cases.py / synthetic_flow_cases.py / synthetic_portfolio_cases.py 分別負責 synthetic 投組共用 helper、半倉停利案例、流程/rotation 案例與 façade；synthetic_unit_cases.py 負責 price_utils / history_filters / portfolio_stats 邊界案例，以及 exact-accounting ledger / cost-basis allocation / integer tick-limit / cash-risk boundary / single-vs-portfolio parity 契約；synthetic_meta_cases.py 負責 checklist / registry / synthetic 主入口一致性、project import graph cycle guard 與 `doc/CMD.md` 指令契約案例；synthetic_error_cases.py 負責 params_io / module_loader / preflight / downloader 的 fail-fast 錯誤路徑；synthetic_data_quality_cases.py 負責髒資料清洗 expected behavior / fail-fast / `load_clean_df` 整合；synthetic_cli_cases.py 負責 dataset wrapper / local regression / no-arg CLI / 剩餘直接入口 CLI 契約；synthetic_display_cases.py 負責 scanner header / start banner / summary、strategy dashboard 與 core.display re-export output sanity；synthetic_contract_cases.py 負責 validate summary / optimizer profile / issue report 的 CSV/XLSX/JSON contract；synthetic_strategy_cases.py 另補 model I/O schema、ranking / scoring sanity、optimizer objective / export contract、strategy repeatability、minimum viability 與 reporting schema compatibility；synthetic_history_cases.py / synthetic_guardrail_cases.py / synthetic_param_cases.py 分別負責歷史門檻案例、guardrail 案例與 façade
 
 
 ## 資料下載
@@ -93,7 +94,8 @@ python apps/gui.py
 
 # single-stock core 架構
 # core/backtest_core.py：單股 K 棒推進與回測總控
-# core/price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷
+# core/exact_accounting.py：正式整數 ledger / cost-basis allocation / tick-limit 正規化單一真理來源
+# core/price_utils.py：跳價/成交價/股數/成本/漲跌停與賣出阻塞判斷 façade
 # core/signal_utils.py：技術指標與訊號生成
 # core/trade_plans.py：候選/掛單/延續訊號 façade
 # core/history_filters.py：歷史績效候選門檻

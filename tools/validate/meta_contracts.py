@@ -28,6 +28,12 @@ CRITICAL_HELPER_SINGLE_SOURCE_SPECS: Dict[str, Tuple[str, ...]] = {
         "resolve_portfolio_entry_budget",
         "resolve_scanner_live_capital",
     ),
+    "core/exact_accounting.py": (
+        "build_buy_ledger",
+        "build_sell_ledger",
+        "allocate_cost_basis_milli",
+        "round_price_milli_to_tick",
+    ),
 }
 
 

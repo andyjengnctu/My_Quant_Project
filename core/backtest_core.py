@@ -2,9 +2,10 @@ import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
+from core.exact_accounting import build_sell_ledger_from_price, milli_to_money, money_to_milli
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
-from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
+from core.price_utils import adjust_long_sell_fill_price
 from core.signal_utils import generate_signals
 from core.trade_plans import (
     build_extended_entry_plan_from_signal,
@@ -33,24 +34,24 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     position = {'qty': 0}
     active_extended_signal = None
-    currentCapital = params.initial_capital
+    currentCapital_milli = money_to_milli(params.initial_capital)
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
-    totalProfit, totalLoss = 0.0, 0.0
-    peakCapital, maxDrawdownPct = currentCapital, 0.0
+    totalProfit_milli, totalLoss_milli = 0, 0
+    peakCapital_milli, maxDrawdownPct = currentCapital_milli, 0.0
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
-    currentEquity = currentCapital
+    currentEquity_milli = currentCapital_milli
 
     if len(C) == 0:
         stats_dict = build_backtest_stats(
             params=params,
-            current_capital=currentCapital,
-            current_equity=currentEquity,
+            current_capital=milli_to_money(currentCapital_milli),
+            current_equity=milli_to_money(currentEquity_milli),
             max_drawdown_pct=maxDrawdownPct,
             trade_count=tradeCount,
             full_wins=fullWins,
-            total_profit=totalProfit,
-            total_loss=totalLoss,
+            total_profit=0.0,
+            total_loss=0.0,
             total_r_multiple=total_r_multiple,
             total_r_win=total_r_win,
             total_r_loss=total_r_loss,
@@ -71,13 +72,16 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j - 1]):
+            currentEquity_milli = currentCapital_milli
+            peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
+            currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
+            maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
             continue
 
         pos_start_of_current_bar = position['qty']
-
         if pos_start_of_current_bar > 0:
             total_bars_held += 1
-            position, _freed_cash, pnl_realized, events = execute_bar_step(
+            position, _freed_cash, _pnl_realized, events = execute_bar_step(
                 position,
                 ATR_main[j - 1],
                 sellCondition[j - 1],
@@ -89,6 +93,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 V[j],
                 params,
             )
+            pnl_realized_milli = sum(int(ctx.get('pnl_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
                 trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0
@@ -96,20 +101,20 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 tradeCount += 1
                 if return_logs:
                     trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
-                if total_pnl > 0:
+                if position['realized_pnl_milli'] > 0:
                     fullWins += 1
-                    totalProfit += total_pnl
+                    totalProfit_milli += position['realized_pnl_milli']
                     total_r_win += trade_r_mult
                 else:
-                    totalLoss += abs(total_pnl)
+                    totalLoss_milli += abs(position['realized_pnl_milli'])
                     total_r_loss += abs(trade_r_mult)
             elif 'MISSED_SELL' in events:
                 missedSellCount += 1
-            currentCapital += pnl_realized
+            currentCapital_milli += pnl_realized_milli
 
         isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
         buyTriggered = False
-        sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital)
+        sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
 
         if isSetup_prev:
             signal_state = create_signal_tracking_state(buy_limits[j - 1], ATR_main[j - 1], params)
@@ -130,6 +135,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             )
             if entry_result['filled']:
                 position = entry_result['position']
+                currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy']:
@@ -155,6 +161,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             )
             if entry_result['filled']:
                 position = entry_result['position']
+                currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy']:
@@ -163,29 +170,29 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j], t_open=O[j], params=params):
             active_extended_signal = None
 
-        currentEquity = currentCapital
+        currentEquity_milli = currentCapital_milli
         if position['qty'] > 0:
             floating_exec_price = adjust_long_sell_fill_price(C[j])
-            floating_sell_net = calc_net_sell_price(floating_exec_price, position['qty'], params)
-            floating_pnl = (floating_sell_net - position['entry']) * position['qty']
-            currentEquity = currentCapital + floating_pnl
+            floating_sell_ledger = build_sell_ledger_from_price(floating_exec_price, position['qty'], params)
+            floating_pnl_milli = floating_sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
+            currentEquity_milli = currentCapital_milli + floating_pnl_milli
 
-        peakCapital = max(peakCapital, currentEquity)
-        currentDrawdownPct = ((peakCapital - currentEquity) / peakCapital) * 100 if peakCapital > 0 else 0.0
+        peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
+        currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
         maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
     final_state = finalize_open_position_at_end(
         position=position,
         final_close=C[-1],
         final_date=Dates[-1],
-        current_capital=currentCapital,
-        current_equity=currentEquity,
-        peak_capital=peakCapital,
+        current_capital_milli=currentCapital_milli,
+        current_equity_milli=currentEquity_milli,
+        peak_capital_milli=peakCapital_milli,
         max_drawdown_pct=maxDrawdownPct,
         trade_count=tradeCount,
         full_wins=fullWins,
-        total_profit=totalProfit,
-        total_loss=totalLoss,
+        total_profit_milli=totalProfit_milli,
+        total_loss_milli=totalLoss_milli,
         total_r_multiple=total_r_multiple,
         total_r_win=total_r_win,
         total_r_loss=total_r_loss,
@@ -193,13 +200,13 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         return_logs=return_logs,
         params=params,
     )
-    currentCapital = final_state['current_capital']
-    currentEquity = final_state['current_equity']
+    currentCapital_milli = final_state['current_capital_milli']
+    currentEquity_milli = final_state['current_equity_milli']
     maxDrawdownPct = final_state['max_drawdown_pct']
     tradeCount = final_state['trade_count']
     fullWins = final_state['full_wins']
-    totalProfit = final_state['total_profit']
-    totalLoss = final_state['total_loss']
+    totalProfit_milli = final_state['total_profit_milli']
+    totalLoss_milli = final_state['total_loss_milli']
     total_r_multiple = final_state['total_r_multiple']
     total_r_win = final_state['total_r_win']
     total_r_loss = final_state['total_r_loss']
@@ -210,13 +217,13 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
     stats_dict = build_backtest_stats(
         params=params,
-        current_capital=currentCapital,
-        current_equity=currentEquity,
+        current_capital=milli_to_money(currentCapital_milli),
+        current_equity=milli_to_money(currentEquity_milli),
         max_drawdown_pct=maxDrawdownPct,
         trade_count=tradeCount,
         full_wins=fullWins,
-        total_profit=totalProfit,
-        total_loss=totalLoss,
+        total_profit=milli_to_money(totalProfit_milli),
+        total_loss=milli_to_money(totalLoss_milli),
         total_r_multiple=total_r_multiple,
         total_r_win=total_r_win,
         total_r_loss=total_r_loss,

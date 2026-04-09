@@ -1,6 +1,6 @@
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
-from core.price_utils import calc_entry_price
+from core.exact_accounting import calc_entry_total_cost
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     build_normal_candidate_plan,
@@ -39,7 +39,7 @@ def _make_candidate_row(
     continuation_completion_barrier=None,
     entry_ref_price=None,
 ):
-    est_cost = calc_entry_price(est_limit_px, est_qty, params) * est_qty if est_qty > 0 else 0.0
+    est_cost = calc_entry_total_cost(est_limit_px, est_qty, params) if est_qty > 0 else 0.0
     sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
     row = {
         'ticker': ticker,

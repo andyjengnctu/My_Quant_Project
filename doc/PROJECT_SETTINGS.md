@@ -45,6 +45,8 @@
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。
 8. 架構或模組責任有變動時，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 9. 凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+10. 正式帳務中的 `cash`、`pnl`、`equity`、`reserved_cost`、`risk` 必須以整筆總額 ledger 的單一真理來源計算；不得以含費每股價或 per-share × qty 回推正式總額。
+11. 凡屬買入、停損、停利、漲跌停與一字鎖死等交易狀態判斷，必須經共享價格正規化 helper；不得以 raw float equality 或未正規化浮點值直接判定。
 
 ## E. 交易與策略原則
 

@@ -4,6 +4,7 @@ from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_entry_price, calc_reference_candidate_qty, can_execute_half_take_profit
 from core.scanner_display import build_scanner_sort_probe_text
 from .runtime_common import is_insufficient_data_error
@@ -55,7 +56,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     if stats['is_setup_today']:
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params)
         if proj_qty > 0:
-            proj_cost = calc_entry_price(stats['buy_limit'], proj_qty, params) * proj_qty
+            proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
             half_tp_note = " | 半倉停利:股數不足" if not can_execute_half_take_profit(proj_qty, params.tp_percent) else ""
             detail = f"限價買進:{stats['buy_limit']:>6.2f} | 參考投入:{proj_cost:>7,.0f}{half_tp_note}"
             kind = 'buy'
@@ -113,7 +114,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         if limit_price is not None and init_sl is not None and not pd.isna(limit_price) and not pd.isna(init_sl):
             proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
             if proj_qty > 0:
-                proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
+                proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
                 barrier_parts.append(f"參考投入:{proj_cost:>7,.0f}")
                 if not can_execute_half_take_profit(proj_qty, params.tp_percent):
                     barrier_parts.append("半倉停利:股數不足")

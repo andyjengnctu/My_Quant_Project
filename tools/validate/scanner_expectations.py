@@ -5,6 +5,7 @@ import pandas as pd
 from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
 from core.config import BUY_SORT_METHOD
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_entry_price, calc_reference_candidate_qty
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 
@@ -134,7 +135,7 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
             return payload
         proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
 
-    proj_cost = calc_entry_price(limit_price, proj_qty, params) * proj_qty
+    proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
     sort_value = calc_buy_sort_value(
         BUY_SORT_METHOD,
         scanner_ref_stats["expected_value"],

@@ -1,5 +1,6 @@
 import numpy as np
 
+from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from tools.debug.charting import record_trade_marker
@@ -219,7 +220,8 @@ def append_debug_forced_closeout(
 ):
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
-    final_leg_pnl = (sell_net_price - position['entry']) * position['qty']
+    sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
+    final_leg_pnl = milli_to_money(sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0))
     total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_pnl)
     current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(final_leg_pnl)
     completed_trade_snapshot = _build_completed_trade_snapshot(
@@ -238,7 +240,7 @@ def append_debug_forced_closeout(
         price=exec_sell_price,
         net_price=sell_net_price,
         qty=position['qty'],
-        gross_amount=sell_net_price * position['qty'],
+        gross_amount=milli_to_money(sell_ledger['net_sell_total_milli']),
         stop_price=position.get('sl', np.nan),
         tp_half_price=np.nan,
         atr_prev=atr_last,
@@ -255,7 +257,7 @@ def append_debug_forced_closeout(
             'pnl_value': float(final_leg_pnl),
             'total_pnl': float(total_pnl),
             'pnl_pct': float(total_return_pct),
-            'sell_capital': float(sell_net_price * position['qty']),
+            'sell_capital': float(milli_to_money(sell_ledger['net_sell_total_milli'])),
             'payoff_ratio': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('payoff_ratio', 0.0)),
             'win_rate': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('win_rate', 0.0)),
             'expected_value': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('expected_value', 0.0)),

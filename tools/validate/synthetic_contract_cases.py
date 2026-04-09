@@ -27,6 +27,7 @@ from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
 from core.portfolio_fast_data import prep_stock_data_and_trades, build_trade_stats_index
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_reference_candidate_qty, calc_entry_price
 from tools.scanner.stock_processor import build_scanner_response_from_stats
 from tools.debug.charting import (
@@ -1559,7 +1560,7 @@ def validate_scanner_live_capital_contract_case(base_params):
     buy_limit = 100.0
     stop_loss = 90.0
     projected_qty = calc_reference_candidate_qty(buy_limit, stop_loss, params)
-    projected_cost = calc_entry_price(buy_limit, projected_qty, params) * projected_qty
+    projected_cost = calc_entry_total_cost(buy_limit, projected_qty, params)
 
     scanner_result = build_scanner_response_from_stats(
         ticker="2330",

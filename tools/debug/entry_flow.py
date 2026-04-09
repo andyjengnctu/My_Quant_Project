@@ -7,6 +7,7 @@ from core.extended_signals import (
     create_signal_tracking_state,
     should_clear_extended_signal,
 )
+from core.exact_accounting import calc_entry_total_cost
 from core.price_utils import calc_entry_price
 from tools.debug.charting import record_active_levels, record_limit_order, record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
@@ -135,7 +136,7 @@ def process_debug_entry_for_day(
                 },
             )
         elif entry_result['count_as_missed_buy']:
-            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -151,7 +152,7 @@ def process_debug_entry_for_day(
                 note=f"預掛限價 {entry_plan['limit_price']:.2f} 未成交",
             )
         elif entry_result['is_worse_than_initial_stop']:
-            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -233,7 +234,7 @@ def process_debug_entry_for_day(
                 },
             )
         elif entry_result['count_as_missed_buy']:
-            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -249,7 +250,7 @@ def process_debug_entry_for_day(
                 note=f"預掛限價 {entry_plan['limit_price']:.2f} 未成交",
             )
         elif entry_result['is_worse_than_initial_stop']:
-            reserved_cost = calc_entry_price(entry_plan['limit_price'], entry_plan['qty'], params) * entry_plan['qty']
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,

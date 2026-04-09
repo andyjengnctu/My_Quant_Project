@@ -1,5 +1,6 @@
 import pandas as pd
 import time
+from core.exact_accounting import milli_to_money, money_to_milli
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.config import get_ev_calc_method
 from core.portfolio_fast_data import (
@@ -53,12 +54,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         build_trade_index_sec = time.perf_counter() - t0
 
     initial_capital = params.initial_capital
-    cash = initial_capital
+    initial_capital_milli = money_to_milli(initial_capital)
+    cash = initial_capital_milli
     portfolio = {}
     active_extended_signals = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
     normal_trade_count, extended_trade_count = 0, 0
-    peak_equity, max_drawdown, current_equity = initial_capital, 0.0, initial_capital
+    peak_equity, max_drawdown, current_equity = initial_capital_milli, 0.0, initial_capital_milli
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [initial_capital], []
     yesterday_equity = initial_capital
@@ -95,17 +97,19 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         today = sorted_dates[i]
 
         if today.year not in year_start_equity:
-            year_start_equity[today.year] = current_equity
+            year_start_equity[today.year] = milli_to_money(current_equity)
             year_first_sim_date[today.year] = pd.Timestamp(today)
 
         available_cash = cash
-        sizing_equity = resolve_portfolio_sizing_equity(current_equity, initial_capital, params)
+        current_equity_money = milli_to_money(current_equity)
+        cash_money = milli_to_money(cash)
+        sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params)
 
         sold_today = set()
 
         if verbose and (not is_training) and i % 20 == 0:
-            exp = ((current_equity - cash) / current_equity) * 100 if current_equity > 0 else 0
-            print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
+            exp = ((current_equity_money - cash_money) / current_equity_money) * 100 if current_equity_money > 0 else 0
+            print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity_money:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
 
         t0 = time.perf_counter() if profile_stats is not None else None
         candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
@@ -205,17 +209,20 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         t0 = time.perf_counter() if profile_stats is not None else None
         today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+        today_equity_money = milli_to_money(today_equity)
+        cash_money = milli_to_money(cash)
         if profile_stats is not None:
             equity_mark_sec += time.perf_counter() - t0
 
         current_equity = today_equity
-        invested_capital = today_equity - cash
-        exposure_pct = (invested_capital / today_equity) * 100 if today_equity > 0 else 0
+        current_equity_money = today_equity_money
+        invested_capital = current_equity_money - cash_money
+        exposure_pct = (invested_capital / current_equity_money) * 100 if current_equity_money > 0 else 0
         total_exposure += exposure_pct
         if exposure_pct > max_exp:
             max_exp = exposure_pct
 
-        strategy_ret_pct = (today_equity - initial_capital) / initial_capital * 100
+        strategy_ret_pct = (current_equity_money - initial_capital) / initial_capital * 100
 
         if benchmark_data and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
             current_bm_px = get_fast_close(benchmark_data, date=today)
@@ -234,24 +241,24 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 bm_monthly_equities.append(yesterday_bm_px)
             current_month = today.month
 
-        yesterday_equity = today_equity
+        yesterday_equity = current_equity_money
         yesterday_bm_px = current_bm_px
-        year_end_equity[today.year] = today_equity
+        year_end_equity[today.year] = current_equity_money
         year_last_sim_date[today.year] = pd.Timestamp(today)
 
         if not is_training:
             equity_curve.append({
                 "Date": today.strftime('%Y-%m-%d'),
-                "Equity": today_equity,
+                "Equity": current_equity_money,
                 "Invested_Amount": invested_capital,
                 "Exposure_Pct": exposure_pct,
                 "Strategy_Return_Pct": strategy_ret_pct,
                 f"Benchmark_{benchmark_ticker}_Pct": bm_ret_pct
             })
 
-        if today_equity > peak_equity:
-            peak_equity = today_equity
-        drawdown = (peak_equity - today_equity) / peak_equity * 100
+        if current_equity > peak_equity:
+            peak_equity = current_equity
+        drawdown = (peak_equity - current_equity) / peak_equity * 100 if peak_equity > 0 else 0.0
         if drawdown > max_drawdown:
             max_drawdown = drawdown
 
@@ -286,7 +293,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     final_cash = today_equity
     if last_date is not None and last_date.year in year_end_equity:
-        year_end_equity[last_date.year] = today_equity
+        year_end_equity[last_date.year] = milli_to_money(today_equity)
 
     # # (AI註: 期末強制結算後補做一次 peak / drawdown 更新，避免 final closeout 對 MDD 漏算)
     if today_equity > peak_equity:
@@ -296,14 +303,15 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         max_drawdown = drawdown
 
     if len(sorted_dates) > start_idx:
-        monthly_equities.append(today_equity)
+        monthly_equities.append(milli_to_money(today_equity))
         if current_bm_px is not None:
             bm_monthly_equities.append(current_bm_px)
 
-    total_return = (today_equity - initial_capital) / initial_capital * 100
+    final_equity_money = milli_to_money(today_equity)
+    total_return = (final_equity_money - initial_capital) / initial_capital * 100
 
     if not is_training and len(equity_curve) > 0:
-        equity_curve[-1]['Equity'] = today_equity
+        equity_curve[-1]['Equity'] = final_equity_money
         equity_curve[-1]['Strategy_Return_Pct'] = total_return
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
@@ -340,7 +348,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
     total_reserved_entries = normal_trade_count + extended_trade_count
     reserved_buy_fill_rate = (total_reserved_entries / (total_reserved_entries + total_missed_buys) * 100.0) if (total_reserved_entries + total_missed_buys) > 0 else 0.0
-    annual_return_pct = calc_annual_return_pct(initial_capital, today_equity, sim_years)
+    annual_return_pct = calc_annual_return_pct(initial_capital, final_equity_money, sim_years)
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
     bm_end_value = bm_start_value * (1.0 + bm_ret_pct / 100.0) if bm_start_value > 0 else 0.0
@@ -379,9 +387,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats.update(bm_yearly_stats)
 
     if is_training:
-        return total_return, max_drawdown, trade_count, today_equity, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
+        return total_return, max_drawdown, trade_count, final_equity_money, avg_exp, max_exp, bm_ret_pct, bm_max_drawdown, win_rate, pf_ev, pf_payoff, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
 
     df_equity = pd.DataFrame(equity_curve)
     df_trades = pd.DataFrame(trade_history)
     final_bm_return = df_equity.iloc[-1][f"Benchmark_{benchmark_ticker}_Pct"] if not df_equity.empty else 0.0
-    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, today_equity, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct
+    return df_equity, df_trades, total_return, max_drawdown, trade_count, win_rate, pf_ev, pf_payoff, final_equity_money, avg_exp, max_exp, final_bm_return, bm_max_drawdown, total_missed_buys, total_missed_sells, r_squared, monthly_win_rate, bm_r_squared, bm_monthly_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct

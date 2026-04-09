@@ -1,15 +1,23 @@
 import numpy as np
 import pandas as pd
 
+from core.exact_accounting import (
+    build_buy_ledger_from_price,
+    build_sell_ledger_from_price,
+    calc_initial_risk_total_milli,
+    milli_to_money,
+    milli_to_price,
+    money_to_milli,
+    price_to_milli,
+    rate_to_ppm,
+    sync_position_display_fields,
+)
 from core.price_utils import (
     adjust_long_buy_fill_price,
-    calc_entry_price,
     calc_half_take_profit_sell_qty,
     calc_frozen_target_price,
-    calc_initial_risk_total,
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
-    calc_net_sell_price,
     calc_position_size,
     is_locked_limit_up_bar,
 )
@@ -38,11 +46,13 @@ def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
     if resized_plan is None or resized_plan["qty"] <= 0:
         return None
 
-    reserved_cost = calc_entry_price(resized_plan["limit_price"], resized_plan["qty"], params) * resized_plan["qty"]
-    if pd.isna(reserved_cost) or reserved_cost > available_cash:
+    buy_ledger = build_buy_ledger_from_price(resized_plan["limit_price"], resized_plan["qty"], params)
+    reserved_cost_milli = buy_ledger["net_buy_total_milli"]
+    if reserved_cost_milli > money_to_milli(available_cash):
         return None
 
-    resized_plan["reserved_cost"] = reserved_cost
+    resized_plan["reserved_cost_milli"] = reserved_cost_milli
+    resized_plan["reserved_cost"] = milli_to_money(reserved_cost_milli)
     return resized_plan
 
 
@@ -110,11 +120,11 @@ def _apply_entry_day_virtual_exit_trigger(position, *, t_high, t_low, params):
     if position.get("qty", 0) <= 0:
         return position
 
-    is_stop_hit = (not pd.isna(t_low)) and t_low <= position["sl"]
+    is_stop_hit = (not pd.isna(t_low)) and price_to_milli(t_low) <= position["sl_milli"]
     half_sell_qty = calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)
     is_tp_hit = (
         (not pd.isna(t_high))
-        and t_high >= position["tp_half"]
+        and price_to_milli(t_high) >= position["tp_half_milli"]
         and not position["sold_half"]
         and half_sell_qty > 0
     )
@@ -163,30 +173,51 @@ def build_position_from_entry_fill(
     if pd.isna(resolved_init_sl) or pd.isna(resolved_init_trail) or pd.isna(resolved_target_price):
         raise ValueError("build_position_from_entry_fill 無法建立有效的 stop / trail / target")
 
-    entry_price = calc_entry_price(buy_price, qty, params)
-    net_sl = calc_net_sell_price(resolved_init_sl, qty, params)
-    init_risk = calc_initial_risk_total(entry_price, net_sl, qty, params)
+    buy_price_milli = price_to_milli(buy_price)
+    initial_stop_milli = price_to_milli(resolved_init_sl)
+    trailing_stop_milli = price_to_milli(resolved_init_trail)
+    target_price_milli = price_to_milli(resolved_target_price)
+    pure_limit_price_milli = None if limit_price is None or pd.isna(limit_price) else price_to_milli(limit_price)
 
-    return {
+    buy_ledger = build_buy_ledger_from_price(buy_price, qty, params)
+    stop_sell_ledger = build_sell_ledger_from_price(resolved_init_sl, qty, params)
+    initial_risk_total_milli = calc_initial_risk_total_milli(
+        buy_ledger["net_buy_total_milli"],
+        stop_sell_ledger["net_sell_total_milli"],
+        rate_to_ppm(params.fixed_risk),
+    )
+
+    position = {
         "qty": qty,
         "initial_qty": qty,
-        "entry": entry_price,
-        "entry_capital_total": entry_price * qty,
-        "sl": resolved_init_sl,
-        "initial_stop": resolved_init_sl,
-        "trailing_stop": resolved_init_trail,
-        "tp_half": resolved_target_price,
+        "entry_fill_price_milli": buy_price_milli,
+        "entry_fill_price": milli_to_price(buy_price_milli),
+        "gross_buy_milli": buy_ledger["gross_buy_milli"],
+        "buy_fee_milli": buy_ledger["buy_fee_milli"],
+        "net_buy_total_milli": buy_ledger["net_buy_total_milli"],
+        "remaining_cost_basis_milli": buy_ledger["net_buy_total_milli"],
+        "sl_milli": initial_stop_milli,
+        "initial_stop_milli": initial_stop_milli,
+        "trailing_stop_milli": trailing_stop_milli,
+        "tp_half_milli": target_price_milli,
+        "sl": milli_to_price(initial_stop_milli),
+        "initial_stop": milli_to_price(initial_stop_milli),
+        "trailing_stop": milli_to_price(trailing_stop_milli),
+        "tp_half": milli_to_price(target_price_milli),
         "sold_half": False,
-        "pure_buy_price": buy_price,
-        "realized_pnl": 0.0,
-        "initial_risk_total": init_risk,
+        "pure_buy_price_milli": buy_price_milli,
+        "pure_buy_price": milli_to_price(buy_price_milli),
+        "realized_pnl_milli": 0,
+        "initial_risk_total_milli": initial_risk_total_milli,
         "entry_type": entry_type,
         "limit_price": limit_price,
+        "limit_price_milli": pure_limit_price_milli,
         "entry_day_stop_triggered": False,
         "entry_day_tp_triggered": False,
         "pending_exit_action": None,
         "pending_exit_trigger_price": np.nan,
     }
+    return sync_position_display_fields(position)
 
 
 # # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy 邏輯統一由此判斷)
@@ -204,6 +235,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         "entry_day_stop_triggered": False,
         "entry_day_tp_triggered": False,
         "entry_day_pending_action": None,
+        "net_buy_total_milli": 0,
     }
     if entry_plan is None:
         return result
@@ -220,8 +252,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         return result
 
     limit_price = entry_plan["limit_price"]
-
-    if t_low > limit_price:
+    if price_to_milli(t_low) > price_to_milli(limit_price):
         return result
 
     buy_price = adjust_long_buy_fill_price(min(t_open, limit_price))
@@ -247,4 +278,6 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     result["entry_day_stop_triggered"] = bool(position["entry_day_stop_triggered"])
     result["entry_day_tp_triggered"] = bool(position["entry_day_tp_triggered"])
     result["entry_day_pending_action"] = position["pending_exit_action"]
+    result["net_buy_total_milli"] = position["net_buy_total_milli"]
+    result["entry_cost"] = milli_to_money(position["net_buy_total_milli"])
     return result

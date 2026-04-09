@@ -1,9 +1,9 @@
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
+from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
 from core.position_step import execute_bar_step
 from core.price_utils import (
     adjust_long_sell_fill_price,
-    calc_net_sell_price,
     get_exit_sell_block_reason,
 )
 from core.portfolio_fast_data import (
@@ -57,7 +57,7 @@ def try_rotate_weakest_position(
             pt_y_close = get_fast_close(pt_data, pos=pt_y_pos)
             ret = (pt_y_close - pos['entry']) / pos['entry']
 
-            holding_cost = pos['entry'] * pos['qty']
+            holding_cost = milli_to_money(pos.get('remaining_cost_basis_milli', 0))
             _, holding_ev, holding_win_rate, holding_trade_count, holding_asset_growth_pct = get_pit_stats_from_index(
                 pit_stats_index[pt],
                 today,
@@ -104,12 +104,13 @@ def try_rotate_weakest_position(
 
         pos = portfolio[weakest_ticker]
         est_sell_px = adjust_long_sell_fill_price(w_open)
-        est_freed_cash = calc_net_sell_price(est_sell_px, pos['qty'], params) * pos['qty']
+        sell_ledger = build_sell_ledger_from_price(est_sell_px, pos['qty'], params)
+        est_freed_cash_milli = sell_ledger['net_sell_total_milli']
+        pnl_milli = est_freed_cash_milli - pos['remaining_cost_basis_milli']
+        cash += est_freed_cash_milli
 
-        pnl = est_freed_cash - (pos['entry'] * pos['qty'])
-        cash += est_freed_cash
-
-        total_pnl = pos['realized_pnl'] + pnl
+        total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
+        total_pnl = milli_to_money(total_pnl_milli)
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
@@ -125,7 +126,7 @@ def try_rotate_weakest_position(
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': weakest_ticker,
                     'Type': '汰弱賣出(Open, T+1再評估買進)',
-                    '單筆損益': pnl,
+                    '單筆損益': milli_to_money(pnl_milli),
                     '該筆總損益': total_pnl,
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
@@ -137,6 +138,7 @@ def try_rotate_weakest_position(
         break
 
     return cash, normal_trade_count, extended_trade_count
+
 
 def settle_portfolio_positions(
     portfolio,
@@ -161,7 +163,7 @@ def settle_portfolio_positions(
             continue
         y_pos = t_pos - 1
 
-        pos, freed_cash, pnl_realized, events = execute_bar_step(
+        pos, _freed_cash, _pnl_realized, events = execute_bar_step(
             pos,
             get_fast_value(fast_df, 'ATR', pos=y_pos),
             get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos),
@@ -173,7 +175,8 @@ def settle_portfolio_positions(
             get_fast_value(fast_df, 'Volume', pos=t_pos),
             params,
         )
-        cash += freed_cash
+        freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
+        cash += freed_cash_milli
 
         tp_context = _first_exec_context(pos, 'TP_HALF')
         stop_context = _first_exec_context(pos, 'STOP')
@@ -210,7 +213,7 @@ def settle_portfolio_positions(
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': ticker,
                         'Type': t_type,
-                        '單筆損益': pnl_realized if exit_context is None else float(exit_context['pnl']),
+                        '單筆損益': 0.0 if exit_context is None else float(exit_context['pnl']),
                         '該筆總損益': total_pnl,
                         'R_Multiple': total_r,
                         'Risk': params.fixed_risk,
@@ -252,6 +255,7 @@ def settle_portfolio_positions(
 
     return cash, total_missed_sells, normal_trade_count, extended_trade_count
 
+
 def closeout_open_positions(
     portfolio,
     cash,
@@ -269,11 +273,12 @@ def closeout_open_positions(
         pos = portfolio[ticker]
         raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
         exec_price = adjust_long_sell_fill_price(raw_exit_price)
-        net_price = calc_net_sell_price(exec_price, pos['qty'], params)
-        final_cash += net_price * pos['qty']
+        sell_ledger = build_sell_ledger_from_price(exec_price, pos['qty'], params)
+        final_cash += sell_ledger['net_sell_total_milli']
 
-        pnl = (net_price - pos['entry']) * pos['qty']
-        total_pnl = pos['realized_pnl'] + pnl
+        pnl_milli = sell_ledger['net_sell_total_milli'] - pos['remaining_cost_basis_milli']
+        total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
+        total_pnl = milli_to_money(total_pnl_milli)
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
@@ -289,7 +294,7 @@ def closeout_open_positions(
                     'Date': last_date.strftime('%Y-%m-%d') if last_date else '',
                     'Ticker': ticker,
                     'Type': '期末強制結算',
-                    '單筆損益': pnl,
+                    '單筆損益': milli_to_money(pnl_milli),
                     '該筆總損益': total_pnl,
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
