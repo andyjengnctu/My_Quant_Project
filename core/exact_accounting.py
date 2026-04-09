@@ -205,6 +205,32 @@ def is_same_price_milli(a, b) -> bool:
     return price_to_milli(a) == price_to_milli(b)
 
 
+
+
+def round_money_for_display(value) -> float:
+    return round(float(value), 2)
+
+
+def calc_risk_budget_milli(cap, risk_pct) -> int:
+    cap_milli = coerce_money_like_to_milli(cap)
+    risk_ppm = rate_to_ppm(risk_pct)
+    return _round_decimal_to_int(Decimal(int(cap_milli)) * Decimal(int(risk_ppm)) / _DECIMAL_PPM)
+
+
+def get_display_realized_pnl_sum(position: Dict[str, Any]) -> float:
+    return round_money_for_display(position.get("display_realized_pnl_sum", 0.0) or 0.0)
+
+
+def register_display_realized_pnl(position: Dict[str, Any], pnl_display) -> float:
+    updated_total = round_money_for_display(get_display_realized_pnl_sum(position) + round_money_for_display(pnl_display))
+    position["display_realized_pnl_sum"] = updated_total
+    return updated_total
+
+
+def calc_reconciled_exit_display_pnl(position: Dict[str, Any], total_trade_pnl) -> float:
+    return round_money_for_display(round_money_for_display(total_trade_pnl) - get_display_realized_pnl_sum(position))
+
+
 def sync_position_display_fields(position: Dict[str, Any]) -> Dict[str, Any]:
     initial_qty = int(position.get("initial_qty") or position.get("qty") or 0)
     position["entry"] = calc_average_price_from_total_milli(position.get("net_buy_total_milli", 0), initial_qty)

@@ -208,6 +208,7 @@ def build_position_from_entry_fill(
         "pure_buy_price_milli": buy_price_milli,
         "pure_buy_price": milli_to_price(buy_price_milli),
         "realized_pnl_milli": 0,
+        "display_realized_pnl_sum": 0.0,
         "initial_risk_total_milli": initial_risk_total_milli,
         "entry_type": entry_type,
         "limit_price": limit_price,

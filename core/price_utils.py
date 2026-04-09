@@ -13,6 +13,7 @@ from core.exact_accounting import (
     calc_initial_risk_total_milli,
     calc_limit_down_price_milli,
     calc_limit_up_price_milli,
+    calc_risk_budget_milli,
     get_tick_milli,
     milli_to_money,
     milli_to_price,
@@ -151,7 +152,7 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
     buy_price_milli = price_to_milli(bPrice)
     stop_price_milli = price_to_milli(stopPrice)
     cap_milli = money_to_milli(cap)
-    max_risk_milli = money_to_milli(cap * riskPct)
+    max_risk_milli = calc_risk_budget_milli(cap_milli, riskPct)
 
     buy_fee_ppm = rate_to_ppm(params.buy_fee)
     sell_fee_ppm = rate_to_ppm(params.sell_fee)

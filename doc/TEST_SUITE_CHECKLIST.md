@@ -192,6 +192,8 @@
 | B125 | P0 | 契約 / 一致性 | 單股 backtest / debug 的 `currentCapital` 必須固定代表可用現金；任何半倉、全倉與期末結算都只能加回 `net sell total`，`currentEquity` 必須以 `cash + 當前可變現淨值` 計；不得再沿用 `+ realized pnl` 或 `cash + floating pnl` 的舊路徑，否則會讓單股與投組 trade_count / asset_growth / completed-trade PnL 分叉 | DONE | 已補 static meta contract，直接掃描 `core/backtest_core.py`、`core/backtest_finalize.py`、`tools/debug/backtest.py` 與 `tools/debug/exit_flow.py`，釘死單股 / debug 現金更新必須使用 freed cash / net sell total，mark-to-market equity 必須使用 net liquidation value；避免 exact-accounting 遷移後把 `currentCapital` 誤當 accumulated pnl | `tools/validate/synthetic_meta_cases.py`, `core/backtest_core.py` |
 | B126 | P1 | Meta / 契約 | debug backtest / GUI 重播現金路徑時，買進當下也必須扣除實際 `net buy total`，不得只在賣出時更新 `current_capital`；否則會讓 debug trade log sizing、completed-trade PnL sequence 與核心單股回測分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/backtest.py` 與 `tools/debug/entry_flow.py`，釘死 debug entry flow 必須回傳 `spent_cash` 並由主流程扣減 `current_capital`，且買進 marker / trade row 必須使用實際 entry cost；避免重播路徑只補賣出現金、漏扣買進現金 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py` |
 
+| B127 | P1 | 契約 / 顯示一致性 | 使用者可見的 debug / portfolio trade log 若以 rounded 單筆損益重建 completed trades，則半倉停利 + 尾倉賣出後的逐列可見值加總必須精準回到 core completed-trade 總損益；不得只保證內部 exact pnl 一致，放任可見明細因 rounding residual 漂移 0.01 | DONE | 已補 exact-accounting display reconciliation unit case，並把 debug / portfolio full-exit 顯示損益改為吸收前序 rounded leg residual；避免 completed-trade sequence 與可見 trade log 因 0.01 rounding 差異而分叉 | `tools/validate/synthetic_unit_cases.py`, `core/portfolio_exits.py`, `tools/debug/exit_flow.py` |
+
 ### B3. 可隨策略升級調整的測試
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
@@ -278,6 +280,7 @@
 | T43 | `validate_downloader_sync_error_path_case` | B15 |
 | T44 | `validate_downloader_main_error_path_case` | B15 |
 | T45 | `validate_local_regression_summary_contract_case` | B11 |
+| T213 | `validate_exact_accounting_display_leg_reconciliation_case` | B127 |
 | T46 | `validate_test_suite_summary_failure_reporting_case` | B21 |
 | T47 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 |
 | T48 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 |
@@ -823,3 +826,5 @@
 | 2026-04-09 | T210 | 新增單股 backtest public stats legacy schema static contract 並驗證 | NEW -> DONE | `validate_single_backtest_stats_legacy_schema_contract_case` |
 | 2026-04-09 | T211 | 新增單股 backtest / debug exact cash / equity path static contract 並驗證 | NEW -> DONE | `validate_single_backtest_exact_cash_path_contract_case` |
 | 2026-04-09 | T212 | 新增 debug backtest 買進現金扣減 static contract 並驗證 | NEW -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
+
+| 2026-04-09 | T213 | 補 completed-trade 可見 rounded leg reconciliation contract，避免 debug / portfolio trade log 與 core completed trades 因 0.01 殘差分叉 | NEW -> DONE | `validate_exact_accounting_display_leg_reconciliation_case` |

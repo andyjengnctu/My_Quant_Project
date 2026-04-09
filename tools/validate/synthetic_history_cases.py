@@ -7,7 +7,6 @@ from core.backtest_core import run_v16_backtest
 from core.entry_plans import build_cash_capped_entry_plan, resize_candidate_plan_to_capital
 from core.history_filters import evaluate_history_candidate_metrics
 from core.exact_accounting import calc_entry_total_cost
-from core.price_utils import calc_entry_price
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data
 
@@ -56,8 +55,8 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     sizing_equity = 1_000_000.0
     available_cash = 50_000.0
     candidate_rows = [
-        {"ticker": "9801", "limit_px": 10.0, "init_sl": 9.5, "init_trail": 9.0},
-        {"ticker": "9802", "limit_px": 14.0, "init_sl": 13.3, "init_trail": 12.8},
+        {"ticker": "9801", "limit_px": 10.0, "init_sl": 9.0, "init_trail": 8.5},
+        {"ticker": "9802", "limit_px": 14.0, "init_sl": 13.85, "init_trail": 13.5},
     ]
 
     estimated_rank_rows = []

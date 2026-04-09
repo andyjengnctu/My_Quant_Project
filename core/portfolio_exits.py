@@ -1,6 +1,12 @@
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
-from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
+from core.exact_accounting import (
+    build_sell_ledger_from_price,
+    calc_reconciled_exit_display_pnl,
+    milli_to_money,
+    register_display_realized_pnl,
+    round_money_for_display,
+)
 from core.position_step import execute_bar_step
 from core.price_utils import (
     adjust_long_sell_fill_price,
@@ -117,6 +123,7 @@ def try_rotate_weakest_position(
 
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
         total_pnl = milli_to_money(total_pnl_milli)
+        display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
@@ -132,12 +139,13 @@ def try_rotate_weakest_position(
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': weakest_ticker,
                     'Type': '汰弱賣出(Open, T+1再評估買進)',
-                    '單筆損益': _round_money_for_history(milli_to_money(pnl_milli)),
+                    '單筆損益': _round_money_for_history(display_tail_pnl),
                     '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
                 }
             )
+            register_display_realized_pnl(pos, display_tail_pnl)
 
         del portfolio[weakest_ticker]
         sold_today.add(weakest_ticker)
@@ -194,11 +202,13 @@ def settle_portfolio_positions(
                     'Date': today.strftime('%Y-%m-%d'),
                     'Ticker': ticker,
                     'Type': '半倉停利',
-                    '單筆損益': 0.0 if tp_context is None else _round_money_for_history(tp_context['pnl']),
+                    '單筆損益': 0.0 if tp_context is None else _round_money_for_history(round_money_for_display(tp_context['pnl'])),
                     'R_Multiple': 0.0,
                     'Risk': params.fixed_risk,
                 }
             )
+            if tp_context is not None:
+                register_display_realized_pnl(pos, round_money_for_display(tp_context['pnl']))
 
         if 'STOP' in events or 'IND_SELL' in events:
             total_pnl = pos['realized_pnl']
@@ -214,17 +224,19 @@ def settle_portfolio_positions(
             if not is_training:
                 t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
                 exit_context = stop_context if 'STOP' in events else ind_sell_context
+                display_exit_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
                 trade_history.append(
                     {
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': ticker,
                         'Type': t_type,
-                        '單筆損益': 0.0 if exit_context is None else _round_money_for_history(exit_context['pnl']),
+                        '單筆損益': _round_money_for_history(display_exit_pnl),
                         '該筆總損益': _round_money_for_history(total_pnl),
                         'R_Multiple': total_r,
                         'Risk': params.fixed_risk,
                     }
                 )
+                register_display_realized_pnl(pos, display_exit_pnl)
 
             tickers_to_remove.append(ticker)
         elif 'MISSED_SELL' in events:
@@ -285,6 +297,7 @@ def closeout_open_positions(
         pnl_milli = sell_ledger['net_sell_total_milli'] - pos['remaining_cost_basis_milli']
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
         total_pnl = milli_to_money(total_pnl_milli)
+        display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
@@ -300,11 +313,12 @@ def closeout_open_positions(
                     'Date': last_date.strftime('%Y-%m-%d') if last_date else '',
                     'Ticker': ticker,
                     'Type': '期末強制結算',
-                    '單筆損益': _round_money_for_history(milli_to_money(pnl_milli)),
+                    '單筆損益': _round_money_for_history(display_tail_pnl),
                     '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
                     'Risk': params.fixed_risk,
                 }
             )
+            register_display_realized_pnl(pos, display_tail_pnl)
 
     return final_cash, normal_trade_count, extended_trade_count

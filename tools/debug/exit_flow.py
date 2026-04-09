@@ -1,6 +1,12 @@
 import numpy as np
 
-from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
+from core.exact_accounting import (
+    build_sell_ledger_from_price,
+    calc_reconciled_exit_display_pnl,
+    milli_to_money,
+    register_display_realized_pnl,
+    round_money_for_display,
+)
 from core.position_step import execute_bar_step, sum_last_exec_contexts_milli
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from tools.debug.charting import record_trade_marker
@@ -91,7 +97,7 @@ def process_debug_position_step(
         sold_qty = int(tp_context['qty'])
         exec_sell_price_half = float(tp_context['exec_price'])
         sell_net_price_half = float(tp_context['net_price'])
-        tp_leg_pnl = float(tp_context['pnl'])
+        tp_leg_pnl = round_money_for_display(tp_context['pnl'])
         current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(int(tp_context.get('net_total_milli', 0)))
         append_debug_trade_row(
             trade_logs,
@@ -106,6 +112,7 @@ def process_debug_position_step(
             atr_prev=atr_prev,
             pnl=tp_leg_pnl,
         )
+        register_display_realized_pnl(position, tp_leg_pnl)
         record_trade_marker(
             chart_context,
             current_date=current_date,
@@ -131,7 +138,6 @@ def process_debug_position_step(
         action_str = "停損殺出" if 'STOP' in events else "指標賣出"
         sell_price = adjust_long_sell_fill_price(t_open) if exit_context is None else float(exit_context['exec_price'])
         sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
-        final_leg_pnl = pnl_realized if exit_context is None else float(exit_context['pnl'])
         current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
         completed_trade_snapshot = _build_completed_trade_snapshot(
             stats_index,
@@ -141,6 +147,7 @@ def process_debug_position_step(
             overall_max_drawdown,
         )
         total_pnl = float(position.get('realized_pnl', pnl_realized))
+        final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
         full_entry_capital = _resolve_full_entry_capital(position, prev_qty)
         total_return_pct = (total_pnl / full_entry_capital * 100.0) if full_entry_capital > 0 else 0.0
         append_debug_trade_row(
@@ -156,6 +163,7 @@ def process_debug_position_step(
             atr_prev=atr_prev,
             pnl=final_leg_pnl,
         )
+        register_display_realized_pnl(position, final_leg_pnl)
         record_trade_marker(
             chart_context,
             current_date=current_date,
@@ -223,8 +231,9 @@ def append_debug_forced_closeout(
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
     sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
-    final_leg_pnl = milli_to_money(sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0))
-    total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_pnl)
+    final_leg_actual_pnl = milli_to_money(sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0))
+    total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)
+    final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
     current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])
     completed_trade_snapshot = _build_completed_trade_snapshot(
         stats_index,
@@ -248,6 +257,7 @@ def append_debug_forced_closeout(
         atr_prev=atr_last,
         pnl=final_leg_pnl,
     )
+    register_display_realized_pnl(position, final_leg_pnl)
     record_trade_marker(
         chart_context,
         current_date=current_date,
