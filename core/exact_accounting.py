@@ -208,7 +208,7 @@ def is_same_price_milli(a, b) -> bool:
 
 
 def round_money_for_display(value) -> float:
-    return round(float(value), 2)
+    return float(_to_decimal(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 def calc_risk_budget_milli(cap, risk_pct) -> int:

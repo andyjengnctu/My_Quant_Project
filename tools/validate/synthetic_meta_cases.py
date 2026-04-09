@@ -2152,6 +2152,35 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     return results, summary
 
 
+
+
+def validate_display_money_rounding_helper_contract_case(_base_params):
+    case_id = "META_DISPLAY_MONEY_ROUNDING_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exact_path = build_project_absolute_path("core", "exact_accounting.py")
+    portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
+    log_rows_path = build_project_absolute_path("tools", "debug", "log_rows.py")
+
+    exact_text = exact_path.read_text(encoding="utf-8")
+    portfolio_text = portfolio_path.read_text(encoding="utf-8")
+    log_rows_text = log_rows_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "shared_display_rounding_uses_decimal_half_up", True, 'quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)' in exact_text)
+    add_check(results, "meta_contract", case_id, "portfolio_history_rounding_delegates_to_shared_helper", True, 'return round_money_for_display(value)' in portfolio_text)
+    add_check(results, "meta_contract", case_id, "debug_log_rounding_delegates_to_shared_helper", True, 'return round_money_for_display(value)' in log_rows_text)
+    add_check(results, "meta_contract", case_id, "portfolio_history_rounding_has_no_legacy_builtin_round", False, 'return round(float(value), 2)' in portfolio_text)
+    add_check(results, "meta_contract", case_id, "debug_log_rounding_has_no_legacy_builtin_round", False, 'return round(float(value), 2)' in log_rows_text)
+
+    summary["source_paths"] = [
+        str(exact_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(portfolio_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+        str(log_rows_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+    ]
+    return results, summary
+
+
 def validate_single_backtest_exact_cash_path_contract_case(_base_params):
     case_id = "META_SINGLE_BACKTEST_EXACT_CASH_PATH_CONTRACT"
     results = []

@@ -1,6 +1,7 @@
 import math
 import numpy as np
 
+from core.exact_accounting import round_money_for_display
 from core.price_utils import can_execute_half_take_profit
 
 
@@ -11,7 +12,7 @@ def get_debug_tp_half_price(tp_half, qty, params):
 def _round_money_for_log(value):
     if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
         return value
-    return round(float(value), 2)
+    return round_money_for_display(value)
 
 
 def append_debug_trade_row(

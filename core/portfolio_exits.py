@@ -29,7 +29,7 @@ def _first_exec_context(position, event_name):
 
 
 def _round_money_for_history(value):
-    return round(float(value), 2)
+    return round_money_for_display(value)
 
 
 

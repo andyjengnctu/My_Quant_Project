@@ -55,8 +55,8 @@ def validate_synthetic_proj_cost_cash_capped_case(base_params):
     sizing_equity = 1_000_000.0
     available_cash = 50_000.0
     candidate_rows = [
-        {"ticker": "9801", "limit_px": 10.0, "init_sl": 9.0, "init_trail": 8.5},
-        {"ticker": "9802", "limit_px": 14.0, "init_sl": 13.85, "init_trail": 13.5},
+        {"ticker": "9801", "limit_px": 5.0, "init_sl": 4.5, "init_trail": 4.0},
+        {"ticker": "9802", "limit_px": 10.0, "init_sl": 9.0, "init_trail": 8.5},
     ]
 
     estimated_rank_rows = []

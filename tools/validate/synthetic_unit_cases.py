@@ -266,11 +266,11 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     candidate_plan = {
-        "limit_price": 100.0,
-        "init_sl": 95.0,
-        "init_trail": 95.0,
-        "target_price": 110.0,
-        "entry_atr": 1.0,
+        "limit_price": 5.0,
+        "init_sl": 4.999,
+        "init_trail": 4.999,
+        "target_price": 5.01,
+        "entry_atr": 0.001,
     }
     resized = build_cash_capped_entry_plan(candidate_plan, 10_000.0, params)
     exact_cash = milli_to_money(resized["reserved_cost_milli"])
