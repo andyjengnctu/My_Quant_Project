@@ -197,7 +197,8 @@ def process_debug_position_step(
             current_capital_after_exit,
             overall_max_drawdown,
         )
-        total_pnl = float(position.get('realized_pnl', pnl_realized))
+        total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
+        total_pnl = milli_to_money(total_pnl_milli)
         final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
         full_entry_capital_milli = _resolve_full_entry_capital_milli(position, prev_qty, params)
         total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0

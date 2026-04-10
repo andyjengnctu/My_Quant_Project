@@ -2640,9 +2640,35 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
 
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t233", True, "T225/T226/T229/T230/T231/T232/T233" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t233", True, "T233" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t233_list", False, "T225/T226/T229/T230/T231/T232）。" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t235", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in source_text)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+def validate_debug_exit_total_return_milli_binding_contract_case(_base_params):
+    case_id = "META_DEBUG_EXIT_TOTAL_RETURN_MILLI_BINDING_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_text = source_path.read_text(encoding="utf-8")
+
+    process_start = source_text.index("def process_debug_position_step(")
+    forced_closeout_start = source_text.index("def append_debug_forced_closeout(")
+    function_source = source_text[process_start:forced_closeout_start]
+
+    milli_binding = "total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)"
+    total_return_stmt = "total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0"
+    milli_binding_index = function_source.find(milli_binding)
+    total_return_index = function_source.find(total_return_stmt)
+
+    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_binds_total_pnl_milli_before_use", True, milli_binding_index != -1 and total_return_index != -1 and milli_binding_index < total_return_index)
+    add_check(results, "meta_contract", case_id, "debug_exit_total_pnl_display_derives_from_milli_binding", True, "total_pnl = milli_to_money(total_pnl_milli)" in function_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_has_no_unbound_total_pnl_milli_path", False, "total_pnl = float(position.get('realized_pnl', pnl_realized))" in function_source)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

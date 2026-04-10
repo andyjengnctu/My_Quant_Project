@@ -71,6 +71,7 @@
 33. 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉。
 34. `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，凡新增或擴充該註解所涵蓋的 formal contract 範圍時，必須同輪同步更新列舉的 `Txx`；不得讓正式入口摘要註解落後於實際 synthetic registry。
 35. 凡 exact ledger / integer total 已存在的報酬率、風報比或持倉優劣比較分母分子計算，必須直接使用 milli / integer total 相除；不得先各自 `milli_to_money(...)` 轉回 float 金額後再相除，避免 display / rotation 排序因浮點偏移產生微小分叉。
+36. 凡將 debug / GUI / history 的 `total_return_pct`、`pnl_pct` 或類似可見公式改為引用 `*_milli` 局部變數時，必須在同一函式同一路徑先明確綁定該變數並由其推導顯示值；不得引用未定義的 `*_milli` 名稱，避免 runtime `NameError`。
 
 ## E. 交易與策略原則
 
