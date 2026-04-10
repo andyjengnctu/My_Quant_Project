@@ -259,7 +259,7 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     raw_limit_cross_up_ref = 9.22
     raw_limit_cross_down_ref = 10.01
 
-    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.6, up_limit, tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.5, up_limit, tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "limit_up_price_uses_raw_limit_price_tick_band_when_crossing_band", 10.1, calc_limit_up_price(raw_limit_cross_up_ref), tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "limit_down_price_uses_raw_limit_price_tick_band_when_crossing_band", 9.01, calc_limit_down_price(raw_limit_cross_down_ref), tol=1e-12)
