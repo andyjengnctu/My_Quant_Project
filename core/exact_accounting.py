@@ -227,15 +227,15 @@ def calc_net_sell_price_from_total(exec_price, qty: int, params) -> float:
 
 
 def calc_limit_up_price_milli(reference_price_milli: int) -> int:
-    raw_price_milli = _round_decimal_to_int(Decimal(int(reference_price_milli)) * Decimal(110) / Decimal(100))
-    tick_milli = get_tick_milli(int(reference_price_milli))
-    return (raw_price_milli // tick_milli) * tick_milli
+    reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
+    raw_limit_price = reference_price * Decimal(110) / Decimal(100)
+    return round_price_to_tick_milli(raw_limit_price, direction="down")
 
 
 def calc_limit_down_price_milli(reference_price_milli: int) -> int:
-    raw_price_milli = _round_decimal_to_int(Decimal(int(reference_price_milli)) * Decimal(90) / Decimal(100))
-    tick_milli = get_tick_milli(int(reference_price_milli))
-    return ((raw_price_milli + tick_milli - 1) // tick_milli) * tick_milli
+    reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
+    raw_limit_price = reference_price * Decimal(90) / Decimal(100)
+    return round_price_to_tick_milli(raw_limit_price, direction="up")
 
 
 def is_same_price_milli(a, b) -> bool:

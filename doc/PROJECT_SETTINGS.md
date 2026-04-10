@@ -73,6 +73,7 @@
 35. `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，凡新增或擴充該註解所涵蓋的 formal contract 範圍時，必須同輪同步更新列舉的 `Txx`；不得讓正式入口摘要註解落後於實際 synthetic registry。
 36. 凡 exact ledger / integer total 已存在的報酬率、風報比或持倉優劣比較分母分子計算，必須直接使用 milli / integer total 相除；不得先各自 `milli_to_money(...)` 轉回 float 金額後再相除，避免 display / rotation 排序因浮點偏移產生微小分叉。
 37. 凡將 debug / GUI / history 的 `total_return_pct`、`pnl_pct` 或類似可見公式改為引用 `*_milli` 局部變數時，必須在同一函式同一路徑先明確綁定該變數並由其推導顯示值；不得引用未定義的 `*_milli` 名稱，避免 runtime `NameError`。
+38. 凡計算漲跌停價格或其他由「基準價 × 比率」先得到 raw 結果、再對齊合法 tick 的價格時，tick band 必須依 raw 結果本身決定；不得沿用基準價原 band 的 tick，否則像 `9.22 × 1.1 = 10.142` 這類跨 band 案例會產生不合法的漲跌停價。
 ## E. 交易與策略原則
 
 1. 杜絕未來函數：不可偷看未來資料。

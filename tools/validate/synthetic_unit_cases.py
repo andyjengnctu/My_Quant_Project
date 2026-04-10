@@ -256,9 +256,13 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     near_down = np.nextafter(down_limit, np.inf)
     raw_stop = 34.35033333333333
     raw_tick_boundary = 9.9996
+    raw_limit_cross_up_ref = 9.22
+    raw_limit_cross_down_ref = 10.01
 
     add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.6, up_limit, tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "limit_up_price_uses_raw_limit_price_tick_band_when_crossing_band", 10.1, calc_limit_up_price(raw_limit_cross_up_ref), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "limit_down_price_uses_raw_limit_price_tick_band_when_crossing_band", 9.01, calc_limit_down_price(raw_limit_cross_down_ref), tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_up_milli", price_to_milli(up_limit), price_to_milli(near_up))
     add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_down_milli", price_to_milli(down_limit), price_to_milli(near_down))
     add_check(results, "unit_exact_accounting", case_id, "limit_up_bar_uses_integer_price_comparison", True, is_limit_up_bar(near_up, near_up, near_up, near_up, 95.1))
