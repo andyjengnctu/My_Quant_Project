@@ -38,6 +38,8 @@ def _make_candidate_row(
     continuation_invalidation_barrier=None,
     continuation_completion_barrier=None,
     entry_ref_price=None,
+    security_profile=None,
+    trade_date=None,
 ):
     est_cost = calc_entry_total_cost(est_limit_px, est_qty, params) if est_qty > 0 else 0.0
     sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
@@ -63,6 +65,8 @@ def _make_candidate_row(
         'continuation_invalidation_barrier': continuation_invalidation_barrier,
         'continuation_completion_barrier': continuation_completion_barrier,
         'entry_ref_price': entry_ref_price,
+        'security_profile': security_profile,
+        'trade_date': trade_date,
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -103,7 +107,7 @@ def _collect_normal_candidates(
         if not is_candidate:
             continue
 
-        candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params, ticker=ticker)
+        candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params, ticker=ticker, trade_date=today)
         if candidate_plan is None:
             continue
 
@@ -129,6 +133,8 @@ def _collect_normal_candidates(
             entry_atr=candidate_plan['entry_atr'],
             is_orderable=candidate_plan['is_orderable'],
             params=params,
+            security_profile=candidate_plan.get('security_profile'),
+            trade_date=today,
         )
         candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:
@@ -177,6 +183,7 @@ def _collect_extended_candidates(
             sizing_equity,
             params,
             ticker=ticker,
+            trade_date=today,
         )
         if candidate_plan is None:
             continue
@@ -206,6 +213,8 @@ def _collect_extended_candidates(
             entry_atr=candidate_plan['entry_atr'],
             is_orderable=today_orderable,
             params=params,
+            security_profile=candidate_plan.get('security_profile'),
+            trade_date=today,
             signal_state=active_extended_signals[ticker],
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),

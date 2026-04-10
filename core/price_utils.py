@@ -22,6 +22,7 @@ from core.exact_accounting import (
     money_to_milli,
     price_to_milli,
     rate_to_ppm,
+    resolve_sell_tax_ppm,
     round_price_to_tick_milli,
 )
 
@@ -145,14 +146,21 @@ def calc_entry_price(bPrice, bQty, params):
     return calc_average_price_from_total_milli(ledger["net_buy_total_milli"], int(bQty))
 
 
-def calc_net_sell_price(sPrice, sQty, params):
+def calc_net_sell_price(sPrice, sQty, params, ticker=None, security_profile=None, trade_date=None):
     if pd.isna(sPrice) or pd.isna(sQty) or sPrice <= 0 or sQty <= 0:
         return np.nan
-    ledger = build_sell_ledger_from_price(sPrice, int(sQty), params)
+    ledger = build_sell_ledger_from_price(
+        sPrice,
+        int(sQty),
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
     return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], int(sQty))
 
 
-def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
+def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, security_profile=None, trade_date=None):
     if pd.isna(bPrice) or pd.isna(stopPrice) or bPrice <= 0 or stopPrice <= 0:
         return 0
 
@@ -163,7 +171,7 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
 
     buy_fee_ppm = rate_to_ppm(params.buy_fee)
     sell_fee_ppm = rate_to_ppm(params.sell_fee)
-    tax_ppm = rate_to_ppm(params.tax_rate)
+    tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)
 
     est_buy_fee_per_share_milli = 0 if buy_fee_ppm <= 0 else (buy_price_milli * buy_fee_ppm + 999_999) // 1_000_000
     est_sell_cost_per_share_milli = 0 if (sell_fee_ppm + tax_ppm) <= 0 else ((stop_price_milli * (sell_fee_ppm + tax_ppm) + 999_999) // 1_000_000)
@@ -177,7 +185,14 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
 
     while qty > 0:
         buy_ledger = build_buy_ledger_from_price(bPrice, qty, params)
-        sell_ledger = build_sell_ledger_from_price(stopPrice, qty, params)
+        sell_ledger = build_sell_ledger_from_price(
+            stopPrice,
+            qty,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+        )
         exact_entry_cost_milli = buy_ledger["net_buy_total_milli"]
         exact_exit_net_milli = sell_ledger["net_sell_total_milli"]
         actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
@@ -189,8 +204,17 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params):
 
 
 # # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
-def calc_reference_candidate_qty(bPrice, stopPrice, params):
-    return calc_position_size(bPrice, stopPrice, resolve_scanner_live_capital(params), params.fixed_risk, params)
+def calc_reference_candidate_qty(bPrice, stopPrice, params, ticker=None, security_profile=None, trade_date=None):
+    return calc_position_size(
+        bPrice,
+        stopPrice,
+        resolve_scanner_live_capital(params),
+        params.fixed_risk,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
 
 
 # # (AI註: 單一真理來源 - 半倉停利可執行股數統一由此計算，避免核心/掃描/除錯工具各自判斷)

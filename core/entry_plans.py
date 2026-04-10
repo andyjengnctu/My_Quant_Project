@@ -57,7 +57,7 @@ def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
 
 
 # # (AI註: 單一真理來源 - 正常候選的盤前 limit / worst-case sizing stop / trail / qty 規格統一由此產生；候選資格與可掛單分離)
-def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None):
+def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     if pd.isna(limit_price) or pd.isna(atr):
         return None
 
@@ -72,13 +72,14 @@ def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker
         "entry_atr": atr,
         "ticker": ticker,
         "security_profile": security_profile,
+        "trade_date": trade_date,
     }
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
-def build_normal_entry_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None):
-    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=ticker, security_profile=security_profile)
+def build_normal_entry_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)
     if candidate_plan is None or candidate_plan["qty"] <= 0:
         return None
     return candidate_plan
@@ -159,6 +160,7 @@ def build_position_from_entry_fill(
     entry_atr=None,
     ticker=None,
     security_profile=None,
+    trade_date=None,
 ):
     if params is None:
         raise ValueError("build_position_from_entry_fill 需要 params")
@@ -186,7 +188,14 @@ def build_position_from_entry_fill(
     pure_limit_price_milli = None if limit_price is None or pd.isna(limit_price) else price_to_milli(limit_price)
 
     buy_ledger = build_buy_ledger_from_price(buy_price, qty, params)
-    stop_sell_ledger = build_sell_ledger_from_price(resolved_init_sl, qty, params)
+    stop_sell_ledger = build_sell_ledger_from_price(
+        resolved_init_sl,
+        qty,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+    )
     initial_risk_total_milli = calc_initial_risk_total_milli(
         buy_ledger["net_buy_total_milli"],
         stop_sell_ledger["net_sell_total_milli"],
@@ -219,6 +228,7 @@ def build_position_from_entry_fill(
         "entry_type": entry_type,
         "ticker": ticker,
         "security_profile": security_profile,
+        "entry_trade_date": trade_date,
         "limit_price": limit_price,
         "limit_price_milli": pure_limit_price_milli,
         "entry_day_stop_triggered": False,
@@ -230,7 +240,7 @@ def build_position_from_entry_fill(
 
 
 # # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy 邏輯統一由此判斷)
-def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal", ticker=None, security_profile=None):
+def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal", ticker=None, security_profile=None, trade_date=None):
     result = {
         "filled": False,
         "count_as_missed_buy": False,
@@ -281,6 +291,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         entry_atr=entry_plan.get("entry_atr"),
         ticker=resolved_ticker,
         security_profile=resolved_security_profile,
+        trade_date=trade_date,
     )
     position = _apply_entry_day_virtual_exit_trigger(position, t_high=t_high, t_low=t_low, params=params)
     result["filled"] = True

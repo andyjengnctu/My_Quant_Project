@@ -52,7 +52,7 @@ def _resolve_full_entry_capital_milli(position, fallback_qty):
     return calc_total_from_average_price_milli(avg_entry_price, initial_qty)
 
 
-def _calc_position_mark_to_market_return(position, mark_price, params):
+def _calc_position_mark_to_market_return(position, mark_price, params, trade_date=None):
     remaining_qty = int(position.get('qty', 0) or 0)
     if remaining_qty <= 0:
         return float('inf')
@@ -63,7 +63,14 @@ def _calc_position_mark_to_market_return(position, mark_price, params):
 
     realized_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
     remaining_cost_basis_milli = int(position.get('remaining_cost_basis_milli', 0) or 0)
-    sell_ledger = build_sell_ledger_from_price(mark_price, remaining_qty, params)
+    sell_ledger = build_sell_ledger_from_price(
+        mark_price,
+        remaining_qty,
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=trade_date,
+    )
 
     if remaining_cost_basis_milli > 0:
         floating_pnl_milli = sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli
@@ -107,7 +114,7 @@ def try_rotate_weakest_position(
                 continue
             pt_y_pos = pt_pos - 1
             pt_y_close = get_fast_close(pt_data, pos=pt_y_pos)
-            ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)
+            ret = _calc_position_mark_to_market_return(pos, pt_y_close, params, trade_date=today)
 
             holding_cost = milli_to_money(pos.get('remaining_cost_basis_milli', 0))
             _, holding_ev, holding_win_rate, holding_trade_count, holding_asset_growth_pct = get_pit_stats_from_index(
@@ -156,7 +163,14 @@ def try_rotate_weakest_position(
 
         pos = portfolio[weakest_ticker]
         est_sell_px = adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)
-        sell_ledger = build_sell_ledger_from_price(est_sell_px, pos['qty'], params)
+        sell_ledger = build_sell_ledger_from_price(
+            est_sell_px,
+            pos['qty'],
+            params,
+            ticker=weakest_ticker,
+            security_profile=pos.get('security_profile'),
+            trade_date=today,
+        )
         est_freed_cash_milli = sell_ledger['net_sell_total_milli']
         pnl_milli = est_freed_cash_milli - pos['remaining_cost_basis_milli']
         cash += est_freed_cash_milli
@@ -228,6 +242,7 @@ def settle_portfolio_positions(
             get_fast_close(fast_df, pos=t_pos),
             get_fast_value(fast_df, 'Volume', pos=t_pos),
             params,
+            current_date=today,
         )
         freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
         cash += freed_cash_milli
@@ -332,7 +347,14 @@ def closeout_open_positions(
         pos = portfolio[ticker]
         raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
         exec_price = adjust_long_sell_fill_price(raw_exit_price, ticker=ticker)
-        sell_ledger = build_sell_ledger_from_price(exec_price, pos['qty'], params)
+        sell_ledger = build_sell_ledger_from_price(
+            exec_price,
+            pos['qty'],
+            params,
+            ticker=ticker,
+            security_profile=pos.get('security_profile'),
+            trade_date=last_date,
+        )
         final_cash += sell_ledger['net_sell_total_milli']
 
         pnl_milli = sell_ledger['net_sell_total_milli'] - pos['remaining_cost_basis_milli']

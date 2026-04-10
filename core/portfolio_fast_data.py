@@ -28,7 +28,14 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
         pos['last_px'] = px
 
         floating_exec_price = adjust_long_sell_fill_price(px, ticker=ticker)
-        sell_ledger = build_sell_ledger_from_price(floating_exec_price, pos['qty'], params)
+        sell_ledger = build_sell_ledger_from_price(
+            floating_exec_price,
+            pos['qty'],
+            params,
+            ticker=ticker,
+            security_profile=pos.get('security_profile'),
+            trade_date=today,
+        )
         equity_milli += sell_ledger['net_sell_total_milli']
 
     return restore_money_like_from_milli(equity_milli, cash_template)

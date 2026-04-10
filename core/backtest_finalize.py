@@ -57,7 +57,14 @@ def finalize_open_position_at_end(
 
     resolved_ticker = ticker or position.get("ticker")
     exec_price = adjust_long_sell_fill_price(final_close, ticker=resolved_ticker)
-    sell_ledger = build_sell_ledger_from_price(exec_price, position['qty'], params)
+    sell_ledger = build_sell_ledger_from_price(
+        exec_price,
+        position['qty'],
+        params,
+        ticker=resolved_ticker,
+        security_profile=position.get('security_profile'),
+        trade_date=final_date,
+    )
     pnl_milli = sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
     total_pnl_milli = position['realized_pnl_milli'] + pnl_milli
     total_pnl = milli_to_money(total_pnl_milli)
@@ -158,7 +165,7 @@ def build_backtest_stats(
     if active_extended_signal is not None:
         sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
         resolved_ticker = resolved_ticker or active_extended_signal.get("ticker")
-        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_capital, params, ticker=resolved_ticker)
+        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_capital, params, ticker=resolved_ticker, trade_date=final_date)
         extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last, ticker=resolved_ticker)
 
     stats_dict = {

@@ -90,9 +90,9 @@ def process_debug_entry_for_day(
         if signal_state is not None:
             active_extended_signal = signal_state
 
-        preview_candidate_plan = build_normal_candidate_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)
+        preview_candidate_plan = build_normal_candidate_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=current_date)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
-        entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)
+        entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=current_date)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,
@@ -184,7 +184,7 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
-        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile)
+        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=current_date)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_extended_entry_plan_from_signal(
             active_extended_signal,
@@ -193,6 +193,7 @@ def process_debug_entry_for_day(
             y_close=close_prev,
             ticker=ticker,
             security_profile=security_profile,
+            trade_date=current_date,
         )
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,

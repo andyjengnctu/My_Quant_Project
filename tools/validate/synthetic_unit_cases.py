@@ -17,6 +17,7 @@ from core.exact_accounting import (
     money_to_milli,
     price_to_milli,
     infer_security_profile,
+    resolve_sell_tax_ppm,
     round_money_for_display,
     round_price_to_tick_milli,
     sync_position_display_fields,
@@ -298,6 +299,18 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_keeps_stock_tick_profile", 11.15, calc_limit_up_price(10.17, ticker="1101"), tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "etf_limit_up_bar_uses_etf_tick_profile", True, is_limit_up_bar(11.18, 11.18, 11.18, 11.18, 10.17, ticker="0050"))
     add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_bar_uses_stock_tick_profile", True, is_limit_up_bar(11.15, 11.15, 11.15, 11.15, 10.17, ticker="1101"))
+
+    add_check(results, "unit_exact_accounting", case_id, "stock_sell_tax_ppm_uses_stock_policy_rate", 3000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="1101", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="0050", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "leveraged_etf_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00631L", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "etn_sell_tax_ppm_uses_fund_rate", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="020032", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "reit_sell_tax_ppm_is_exempt", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="01001T", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_tax_ppm_is_exempt_before_deadline", 0, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2026-03-02"))
+    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_tax_ppm_reverts_after_deadline", 1000, resolve_sell_tax_ppm(V16StrategyParams(), ticker="00679B", trade_date="2027-01-02"))
+    add_check(results, "unit_exact_accounting", case_id, "etf_sell_ledger_uses_fund_tax_rate", 80350, build_sell_ledger_from_price(80.35, 1000, V16StrategyParams(), ticker="0050", trade_date="2026-03-02")["tax_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_ledger_zero_tax_before_deadline", 0, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2026-03-02")["tax_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "bond_etf_sell_ledger_tax_after_deadline_uses_fund_rate", 28000, build_sell_ledger_from_price(28.0, 1000, V16StrategyParams(), ticker="00679B", trade_date="2027-01-02")["tax_milli"])
+    add_check(results, "unit_exact_accounting", case_id, "reit_sell_ledger_tax_is_exempt", 0, build_sell_ledger_from_price(10.0, 1000, V16StrategyParams(), ticker="01001T", trade_date="2026-03-02")["tax_milli"])
 
     summary["limit_up"] = up_limit
     summary["etf_tick_size"] = get_tick_size(10.17, ticker="0050")

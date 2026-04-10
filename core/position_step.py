@@ -62,8 +62,15 @@ def _clear_pending_exit(position):
     position['pending_exit_trigger_price'] = pd.NA
 
 
-def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None):
-    sell_ledger = build_sell_ledger_from_price(exec_price, sell_qty, params)
+def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None):
+    sell_ledger = build_sell_ledger_from_price(
+        exec_price,
+        sell_qty,
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=trade_date,
+    )
     allocated_cost_milli = allocate_cost_basis_milli(position['remaining_cost_basis_milli'], position['qty'], sell_qty)
     freed_cash_milli = sell_ledger['net_sell_total_milli']
     pnl_milli = freed_cash_milli - allocated_cost_milli
@@ -93,7 +100,7 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
     return freed_cash_milli, pnl_milli
 
 
-def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_volume, y_close, params, events):
+def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_volume, y_close, params, events, current_date=None):
     pending_action = position.get('pending_exit_action')
     resolved_ticker = position.get('ticker')
     if pending_action not in {'STOP', 'TP_HALF'}:
@@ -115,6 +122,7 @@ def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_
             params=params,
             deferred=True,
             trigger_price=trigger_price,
+            trade_date=current_date,
         )
         _clear_pending_exit(position)
         events.extend(['STOP', 'DEFERRED_STOP_ON_OPEN'])
@@ -133,6 +141,7 @@ def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_
         params=params,
         deferred=True,
         trigger_price=trigger_price,
+        trade_date=current_date,
     )
     position['sold_half'] = True
     _clear_pending_exit(position)
@@ -140,7 +149,7 @@ def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_
     return False, freed_cash_milli, pnl_milli
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None):
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
     _reset_exec_contexts(position)
@@ -158,6 +167,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         y_close=y_close,
         params=params,
         events=events,
+        current_date=current_date,
     )
     freed_cash_milli += pending_freed_cash_milli
     pnl_realized_milli += pending_pnl_milli
@@ -185,6 +195,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 sell_qty=position['qty'],
                 params=params,
                 deferred=False,
+                trade_date=current_date,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
@@ -211,6 +222,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             params=params,
             deferred=False,
             trigger_price=position['tp_half'],
+            trade_date=current_date,
         )
         freed_cash_milli += leg_freed_cash_milli
         pnl_realized_milli += leg_pnl_milli
@@ -229,6 +241,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 params=params,
                 deferred=False,
                 trigger_price=position['sl'],
+                trade_date=current_date,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli

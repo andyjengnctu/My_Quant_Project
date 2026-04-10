@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from numbers import Integral
 from typing import Any, Dict
@@ -82,6 +83,47 @@ _LEVERAGED_INVERSE_SUFFIXES = frozenset({"L", "M", "R", "S"})
 _BOND_SUFFIXES = frozenset({"B", "C", "D"})
 _ETF_GENERAL_SUFFIXES = frozenset({"A", "K", "T", "U", "V"})
 _ETN_PREFIX = "02"
+
+_FUND_SELL_TAX_PPM = 1_000
+_REIT_SELL_TAX_PPM = 0
+_BOND_ETF_TAX_EXEMPTION_END = date(2026, 12, 31)
+
+
+def _normalize_trade_date(trade_date):
+    if trade_date is None:
+        return None
+    if isinstance(trade_date, datetime):
+        return trade_date.date()
+    if isinstance(trade_date, date):
+        return trade_date
+    text_value = str(trade_date).strip()
+    if not text_value:
+        return None
+    candidate = text_value[:10]
+    try:
+        return date.fromisoformat(candidate)
+    except ValueError:
+        return None
+
+
+def resolve_sell_tax_ppm(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
+    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+    family = resolved_profile.get("family", "stock")
+    broad_type = resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK)
+    trade_day = _normalize_trade_date(trade_date)
+    stock_tax_ppm = rate_to_ppm(params.tax_rate)
+
+    if family == "stock":
+        return stock_tax_ppm
+    if family == "reit":
+        return _REIT_SELL_TAX_PPM
+    if family == "etf" and broad_type == _SECURITY_BROAD_BOND:
+        if trade_day is None or trade_day <= _BOND_ETF_TAX_EXEMPTION_END:
+            return 0
+        return _FUND_SELL_TAX_PPM
+    if family in {"etf", "etn"}:
+        return _FUND_SELL_TAX_PPM
+    return stock_tax_ppm
 
 
 def normalize_security_symbol(symbol) -> str:
@@ -263,11 +305,18 @@ def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
     return _round_decimal_to_int(Decimal(gross_milli) * Decimal(tax_ppm) / _DECIMAL_PPM)
 
 
-def _resolve_fee_schedule(params) -> Dict[str, int]:
+def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
     return {
         "buy_fee_ppm": rate_to_ppm(params.buy_fee),
         "sell_fee_ppm": rate_to_ppm(params.sell_fee),
-        "tax_ppm": rate_to_ppm(params.tax_rate),
+        "tax_ppm": resolve_sell_tax_ppm(
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+            cfi_code=cfi_code,
+            security_name=security_name,
+        ),
         "min_fee_milli": money_to_milli(params.min_fee),
         "fixed_risk_ppm": rate_to_ppm(params.fixed_risk),
     }
@@ -288,8 +337,15 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
     }
 
 
-def build_sell_ledger(exec_price_milli: int, qty: int, params) -> Dict[str, int]:
-    schedule = _resolve_fee_schedule(params)
+def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
+    schedule = _resolve_fee_schedule(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
     qty = int(qty)
     gross_sell_milli = int(exec_price_milli) * qty
     sell_fee_milli = calc_fee_milli(gross_sell_milli, schedule["sell_fee_ppm"], schedule["min_fee_milli"])
@@ -336,16 +392,36 @@ def build_buy_ledger_from_price(fill_price, qty: int, params) -> Dict[str, int]:
     return build_buy_ledger(price_to_milli(fill_price), qty, params)
 
 
-def build_sell_ledger_from_price(exec_price, qty: int, params) -> Dict[str, int]:
-    return build_sell_ledger(price_to_milli(exec_price), qty, params)
+def build_sell_ledger_from_price(exec_price, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
+    return build_sell_ledger(
+        price_to_milli(exec_price),
+        qty,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
 
 
 def calc_entry_total_cost(fill_price, qty: int, params) -> float:
     return milli_to_money(build_buy_ledger_from_price(fill_price, qty, params)["net_buy_total_milli"])
 
 
-def calc_exit_net_total(exec_price, qty: int, params) -> float:
-    return milli_to_money(build_sell_ledger_from_price(exec_price, qty, params)["net_sell_total_milli"])
+def calc_exit_net_total(exec_price, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> float:
+    return milli_to_money(
+        build_sell_ledger_from_price(
+            exec_price,
+            qty,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=trade_date,
+            cfi_code=cfi_code,
+            security_name=security_name,
+        )["net_sell_total_milli"]
+    )
 
 
 def calc_total_from_average_price_milli(avg_price, qty: int) -> int:
@@ -364,8 +440,17 @@ def calc_entry_price_from_total(fill_price, qty: int, params) -> float:
     return calc_average_price_from_total_milli(ledger["net_buy_total_milli"], qty)
 
 
-def calc_net_sell_price_from_total(exec_price, qty: int, params) -> float:
-    ledger = build_sell_ledger_from_price(exec_price, qty, params)
+def calc_net_sell_price_from_total(exec_price, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> float:
+    ledger = build_sell_ledger_from_price(
+        exec_price,
+        qty,
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
     return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], qty)
 
 

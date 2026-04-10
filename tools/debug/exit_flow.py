@@ -47,7 +47,14 @@ def _resolve_full_entry_capital_milli(position, fallback_qty, params):
 def _resolve_display_sell_total_milli(exit_context, *, sell_price, qty, params):
     if exit_context is not None and int(exit_context.get('net_total_milli', 0) or 0) > 0:
         return int(exit_context.get('net_total_milli', 0) or 0)
-    sell_ledger = build_sell_ledger_from_price(sell_price, qty, params)
+    sell_ledger = build_sell_ledger_from_price(
+        sell_price,
+        qty,
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=current_date,
+    )
     return int(sell_ledger['net_sell_total_milli'])
 
 
@@ -187,7 +194,14 @@ def process_debug_position_step(
         final_exit_qty = prev_qty if exit_context is None else int(exit_context['qty'])
         action_str = "停損殺出" if 'STOP' in events else "指標賣出"
         sell_price = adjust_long_sell_fill_price(t_open, ticker=position.get("ticker")) if exit_context is None else float(exit_context['exec_price'])
-        sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
+        sell_net_price = calc_net_sell_price(
+            sell_price,
+            final_exit_qty,
+            params,
+            ticker=position.get('ticker'),
+            security_profile=position.get('security_profile'),
+            trade_date=current_date,
+        ) if exit_context is None else float(exit_context['net_price'])
         sell_total_amount = _resolve_display_sell_total(exit_context, sell_price=sell_price, qty=final_exit_qty, params=params)
         current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
         completed_trade_snapshot = _build_completed_trade_snapshot(
@@ -281,8 +295,22 @@ def append_debug_forced_closeout(
     overall_max_drawdown=0.0,
 ):
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'], ticker=position.get('ticker'))
-    sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
-    sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
+    sell_net_price = calc_net_sell_price(
+        exec_sell_price,
+        position['qty'],
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=current_date,
+    )
+    sell_ledger = build_sell_ledger_from_price(
+        exec_sell_price,
+        position['qty'],
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=current_date,
+    )
     final_leg_actual_pnl_milli = sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0)
     total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)
     total_pnl = milli_to_money(total_pnl_milli)

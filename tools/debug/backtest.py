@@ -110,7 +110,7 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     )
 
 
-def _resolve_sell_signal_profit_pct(position, signal_close, params):
+def _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=None):
     remaining_qty = int(position.get('qty', 0) or 0)
     if remaining_qty <= 0:
         return 0.0
@@ -134,12 +134,26 @@ def _resolve_sell_signal_profit_pct(position, signal_close, params):
     realized_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
     remaining_cost_basis_milli = int(position.get('remaining_cost_basis_milli', 0) or 0)
     if remaining_cost_basis_milli > 0:
-        signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
+        signal_sell_ledger = build_sell_ledger_from_price(
+            signal_close,
+            remaining_qty,
+            params,
+            ticker=position.get('ticker'),
+            security_profile=position.get('security_profile'),
+            trade_date=signal_date,
+        )
         floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli
         total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli
         return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)
 
-    signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
+    signal_sell_ledger = build_sell_ledger_from_price(
+        signal_close,
+        remaining_qty,
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=signal_date,
+    )
     signal_trade_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - full_entry_total_milli
     return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)
 
@@ -147,7 +161,7 @@ def _resolve_sell_signal_profit_pct(position, signal_close, params):
 def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot, params):
     if chart_context is None or position.get('qty', 0) <= 0:
         return
-    signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)
+    signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=signal_date)
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
@@ -218,7 +232,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params, ticker=ticker)
+            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params, ticker=ticker, trade_date=dates[j])
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=signal_date,
@@ -297,7 +311,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params, ticker=ticker) if not np.isnan(atr_main[-1]) else None
+            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params, ticker=ticker, trade_date=dates[-1]) if not np.isnan(atr_main[-1]) else None
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=dates[-1],
@@ -310,7 +324,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)
         elif chart_context is not None and position.get('qty', 0) == 0 and active_extended_signal is not None:
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params, ticker=ticker)
+            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params, ticker=ticker, trade_date=dates[-1])
             if latest_history_snapshot.get('is_candidate', False):
                 _apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)
         if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):

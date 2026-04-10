@@ -2185,9 +2185,10 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "debug_backtest_passes_ticker_to_entry_flow", True, "ticker=ticker" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_ticker", True, "ticker=None" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_security_profile", True, "security_profile=None" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_trade_date", True, "trade_date=None" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_signal_state", True, "create_signal_tracking_state(buy_limit_prev, atr_prev, params, ticker=ticker, security_profile=security_profile)" in debug_entry_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_entry_plan", True, "build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)" in debug_entry_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_extended_entry_plan", True, "build_extended_entry_plan_from_signal(" in debug_entry_source and "ticker=ticker" in debug_entry_source and "security_profile=security_profile" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_entry_plan", True, "build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=current_date)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_extended_entry_plan", True, "build_extended_entry_plan_from_signal(" in debug_entry_source and "ticker=ticker" in debug_entry_source and "security_profile=security_profile" in debug_entry_source and "trade_date=current_date" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
     summary["source_paths"] = [
@@ -2629,6 +2630,9 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, 'ticker=position.get("ticker")' in position_step_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
+    add_check(results, "meta_contract", case_id, "price_utils_position_size_routes_tax_schedule_by_security_profile", True, 'tax_ppm = resolve_sell_tax_ppm(params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)' in price_source)
+    add_check(results, "meta_contract", case_id, "backtest_core_floating_sell_ledger_threads_trade_date_and_profile", True, "trade_date=Dates[j]" in backtest_source and "security_profile=position.get('security_profile')" in backtest_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_threads_trade_date_and_profile", True, 'trade_date=today' in portfolio_exits_source and "security_profile=pos.get('security_profile')" in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_float_ratio_path", False, "ratios = valid_prices / ticks" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_numpy_ceil_floor_tick_path", False, "np.ceil(ratios - 1e-12) * ticks" in price_source or "np.floor(ratios + 1e-12) * ticks" in price_source or "np.floor(ratios + 0.5) * ticks" in price_source)
 

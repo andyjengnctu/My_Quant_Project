@@ -75,7 +75,7 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
 
 
 # # (AI註: 單一真理來源 - 延續候選掛單只延續 setup 的可掛單資格；若已建立反事實 entry ref，後續 limit 固定為該 entry ref，避免每日追價漂移)
-def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None):
+def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     if signal_state is None:
         return None
 
@@ -104,6 +104,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "continuation_completion_barrier": signal_state.get("continuation_completion_barrier", np.nan),
         "ticker": resolved_ticker,
         "security_profile": resolved_security_profile,
+        "trade_date": trade_date,
     }
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
@@ -120,14 +121,14 @@ def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, 
 
 
 # # (AI註: 單一真理來源 - 延續單實際掛單規格；僅接受有效候選且今日價格帶仍可達)
-def build_extended_entry_plan_from_signal(signal_state, sizing_capital, params, *, y_close, ticker=None, security_profile=None):
-    candidate_plan = build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=ticker, security_profile=security_profile)
+def build_extended_entry_plan_from_signal(signal_state, sizing_capital, params, *, y_close, ticker=None, security_profile=None, trade_date=None):
+    candidate_plan = build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)
     if not is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, ticker=ticker, security_profile=security_profile):
         return None
     return candidate_plan
 
 
 # # (AI註: 延續候選資格評估)
-def evaluate_extended_candidate_eligibility(original_limit, atr, sizing_capital, params, ticker=None, security_profile=None):
+def evaluate_extended_candidate_eligibility(original_limit, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     signal_state = create_signal_tracking_state(original_limit, atr, params, ticker=ticker, security_profile=security_profile)
-    return build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=ticker, security_profile=security_profile)
+    return build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)

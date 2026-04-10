@@ -95,6 +95,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 C[j],
                 V[j],
                 params,
+                current_date=Dates[j],
             )
             freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
             currentCapital_milli += freed_cash_milli
@@ -124,7 +125,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params, ticker=resolved_ticker)
+            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params, ticker=resolved_ticker, trade_date=Dates[j])
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
                 t_open=O[j],
@@ -136,6 +137,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params=params,
                 entry_type='normal',
                 ticker=resolved_ticker,
+                trade_date=Dates[j],
             )
             if entry_result['filled']:
                 position = entry_result['position']
@@ -152,6 +154,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params,
                 y_close=C[j - 1],
                 ticker=resolved_ticker,
+                trade_date=Dates[j],
             )
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
@@ -164,6 +167,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params=params,
                 entry_type='extended',
                 ticker=resolved_ticker,
+                trade_date=Dates[j],
             )
             if entry_result['filled']:
                 position = entry_result['position']
@@ -179,7 +183,14 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         currentEquity_milli = currentCapital_milli
         if position['qty'] > 0:
             floating_exec_price = adjust_long_sell_fill_price(C[j], ticker=resolved_ticker)
-            floating_sell_ledger = build_sell_ledger_from_price(floating_exec_price, position['qty'], params)
+            floating_sell_ledger = build_sell_ledger_from_price(
+                floating_exec_price,
+                position['qty'],
+                params,
+                ticker=position.get('ticker', resolved_ticker),
+                security_profile=position.get('security_profile'),
+                trade_date=Dates[j],
+            )
             currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
 
         peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
