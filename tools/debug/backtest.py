@@ -123,9 +123,10 @@ def _resolve_sell_signal_profit_pct(position, signal_close, params):
 
     if full_entry_total_milli <= 0:
         entry_price = float(position.get('entry', signal_close) or signal_close or 0.0)
-        if entry_price <= 0:
+        initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)
+        if entry_price <= 0 or initial_qty <= 0:
             return 0.0
-        full_entry_total_milli = coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))
+        full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))
 
     if full_entry_total_milli <= 0:
         return 0.0

@@ -2,6 +2,7 @@ import numpy as np
 
 from core.exact_accounting import (
     build_sell_ledger_from_price,
+    calc_entry_total_cost,
     calc_reconciled_exit_display_pnl,
     milli_to_money,
     register_display_realized_pnl,
@@ -28,7 +29,7 @@ def _resolve_completed_trade_count(history_snapshot, *, include_current_round_tr
     return base_trade_count + 1 if include_current_round_trip else base_trade_count
 
 
-def _resolve_full_entry_capital(position, fallback_qty):
+def _resolve_full_entry_capital(position, fallback_qty, params):
     exact_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
     if exact_entry_total_milli > 0:
         return milli_to_money(exact_entry_total_milli)
@@ -37,7 +38,9 @@ def _resolve_full_entry_capital(position, fallback_qty):
         return round_money_for_display(display_entry_capital)
     entry_price = float(position.get('entry', 0.0) or 0.0)
     initial_qty = int(position.get('initial_qty', fallback_qty) or fallback_qty or 0)
-    return round_money_for_display(entry_price * initial_qty)
+    if entry_price <= 0 or initial_qty <= 0:
+        return 0.0
+    return calc_entry_total_cost(entry_price, initial_qty, params)
 
 
 def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
@@ -47,15 +50,25 @@ def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
     return milli_to_money(sell_ledger['net_sell_total_milli'])
 
 
-def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_price, fallback_net_price):
+def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_price, fallback_sell_price, fallback_qty, params):
     allocated_cost_milli = 0 if exit_context is None else int(exit_context.get('allocated_cost_milli', 0) or 0)
     pnl_milli = 0 if exit_context is None else int(exit_context.get('pnl_milli', 0) or 0)
+    if allocated_cost_milli <= 0 and exit_context is not None:
+        net_total_milli = int(exit_context.get('net_total_milli', 0) or 0)
+        derived_allocated_cost_milli = net_total_milli - pnl_milli
+        if derived_allocated_cost_milli > 0:
+            allocated_cost_milli = derived_allocated_cost_milli
     if allocated_cost_milli > 0:
         return float(milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli) * 100.0)
     entry_price = float(position.get('entry', fallback_entry_price) or fallback_entry_price or 0.0)
-    if entry_price <= 0:
+    sold_qty = int(fallback_qty or 0)
+    if entry_price <= 0 or sold_qty <= 0:
         return 0.0
-    return float((float(fallback_net_price) - entry_price) / entry_price * 100.0)
+    entry_total = calc_entry_total_cost(entry_price, sold_qty, params)
+    if entry_total <= 0:
+        return 0.0
+    sell_total = _resolve_display_sell_total(exit_context, sell_price=fallback_sell_price, qty=sold_qty, params=params)
+    return float((sell_total - entry_total) / entry_total * 100.0)
 
 
 def _build_completed_trade_snapshot(stats_index, current_date, params, current_capital_after_event, overall_max_drawdown):
@@ -151,7 +164,9 @@ def process_debug_position_step(
                     position,
                     tp_context,
                     fallback_entry_price=exec_sell_price_half,
-                    fallback_net_price=sell_net_price_half,
+                    fallback_sell_price=exec_sell_price_half,
+                    fallback_qty=sold_qty,
+                    params=params,
                 ),
                 'sell_capital': float(tp_sell_total),
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
@@ -179,7 +194,7 @@ def process_debug_position_step(
         )
         total_pnl = float(position.get('realized_pnl', pnl_realized))
         final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
-        full_entry_capital = _resolve_full_entry_capital(position, prev_qty)
+        full_entry_capital = _resolve_full_entry_capital(position, prev_qty, params)
         total_return_pct = (total_pnl / full_entry_capital * 100.0) if full_entry_capital > 0 else 0.0
         append_debug_trade_row(
             trade_logs,
@@ -274,7 +289,7 @@ def append_debug_forced_closeout(
         current_capital_after_exit,
         overall_max_drawdown,
     )
-    full_entry_capital = _resolve_full_entry_capital(position, position['qty'])
+    full_entry_capital = _resolve_full_entry_capital(position, position['qty'], params)
     total_return_pct = (total_pnl / full_entry_capital * 100.0) if full_entry_capital > 0 else 0.0
     append_debug_trade_row(
         trade_logs,

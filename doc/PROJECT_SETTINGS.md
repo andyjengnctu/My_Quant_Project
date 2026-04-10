@@ -61,6 +61,7 @@
 23. debug / GUI / history 的買進可見欄位或 marker 若顯示 `buy_capital`、買進 `gross_amount` 或其他 entry total，必須優先使用 `net_buy_total_milli`、`entry_cost` 或共享 exact-total helper；不得以 `entry_price * qty`、`entry * qty` 等 per-share fallback 回推買進總額。
 24. debug / GUI / history 若顯示半倉停利或其他單腿 exit 的可見 `pnl_pct` / 報酬率，必須優先以 exact ledger 的 `allocated_cost_milli` 與該腿 `pnl_milli` 計算；不得以 `(net_price - entry) / entry` 等 per-share 浮點差價公式回推單腿報酬率。
 25. debug / GUI / history 若顯示賣訊 annotation 的可見 `profit_pct`、盈虧顏色或其他 signal-day 持倉報酬率，必須優先以 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `(close - entry) / entry` 等 raw close 與 per-share 成本的浮點差價公式回推。
+26. debug / GUI / history 的 fallback helper 若在缺少預先儲存的 total / allocated-cost 時仍需回推可見資本、單腿報酬率或持倉報酬率，必須優先使用共享 exact-total / exact-ledger helper（如 `calc_entry_total_cost(...)`、`net_total_milli - pnl_milli`）；不得再以 `entry * qty`、`entry_price * qty`、`(net_price - entry) / entry` 等 raw per-share 浮點公式作最後 fallback。
 
 ## E. 交易與策略原則
 
