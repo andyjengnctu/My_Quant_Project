@@ -50,7 +50,7 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
 
     stop_level = float(position["sl"])
     tp_half_level = float(position["tp_half"])
-    entry_price = float(position["entry"])
+    original_cost_basis_milli = int(position["remaining_cost_basis_milli"])
 
     updated_position, freed_cash, pnl_realized, events = execute_bar_step(
         position,
@@ -68,7 +68,7 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
     expected_exec_price = adjust_long_sell_fill_price(min(stop_level, 100.0))
     expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)
     expected_freed_cash = milli_to_money(expected_sell_ledger["net_sell_total_milli"])
-    expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - position["remaining_cost_basis_milli"])
+    expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)
 
     add_check(results, "synthetic_same_bar_stop_priority", case_id, "stop_event_emitted", True, "STOP" in events)
     add_check(results, "synthetic_same_bar_stop_priority", case_id, "tp_half_event_suppressed", False, "TP_HALF" in events, note="同 K 棒同時碰到停損 / 停利時，必須以最壞停損計算。")

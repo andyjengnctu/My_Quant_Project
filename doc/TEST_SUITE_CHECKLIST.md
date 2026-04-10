@@ -208,6 +208,8 @@
 
 | B141 | P1 | Meta / 投組 rotation 報酬率契約 | 投組 rotation、汰弱賣出候選比較或其他持倉優劣排序，若需以持倉報酬率做比較，必須優先以 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `(close - entry) / entry` 等 raw close 與 per-share 成本的浮點差價公式回推，避免 rotation 決策與正式帳務口徑分叉 | DONE | 已補 static meta contract，直接掃描 `core/portfolio_exits.py`，釘死 rotation 的 `ret` 必須走 exact mark-to-market helper，且不得殘留 `ret = (pt_y_close - pos['entry']) / pos['entry']` 舊公式；避免投組 rotation 將 raw close 與 per-share 平均成本當作正式持倉報酬率 | `tools/validate/synthetic_meta_cases.py`, `core/portfolio_exits.py` |
 | B142 | P1 | Meta / validator exact-ledger oracle 契約 | 凡 unit / synthetic validator、oracle、expected 值建構若需比較正式帳務 total、risk budget、freed cash、realized pnl 或 entry cash after buy，必須使用共享 exact ledger / integer budget helper；不得以 `price * qty`、`net_price * qty`、`capital * risk_fraction` 等 per-share float 公式自行重建 oracle，避免 validator 自己與正式帳務口徑分叉 | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_unit_cases.py` 與 `tools/validate/synthetic_take_profit_cases.py`，釘死 oracle 必須使用 buy/sell ledger、integer risk budget 與 exact total；不得殘留 `gross = float(price) * int(qty)`、`risk_budget = capital * risk_fraction`、`expected_freed_cash = expected_net_price * qty`、`entry_result["entry_price"] * entry_qty` 等舊公式 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_unit_cases.py` |
+| B143 | P1 | Meta / checklist DONE 測試摘要表結構契約 | `T. 目前所有 DONE 的建議測試項目摘要` 必須維持合法 markdown table 結構，包含 header separator row，且資料列 ID 必須是 `Txx`、對應主表項必須是 `Bxx`；不得讓 parser 把表頭列當成資料列，避免 checklist parser / meta-registry 產生假性 FAIL | DONE | 已補 static meta contract，直接檢查 `doc/TEST_SUITE_CHECKLIST.md` 的 `T` 摘要表是否保留 header separator row，並驗證 `_load_done_test_rows()` 解析出的 `id` / `b_id` 皆符合 `Txx` / `Bxx`；避免表格排版小失誤直接污染 meta-registry 載入結果 | `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B144 | P1 | Meta / mutating validator oracle snapshot 契約 | 凡 validator / synthetic case 若呼叫會原地修改 `position` 或其他狀態的 producer，且 expected 值依賴呼叫前成本基礎或持倉狀態，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle，避免 validator 自己把 mutated state 誤當 expected | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_take_profit_cases.py` 的 same-bar stop-priority case，釘死 expected pnl 必須使用 `original_cost_basis_milli` snapshot，而不得在 `execute_bar_step(...)` 後再讀 `position["remaining_cost_basis_milli"]`；避免 in-place mutation 把 oracle 算錯 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_take_profit_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -249,6 +251,7 @@
 ### T. 目前所有 `DONE` 的建議測試項目摘要
 
 | ID | 建議測試名稱 | 對應主表項目 |
+|---|---|---|
 | T01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |
 | T02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 |
 | T03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 |
@@ -473,6 +476,8 @@
 | T226 | `validate_average_price_total_helper_contract_case` | B140 |
 | T227 | `validate_portfolio_rotation_mark_to_market_return_contract_case` | B141 |
 | T228 | `validate_validator_oracles_use_exact_ledger_totals_contract_case` | B142 |
+| T229 | `validate_checklist_done_test_summary_markdown_structure_case` | B143 |
+| T230 | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` | B144 |
 
 ## G. 逐項收斂紀錄
 
@@ -871,6 +876,8 @@
 | 2026-04-10 | B140 | 新增 average-price total helper static contract 後主表收斂為 DONE | NEW -> DONE | `core/exact_accounting.py` |
 | 2026-04-10 | B141 | 新增投組 rotation exact mark-to-market return static contract 後主表收斂為 DONE | NEW -> DONE | `core/portfolio_exits.py` |
 | 2026-04-10 | B142 | 新增 validator/oracle exact-ledger total static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_unit_cases.py` |
+| 2026-04-10 | B143 | 新增 checklist DONE 測試摘要表結構 static contract 後主表收斂為 DONE | NEW -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-10 | B144 | 新增 mutating validator oracle snapshot static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_take_profit_cases.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
@@ -886,3 +893,5 @@
 | 2026-04-10 | T226 | 新增 average-price total helper static contract 並驗證 | NEW -> DONE | `validate_average_price_total_helper_contract_case` |
 | 2026-04-10 | T227 | 新增投組 rotation exact mark-to-market return static contract 並驗證 | NEW -> DONE | `validate_portfolio_rotation_mark_to_market_return_contract_case` |
 | 2026-04-10 | T228 | 新增 validator/oracle exact-ledger total static contract 並驗證 | NEW -> DONE | `validate_validator_oracles_use_exact_ledger_totals_contract_case` |
+| 2026-04-10 | T229 | 新增 checklist DONE 測試摘要表結構 static contract 並驗證 | NEW -> DONE | `validate_checklist_done_test_summary_markdown_structure_case` |
+| 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |

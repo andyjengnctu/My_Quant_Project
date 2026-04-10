@@ -65,6 +65,8 @@
 27. 凡 fallback helper 只握有 `entry` / `entry_price` 這類由既有總額反推的「已含費或已正規化每股平均價格」時，不得再把該價格當原始買價餵給 `calc_entry_total_cost(...)` 之類會重新加費的 gross-price helper；必須改用共享 average-price total helper 以每股平均價格回推總額，避免 double-count 手續費。
 28. 投組 rotation、汰弱賣出候選比較或其他持倉優劣排序，若需以持倉報酬率做比較，必須優先使用 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `close` 與 `entry` 的 per-share 浮點差價公式回推。
 29. 凡 unit / synthetic validator、oracle、expected 值建構若需比較正式帳務 total、risk budget、freed cash、realized pnl 或 entry cash after buy，必須使用共享 exact ledger / integer budget helper；不得以 `price * qty`、`net_price * qty`、`capital * risk_fraction` 等 per-share float 公式自行重建 oracle。
+30. 凡 validator / oracle 呼叫會原地修改 position、portfolio 或其他可變狀態的 producer 後，再比對依賴「呼叫前成本基礎 / 持倉狀態」的 expected 值時，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle。
+31. 編輯 `doc/TEST_SUITE_CHECKLIST.md` 的摘要表時，必須維持合法 markdown table header + separator 結構；不得讓 parser 把表頭列當成資料列。
 
 ## E. 交易與策略原則
 

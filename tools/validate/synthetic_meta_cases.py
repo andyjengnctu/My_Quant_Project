@@ -907,6 +907,46 @@ def validate_checklist_f2_formal_command_single_entry_case(_base_params):
     return results, summary
 
 
+def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
+    case_id = "META_CHECKLIST_DONE_TEST_SUMMARY_MARKDOWN_STRUCTURE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    lines = CHECKLIST_PATH.read_text(encoding="utf-8").splitlines()
+    heading = "### T. 目前所有 `DONE` 的建議測試項目摘要"
+    try:
+        heading_index = next(i for i, line in enumerate(lines) if line.strip() == heading)
+    except StopIteration:
+        add_check(results, "meta_checklist", case_id, "done_test_summary_heading_exists", True, False)
+        return results, summary
+
+    header_index = None
+    for cursor in range(heading_index + 1, len(lines)):
+        stripped = lines[cursor].strip()
+        if stripped.startswith(("## ", "### ")):
+            break
+        if stripped.startswith("|"):
+            header_index = cursor
+            break
+    if header_index is None:
+        add_check(results, "meta_checklist", case_id, "done_test_summary_table_header_exists", True, False)
+        return results, summary
+
+    separator_line = lines[header_index + 1].strip() if header_index + 1 < len(lines) else ""
+    has_separator = separator_line.startswith("|") and set(separator_line.replace("|", "").replace(" ", "").replace(":", "")) <= {"-"}
+    add_check(results, "meta_checklist", case_id, "done_test_summary_table_has_markdown_separator_row", True, has_separator)
+
+    done_test_rows = _load_done_test_rows()
+    invalid_ids = [row["id"] for row in done_test_rows if not re.fullmatch(r"T\d+", row["id"])]
+    invalid_b_ids = [row["b_id"] for row in done_test_rows if not re.fullmatch(r"B\d+", row["b_id"])]
+    add_check(results, "meta_checklist", case_id, "done_test_summary_rows_use_valid_t_ids", [], invalid_ids)
+    add_check(results, "meta_checklist", case_id, "done_test_summary_rows_use_valid_b_ids", [], invalid_b_ids)
+
+    summary["invalid_ids"] = invalid_ids
+    summary["invalid_b_ids"] = invalid_b_ids
+    return results, summary
+
+
 def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
@@ -2938,6 +2978,22 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_mark_to_market_helper", True, "def _calc_position_mark_to_market_return(" in source_text)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)" in source_text)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_no_legacy_raw_close_minus_entry_formula", False, "ret = (pt_y_close - pos['entry']) / pos['entry']" in source_text)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+def validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case(_base_params):
+    case_id = "META_SAME_BAR_STOP_PRIORITY_ORACLE_SNAPSHOT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_take_profit_cases.py"
+    source_text = source_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_snapshots_original_cost_basis_before_execute", True, 'original_cost_basis_milli = int(position["remaining_cost_basis_milli"])' in source_text)
+    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_expected_pnl_uses_original_cost_basis_snapshot", True, 'expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)' in source_text)
+    add_check(results, "meta_contract", case_id, "same_bar_stop_priority_has_no_mutated_remaining_cost_basis_oracle", False, 'expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - position["remaining_cost_basis_milli"])' in source_text)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
