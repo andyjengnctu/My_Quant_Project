@@ -2570,6 +2570,22 @@ def validate_average_price_total_helper_contract_case(_base_params):
     return results, summary
 
 
+def validate_price_utils_average_price_total_import_contract_case(_base_params):
+    case_id = "META_PRICE_UTILS_AVERAGE_PRICE_TOTAL_IMPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    price_path = build_project_absolute_path("core", "price_utils.py")
+    price_source = price_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "price_utils_imports_average_price_total_milli_helper", True, "calc_total_from_average_price_milli," in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_initial_risk_total_entry_uses_imported_average_price_total_helper", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, qty)" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_initial_risk_total_stop_uses_imported_average_price_total_helper", True, "stop_net_total_milli = calc_total_from_average_price_milli(net_stop_price, qty)" in price_source)
+
+    summary["source_path"] = price_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []

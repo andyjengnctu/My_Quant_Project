@@ -210,6 +210,7 @@
 | B142 | P1 | Meta / validator exact-ledger oracle 契約 | 凡 unit / synthetic validator、oracle、expected 值建構若需比較正式帳務 total、risk budget、freed cash、realized pnl 或 entry cash after buy，必須使用共享 exact ledger / integer budget helper；不得以 `price * qty`、`net_price * qty`、`capital * risk_fraction` 等 per-share float 公式自行重建 oracle，避免 validator 自己與正式帳務口徑分叉 | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_unit_cases.py` 與 `tools/validate/synthetic_take_profit_cases.py`，釘死 oracle 必須使用 buy/sell ledger、integer risk budget 與 exact total；不得殘留 `gross = float(price) * int(qty)`、`risk_budget = capital * risk_fraction`、`expected_freed_cash = expected_net_price * qty`、`entry_result["entry_price"] * entry_qty` 等舊公式 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_unit_cases.py` |
 | B143 | P1 | Meta / checklist DONE 測試摘要表結構契約 | `T. 目前所有 DONE 的建議測試項目摘要` 必須維持合法 markdown table 結構，包含 header separator row，且資料列 ID 必須是 `Txx`、對應主表項必須是 `Bxx`；不得讓 parser 把表頭列當成資料列，避免 checklist parser / meta-registry 產生假性 FAIL | DONE | 已補 static meta contract，直接檢查 `doc/TEST_SUITE_CHECKLIST.md` 的 `T` 摘要表是否保留 header separator row，並驗證 `_load_done_test_rows()` 解析出的 `id` / `b_id` 皆符合 `Txx` / `Bxx`；避免表格排版小失誤直接污染 meta-registry 載入結果 | `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B144 | P1 | Meta / mutating validator oracle snapshot 契約 | 凡 validator / synthetic case 若呼叫會原地修改 `position` 或其他狀態的 producer，且 expected 值依賴呼叫前成本基礎或持倉狀態，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle，避免 validator 自己把 mutated state 誤當 expected | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_take_profit_cases.py` 的 same-bar stop-priority case，釘死 expected pnl 必須使用 `original_cost_basis_milli` snapshot，而不得在 `execute_bar_step(...)` 後再讀 `position["remaining_cost_basis_milli"]`；避免 in-place mutation 把 oracle 算錯 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_take_profit_cases.py` |
+| B145 | P1 | Meta / shared helper import 契約 | 凡核心或 producer 以共享 helper 取代舊邏輯時，必須同輪同步補齊 import；不得只改函式呼叫而漏 import，避免靜態 compile 未必能捕捉、runtime 才因 `NameError` 失敗。尤其 `price_utils` 這類核心 helper 聚合模組，若引用 `calc_total_from_average_price_milli` 等 exact-accounting helper，必須明確從單一來源匯入並由 static meta contract 釘死 | DONE | 已補 static meta contract，直接掃描 `core/price_utils.py`，釘死 `calc_initial_risk_total()` 在使用 `calc_total_from_average_price_milli(...)` 時，該 helper 必須已於 import 區塊明確匯入；避免 helper call 已替換但 import 遺漏，形成 runtime `NameError` | `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -478,6 +479,7 @@
 | T228 | `validate_validator_oracles_use_exact_ledger_totals_contract_case` | B142 |
 | T229 | `validate_checklist_done_test_summary_markdown_structure_case` | B143 |
 | T230 | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` | B144 |
+| T231 | `validate_price_utils_average_price_total_import_contract_case` | B145 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -877,6 +879,7 @@
 | 2026-04-10 | B142 | 新增 validator/oracle exact-ledger total static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_unit_cases.py` |
 | 2026-04-10 | B143 | 新增 checklist DONE 測試摘要表結構 static contract 後主表收斂為 DONE | NEW -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-10 | B144 | 新增 mutating validator oracle snapshot static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_take_profit_cases.py` |
+| 2026-04-10 | B145 | 新增 shared helper import static contract 後主表收斂為 DONE | NEW -> DONE | `core/price_utils.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
@@ -894,3 +897,4 @@
 | 2026-04-10 | T228 | 新增 validator/oracle exact-ledger total static contract 並驗證 | NEW -> DONE | `validate_validator_oracles_use_exact_ledger_totals_contract_case` |
 | 2026-04-10 | T229 | 新增 checklist DONE 測試摘要表結構 static contract 並驗證 | NEW -> DONE | `validate_checklist_done_test_summary_markdown_structure_case` |
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
+| 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |

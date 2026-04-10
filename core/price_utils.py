@@ -11,6 +11,7 @@ from core.exact_accounting import (
     calc_entry_total_cost,
     calc_exit_net_total,
     calc_initial_risk_total_milli,
+    calc_total_from_average_price_milli,
     calc_limit_down_price_milli,
     calc_limit_up_price_milli,
     calc_risk_budget_milli,
