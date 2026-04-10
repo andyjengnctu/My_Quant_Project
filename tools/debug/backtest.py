@@ -293,6 +293,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             chart_context=chart_context,
             current_capital=current_capital,
             ticker=ticker,
+            trade_date=dates[j],
         )
         current_capital -= spent_cash
         if chart_context is not None and position['qty'] > 0:

@@ -2192,10 +2192,11 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "debug_backtest_passes_ticker_to_entry_flow", True, "ticker=ticker" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_ticker", True, "ticker=None" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_security_profile", True, "security_profile=None" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_passes_trade_date_to_entry_flow", True, "trade_date=dates[j]" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_trade_date", True, "trade_date=None" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_signal_state", True, "create_signal_tracking_state(buy_limit_prev, atr_prev, params, ticker=ticker, security_profile=security_profile)" in debug_entry_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_entry_plan", True, "build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=current_date)" in debug_entry_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_extended_entry_plan", True, "build_extended_entry_plan_from_signal(" in debug_entry_source and "ticker=ticker" in debug_entry_source and "security_profile=security_profile" in debug_entry_source and "trade_date=current_date" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_entry_plan", True, "build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile, trade_date=effective_trade_date)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_extended_entry_plan", True, "build_extended_entry_plan_from_signal(" in debug_entry_source and "ticker=ticker" in debug_entry_source and "security_profile=security_profile" in debug_entry_source and "trade_date=effective_trade_date" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
     summary["source_paths"] = [
@@ -2528,14 +2529,14 @@ def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_cas
         if isinstance(node, ast.FunctionDef) and node.name == "_record_sell_signal_annotation":
             sell_signal_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
 
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_exact_profit_pct_helper", True, "def _resolve_sell_signal_profit_pct(position, signal_close, params):" in source_text)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_exact_profit_pct_helper", True, "def _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=None):" in source_text)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_prefers_net_buy_total_milli", True, "full_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_final_fallback_uses_average_price_total_helper", True, "initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)" in helper_source and "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_remaining_cost_basis_mark_to_market", True, "floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli" in helper_source and "total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_divides_integer_totals_directly", True, "return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source and "return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_milli_to_money_ratio_path", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source or "milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)" in sell_signal_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=signal_date)" in sell_signal_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_raw_close_minus_entry_formula", False, "((float(signal_close) - entry_price) / entry_price * 100.0)" in sell_signal_source or "((float(signal_close) - entry_price) / entry_price * 100.0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_per_share_entry_total_fallback", False, "coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))" in helper_source)
 
@@ -3118,7 +3119,7 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
     source_text = source_path.read_text(encoding="utf-8")
 
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_mark_to_market_helper", True, "def _calc_position_mark_to_market_return(" in source_text)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)" in source_text)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params, trade_date=today)" in source_text)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_no_legacy_raw_close_minus_entry_formula", False, "ret = (pt_y_close - pos['entry']) / pos['entry']" in source_text)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()

@@ -907,6 +907,8 @@
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
 | 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |
 | 2026-04-10 | T232 | 新增 price_utils array tick-normalization shared-helper static contract 並驗證 | NEW -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
+| 2026-04-11 | B26 | 檢出 `G` 區 `B124` 歷史收斂列 note 欄混寫兩個檔案 reference，違反單 note entry 規則，主表改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-11 | B26 | 將 `B124` 歷史收斂列 note 欄改回單一 code reference 後重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-11 | B95 | 檢出 GUI extended preview continuity contract 仍比對舊 `build_extended_candidate_plan_from_signal(..., ticker=ticker)` signature，未同步 `security_profile` 傳遞，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B95 | 將 GUI extended preview continuity contract 同步到 `ticker` + `security_profile` counterfactual signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B95 | 檢出 GUI extended preview continuity contract 尚未同步 `trade_date` counterfactual signature，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
@@ -917,14 +919,20 @@
 | 2026-04-11 | B123 | 補齊 ticker / metadata 商品 profile 自動辨識與兩級 tick 路由後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 以 reduced dataset 實際比對檢出 ETF / ETN / REIT / 債券 ETF 仍共用 stock-only 賣出交易稅，主表改回 PARTIAL | DONE -> PARTIAL | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 補齊商品別 / 交易日期驅動的賣出交易稅路由後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
-| 2026-04-11 | B124 | 檢出 `build_backtest_stats()` 內部已使用 `trade_date=final_date` 但函式簽名與 caller 尚未同步日期上下文，改回 PARTIAL | DONE -> PARTIAL | `core/backtest_finalize.py`, `core/backtest_core.py` |
-| 2026-04-11 | B124 | 補齊 `build_backtest_stats()` 的 `final_date` 簽名、empty/final caller 傳遞與 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `core/backtest_finalize.py`, `core/backtest_core.py` |
+| 2026-04-11 | B124 | 檢出 `build_backtest_stats()` 內部已使用 `trade_date=final_date` 但函式簽名與 caller 尚未同步日期上下文，改回 PARTIAL | DONE -> PARTIAL | `core/backtest_finalize.py` |
+| 2026-04-11 | B124 | 補齊 `build_backtest_stats()` 的 `final_date` 簽名、empty/final caller 傳遞與 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `core/backtest_finalize.py` |
 | 2026-04-11 | B126 | 檢出 debug entry flow caller 已傳 `ticker` 但 callee 簽名未同步更新，主表改回 PARTIAL | DONE -> PARTIAL | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B126 | 將 debug entry flow 簽名、商品 profile 傳遞與 static contract 一併補齊後重新收斂為 DONE | PARTIAL -> DONE | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B126 | 檢出 debug entry flow / backtest caller-callee 尚未同步 `trade_date` keyword 與 builder 傳遞，改回 PARTIAL | DONE -> PARTIAL | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B126 | 補齊 debug entry flow / backtest 的 `trade_date` 簽名、caller 傳遞與 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/debug/entry_flow.py` |
+| 2026-04-11 | B126 | 檢出 debug entry flow 實作仍未真正接受與傳遞 `trade_date`，主表改回 PARTIAL | DONE -> PARTIAL | `tools/debug/entry_flow.py` |
+| 2026-04-11 | B126 | 將 debug entry flow 的 `trade_date` 簽名、caller 傳遞與 static contract 真正落地後重新收斂為 DONE | PARTIAL -> DONE | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B137 | 檢出 debug half-exit leg-return static validator 仍要求舊 milli_to_money ratio，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B137 | 將 debug half-exit leg-return static validator 同步到 integer-total ratio 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B138 | 檢出 debug sell-signal profit-pct static contract 仍比對舊 helper / helper-call signature，未同步 `signal_date` keyword，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B138 | 將 debug sell-signal profit-pct static contract 同步到 `signal_date` helper / helper-call signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B141 | 檢出投組 rotation exact mark-to-market return static contract 仍比對舊 helper-call signature，未同步 `trade_date=today`，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B141 | 將投組 rotation exact mark-to-market return static contract 同步到 `trade_date=today` helper-call signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B146 | 檢出 portfolio rotation 賣出路徑仍引用未宣告 `ticker` 自由變數，主表改回 PARTIAL | DONE -> PARTIAL | `core/portfolio_exits.py` |
 | 2026-04-11 | B146 | 檢出 scalar / array 價格正規化 caller 尚未一路傳遞 ticker / security_profile，主表改回 PARTIAL | DONE -> PARTIAL | `core/price_utils.py` |
 | 2026-04-11 | B146 | 補齊 portfolio rotation 賣出路徑改用 `weakest_ticker` 並擴充 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
@@ -948,8 +956,14 @@
 | 2026-04-11 | T212 | 擴充 debug backtest entry cash-path static contract 納入 entry flow 簽名與商品 profile 傳遞後重新驗證 | PARTIAL -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-11 | T212 | 檢出 debug backtest entry cash-path static contract 尚未釘死 `trade_date` caller-callee 相容與 builder 傳遞，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-11 | T212 | 擴充 debug backtest entry cash-path static contract 納入 `trade_date` 簽名、caller 與 builder 傳遞後重新驗證 | PARTIAL -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
+| 2026-04-11 | T212 | 檢出 debug backtest entry cash-path static contract 雖已要求 `trade_date`，但實作仍未真正接受與傳遞，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_backtest_entry_cash_path_contract_case` |
+| 2026-04-11 | T212 | 將 debug backtest entry cash-path static contract 與實作同步到 `trade_date` 簽名、caller 傳遞後重新驗證 | PARTIAL -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-11 | T223 | 檢出 debug half-exit leg-return static contract 仍要求舊 milli_to_money ratio，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
 | 2026-04-11 | T223 | 將 debug half-exit leg-return static contract 同步到 integer-total ratio 後重新驗證 | PARTIAL -> DONE | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
+| 2026-04-11 | T224 | 檢出 debug sell-signal profit-pct static contract 仍比對舊 helper / helper-call signature，未同步 `signal_date` keyword，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case` |
+| 2026-04-11 | T224 | 將 debug sell-signal profit-pct static contract 同步到 `signal_date` helper / helper-call signature 後重新驗證 | PARTIAL -> DONE | `validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case` |
+| 2026-04-11 | T227 | 檢出投組 rotation exact mark-to-market return static contract 仍比對舊 helper-call signature，未同步 `trade_date=today`，改回 PARTIAL | DONE -> PARTIAL | `validate_portfolio_rotation_mark_to_market_return_contract_case` |
+| 2026-04-11 | T227 | 將投組 rotation exact mark-to-market return static contract 同步到 `trade_date=today` helper-call signature 後重新驗證 | PARTIAL -> DONE | `validate_portfolio_rotation_mark_to_market_return_contract_case` |
 | 2026-04-11 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 portfolio rotation 賣出路徑的未宣告 `ticker` 引用，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 ticker / security_profile 傳遞路徑，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T232 | 擴充 array tick-normalization static contract 納入 portfolio rotation 賣出路徑 ticker 來源契約後重新驗證 | PARTIAL -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
