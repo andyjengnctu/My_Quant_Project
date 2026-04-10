@@ -2154,7 +2154,7 @@ def validate_gui_extended_preview_continuity_contract_case(base_params):
     add_check(results, "output_contract", case_id, "single_stock_history_chip_runtime_text_stays_fixed", True, 'self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)' in inspector_source and 'self._sidebar_history_var.set(history_text)' not in inspector_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_new_signals", True, 'preview_candidate_plan = build_normal_candidate_plan' in entry_flow_source)
     add_check(results, "output_contract", case_id, "entry_preview_uses_candidate_layer_for_extended_days", True, 'preview_candidate_plan = build_extended_candidate_plan_from_signal' in entry_flow_source)
-    add_check(results, "output_contract", case_id, "entry_preview_extended_candidate_plan_stays_counterfactual_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker)' in entry_flow_source)
+    add_check(results, "output_contract", case_id, "entry_preview_extended_candidate_plan_stays_counterfactual_signature", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile)' in entry_flow_source)
 
     params = make_synthetic_validation_params(base_params)
     params.initial_capital = 1.0

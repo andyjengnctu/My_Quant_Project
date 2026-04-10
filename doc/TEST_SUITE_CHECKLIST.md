@@ -159,7 +159,7 @@
 | B88 | P1 | GUI | GUI 單股工作台必須固定使用完整資料集、同時提供『計算候選股』與『計算歷史績效股』兩個獨立掃描鍵、兩個下拉選單 / Console 分頁 / 一鍵回到最新 K 線，且 scanner 每檔輸出與歷史績效股下拉選單都必須顯示資產成長與當前排序探針，latest-bar 買訊預覽、右側狀態晶片與滑鼠互動不得與單股圖表契約分叉 | DONE | 已補 direct contract，直接釘死 panel 不得再顯示資料集選項，必須提供候選股與歷史績效股兩個 scanner button、candidate/history combobox、Console tab、latest button；scanner runner 必須同時維持 `candidate_rows` 與 `history_qualified_rows` payload 契約，scanner row text 與 history dropdown 必須共用 sort probe 顯示資產成長，chart helper 必須提供 `scroll_chart_to_latest()` 與右側留白契約 | `tools/gui/single_stock_inspector.py`, `tools/scanner/scan_runner.py`, `tools/debug/charting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B89 | P1 | GUI | GUI 單股工作台必須以右側獨立 sidebar 呈現買入訊號 / 符合歷史績效 / 歷史績效表 / 選取日線值 / 回到最新 K 線，並支援 Enter 直接回測、候選股選取即回測、最新 K 線後右側留白約 1/6 版面，以及 latest-bar 買訊的隔日預掛線預覽不得畫在訊號當日 | DONE | 已補 direct contract，直接釘死 panel 不得保留執行回測按鈕、ticker entry 必須綁定 Enter、candidate select 必須直接觸發回測；chart helper 必須宣告 future_preview 與動態 right padding，且最新 K 線後的右側留白需壓到約 1/6 版面，backtest latest signal preview 必須走 next-day future preview path | `tools/gui/single_stock_inspector.py`, `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B94 | P1 | GUI | GUI 單股回測檢視必須使用純黑 K 線底色、固定文案的右側狀態晶片、右側 OHLCV / 線值單一資訊來源、移除 chart hint footer 以擴大主圖高度，且買訊預掛線必須自訊號次日開始預覽；賣出/停損資訊框需包含最大回撤 | DONE | 已補 refined visual contract，直接釘死 pure-black chart background、固定「出現買入訊號」/「符合歷史績效」晶片文案、右側 sidebar 必須承接 OHLCV 與線值、footer 不得再保留 chart hint 空間、賣出框需列出最大回撤，且 entry preview lines 必須在次日預先畫出 | `tools/gui/single_stock_inspector.py`, `tools/gui/workbench.py`, `tools/debug/charting.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
-| B95 | P1 | GUI | GUI 單股回測狀態晶片在 runtime 必須保持固定文案、僅以底色切換狀態；延續候選預掛線必須依候選資格跨多日連續顯示，但未成交前只得預覽限價，不得預先畫出 stop / tp | DONE | 已補 direct contract，直接釘死右側「出現買入訊號」/「符合歷史績效」晶片不得被 runtime 文案覆寫，且 entry preview 必須走 candidate layer；即使 entry plan 因不可掛單而為 `None`，延續候選有效期間仍須連續顯示 limit 預掛線，未成交前不得預畫 stop / tp | `tools/gui/single_stock_inspector.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
+| B95 | P1 | GUI | GUI 單股回測狀態晶片在 runtime 必須保持固定文案、僅以底色切換狀態；延續候選預掛線必須依候選資格跨多日連續顯示，但未成交前只得預覽限價，不得預先畫出 stop / tp | DONE | 已補 direct contract，直接釘死右側「出現買入訊號」/「符合歷史績效」晶片不得被 runtime 文案覆寫，且 entry preview 必須走 candidate layer；即使 entry plan 因不可掛單而為 `None`，延續候選有效期間仍須連續顯示 limit 預掛線，未成交前不得預畫 stop / tp；延續候選 preview 的 counterfactual builder 呼叫也必須同步傳遞 `ticker` 與 `security_profile`，避免 contract 仍比對舊 signature | `tools/gui/single_stock_inspector.py`, `tools/debug/entry_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B96 | P1 | GUI | GUI 單股回測圖例必須貼近 K 線圖分頁上緣但仍保留小幅左上 inset gap、價格軸數字不得因邊界裁切而缺字，且主圖左/下邊界需盡量收小以保留更多 K 線可視區；延續候選若一路持續到最新一根，最新實際 K 棒與 next-day future preview 都必須維持限價預掛線一致顯示，未成交前 stop / tp 必須保持缺席 | DONE | 已補 direct contract，直接釘死 matplotlib 左/下 margin 收小、legend 需保留小幅 top-left inset gap 且不得裁切價格軸；並補 latest extended candidate preview contract，釘死延續候選走到最新一根時，最後一根實際 K 棒與 next-day future preview 都必須保留 limit 預掛線，未成交前 stop / tp 保持缺席 | `tools/debug/charting.py`, `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B97 | P1 | GUI | GUI 單股 latest raw-signal 買訊預覽路徑必須可直接執行；`tools/debug/backtest.py` 若引用 `build_normal_entry_plan` / `build_normal_candidate_plan`，必須同步自 `core.entry_plans` 明確 import，避免 GUI/coverage runtime 因未定義 helper 而在單股圖表路徑 NameError | DONE | 已補 direct contract，直接以 AST 掃描 `tools/debug/backtest.py`，釘死 latest raw-signal 預覽使用的 `build_normal_entry_plan` 與 tail preview 使用的 `build_normal_candidate_plan` 都必須被引用且已自 `core.entry_plans` 匯入，避免再次只改呼叫點卻漏同步 import | `tools/debug/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B98 | P0 | 交易規格 | 延續候選不得再以 signal day frozen `L/S/T` 模型存續；未成交前不得預先具有可執行 stop / tp，僅當首個待掛單日曾進入可買區時，才可用固定反事實 `P' = min(Open, L)` 建立不隨日漂移的失效 / 達標 barrier；`signal_valid` 與 `today_orderable` 必須分層，固定 `L` 若低於今日跌停價不得進 `orderable_candidates_today` | DONE | 已補 direct synthetic case，直接釘死延續候選不得再以 signal day frozen `L/S/T` 或每日漂移 `reference_price` 模型存續；只有首個待掛單日曾進入可買區時，才可建立固定反事實 `P'` barrier，且 valid signal 即使當日價格帶不可達也只能留在 candidate layer，不得擠進 orderable list | `tools/validate/synthetic_flow_cases.py` |
@@ -526,8 +526,8 @@
 | 2026-04-02 | B22 | 將 coverage report baseline 收斂為正式 gate，主表升為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B23 | 檢出 synthetic 主入口漏註冊既有 `validate_*` case，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_cases.py` 尚未完整覆蓋 imported validate cases |
 | 2026-04-02 | B23 | 補齊 synthetic 主入口遺漏註冊與 registry completeness guard 後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cases.py` |
-| 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B26 | 檢出完成摘要索引仍有漏同步風險，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身仍有回寫 / 摘要失同步缺口 |
+| 2026-04-02 | B26 | checklist / test suite 自身完整性收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | B26 | 補齊 checklist main / `T` / `G` sync blocker 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-02 | T14 | 新增 model I/O schema 案例並驗證 | TODO -> DONE | `validate_model_io_schema_case` |
 | 2026-04-02 | T15 | 補 scanner worker / `scan_runner` 入口重跑一致性後收斂完成 | PARTIAL -> DONE | `validate_scanner_worker_repeatability_case` |
@@ -584,12 +584,12 @@
 | 2026-04-02 | T68 | 新增 checklist 完成映射同步缺口 | NEW -> TODO | 需阻擋已完成 T 項遺漏於 `T` 仍被判定為已收斂 |
 | 2026-04-02 | T68 | 補 checklist `DONE` 摘要缺漏自動偵測與阻擋 | TODO -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-03 | B27 | 補 top-level import cycle formal guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-03 | B28 | 補入核心交易模組 coverage target completeness 主表項目 | NEW -> PARTIAL | `run_meta_quality.py` 已有 key target hit guard，但尚未明確要求核心交易模組入列 |
 | 2026-04-03 | B28 | 核心交易模組已納入 `COVERAGE_TARGETS`，主表收斂為 DONE | PARTIAL -> DONE | `run_meta_quality.py` |
+| 2026-04-03 | B28 | 補入核心交易模組 coverage target completeness 主表項目 | NEW -> PARTIAL | `run_meta_quality.py` 已有 key target hit guard，但尚未明確要求核心交易模組入列 |
 | 2026-04-03 | B29 | 補入 critical file per-file coverage minimum gate 主表項目 | NEW -> TODO | 目前僅有 overall coverage gate，尚未建立核心檔 per-file minimum guard |
 | 2026-04-03 | B29 | 核心檔 per-file coverage minimum guard 已建立，主表收斂為 DONE | TODO -> DONE | `run_meta_quality.py` 已正式檢查 critical file line / branch minimum coverage |
-| 2026-04-03 | B30 | 補入 coverage threshold gradual uplift 主表項目 | NEW -> PARTIAL | 已有 minimum threshold gate，但正式基線仍為 `line 50% / branch 45%` |
 | 2026-04-03 | B30 | 正式 coverage 基線已提高並補 floor guard，主表收斂為 DONE | PARTIAL -> DONE | 基線已提升，並由 `run_meta_quality.py` 阻擋回退。 |
+| 2026-04-03 | B30 | 補入 coverage threshold gradual uplift 主表項目 | NEW -> PARTIAL | 已有 minimum threshold gate，但正式基線仍為 `line 50% / branch 45%` |
 | 2026-04-03 | B31 | 進場關鍵模組已納入 critical file coverage gate，主表收斂為 DONE | NEW -> DONE | `run_meta_quality.py` |
 | 2026-04-03 | B32 | critical per-file threshold 已提升到 stage-2 正式基線，主表收斂為 DONE | NEW -> DONE | 基線已提升，並由 `run_meta_quality.py` 阻擋回退。 |
 | 2026-04-03 | B33 | 補上 reduced dataset member/content fingerprint gate，主表收斂為 DONE | NEW -> DONE | `tools/local_regression/common.py` |
@@ -661,8 +661,8 @@
 | 2026-04-04 | B54 | 專案資金規則改為全系統複利後，原單股 fixed-cap 規格退役，主表先改回 PARTIAL | DONE -> PARTIAL | 待改為單股複利資金 contract |
 | 2026-04-04 | B54 | 改為單股複利資金 contract 並收斂完成 | PARTIAL -> DONE | `tools/validate/synthetic_history_cases.py` |
 | 2026-04-04 | B55 | 專案資金規則改為全系統複利後，原 execution-only fixed-cap 規格退役，主表先改回 PARTIAL | DONE -> PARTIAL | 待改為單檔複利 parity contract |
-| 2026-04-04 | B55 | 改為單檔複利 parity contract 並收斂完成 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B55 | 檢出單檔複利 parity contract 初版未覆蓋獲利後 entry budget，主表改回 PARTIAL | DONE -> PARTIAL | portfolio 實際下單仍可能以 available_cash 恢復複利 |
+| 2026-04-04 | B55 | 改為單檔複利 parity contract 並收斂完成 | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B55 | 補齊 gain-side entry budget contract 與 portfolio 單檔 parity 路徑後收斂為 DONE | PARTIAL -> DONE | `core/portfolio_entries.py` |
 | 2026-04-04 | B56 | 新增 scanner live capital contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-04 | B57 | 新增 score numerator option contract 後，主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_strategy_cases.py` |
@@ -686,35 +686,35 @@
 | 2026-04-04 | T130 | 專案資金規則改為全系統複利後，原單股 fixed-cap synthetic case 退役，先改回 PARTIAL | DONE -> PARTIAL | 待改為單股複利 synthetic case |
 | 2026-04-04 | T130 | 改為單股複利 synthetic case 並驗證 | PARTIAL -> DONE | `validate_synthetic_single_backtest_uses_compounding_capital_case` |
 | 2026-04-04 | T131 | 專案資金規則改為全系統複利後，原 execution-only fixed-cap parity contract 退役，先改回 PARTIAL | DONE -> PARTIAL | 待改為單檔複利 parity contract |
-| 2026-04-04 | T131 | 改為單檔複利 parity contract 並驗證 | PARTIAL -> DONE | `validate_single_ticker_compounding_parity_contract_case` |
 | 2026-04-04 | T131 | 檢出單檔複利 parity contract 初版僅覆蓋虧損側，改回 PARTIAL | DONE -> PARTIAL | 尚未釘死獲利後不得再放大倉位 |
 | 2026-04-04 | T131 | 擴充獲利側 entry budget 的單檔複利 parity contract 並收斂完成 | PARTIAL -> DONE | `validate_single_ticker_compounding_parity_contract_case` |
+| 2026-04-04 | T131 | 改為單檔複利 parity contract 並驗證 | PARTIAL -> DONE | `validate_single_ticker_compounding_parity_contract_case` |
 | 2026-04-04 | T132 | 新增 scanner live capital contract 並驗證 | NEW -> DONE | `validate_scanner_live_capital_contract_case` |
 | 2026-04-04 | T133 | 新增 optimizer interrupt export contract 並驗證 | NEW -> DONE | `validate_optimizer_interrupt_export_contract_case` |
 | 2026-04-04 | T134 | 新增 score numerator option contract 並驗證 | NEW -> DONE | `validate_score_numerator_option_case` |
 | 2026-04-05 | B21 | 檢出 score header 將評分模型與分子混寫在同一括號，主表先改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_display_cases.py` |
 | 2026-04-05 | B21 | 將 score header 改為模型/分子分欄顯示並補契約後收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_display_cases.py` |
 | 2026-04-05 | B26 | 檢出 `G` 仍可殘留退役 validator 名稱與重複 `NEW -> *`，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有歷史回寫缺口 |
-| 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
-| 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-05 | B26 | 檢出 checklist 摘要表固定升冪排序仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有摘要表排序契約缺口 |
-| 2026-04-05 | B26 | 補上 checklist 摘要表固定升冪排序 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B26 | 檢出 `G` 同日區塊新增列後未整段重排，造成排序 guard 再次被真實 bundle 擊中，主表改回 PARTIAL | DONE -> PARTIAL | checklist 同日區塊回寫仍有排序失誤 |
+| 2026-04-05 | B26 | 檢出 checklist 摘要表固定升冪排序仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有摘要表排序契約缺口 |
+| 2026-04-05 | B26 | 檢出 checklist 首行固定標題仍缺 formal guard，主表改回 PARTIAL | DONE -> PARTIAL | checklist 自身完整性仍有檔首契約缺口 |
 | 2026-04-05 | B26 | 修正 2026-04-05 同日區塊排序並補強前後鄰列核對要求後重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-05 | B26 | 補上 `G` 的 `NEW` 首次出現約束與有效 validator reference guard 後收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-05 | B26 | 補上 checklist 摘要表固定升冪排序 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-05 | B26 | 補上 checklist 首行固定標題 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-05 | B43 | 依新規格調整 package_zip：root bundle 不得移入 arch，主表先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
 | 2026-04-05 | B43 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_cli_cases.py` |
+| 2026-04-05 | B45 | 檢出 `resolve_log_dir("outputs")` 先命中 generic root-dir 錯誤，未維持 outputs-root 專屬拒絕語意，主表改回 PARTIAL | DONE -> PARTIAL | outputs-root guard 判斷順序錯誤 |
 | 2026-04-05 | B45 | 檢出 `write_issue_log` / `build_timestamped_log_path` 仍可接受 outputs 根目錄，主表改回 PARTIAL | DONE -> PARTIAL | log path create-path outputs-root guard 仍有缺口 |
 | 2026-04-05 | B45 | 補上 outputs-root create-path guard 後重新收斂為 DONE | PARTIAL -> DONE | `core/log_utils.py` |
-| 2026-04-05 | B45 | 檢出 `resolve_log_dir("outputs")` 先命中 generic root-dir 錯誤，未維持 outputs-root 專屬拒絕語意，主表改回 PARTIAL | DONE -> PARTIAL | outputs-root guard 判斷順序錯誤 |
 | 2026-04-05 | B45 | 調整 `resolve_log_dir` 判斷順序後重新收斂為 DONE | PARTIAL -> DONE | `core/log_utils.py` |
 | 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
 | 2026-04-05 | B59 | 補關鍵 helper single-source-of-truth static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B60 | 補 `PROJECT_SETTINGS.md` dynamic-test / formal-step bypass boundary contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B61 | 補 policy/config coverage-target static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-05 | B62 | 新增 checklist 首行固定標題 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B62 | 檢出 T141 直接依賴巢狀 `result["extra"]` 讀取 summary 欄位，造成首行 guard synthetic validator 假失敗，主表改回 PARTIAL | DONE -> PARTIAL | checklist 首行契約的 synthetic validator payload 讀法仍綁定舊 schema |
 | 2026-04-05 | B62 | 改以 shared summary-value accessor 相容 flattened payload，並補 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-05 | B62 | 新增 checklist 首行固定標題 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B63 | 新增 synthetic meta summary-value accessor contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B64 | 新增 checklist 摘要表固定升冪排序 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B65 | 新增 package_zip commit → zip → test_suite orchestration contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_cli_cases.py` |
@@ -745,23 +745,23 @@
 | 2026-04-05 | T27 | 補 scanner / dashboard score header 顯示契約並驗證 | PARTIAL -> DONE | validate_display_reporting_sanity_case |
 | 2026-04-05 | T116 | 依新規格調整 package_zip runtime contract：root bundle 不得移入 arch，建議測試先改回 PARTIAL | DONE -> PARTIAL | root `to_chatgpt_bundle_*.zip` 應保留於 root |
 | 2026-04-05 | T116 | 改為只歸檔非 bundle 舊 ZIP 並保留 root bundle copy 後重新收斂 | PARTIAL -> DONE | `validate_package_zip_runtime_contract_case` |
-| 2026-04-05 | T121 | 檢出 quick_gate log-path contract 尚未覆蓋 outputs-root create path，建議測試先改回 PARTIAL | DONE -> PARTIAL | 尚未釘死拒絕 outputs 根目錄寫入 |
-| 2026-04-05 | T121 | 補上 outputs-root create-path guard 並重新收斂 | PARTIAL -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-05 | T121 | 檢出 outputs-root create-path guard 錯誤語意被 generic root-dir 檢查覆蓋，建議測試先改回 PARTIAL | DONE -> PARTIAL | outputs-root 錯誤語意未命中 |
+| 2026-04-05 | T121 | 檢出 quick_gate log-path contract 尚未覆蓋 outputs-root create path，建議測試先改回 PARTIAL | DONE -> PARTIAL | 尚未釘死拒絕 outputs 根目錄寫入 |
 | 2026-04-05 | T121 | 修正 outputs-root 專屬拒絕語意後重新收斂 | PARTIAL -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
+| 2026-04-05 | T121 | 補上 outputs-root create-path guard 並重新收斂 | PARTIAL -> DONE | `validate_quick_gate_output_path_guard_contract_case` |
 | 2026-04-05 | T124 | 檢出 `G` 同日區塊新增列後未整段重排，排序 guard 再次被真實 bundle 擊中 | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-05 | T124 | 修正同日區塊排序並補強前後鄰列核對流程後重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
 | 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
 | 2026-04-05 | T138 | 新增 policy/config coverage-target contract 並驗證 | NEW -> DONE | `validate_policy_contract_modules_in_coverage_targets_case` |
-| 2026-04-05 | T139 | 新增 `G` 的 `NEW` 只能出現在首次收斂紀錄的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T139 | 檢出 synthetic mutation target 指到首筆合法歷史列，guard 驗證暫時失真 | DONE -> PARTIAL | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T139 | 改為鎖定同 ID 非首次出現列後，guard synthetic validator 重新收斂 | PARTIAL -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
+| 2026-04-05 | T139 | 新增 `G` 的 `NEW` 只能出現在首次收斂紀錄的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T140 | 新增 `G` 備註欄 validator reference existence guard 並驗證 | NEW -> DONE | `validate_checklist_g_note_validate_reference_exists_case` |
-| 2026-04-05 | T141 | 新增 checklist 首行固定標題 guard 並驗證 | NEW -> DONE | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T141 | 檢出 synthetic case 直接依賴巢狀 `result["extra"]` 導致 formal suite 假失敗 | DONE -> PARTIAL | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T141 | 改以 shared summary-value accessor 讀取 flattened payload 後重新收斂 | PARTIAL -> DONE | `validate_checklist_first_nonempty_line_case` |
+| 2026-04-05 | T141 | 新增 checklist 首行固定標題 guard 並驗證 | NEW -> DONE | `validate_checklist_first_nonempty_line_case` |
 | 2026-04-05 | T142 | 新增 synthetic meta summary-value accessor static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` |
 | 2026-04-05 | T143 | 新增 checklist 摘要表固定升冪排序 guard 並驗證 | NEW -> DONE | `validate_checklist_summary_tables_sorted_by_id_case` |
 | 2026-04-05 | T144 | 新增 package_zip commit → zip → test_suite orchestration contract 並驗證 | NEW -> DONE | `validate_package_zip_commit_test_suite_orchestration_case` |
@@ -907,37 +907,41 @@
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
 | 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |
 | 2026-04-10 | T232 | 新增 price_utils array tick-normalization shared-helper static contract 並驗證 | NEW -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
+| 2026-04-11 | B95 | 檢出 GUI extended preview continuity contract 仍比對舊 `build_extended_candidate_plan_from_signal(..., ticker=ticker)` signature，未同步 `security_profile` 傳遞，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-11 | B95 | 將 GUI extended preview continuity contract 同步到 `ticker` + `security_profile` counterfactual signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B123 | 以 reduced dataset 實際比對檢出跨 tick band 漲跌停價仍沿用基準價 band，主表改回 PARTIAL | DONE -> PARTIAL | `core/exact_accounting.py` |
-| 2026-04-11 | B123 | 修正漲跌停價改依 raw-limit 價本身決定 tick band 後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 檢出 ETF / ETN / REIT 類商品仍沿用股票 tick ladder，主表改回 PARTIAL | DONE -> PARTIAL | `core/exact_accounting.py` |
+| 2026-04-11 | B123 | 修正漲跌停價改依 raw-limit 價本身決定 tick band 後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 補齊 ticker / metadata 商品 profile 自動辨識與兩級 tick 路由後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
 | 2026-04-11 | B126 | 檢出 debug entry flow caller 已傳 `ticker` 但 callee 簽名未同步更新，主表改回 PARTIAL | DONE -> PARTIAL | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B126 | 將 debug entry flow 簽名、商品 profile 傳遞與 static contract 一併補齊後重新收斂為 DONE | PARTIAL -> DONE | `tools/debug/entry_flow.py` |
 | 2026-04-11 | B137 | 檢出 debug half-exit leg-return static validator 仍要求舊 milli_to_money ratio，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B137 | 將 debug half-exit leg-return static validator 同步到 integer-total ratio 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-11 | B146 | 檢出 scalar / array 價格正規化 caller 尚未一路傳遞 ticker / security_profile，主表改回 PARTIAL | DONE -> PARTIAL | `core/price_utils.py` |
-| 2026-04-11 | B146 | 補齊 signal / backtest / portfolio / position 路徑的 ticker / security_profile 傳遞後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B146 | 檢出 portfolio rotation 賣出路徑仍引用未宣告 `ticker` 自由變數，主表改回 PARTIAL | DONE -> PARTIAL | `core/portfolio_exits.py` |
+| 2026-04-11 | B146 | 檢出 scalar / array 價格正規化 caller 尚未一路傳遞 ticker / security_profile，主表改回 PARTIAL | DONE -> PARTIAL | `core/price_utils.py` |
 | 2026-04-11 | B146 | 補齊 portfolio rotation 賣出路徑改用 `weakest_ticker` 並擴充 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-11 | B147 | 新增正式入口摘要同步契約，要求 apps/test_suite.py 的 Txx 註解列舉與實際 synthetic registry 同步 | NEW -> DONE | `apps/test_suite.py` |
+| 2026-04-11 | B146 | 補齊 signal / backtest / portfolio / position 路徑的 ticker / security_profile 傳遞後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B147 | 檢出正式入口摘要註解新增 exact-contract 後仍漏列 T234/T235，主表改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-11 | B147 | 補齊正式入口摘要註解與 summary meta contract 對 T234/T235 的同步後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B147 | 新增正式入口摘要同步契約，要求 apps/test_suite.py 的 Txx 註解列舉與實際 synthetic registry 同步 | NEW -> DONE | `apps/test_suite.py` |
 | 2026-04-11 | B148 | 新增 exact-ledger ratio path 契約，釘死 return / rotation ratio 不得先轉 float money 再相除 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B149 | 新增 debug exit milli binding 契約，釘死 final-exit total_return_pct 不得引用未定義 total_pnl_milli | NEW -> DONE | `tools/debug/exit_flow.py` |
+| 2026-04-11 | T174 | 檢出 GUI extended preview continuity static contract 仍比對舊 counterfactual signature，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_extended_preview_continuity_contract_case` |
+| 2026-04-11 | T174 | 將 GUI extended preview continuity static contract 同步到 `ticker` + `security_profile` signature 後重新驗證 | PARTIAL -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-11 | T206 | 以 reduced dataset 實際比對檢出 exact-accounting tick/limit unit contract 尚未覆蓋跨 tick band 漲跌停價案例，改回 PARTIAL | DONE -> PARTIAL | `validate_exact_accounting_tick_limit_integer_case` |
-| 2026-04-11 | T206 | 擴充 exact-accounting tick/limit unit contract 納入跨 tick band 漲跌停價案例後重新驗證 | PARTIAL -> DONE | `validate_exact_accounting_tick_limit_integer_case` |
 | 2026-04-11 | T206 | 檢出 exact-accounting tick/limit unit contract 尚未覆蓋 ETF / ETN / REIT 類商品 profile 與兩級 tick 案例，改回 PARTIAL | DONE -> PARTIAL | `validate_exact_accounting_tick_limit_integer_case` |
 | 2026-04-11 | T206 | 擴充 exact-accounting tick/limit unit contract 納入 ticker 自動辨識與 ETF / ETN / REIT 兩級 tick 案例後重新驗證 | PARTIAL -> DONE | `validate_exact_accounting_tick_limit_integer_case` |
+| 2026-04-11 | T206 | 擴充 exact-accounting tick/limit unit contract 納入跨 tick band 漲跌停價案例後重新驗證 | PARTIAL -> DONE | `validate_exact_accounting_tick_limit_integer_case` |
 | 2026-04-11 | T212 | 檢出 debug backtest entry cash-path static contract 尚未釘死 `ticker` / `security_profile` caller-callee 相容，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-11 | T212 | 擴充 debug backtest entry cash-path static contract 納入 entry flow 簽名與商品 profile 傳遞後重新驗證 | PARTIAL -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-11 | T223 | 檢出 debug half-exit leg-return static contract 仍要求舊 milli_to_money ratio，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
 | 2026-04-11 | T223 | 將 debug half-exit leg-return static contract 同步到 integer-total ratio 後重新驗證 | PARTIAL -> DONE | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
-| 2026-04-11 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 ticker / security_profile 傳遞路徑，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
-| 2026-04-11 | T232 | 擴充 array tick-normalization static contract 納入商品 profile 傳遞與 stock-only ladder 禁止案例後重新驗證 | PARTIAL -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 portfolio rotation 賣出路徑的未宣告 `ticker` 引用，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
+| 2026-04-11 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 ticker / security_profile 傳遞路徑，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T232 | 擴充 array tick-normalization static contract 納入 portfolio rotation 賣出路徑 ticker 來源契約後重新驗證 | PARTIAL -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
-| 2026-04-11 | T233 | 新增 test_suite summary comment coverage static contract 並驗證 | NEW -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T232 | 擴充 array tick-normalization static contract 納入商品 profile 傳遞與 stock-only ladder 禁止案例後重新驗證 | PARTIAL -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T233 | 檢出 summary comment coverage contract 仍只覆蓋到 T233，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T233 | 擴充 summary comment coverage contract 納入 T234/T235 並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T233 | 新增 test_suite summary comment coverage static contract 並驗證 | NEW -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T234 | 新增 exact-ledger return ratio no-money-float-division static contract 並驗證 | NEW -> DONE | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` |
 | 2026-04-11 | T235 | 新增 debug exit total-return milli binding static contract 並驗證 | NEW -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
