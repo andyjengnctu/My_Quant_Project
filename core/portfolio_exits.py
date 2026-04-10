@@ -155,7 +155,7 @@ def try_rotate_weakest_position(
             continue
 
         pos = portfolio[weakest_ticker]
-        est_sell_px = adjust_long_sell_fill_price(w_open, ticker=ticker)
+        est_sell_px = adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)
         sell_ledger = build_sell_ledger_from_price(est_sell_px, pos['qty'], params)
         est_freed_cash_milli = sell_ledger['net_sell_total_milli']
         pnl_milli = est_freed_cash_milli - pos['remaining_cost_basis_milli']

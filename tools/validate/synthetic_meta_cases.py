@@ -2611,6 +2611,8 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     entry_source = entry_path.read_text(encoding="utf-8")
     position_step_path = build_project_absolute_path("core", "position_step.py")
     position_step_source = position_step_path.read_text(encoding="utf-8")
+    portfolio_exits_path = build_project_absolute_path("core", "portfolio_exits.py")
+    portfolio_exits_source = portfolio_exits_path.read_text(encoding="utf-8")
 
     add_check(results, "meta_contract", case_id, "price_utils_imports_shared_security_profile_inference", True, "infer_security_profile" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_scalar_tick_size_uses_shared_raw_price_tick_helper", True, "milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile))" in price_source)
@@ -2625,6 +2627,8 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "backtest_core_generate_signals_routes_ticker", True, "generate_signals(df, params, ticker=resolved_ticker)" in backtest_source)
     add_check(results, "meta_contract", case_id, "portfolio_entry_seed_preserves_ticker_for_execution", True, "'ticker': candidate_row.get('ticker')" in entry_source)
     add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, 'ticker=position.get("ticker")' in position_step_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_float_ratio_path", False, "ratios = valid_prices / ticks" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_numpy_ceil_floor_tick_path", False, "np.ceil(ratios - 1e-12) * ticks" in price_source or "np.floor(ratios + 1e-12) * ticks" in price_source or "np.floor(ratios + 0.5) * ticks" in price_source)
 
