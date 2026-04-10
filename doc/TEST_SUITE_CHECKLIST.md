@@ -205,6 +205,8 @@
 | B138 | P1 | Meta / 賣訊持倉報酬率契約 | debug / GUI / history 若顯示賣訊 annotation 的可見 `profit_pct`、盈虧顏色或其他 signal-day 持倉報酬率，必須優先以 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；若必須 fallback，也必須走共享 average-price total helper；不得以 `(close - entry) / entry` 等 raw close 與 per-share 成本的浮點差價公式回推，避免賣訊顏色與持倉淨報酬率在接近損益兩平時分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/backtest.py`，釘死賣訊 `profit_pct` 必須走 `_resolve_sell_signal_profit_pct()`，且 helper 必須優先使用 `net_buy_total_milli`、`realized_pnl_milli` 與 `remaining_cost_basis_milli` 做 exact mark-to-market，fallback 也必須走 average-price total helper；不得殘留 raw close 差價或 `entry_price * qty` 舊 per-share 路徑 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py` |
 | B139 | P1 | Meta / debug fallback exact-helper 契約 | debug / GUI / history 的 fallback helper 若在缺少預先儲存 total / allocated-cost 時仍需回推可見資本、單腿報酬率或持倉報酬率，必須優先使用共享 exact-total / exact-ledger helper（如 `calc_total_from_average_price(...)`、`net_total_milli - pnl_milli`）；不得再以 `entry * qty`、`entry_price * qty`、`(net_price - entry) / entry` 等 raw per-share 浮點公式作最後 fallback，避免可見值在邊界與四捨五入情境再次分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/backtest.py` 與 `tools/debug/exit_flow.py`，釘死 debug fallback helper 必須走共享 exact-total / exact-ledger helper，且不得殘留 `entry * qty`、`entry_price * qty` 或 per-share 浮點差價公式；同時已收斂到 average-price total helper，避免把 `entry` 這類已含費平均價誤餵給 gross-price helper 再次加費 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/backtest.py` |
 | B140 | P1 | Meta / average-price total 契約 | 凡 helper 只有 `entry`、`net_stop_price` 或其他由既有總額反推的已正規化每股平均價格時，若需重建 total，不得再以 `money_to_milli(price * qty)` 走浮點乘法，也不得把該平均價當原始買價餵給 `calc_entry_total_cost(...)` 重新加費；必須使用共享 average-price total helper，以避免 risk / fallback total double-count 費用或引入浮點乘法尾差 | DONE | 已補 static meta contract，直接掃描 `core/exact_accounting.py` 與 `core/price_utils.py`，釘死 average-price total helper 必須存在，且 `calc_initial_risk_total()` 必須走該 helper，不得殘留 `money_to_milli(entry_price * qty)` 舊路徑；同時 debug fallback 已改用同一 helper，避免把已含費平均價錯當原始買價再度加費 | `tools/validate/synthetic_meta_cases.py`, `core/exact_accounting.py` |
+| B141 | P1 | Meta / 投組 rotation 持倉報酬率契約 | 投組 rotation、汰弱換強或其他以持倉報酬率判定保留 / 汰換標的的邏輯，必須以 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `(close - entry) / entry` 等 raw close 與 per-share 成本的浮點差價公式回推，避免 rotation 決策與正式淨損益口徑分叉 | DONE | 已補 static meta contract，直接掃描 `core/portfolio_exits.py`，釘死 rotation 必須走 `_calc_position_mark_to_market_return()`、必須使用 full-entry capital helper、sell ledger、已實現損益與剩餘成本基礎，且不得殘留 `ret = (pt_y_close - pos['entry']) / pos['entry']` 舊公式 | `tools/validate/synthetic_meta_cases.py`, `core/portfolio_exits.py` |
+| B142 | P1 | Meta / Validator exact-ledger oracle 契約 | 凡 unit / synthetic validator 或 oracle 需要驗證費稅後淨值、sizing、停損現金回收或其他正式帳務 total，必須以共享 exact-ledger helper 或獨立的整數 / Decimal oracle 計算；不得再以 per-share float × qty 公式近似 expected total，避免 validator 自己與正式帳務口徑分叉 | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_unit_cases.py` 與 `tools/validate/synthetic_take_profit_cases.py`，釘死 unit oracle 必須使用整數 total helper / integer risk budget，stop-priority expected cash / pnl 必須走 sell ledger 與 remaining cost basis，且不得殘留 `gross = float(price) * int(qty)`、`risk_budget = capital * risk_fraction`、`expected_pnl = (expected_net_price - entry_price) * qty` 等舊公式 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_unit_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -468,7 +470,8 @@
 | T224 | `validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case` | B138 |
 | T225 | `validate_debug_exact_fallback_helpers_contract_case` | B139 |
 | T226 | `validate_average_price_total_helper_contract_case` | B140 |
-|---|---|---|
+| T227 | `validate_portfolio_rotation_mark_to_market_return_contract_case` | B141 |
+| T228 | `validate_validator_oracles_use_exact_ledger_totals_contract_case` | B142 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -864,6 +867,8 @@
 | 2026-04-10 | B138 | 新增 debug sell-signal profit-pct exact mark-to-market static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/backtest.py` |
 | 2026-04-10 | B139 | 新增 debug fallback exact-helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/backtest.py` |
 | 2026-04-10 | B140 | 新增 average-price total helper static contract 後主表收斂為 DONE | NEW -> DONE | `core/exact_accounting.py` |
+| 2026-04-10 | B141 | 新增投組 rotation exact mark-to-market return static contract 後主表收斂為 DONE | NEW -> DONE | `core/portfolio_exits.py` |
+| 2026-04-10 | B142 | 新增 validator exact-ledger oracle static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_unit_cases.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
@@ -877,3 +882,5 @@
 | 2026-04-10 | T224 | 新增 debug sell-signal profit-pct exact mark-to-market static contract 並驗證 | NEW -> DONE | `validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case` |
 | 2026-04-10 | T225 | 新增 debug fallback exact-helper static contract 並驗證 | NEW -> DONE | `validate_debug_exact_fallback_helpers_contract_case` |
 | 2026-04-10 | T226 | 新增 average-price total helper static contract 並驗證 | NEW -> DONE | `validate_average_price_total_helper_contract_case` |
+| 2026-04-10 | T227 | 新增投組 rotation exact mark-to-market return static contract 並驗證 | NEW -> DONE | `validate_portfolio_rotation_mark_to_market_return_contract_case` |
+| 2026-04-10 | T228 | 新增 validator exact-ledger oracle static contract 並驗證 | NEW -> DONE | `validate_validator_oracles_use_exact_ledger_totals_contract_case` |

@@ -3,6 +3,8 @@ from core.config import get_buy_sort_method
 from core.exact_accounting import (
     build_sell_ledger_from_price,
     calc_reconciled_exit_display_pnl,
+    calc_total_from_average_price_milli,
+    coerce_money_like_to_milli,
     milli_to_money,
     register_display_realized_pnl,
     round_money_for_display,
@@ -32,6 +34,34 @@ def _round_money_for_history(value):
     return round_money_for_display(value)
 
 
+def _resolve_full_entry_capital_milli(pos):
+    net_buy_total_milli = int(pos.get('net_buy_total_milli', 0) or 0)
+    if net_buy_total_milli > 0:
+        return net_buy_total_milli
+    entry_capital_total = pos.get('entry_capital_total', 0.0)
+    if entry_capital_total not in (None, 0, 0.0):
+        entry_capital_milli = coerce_money_like_to_milli(entry_capital_total)
+        if entry_capital_milli > 0:
+            return entry_capital_milli
+    entry_price = float(pos.get('entry', 0.0) or 0.0)
+    initial_qty = int(pos.get('initial_qty', pos.get('qty', 0)) or 0)
+    if entry_price <= 0 or initial_qty <= 0:
+        return 0
+    return calc_total_from_average_price_milli(entry_price, initial_qty)
+
+
+def _calc_position_mark_to_market_return(pos, mark_price, params):
+    full_entry_capital_milli = _resolve_full_entry_capital_milli(pos)
+    if full_entry_capital_milli <= 0:
+        return float('-inf')
+    qty = int(pos.get('qty', 0) or 0)
+    if qty <= 0:
+        return float('-inf')
+    floating_exec_price = adjust_long_sell_fill_price(mark_price)
+    sell_ledger = build_sell_ledger_from_price(floating_exec_price, qty, params)
+    floating_pnl_milli = sell_ledger['net_sell_total_milli'] - int(pos.get('remaining_cost_basis_milli', 0) or 0)
+    total_trade_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0) + floating_pnl_milli
+    return total_trade_pnl_milli / full_entry_capital_milli
 
 
 def try_rotate_weakest_position(
@@ -67,7 +97,7 @@ def try_rotate_weakest_position(
                 continue
             pt_y_pos = pt_pos - 1
             pt_y_close = get_fast_close(pt_data, pos=pt_y_pos)
-            ret = (pt_y_close - pos['entry']) / pos['entry']
+            ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)
 
             holding_cost = milli_to_money(pos.get('remaining_cost_basis_milli', 0))
             _, holding_ev, holding_win_rate, holding_trade_count, holding_asset_growth_pct = get_pit_stats_from_index(
