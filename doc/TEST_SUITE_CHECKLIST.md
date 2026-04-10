@@ -198,6 +198,7 @@
 | B131 | P1 | Meta / 顯示一致性契約 | debug / GUI / history 的期末強制結算若需合成整筆 completed-trade `total_pnl`，必須以 `realized_pnl_milli + final_leg_pnl_milli` 走整數 ledger 路徑後再轉顯示；不得以 float 將既有已實現損益與尾倉損益直接相加，否則會在最後一筆 forced closeout 殘留 0.01 級漂移 | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py` 的 `append_debug_forced_closeout()`，釘死整筆 `total_pnl` 必須先組 `total_pnl_milli` 再 `milli_to_money(...)`，且不得殘留舊 `float(realized_pnl + final_leg_actual_pnl)` 路徑；避免 debug completed-trade sequence / realized-pnl-sum 只在期末結算尾筆分叉 0.01 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py` |
 | B132 | P1 | Meta / suite 可執行性契約 | `tools/validate/synthetic_meta_cases.py` 內任何 validator 若回填 `summary["source_path"]` 等來源路徑欄位，引用的 path 變數必須在該函式內明確宣告；不得誤引用其他 validator 的局部變數名稱，避免 synthetic suite runtime 因 `NameError` 中斷 | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_meta_cases.py` 內各 `validate_*` 函式的 `summary["source_path"]` 指派，釘死 `.relative_to(PROJECT_ROOT)` 所用 path 名稱必須在該函式內有宣告；避免 copy-paste 後把 `source_path` 誤寫成其他 validator 的局部 path 變數，導致 synthetic suite 於 coverage / consistency 階段 runtime 中斷 | `tools/validate/synthetic_meta_cases.py` |
 | B133 | P1 | Meta / 驗證 Oracle 契約 | unit / synthetic validator 若比對可見 rounded 金額、display leg pnl 或 completed-trade 顯示總損益，必須與正式顯示層共用同一 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生不同 rounding oracle | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_unit_cases.py` 的 `validate_exact_accounting_display_leg_reconciliation_case`，釘死 display-leg reconciliation validator 必須委派 `round_money_for_display(...)`，且不得殘留內建 `round(..., 2)`；避免 unit validator 自己用不同 rounding 規則把顯示口徑誤判成核心差異 | `tools/validate/synthetic_meta_cases.py` |
+| B134 | P1 | Meta / 顯示總額契約 | debug / GUI / history 的可見交易明細或 marker 若顯示 `buy_capital`、`sell_capital`、`gross_amount`、`total_return_pct` 等正式交易總額或報酬率，必須由 exact ledger total（如 `net_buy_total_milli`、`net_total_milli`）推導；不得再以含費每股顯示價或 `per-share × qty` 回推可見總額，避免把可見值重新拉回浮點攤提路徑 | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py`，釘死 debug exit flow 的 full-entry capital、half/full exit `gross_amount` 與 marker `sell_capital` 都必須優先使用 ledger total，且不得殘留 `sell_net_price * qty` 舊路徑；避免 debug trade row / marker 顯示金額與正式帳務總額再度分叉 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -455,6 +456,7 @@
 | T217 | `validate_debug_forced_closeout_exact_total_pnl_contract_case` | B131 |
 | T218 | `validate_synthetic_meta_source_path_binding_contract_case` | B132 |
 | T219 | `validate_unit_display_rounding_helper_contract_case` | B133 |
+| T220 | `validate_debug_exit_display_capital_uses_ledger_totals_contract_case` | B134 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -843,9 +845,11 @@
 | 2026-04-10 | B131 | 新增 debug forced-closeout exact total-pnl static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/exit_flow.py` |
 | 2026-04-10 | B132 | 新增 synthetic-meta source-path binding static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-10 | B133 | 新增 unit-display rounding-helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-10 | B134 | 新增 debug exit display-capital exact-ledger static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/exit_flow.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
 | 2026-04-10 | T217 | 新增 debug forced-closeout exact total-pnl static contract 並驗證 | NEW -> DONE | `validate_debug_forced_closeout_exact_total_pnl_contract_case` |
 | 2026-04-10 | T218 | 新增 synthetic-meta source-path binding static contract 並驗證 | NEW -> DONE | `validate_synthetic_meta_source_path_binding_contract_case` |
 | 2026-04-10 | T219 | 新增 unit-display rounding-helper static contract 並驗證 | NEW -> DONE | `validate_unit_display_rounding_helper_contract_case` |
+| 2026-04-10 | T220 | 新增 debug exit display-capital exact-ledger static contract 並驗證 | NEW -> DONE | `validate_debug_exit_display_capital_uses_ledger_totals_contract_case` |

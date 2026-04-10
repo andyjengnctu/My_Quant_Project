@@ -2299,6 +2299,34 @@ def validate_unit_display_rounding_helper_contract_case(_base_params):
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
+def validate_debug_exit_display_capital_uses_ledger_totals_contract_case(_base_params):
+    case_id = "META_DEBUG_EXIT_DISPLAY_CAPITAL_LEDGER_TOTALS_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+    helper_source = ""
+    step_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital":
+            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
+            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+
+    add_check(results, "meta_contract", case_id, "debug_exit_total_return_prefers_exact_entry_total", True, "exact_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_gross_amount_uses_exact_sell_total", True, "gross_amount=tp_sell_total" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_full_exit_gross_amount_uses_exact_sell_total", True, "gross_amount=sell_total_amount" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_marker_sell_capital_uses_exact_sell_total", True, "'sell_capital': float(tp_sell_total)" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_full_exit_marker_sell_capital_uses_exact_sell_total", True, "'sell_capital': float(sell_total_amount)" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_half_exit_per_share_times_qty", False, "gross_amount=sell_net_price_half * sold_qty" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_full_exit_per_share_times_qty", False, "gross_amount=sell_net_price * final_exit_qty" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_full_exit_marker_per_share_times_qty", False, "'sell_capital': float(sell_net_price * final_exit_qty)" in step_source)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
 
 def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
     case_id = "META_SYNTHETIC_META_SOURCE_PATH_BINDING_CONTRACT"

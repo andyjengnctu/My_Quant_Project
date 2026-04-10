@@ -29,9 +29,19 @@ def _resolve_completed_trade_count(history_snapshot, *, include_current_round_tr
 
 
 def _resolve_full_entry_capital(position, fallback_qty):
+    exact_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
+    if exact_entry_total_milli > 0:
+        return milli_to_money(exact_entry_total_milli)
     entry_price = float(position.get('entry', 0.0) or 0.0)
     initial_qty = int(position.get('initial_qty', fallback_qty) or fallback_qty or 0)
     return entry_price * initial_qty
+
+
+def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
+    if exit_context is not None and int(exit_context.get('net_total_milli', 0) or 0) > 0:
+        return milli_to_money(int(exit_context.get('net_total_milli', 0) or 0))
+    sell_ledger = build_sell_ledger_from_price(sell_price, qty, params)
+    return milli_to_money(sell_ledger['net_sell_total_milli'])
 
 
 def _build_completed_trade_snapshot(stats_index, current_date, params, current_capital_after_event, overall_max_drawdown):
@@ -98,7 +108,8 @@ def process_debug_position_step(
         exec_sell_price_half = float(tp_context['exec_price'])
         sell_net_price_half = float(tp_context['net_price'])
         tp_leg_pnl = round_money_for_display(tp_context['pnl'])
-        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(int(tp_context.get('net_total_milli', 0)))
+        tp_sell_total = _resolve_display_sell_total(tp_context, sell_price=exec_sell_price_half, qty=sold_qty, params=params)
+        current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_sell_total
         append_debug_trade_row(
             trade_logs,
             date_str=date_str,
@@ -106,7 +117,7 @@ def process_debug_position_step(
             price=exec_sell_price_half,
             net_price=sell_net_price_half,
             qty=sold_qty,
-            gross_amount=sell_net_price_half * sold_qty,
+            gross_amount=tp_sell_total,
             stop_price=active_stop_after_update,
             tp_half_price=np.nan,
             atr_prev=atr_prev,
@@ -123,7 +134,7 @@ def process_debug_position_step(
                 'current_capital': current_capital_after_tp,
                 'pnl_value': tp_leg_pnl,
                 'pnl_pct': float(((sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
-                'sell_capital': float(sell_net_price_half * sold_qty),
+                'sell_capital': float(tp_sell_total),
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if history_snapshot is None else float(history_snapshot.get('expected_value', 0.0)),
@@ -138,6 +149,7 @@ def process_debug_position_step(
         action_str = "停損殺出" if 'STOP' in events else "指標賣出"
         sell_price = adjust_long_sell_fill_price(t_open) if exit_context is None else float(exit_context['exec_price'])
         sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
+        sell_total_amount = _resolve_display_sell_total(exit_context, sell_price=sell_price, qty=final_exit_qty, params=params)
         current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
         completed_trade_snapshot = _build_completed_trade_snapshot(
             stats_index,
@@ -157,7 +169,7 @@ def process_debug_position_step(
             price=sell_price,
             net_price=sell_net_price,
             qty=final_exit_qty,
-            gross_amount=sell_net_price * final_exit_qty,
+            gross_amount=sell_total_amount,
             stop_price=active_stop_after_update,
             tp_half_price=np.nan,
             atr_prev=atr_prev,
@@ -175,7 +187,7 @@ def process_debug_position_step(
                 'pnl_value': float(final_leg_pnl),
                 'total_pnl': float(total_pnl),
                 'pnl_pct': float(total_return_pct),
-                'sell_capital': float(sell_net_price * final_exit_qty),
+                'sell_capital': float(sell_total_amount),
                 'payoff_ratio': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('win_rate', 0.0)),
                 'expected_value': None if completed_trade_snapshot is None else float(completed_trade_snapshot.get('expected_value', 0.0)),
