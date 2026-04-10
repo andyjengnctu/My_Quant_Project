@@ -9,6 +9,7 @@ from core.history_filters import evaluate_history_candidate_metrics
 from core.exact_accounting import (
     build_sell_ledger_from_price,
     calc_entry_total_cost,
+    calc_total_from_average_price_milli,
     coerce_money_like_to_milli,
     milli_to_money,
     round_money_for_display,
@@ -126,7 +127,7 @@ def _resolve_sell_signal_profit_pct(position, signal_close, params):
         initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)
         if entry_price <= 0 or initial_qty <= 0:
             return 0.0
-        full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))
+        full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)
 
     if full_entry_total_milli <= 0:
         return 0.0

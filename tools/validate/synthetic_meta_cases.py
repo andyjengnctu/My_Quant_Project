@@ -2400,7 +2400,8 @@ def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
 
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_prefers_display_total_before_exact_total_fallback", True, "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_rounds_display_total_with_shared_helper", True, "return round_money_for_display(display_entry_capital)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_exact_total_helper", True, "return calc_entry_total_cost(entry_price, initial_qty, params)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price(entry_price, initial_qty)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_per_share_fallback", False, "return round_money_for_display(entry_price * initial_qty)" in helper_source)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
@@ -2475,7 +2476,8 @@ def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_cas
 
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_exact_profit_pct_helper", True, "def _resolve_sell_signal_profit_pct(position, signal_close, params):" in source_text)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_prefers_net_buy_total_milli", True, "full_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_final_fallback_uses_exact_entry_total_helper", True, "initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)" in helper_source and "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_final_fallback_uses_average_price_total_helper", True, "initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)" in helper_source and "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_remaining_cost_basis_mark_to_market", True, "floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli" in helper_source and "total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)" in sell_signal_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_raw_close_minus_entry_formula", False, "((float(signal_close) - entry_price) / entry_price * 100.0)" in sell_signal_source or "((float(signal_close) - entry_price) / entry_price * 100.0)" in helper_source)
@@ -2495,13 +2497,36 @@ def validate_debug_exact_fallback_helpers_contract_case(_base_params):
     backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
 
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_exact_entry_total_helper", True, "return calc_entry_total_cost(entry_price, initial_qty, params)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_raw_entry_times_qty", False, "return round_money_for_display(entry_price * initial_qty)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price(entry_price, initial_qty)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_uses_average_price_total_helper", True, "entry_total = calc_total_from_average_price(entry_price, sold_qty)" in exit_source)
     add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_has_no_legacy_per_share_formula", False, "return float((float(fallback_net_price) - entry_price) / entry_price * 100.0)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_fallback_uses_exact_entry_total_helper", True, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_has_no_legacy_entry_price_times_remaining_qty", False, "coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))" in backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_fallback_uses_average_price_total_helper", True, "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in backtest_source)
 
     summary["source_path"] = exit_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+
+def validate_average_price_total_helper_contract_case(_base_params):
+    case_id = "META_AVERAGE_PRICE_TOTAL_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exact_path = build_project_absolute_path("core", "exact_accounting.py")
+    exact_source = exact_path.read_text(encoding="utf-8")
+    price_path = build_project_absolute_path("core", "price_utils.py")
+    price_source = price_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "exact_accounting_defines_average_price_total_milli_helper", True, "def calc_total_from_average_price_milli(avg_price, qty: int) -> int:" in exact_source)
+    add_check(results, "meta_contract", case_id, "exact_accounting_defines_average_price_total_helper", True, "def calc_total_from_average_price(avg_price, qty: int) -> float:" in exact_source)
+    add_check(results, "meta_contract", case_id, "initial_risk_total_uses_average_price_total_helper_for_entry", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, qty)" in price_source)
+    add_check(results, "meta_contract", case_id, "initial_risk_total_uses_average_price_total_helper_for_stop", True, "stop_net_total_milli = calc_total_from_average_price_milli(net_stop_price, qty)" in price_source)
+    add_check(results, "meta_contract", case_id, "initial_risk_total_has_no_legacy_entry_price_times_qty_float_path", False, "entry_total_milli = money_to_milli(entry_price * qty)" in price_source)
+    add_check(results, "meta_contract", case_id, "initial_risk_total_has_no_legacy_stop_price_times_qty_float_path", False, "stop_net_total_milli = money_to_milli(net_stop_price * qty)" in price_source)
+
+    summary["source_path"] = exact_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 

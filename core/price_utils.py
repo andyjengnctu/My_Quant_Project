@@ -211,8 +211,8 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
     if pd.isna(entry_price) or pd.isna(net_stop_price) or qty <= 0:
         return 0.0
 
-    entry_total_milli = money_to_milli(entry_price * qty)
-    stop_net_total_milli = money_to_milli(net_stop_price * qty)
+    entry_total_milli = calc_total_from_average_price_milli(entry_price, qty)
+    stop_net_total_milli = calc_total_from_average_price_milli(net_stop_price, qty)
     init_risk_milli = calc_initial_risk_total_milli(entry_total_milli, stop_net_total_milli, rate_to_ppm(params.fixed_risk))
     return milli_to_money(init_risk_milli)
 

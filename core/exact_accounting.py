@@ -179,6 +179,17 @@ def calc_exit_net_total(exec_price, qty: int, params) -> float:
     return milli_to_money(build_sell_ledger_from_price(exec_price, qty, params)["net_sell_total_milli"])
 
 
+def calc_total_from_average_price_milli(avg_price, qty: int) -> int:
+    qty = int(qty)
+    if qty <= 0:
+        return 0
+    return price_to_milli(avg_price) * qty
+
+
+def calc_total_from_average_price(avg_price, qty: int) -> float:
+    return milli_to_money(calc_total_from_average_price_milli(avg_price, qty))
+
+
 def calc_entry_price_from_total(fill_price, qty: int, params) -> float:
     ledger = build_buy_ledger_from_price(fill_price, qty, params)
     return calc_average_price_from_total_milli(ledger["net_buy_total_milli"], qty)

@@ -2,8 +2,8 @@ import numpy as np
 
 from core.exact_accounting import (
     build_sell_ledger_from_price,
-    calc_entry_total_cost,
     calc_reconciled_exit_display_pnl,
+    calc_total_from_average_price,
     milli_to_money,
     register_display_realized_pnl,
     round_money_for_display,
@@ -40,7 +40,7 @@ def _resolve_full_entry_capital(position, fallback_qty, params):
     initial_qty = int(position.get('initial_qty', fallback_qty) or fallback_qty or 0)
     if entry_price <= 0 or initial_qty <= 0:
         return 0.0
-    return calc_entry_total_cost(entry_price, initial_qty, params)
+    return calc_total_from_average_price(entry_price, initial_qty)
 
 
 def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
@@ -64,7 +64,7 @@ def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_pr
     sold_qty = int(fallback_qty or 0)
     if entry_price <= 0 or sold_qty <= 0:
         return 0.0
-    entry_total = calc_entry_total_cost(entry_price, sold_qty, params)
+    entry_total = calc_total_from_average_price(entry_price, sold_qty)
     if entry_total <= 0:
         return 0.0
     sell_total = _resolve_display_sell_total(exit_context, sell_price=fallback_sell_price, qty=sold_qty, params=params)
