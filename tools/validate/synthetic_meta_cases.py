@@ -2405,7 +2405,7 @@ def validate_debug_exit_display_capital_uses_ledger_totals_contract_case(_base_p
     helper_source = ""
     step_source = ""
     for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital":
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital_milli":
             helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
         if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
             step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
@@ -2434,13 +2434,13 @@ def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
     parsed = ast.parse(source_text, filename=str(source_path))
     helper_source = ""
     for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital":
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital_milli":
             helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
             break
 
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_prefers_display_total_before_exact_total_fallback", True, "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_rounds_display_total_with_shared_helper", True, "return round_money_for_display(display_entry_capital)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price(entry_price, initial_qty)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_coerces_display_total_with_shared_helper", True, "return coerce_money_like_to_milli(round_money_for_display(display_entry_capital))" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_per_share_fallback", False, "return round_money_for_display(entry_price * initial_qty)" in helper_source)
 
@@ -2519,6 +2519,8 @@ def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_cas
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_final_fallback_uses_average_price_total_helper", True, "initial_qty = int(position.get('initial_qty', remaining_qty) or remaining_qty or 0)" in helper_source and "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_remaining_cost_basis_mark_to_market", True, "floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli" in helper_source and "total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_divides_integer_totals_directly", True, "return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source and "return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_milli_to_money_ratio_path", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source or "milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)" in sell_signal_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_raw_close_minus_entry_formula", False, "((float(signal_close) - entry_price) / entry_price * 100.0)" in sell_signal_source or "((float(signal_close) - entry_price) / entry_price * 100.0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_per_share_entry_total_fallback", False, "coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))" in helper_source)
@@ -2537,9 +2539,11 @@ def validate_debug_exact_fallback_helpers_contract_case(_base_params):
     backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
 
-    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price(entry_price, initial_qty)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in exit_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in exit_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_uses_average_price_total_helper", True, "entry_total = calc_total_from_average_price(entry_price, sold_qty)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_uses_average_price_total_helper", True, "entry_total_milli = calc_total_from_average_price_milli(entry_price, sold_qty)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_divides_integer_totals_directly", True, "return float((sell_total_milli - entry_total_milli) * 100.0 / entry_total_milli)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_has_no_legacy_money_ratio_path", False, "return float((sell_total - entry_total) / entry_total * 100.0)" in exit_source or "milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli)" in exit_source)
     add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_fallback_has_no_legacy_per_share_formula", False, "return float((float(fallback_net_price) - entry_price) / entry_price * 100.0)" in exit_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_fallback_uses_average_price_total_helper", True, "full_entry_total_milli = calc_total_from_average_price_milli(entry_price, initial_qty)" in backtest_source)
     add_check(results, "meta_contract", case_id, "debug_sell_signal_entry_total_has_no_legacy_gross_price_helper_on_net_average_entry", False, "full_entry_total_milli = coerce_money_like_to_milli(calc_entry_total_cost(entry_price, initial_qty, params))" in backtest_source)
@@ -2602,6 +2606,30 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     summary["source_path"] = price_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
+
+
+def validate_exact_ledger_return_ratio_no_money_float_division_contract_case(_base_params):
+    case_id = "META_EXACT_LEDGER_RETURN_RATIO_NO_MONEY_FLOAT_DIVISION_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exit_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    exit_source = exit_path.read_text(encoding="utf-8")
+    backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    backtest_source = backtest_path.read_text(encoding="utf-8")
+    portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
+    portfolio_source = portfolio_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_uses_integer_totals", True, "total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_leg_return_pct_uses_integer_totals", True, "return float(pnl_milli * 100.0 / allocated_cost_milli)" in exit_source and "return float((sell_total_milli - entry_total_milli) * 100.0 / entry_total_milli)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_has_no_legacy_money_ratio_division", False, "milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli)" in exit_source or "(sell_total - entry_total) / entry_total" in exit_source or "(total_pnl / full_entry_capital * 100.0)" in exit_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_integer_totals", True, "return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)" in backtest_source and "return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)" in backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_has_no_legacy_money_ratio_division", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in backtest_source or "milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in backtest_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_mark_to_market_uses_integer_totals", True, "return total_trade_pnl_milli / full_entry_total_milli" in portfolio_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_mark_to_market_has_no_legacy_money_ratio_division", False, "milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)" in portfolio_source)
+
+    summary["source_path"] = exit_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
 
 
 def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_base_params):

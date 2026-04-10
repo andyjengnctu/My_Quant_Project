@@ -11,7 +11,6 @@ from core.exact_accounting import (
     calc_entry_total_cost,
     calc_total_from_average_price_milli,
     coerce_money_like_to_milli,
-    milli_to_money,
     round_money_for_display,
 )
 from core.portfolio_fast_data import build_trade_stats_index
@@ -138,11 +137,11 @@ def _resolve_sell_signal_profit_pct(position, signal_close, params):
         signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
         floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli
         total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli
-        return float(milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli) * 100.0)
+        return float(total_trade_pnl_milli * 100.0 / full_entry_total_milli)
 
     signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
     signal_trade_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - full_entry_total_milli
-    return float(milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli) * 100.0)
+    return float(signal_trade_pnl_milli * 100.0 / full_entry_total_milli)
 
 
 def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot, params):

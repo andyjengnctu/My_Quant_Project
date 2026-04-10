@@ -213,6 +213,7 @@
 | B145 | P1 | Meta / shared helper import 契約 | 凡核心或 producer 以共享 helper 取代舊邏輯時，必須同輪同步補齊 import；不得只改函式呼叫而漏 import，避免靜態 compile 未必能捕捉、runtime 才因 `NameError` 失敗。尤其 `price_utils` 這類核心 helper 聚合模組，若引用 `calc_total_from_average_price_milli` 等 exact-accounting helper，必須明確從單一來源匯入並由 static meta contract 釘死 | DONE | 已補 static meta contract，直接掃描 `core/price_utils.py`，釘死 `calc_initial_risk_total()` 在使用 `calc_total_from_average_price_milli(...)` 時，該 helper 必須已於 import 區塊明確匯入；避免 helper call 已替換但 import 遺漏，形成 runtime `NameError` | `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py` |
 | B146 | P1 | Meta / array 價格正規化契約 | 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉 | DONE | 已補 static meta contract，直接掃描 `core/price_utils.py`，釘死 `get_tick_size_array()` 與 `round_to_tick_array()` 必須委派 `get_tick_milli`、`price_to_milli` 與 `round_price_milli_to_tick`，且不得殘留 `ratios = valid_prices / ticks` 與 `np.ceil` / `np.floor` 的舊浮點取整路徑；避免 `core/signal_utils.py` 的 `buy_limits` 走出另一套 tick ladder | `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py` |
 | B147 | P1 | Meta / 正式入口摘要同步契約 | `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，則該列舉必須與實際已掛入 synthetic registry 的同主題 contract ID 同步；不得讓正式入口摘要註解漏列最新 `Txx`，避免維護者誤判 formal 覆蓋範圍 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py`，釘死該摘要註解在目前 exact-contract 區塊必須包含 `T225/T226/T229/T230/T231/T232/T233`，且必須明確提到 `T233`、不得保留漏列 `T233` 的舊註解；對應 validator 也必須同步掛入 `tools/validate/synthetic_cases.py` registry，避免 checklist 已列 DONE 但 formal suite 未實際執行 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py`, `apps/test_suite.py` |
+| B148 | P1 | Meta / exact-ledger ratio path 契約 | 凡 debug / GUI / history / rotation 以 exact ledger 或 integer total 計算報酬率、持倉優劣比較或 leg return 時，分子分母必須直接使用 milli / integer total 相除；不得先各自 `milli_to_money(...)` 轉回 float 金額後再相除，避免浮點偏移在可見報酬率與 rotation 排序產生微小分叉 | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py`、`tools/debug/backtest.py` 與 `core/portfolio_exits.py`，釘死 total/leg/sell-signal/rotation return 必須直接以 integer total 計算，且不得保留 `milli_to_money(...)/milli_to_money(...)` 舊路徑 | `doc/PROJECT_SETTINGS.md`, `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py`, `tools/debug/backtest.py`, `core/portfolio_exits.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -484,6 +485,7 @@
 | T231 | `validate_price_utils_average_price_total_import_contract_case` | B145 |
 | T232 | `validate_price_utils_array_tick_normalization_contract_case` | B146 |
 | T233 | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` | B147 |
+| T234 | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` | B148 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -904,4 +906,6 @@
 | 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |
 | 2026-04-10 | T232 | 新增 price_utils array tick-normalization shared-helper static contract 並驗證 | NEW -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | B147 | 新增正式入口摘要同步契約，要求 apps/test_suite.py 的 Txx 註解列舉與實際 synthetic registry 同步 | NEW -> DONE | `apps/test_suite.py` summary comment / synthetic meta contract |
+| 2026-04-11 | B148 | 新增 exact-ledger ratio path 契約，釘死 return / rotation ratio 不得先轉 float money 再相除 | NEW -> DONE | `doc/PROJECT_SETTINGS.md`, `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | T233 | 新增 test_suite summary comment coverage static contract 並驗證 | NEW -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T234 | 新增 exact-ledger return ratio no-money-float-division static contract 並驗證 | NEW -> DONE | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` |

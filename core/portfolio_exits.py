@@ -71,7 +71,7 @@ def _calc_position_mark_to_market_return(position, mark_price, params):
     else:
         total_trade_pnl_milli = sell_ledger['net_sell_total_milli'] - full_entry_total_milli
 
-    return milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)
+    return total_trade_pnl_milli / full_entry_total_milli
 
 
 def try_rotate_weakest_position(
