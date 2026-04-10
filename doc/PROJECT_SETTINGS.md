@@ -57,6 +57,7 @@
 19. `tools/validate/synthetic_meta_cases.py` 內任何 validator 若以 `summary["source_path"]` 或類似欄位回報來源檔，所使用的 path 變數必須在該函式內明確宣告；不得引用其他 validator 的局部變數名稱，避免 synthetic suite 因 `NameError` 中斷。
 20. 凡 unit / synthetic validator 需要比對顯示金額、rounded leg pnl 或 completed-trade 顯示總損益時，也必須使用共享 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生與正式顯示口徑不同的 oracle。
 21. debug / GUI / history 的可見交易明細或 marker 若要顯示 `buy_capital`、`sell_capital`、`gross_amount`、`total_return_pct` 等正式交易總額或報酬率，必須以 exact ledger total（如 `net_buy_total_milli`、`net_total_milli`）推導；不得再以含費每股顯示價或 `per-share × qty` 回推可見總額。
+22. debug / GUI / history 若已有 `entry_capital_total`、`net_buy_total_milli` 等既存總額欄位可用，計算 `total_return_pct` 或其他以 full-entry capital 為分母的可見報酬率時，必須優先使用該總額欄位；不得跳過既有 total 而直接退回 `entry * qty` 等 per-share fallback。
 
 ## E. 交易與策略原則
 

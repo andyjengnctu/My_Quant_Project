@@ -2328,6 +2328,29 @@ def validate_debug_exit_display_capital_uses_ledger_totals_contract_case(_base_p
     return results, summary
 
 
+
+def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
+    case_id = "META_DEBUG_EXIT_ENTRY_CAPITAL_FALLBACK_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+    helper_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital":
+            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+            break
+
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_prefers_display_total_before_per_share_fallback", True, "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_rounds_display_total_with_shared_helper", True, "return round_money_for_display(display_entry_capital)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_only_tail_per_share_fallback", True, helper_source.index("display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)") < helper_source.index("return round_money_for_display(entry_price * initial_qty)") if "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in helper_source and "return round_money_for_display(entry_price * initial_qty)" in helper_source else False)
+    add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_direct_per_share_return_before_display_total", False, "if exact_entry_total_milli > 0:\n        return milli_to_money(exact_entry_total_milli)\n    entry_price = float(position.get('entry', 0.0) or 0.0)" in helper_source)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
 def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
     case_id = "META_SYNTHETIC_META_SOURCE_PATH_BINDING_CONTRACT"
     results = []

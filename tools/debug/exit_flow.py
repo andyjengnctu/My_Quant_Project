@@ -32,9 +32,12 @@ def _resolve_full_entry_capital(position, fallback_qty):
     exact_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
     if exact_entry_total_milli > 0:
         return milli_to_money(exact_entry_total_milli)
+    display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)
+    if display_entry_capital > 0:
+        return round_money_for_display(display_entry_capital)
     entry_price = float(position.get('entry', 0.0) or 0.0)
     initial_qty = int(position.get('initial_qty', fallback_qty) or fallback_qty or 0)
-    return entry_price * initial_qty
+    return round_money_for_display(entry_price * initial_qty)
 
 
 def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
