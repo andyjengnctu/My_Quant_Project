@@ -69,6 +69,7 @@
 31. 編輯 `doc/TEST_SUITE_CHECKLIST.md` 的摘要表時，必須維持合法 markdown table header + separator 結構；不得讓 parser 把表頭列當成資料列。
 32. 凡將共享 helper 替換進既有 producer / core 路徑時，必須同輪同步更新 import 與 static contract；不得只改函式呼叫而漏掉 import，避免 `py_compile` 可過但 runtime 因 `NameError` 失敗。
 33. 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉。
+34. `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，凡新增或擴充該註解所涵蓋的 formal contract 範圍時，必須同輪同步更新列舉的 `Txx`；不得讓正式入口摘要註解落後於實際 synthetic registry。
 
 ## E. 交易與策略原則
 

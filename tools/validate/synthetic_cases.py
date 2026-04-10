@@ -91,6 +91,7 @@ from .synthetic_meta_cases import (
     validate_average_price_total_helper_contract_case,
     validate_price_utils_average_price_total_import_contract_case,
     validate_price_utils_array_tick_normalization_contract_case,
+    validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case,
     validate_portfolio_rotation_mark_to_market_return_contract_case,
     validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case,
     validate_validator_oracles_use_exact_ledger_totals_contract_case,

@@ -212,6 +212,7 @@
 | B144 | P1 | Meta / mutating validator oracle snapshot 契約 | 凡 validator / synthetic case 若呼叫會原地修改 `position` 或其他狀態的 producer，且 expected 值依賴呼叫前成本基礎或持倉狀態，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle，避免 validator 自己把 mutated state 誤當 expected | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_take_profit_cases.py` 的 same-bar stop-priority case，釘死 expected pnl 必須使用 `original_cost_basis_milli` snapshot，而不得在 `execute_bar_step(...)` 後再讀 `position["remaining_cost_basis_milli"]`；避免 in-place mutation 把 oracle 算錯 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_take_profit_cases.py` |
 | B145 | P1 | Meta / shared helper import 契約 | 凡核心或 producer 以共享 helper 取代舊邏輯時，必須同輪同步補齊 import；不得只改函式呼叫而漏 import，避免靜態 compile 未必能捕捉、runtime 才因 `NameError` 失敗。尤其 `price_utils` 這類核心 helper 聚合模組，若引用 `calc_total_from_average_price_milli` 等 exact-accounting helper，必須明確從單一來源匯入並由 static meta contract 釘死 | DONE | 已補 static meta contract，直接掃描 `core/price_utils.py`，釘死 `calc_initial_risk_total()` 在使用 `calc_total_from_average_price_milli(...)` 時，該 helper 必須已於 import 區塊明確匯入；避免 helper call 已替換但 import 遺漏，形成 runtime `NameError` | `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py` |
 | B146 | P1 | Meta / array 價格正規化契約 | 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉 | DONE | 已補 static meta contract，直接掃描 `core/price_utils.py`，釘死 `get_tick_size_array()` 與 `round_to_tick_array()` 必須委派 `get_tick_milli`、`price_to_milli` 與 `round_price_milli_to_tick`，且不得殘留 `ratios = valid_prices / ticks` 與 `np.ceil` / `np.floor` 的舊浮點取整路徑；避免 `core/signal_utils.py` 的 `buy_limits` 走出另一套 tick ladder | `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py` |
+| B147 | P1 | Meta / 正式入口摘要同步契約 | `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，則該列舉必須與實際已掛入 synthetic registry 的同主題 contract ID 同步；不得讓正式入口摘要註解漏列最新 `Txx`，避免維護者誤判 formal 覆蓋範圍 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py`，釘死該摘要註解在目前 exact-contract 區塊必須包含 `T225/T226/T229/T230/T231/T232`，且不得保留漏列 `T232` 的舊註解；避免 formal 入口摘要與實際 registry 再度失同步 | `tools/validate/synthetic_meta_cases.py`, `apps/test_suite.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -482,6 +483,7 @@
 | T230 | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` | B144 |
 | T231 | `validate_price_utils_average_price_total_import_contract_case` | B145 |
 | T232 | `validate_price_utils_array_tick_normalization_contract_case` | B146 |
+| T233 | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` | B147 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -901,3 +903,5 @@
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
 | 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |
 | 2026-04-10 | T232 | 新增 price_utils array tick-normalization shared-helper static contract 並驗證 | NEW -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
+| 2026-04-11 | B147 | 新增正式入口摘要同步契約，要求 apps/test_suite.py 的 Txx 註解列舉與實際 synthetic registry 同步 | NEW -> DONE | `apps/test_suite.py` summary comment / synthetic meta contract |
+| 2026-04-11 | T233 | 新增 test_suite summary comment coverage static contract 並驗證 | NEW -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |

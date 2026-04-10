@@ -2603,6 +2603,21 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_base_params):
+    case_id = "META_TEST_SUITE_SUMMARY_COMMENT_COVERS_LATEST_EXACT_CONTRACT_IDS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("apps", "test_suite.py")
+    source_text = source_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t232", True, "T225/T226/T229/T230/T231/T232" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t232_list", False, "T225/T226/T229/T230/T231）。" in source_text)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []
