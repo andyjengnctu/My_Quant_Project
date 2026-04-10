@@ -269,7 +269,7 @@
 | T15 | `tools/local_regression/run_ml_smoke.py` | B12 |
 | T16 | `validate_ranking_scoring_sanity_case` | B49 |
 | T17 | `tools/validate/synthetic_reporting_cases.py` | B21 |
-| T18 | `validate_output_contract_case` | B11 / B17 |
+| T18 | `validate_output_contract_case` | B11 |
 | T19 | `tools/local_regression/run_chain_checks.py` | B18 |
 | T20 | `tools/local_regression/run_meta_quality.py` | B22 |
 | T21 | `core/runtime_utils.py` | B19 |
@@ -289,7 +289,7 @@
 | T35 | `validate_load_clean_df_data_quality_case` | B14 |
 | T36 | `validate_dataset_cli_contract_case` | B16 |
 | T37 | `validate_local_regression_cli_contract_case` | B16 |
-| T38 | `tools/scanner/scan_runner.py` | B12 / B18 |
+| T38 | `tools/scanner/scan_runner.py` | B12 |
 | T39 | `validate_issue_excel_report_schema_case` | B21 |
 | T40 | `validate_portfolio_export_report_artifacts_case` | B21 |
 | T41 | `validate_extended_tool_cli_contract_case` | B16 |
@@ -303,31 +303,31 @@
 | T49 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 |
 | T50 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 |
 | T51 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 |
-| T52 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 / B17 |
+| T52 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 |
 | T53 | `validate_test_suite_summary_checklist_status_sync_case` | B21 |
-| T54 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 / B22 |
+| T54 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 |
 | T55 | `validate_single_formal_test_entry_contract_case` | B26 |
 | T56 | `validate_synthetic_setup_index_prev_day_only_case` | B01 |
 | T57 | `validate_downloader_universe_fetch_error_path_case` | B15 |
 | T58 | `validate_downloader_universe_screening_init_error_path_case` | B15 |
 | T59 | `validate_meta_quality_performance_memory_contract_case` | B19 |
-| T60 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 / B21 |
-| T61 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 / B19 |
+| T60 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 |
+| T61 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 |
 | T62 | `validate_scanner_prepared_tool_contract_case` | B19 |
 | T63 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 |
 | T64 | `validate_scanner_reference_clean_df_contract_case` | B19 |
-| T65 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 / B22 |
+| T65 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 |
 | T66 | `tools/validate/synthetic_cases.py` | B23 |
 | T67 | `tools/validate/synthetic_meta_cases.py` | B26 |
 | T68 | `apps/test_suite.py` | B26 |
 | T69 | `validate_no_reverse_app_layer_dependencies_case` | B23 |
 | T70 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 |
 | T71 | `validate_synthetic_same_bar_stop_priority_case` | B02 |
-| T72 | `validate_synthetic_half_tp_full_year_case` | B04 / B21 |
+| T72 | `validate_synthetic_half_tp_full_year_case` | B04 |
 | T73 | `validate_synthetic_extended_miss_buy_case` | B09 |
 | T74 | `validate_synthetic_competing_candidates_case` | B09 |
 | T75 | `validate_synthetic_same_day_sell_block_case` | B06 |
-| T76 | `validate_synthetic_rotation_t_plus_one_case` | B05 / B06 |
+| T76 | `validate_synthetic_rotation_t_plus_one_case` | B05 |
 | T77 | `validate_synthetic_missed_buy_no_replacement_case` | B07 |
 | T78 | `validate_synthetic_unexecutable_half_tp_case` | B04 |
 | T79 | `validate_synthetic_history_ev_threshold_case` | B10 |
@@ -478,7 +478,15 @@
 | T228 | `validate_validator_oracles_use_exact_ledger_totals_contract_case` | B142 |
 | T229 | `validate_checklist_done_test_summary_markdown_structure_case` | B143 |
 | T230 | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` | B144 |
-
+| T231 | `validate_output_contract_case` | B17 |
+| T232 | `tools/scanner/scan_runner.py` | B18 |
+| T233 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B17 |
+| T234 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B22 |
+| T235 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B21 |
+| T236 | `validate_portfolio_sim_prepared_tool_contract_case` | B19 |
+| T237 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B22 |
+| T238 | `validate_synthetic_half_tp_full_year_case` | B21 |
+| T239 | `validate_synthetic_rotation_t_plus_one_case` | B06 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -895,3 +903,12 @@
 | 2026-04-10 | T228 | 新增 validator/oracle exact-ledger total static contract 並驗證 | NEW -> DONE | `validate_validator_oracles_use_exact_ledger_totals_contract_case` |
 | 2026-04-10 | T229 | 新增 checklist DONE 測試摘要表結構 static contract 並驗證 | NEW -> DONE | `validate_checklist_done_test_summary_markdown_structure_case` |
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
+| 2026-04-10 | T231 | 拆分 checklist `T18` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_output_contract_case` |
+| 2026-04-10 | T232 | 拆分 checklist `T38` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `tools/scanner/scan_runner.py` |
+| 2026-04-10 | T233 | 拆分 checklist `T52` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_run_all_preflight_early_failure_dataset_contract_case` |
+| 2026-04-10 | T234 | 拆分 checklist `T54` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` |
+| 2026-04-10 | T235 | 拆分 checklist `T60` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_test_suite_summary_meta_quality_memory_reporting_case` |
+| 2026-04-10 | T236 | 拆分 checklist `T61` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_portfolio_sim_prepared_tool_contract_case` |
+| 2026-04-10 | T237 | 拆分 checklist `T65` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_meta_quality_reuses_existing_coverage_artifacts_case` |
+| 2026-04-10 | T238 | 拆分 checklist `T72` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_synthetic_half_tp_full_year_case` |
+| 2026-04-10 | T239 | 拆分 checklist `T76` 對應主表項，將單列雙 `Bxx` 映射收斂為單列單 `Bxx` | NEW -> DONE | `validate_synthetic_rotation_t_plus_one_case` |
