@@ -2456,6 +2456,33 @@ def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
     return results, summary
 
 
+
+def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case(_base_params):
+    case_id = "META_DEBUG_SELL_SIGNAL_PROFIT_PCT_EXACT_MARK_TO_MARKET_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+    helper_source = ""
+    sell_signal_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_sell_signal_profit_pct":
+            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+        if isinstance(node, ast.FunctionDef) and node.name == "_record_sell_signal_annotation":
+            sell_signal_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_exact_profit_pct_helper", True, "def _resolve_sell_signal_profit_pct(position, signal_close, params):" in source_text)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_prefers_net_buy_total_milli", True, "full_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_uses_remaining_cost_basis_mark_to_market", True, "floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli" in helper_source and "total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_profit_pct_records_helper_output", True, "signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)" in sell_signal_source)
+    add_check(results, "meta_contract", case_id, "debug_sell_signal_has_no_legacy_raw_close_minus_entry_formula", False, "((float(signal_close) - entry_price) / entry_price * 100.0)" in sell_signal_source or "((float(signal_close) - entry_price) / entry_price * 100.0)" in helper_source)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []

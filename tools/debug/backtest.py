@@ -6,8 +6,13 @@ from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.entry_plans import build_normal_candidate_plan, build_normal_entry_plan
 from core.extended_signals import build_extended_candidate_plan_from_signal
 from core.history_filters import evaluate_history_candidate_metrics
-from core.exact_accounting import calc_entry_total_cost
-from core.price_utils import calc_entry_price, calc_net_sell_price
+from core.exact_accounting import (
+    build_sell_ledger_from_price,
+    calc_entry_total_cost,
+    coerce_money_like_to_milli,
+    milli_to_money,
+    round_money_for_display,
+)
 from core.portfolio_fast_data import build_trade_stats_index
 from core.signal_utils import generate_signals
 from tools.debug.charting import (
@@ -105,11 +110,43 @@ def _record_buy_signal_annotation(*, chart_context, signal_date, signal_low, ent
     )
 
 
+def _resolve_sell_signal_profit_pct(position, signal_close, params):
+    remaining_qty = int(position.get('qty', 0) or 0)
+    if remaining_qty <= 0:
+        return 0.0
+
+    full_entry_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
+    if full_entry_total_milli <= 0:
+        display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)
+        if display_entry_capital > 0:
+            full_entry_total_milli = coerce_money_like_to_milli(round_money_for_display(display_entry_capital))
+
+    if full_entry_total_milli <= 0:
+        entry_price = float(position.get('entry', signal_close) or signal_close or 0.0)
+        if entry_price <= 0:
+            return 0.0
+        full_entry_total_milli = coerce_money_like_to_milli(round_money_for_display(entry_price * remaining_qty))
+
+    if full_entry_total_milli <= 0:
+        return 0.0
+
+    realized_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
+    remaining_cost_basis_milli = int(position.get('remaining_cost_basis_milli', 0) or 0)
+    if remaining_cost_basis_milli > 0:
+        signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
+        floating_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli
+        total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli
+        return float(milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli) * 100.0)
+
+    signal_sell_ledger = build_sell_ledger_from_price(signal_close, remaining_qty, params)
+    signal_trade_pnl_milli = signal_sell_ledger['net_sell_total_milli'] - full_entry_total_milli
+    return float(milli_to_money(signal_trade_pnl_milli) / milli_to_money(full_entry_total_milli) * 100.0)
+
+
 def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, signal_close, position, history_snapshot, params):
     if chart_context is None or position.get('qty', 0) <= 0:
         return
-    entry_price = float(position.get('entry', signal_close))
-    signal_trade_pct = ((float(signal_close) - entry_price) / entry_price * 100.0) if entry_price > 0 else 0.0
+    signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params)
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
