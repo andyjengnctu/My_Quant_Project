@@ -2387,7 +2387,8 @@ def validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case(_b
     add_check(results, "meta_contract", case_id, "debug_half_exit_has_exact_leg_return_helper", True, bool(helper_source))
     add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_prefers_allocated_cost_milli", True, "allocated_cost_milli = 0 if exit_context is None else int(exit_context.get('allocated_cost_milli', 0) or 0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_uses_pnl_milli", True, "pnl_milli = 0 if exit_context is None else int(exit_context.get('pnl_milli', 0) or 0)" in helper_source)
-    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_converts_allocated_cost_from_exact_ledger", True, "return float(milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli) * 100.0)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_converts_allocated_cost_from_exact_ledger", True, "return float(pnl_milli * 100.0 / allocated_cost_milli)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_half_exit_leg_return_has_no_legacy_money_ratio_path", False, "return float(milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli) * 100.0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_half_exit_marker_uses_exact_leg_return_helper", True, "'pnl_pct': _resolve_display_leg_return_pct(" in step_source)
     add_check(results, "meta_contract", case_id, "debug_half_exit_has_no_legacy_per_share_return_pct_formula", False, "(sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0" in step_source)
 
