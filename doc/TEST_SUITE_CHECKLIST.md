@@ -490,7 +490,7 @@
 | T235 | `validate_debug_exit_total_return_milli_binding_contract_case` | B149 |
 ## G. 逐項收斂紀錄
 
-使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
+使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
 
 | 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
 |---|---|---|---|---|
@@ -907,8 +907,6 @@
 | 2026-04-10 | T230 | 新增 same-bar stop-priority oracle snapshot static contract 並驗證 | NEW -> DONE | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` |
 | 2026-04-10 | T231 | 新增 price_utils average-price total import static contract 並驗證 | NEW -> DONE | `validate_price_utils_average_price_total_import_contract_case` |
 | 2026-04-10 | T232 | 新增 price_utils array tick-normalization shared-helper static contract 並驗證 | NEW -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
-| 2026-04-11 | B123 | 擴充 exact-accounting tick contract，補上 raw-price directional rounding 與 tick-band boundary 後維持主表 DONE | DONE -> DONE | `tools/validate/synthetic_unit_cases.py` |
-| 2026-04-11 | B146 | 擴充 price_utils tick-normalization static contract，釘死 scalar / array 不得先做 price_to_milli 預量化後再決定 tick band / direction | DONE -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B137 | 檢出 debug half-exit leg-return static validator 仍要求舊 milli_to_money ratio，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B137 | 將 debug half-exit leg-return static validator 同步到 integer-total ratio 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B147 | 新增正式入口摘要同步契約，要求 apps/test_suite.py 的 Txx 註解列舉與實際 synthetic registry 同步 | NEW -> DONE | `apps/test_suite.py` |
@@ -916,8 +914,6 @@
 | 2026-04-11 | B147 | 補齊正式入口摘要註解與 summary meta contract 對 T234/T235 的同步後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B148 | 新增 exact-ledger ratio path 契約，釘死 return / rotation ratio 不得先轉 float money 再相除 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B149 | 新增 debug exit milli binding 契約，釘死 final-exit total_return_pct 不得引用未定義 total_pnl_milli | NEW -> DONE | `tools/debug/exit_flow.py` |
-| 2026-04-11 | T206 | 擴充 exact-accounting integer tick / limit hit contract，補上 raw-price directional rounding 與 tick-band boundary 邊界案例 | DONE -> DONE | `validate_exact_accounting_tick_limit_integer_case` |
-| 2026-04-11 | T232 | 擴充 price_utils array tick-normalization static contract，釘死 scalar / array 皆不得先做 price_to_milli 預量化 | DONE -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-11 | T223 | 檢出 debug half-exit leg-return static contract 仍要求舊 milli_to_money ratio，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
 | 2026-04-11 | T223 | 將 debug half-exit leg-return static contract 同步到 integer-total ratio 後重新驗證 | PARTIAL -> DONE | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` |
 | 2026-04-11 | T233 | 新增 test_suite summary comment coverage static contract 並驗證 | NEW -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |

@@ -40,6 +40,8 @@ from core.price_utils import (
     calc_net_sell_price,
     calc_position_size,
     can_execute_half_take_profit,
+    get_tick_size,
+    get_tick_size_array,
     is_limit_down_bar,
     is_limit_up_bar,
 )
