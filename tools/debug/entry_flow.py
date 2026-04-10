@@ -78,19 +78,21 @@ def process_debug_entry_for_day(
     trade_logs,
     chart_context=None,
     current_capital=None,
+    ticker=None,
+    security_profile=None,
 ):
     buy_triggered = False
     spent_cash = 0.0
     date_str = current_date.strftime('%Y-%m-%d')
 
     if buy_condition_prev and pos_qty_start_of_bar == 0:
-        signal_state = create_signal_tracking_state(buy_limit_prev, atr_prev, params, ticker=ticker)
+        signal_state = create_signal_tracking_state(buy_limit_prev, atr_prev, params, ticker=ticker, security_profile=security_profile)
         if signal_state is not None:
             active_extended_signal = signal_state
 
-        preview_candidate_plan = build_normal_candidate_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker)
+        preview_candidate_plan = build_normal_candidate_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
-        entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker)
+        entry_plan = build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,
             t_open=t_open,
@@ -182,13 +184,15 @@ def process_debug_entry_for_day(
             )
 
     elif active_extended_signal is not None and pos_qty_start_of_bar == 0:
-        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker)
+        preview_candidate_plan = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_cap, params, ticker=ticker, security_profile=security_profile)
         _record_entry_plan_preview_levels(chart_context, current_date=current_date, entry_plan=preview_candidate_plan)
         entry_plan = build_extended_entry_plan_from_signal(
             active_extended_signal,
             sizing_cap,
             params,
             y_close=close_prev,
+            ticker=ticker,
+            security_profile=security_profile,
         )
         entry_result = execute_pre_market_entry_plan(
             entry_plan=entry_plan,

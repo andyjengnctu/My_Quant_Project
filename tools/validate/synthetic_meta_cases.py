@@ -2182,9 +2182,14 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
 
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_flow_returns_spent_cash", True, "position, active_extended_signal, spent_cash = process_debug_entry_for_day(" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_cash_subtracts_spent_cash", True, "current_capital -= spent_cash" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_backtest_passes_ticker_to_entry_flow", True, "ticker=ticker" in debug_backtest_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_ticker", True, "ticker=None" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_signature_accepts_security_profile", True, "security_profile=None" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_signal_state", True, "create_signal_tracking_state(buy_limit_prev, atr_prev, params, ticker=ticker, security_profile=security_profile)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_normal_entry_plan", True, "build_normal_entry_plan(buy_limit_prev, atr_prev, sizing_cap, params, ticker=ticker, security_profile=security_profile)" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_threads_ticker_to_extended_entry_plan", True, "build_extended_entry_plan_from_signal(" in debug_entry_source and "ticker=ticker" in debug_entry_source and "security_profile=security_profile" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
-
     summary["source_paths"] = [
         str(debug_backtest_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
         str(debug_entry_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
