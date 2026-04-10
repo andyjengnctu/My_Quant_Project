@@ -913,6 +913,8 @@
 | 2026-04-11 | B95 | 將 GUI extended preview continuity contract 同步到 `ticker` + `security_profile` counterfactual signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B95 | 檢出 GUI extended preview continuity contract 尚未同步 `trade_date` counterfactual signature，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B95 | 將 GUI extended preview continuity contract 同步到 `ticker` + `security_profile` + `trade_date` counterfactual signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-11 | B95 | 檢出 GUI extended preview continuity contract 仍比對 `trade_date=current_date`，未同步 debug entry flow 的 `effective_trade_date` fallback signature，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-11 | B95 | 將 GUI extended preview continuity contract 同步到 `trade_date=effective_trade_date` counterfactual signature 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-11 | B123 | 以 reduced dataset 實際比對檢出跨 tick band 漲跌停價仍沿用基準價 band，主表改回 PARTIAL | DONE -> PARTIAL | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 檢出 ETF / ETN / REIT 類商品仍沿用股票 tick ladder，主表改回 PARTIAL | DONE -> PARTIAL | `core/exact_accounting.py` |
 | 2026-04-11 | B123 | 修正漲跌停價改依 raw-limit 價本身決定 tick band 後重新收斂為 DONE | PARTIAL -> DONE | `core/exact_accounting.py` |
@@ -946,6 +948,8 @@
 | 2026-04-11 | T174 | 將 GUI extended preview continuity static contract 同步到 `ticker` + `security_profile` signature 後重新驗證 | PARTIAL -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-11 | T174 | 檢出 GUI extended preview continuity static contract 尚未同步 `trade_date` signature，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-11 | T174 | 將 GUI extended preview continuity static contract 同步到 `ticker` + `security_profile` + `trade_date` signature 後重新驗證 | PARTIAL -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
+| 2026-04-11 | T174 | 檢出 GUI extended preview continuity static contract 仍比對 `trade_date=current_date`，未同步 `effective_trade_date` fallback signature，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_extended_preview_continuity_contract_case` |
+| 2026-04-11 | T174 | 將 GUI extended preview continuity static contract 同步到 `trade_date=effective_trade_date` signature 後重新驗證 | PARTIAL -> DONE | `validate_gui_extended_preview_continuity_contract_case` |
 | 2026-04-11 | T206 | 以 reduced dataset 實際比對檢出 exact-accounting tick/limit unit contract 尚未覆蓋跨 tick band 漲跌停價案例，改回 PARTIAL | DONE -> PARTIAL | `validate_exact_accounting_tick_limit_integer_case` |
 | 2026-04-11 | T206 | 檢出 exact-accounting tick/limit unit contract 尚未覆蓋 ETF / ETN / REIT 類商品 profile 與兩級 tick 案例，改回 PARTIAL | DONE -> PARTIAL | `validate_exact_accounting_tick_limit_integer_case` |
 | 2026-04-11 | T206 | 擴充 exact-accounting tick/limit unit contract 納入 ticker 自動辨識與 ETF / ETN / REIT 兩級 tick 案例後重新驗證 | PARTIAL -> DONE | `validate_exact_accounting_tick_limit_integer_case` |
