@@ -57,26 +57,28 @@ def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
 
 
 # # (AI註: 單一真理來源 - 正常候選的盤前 limit / worst-case sizing stop / trail / qty 規格統一由此產生；候選資格與可掛單分離)
-def build_normal_candidate_plan(limit_price, atr, sizing_capital, params):
+def build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None):
     if pd.isna(limit_price) or pd.isna(atr):
         return None
 
-    init_sl = calc_initial_stop_from_reference(limit_price, atr, params)
-    init_trail = calc_initial_trailing_stop_from_reference(limit_price, atr, params)
-    target_price = calc_frozen_target_price(limit_price, init_sl)
+    init_sl = calc_initial_stop_from_reference(limit_price, atr, params, ticker=ticker, security_profile=security_profile)
+    init_trail = calc_initial_trailing_stop_from_reference(limit_price, atr, params, ticker=ticker, security_profile=security_profile)
+    target_price = calc_frozen_target_price(limit_price, init_sl, ticker=ticker, security_profile=security_profile)
     base_plan = {
         "limit_price": limit_price,
         "init_sl": init_sl,
         "init_trail": init_trail,
         "target_price": target_price,
         "entry_atr": atr,
+        "ticker": ticker,
+        "security_profile": security_profile,
     }
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
 # # (AI註: 單一真理來源 - 正常單實際掛單規格；僅接受可掛單候選)
-def build_normal_entry_plan(limit_price, atr, sizing_capital, params):
-    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params)
+def build_normal_entry_plan(limit_price, atr, sizing_capital, params, ticker=None, security_profile=None):
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, sizing_capital, params, ticker=ticker, security_profile=security_profile)
     if candidate_plan is None or candidate_plan["qty"] <= 0:
         return None
     return candidate_plan
@@ -95,11 +97,11 @@ def should_count_normal_miss_buy(order_qty, is_worse_than_initial_stop=False):
     return should_count_miss_buy(order_qty, is_worse_than_initial_stop=is_worse_than_initial_stop)
 
 
-def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, target_price, limit_price, params):
+def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, target_price, limit_price, params, ticker=None, security_profile=None):
     if entry_atr is not None and not pd.isna(entry_atr):
-        actual_init_sl = calc_initial_stop_from_reference(buy_price, entry_atr, params)
-        actual_init_trail = calc_initial_trailing_stop_from_reference(buy_price, entry_atr, params)
-        actual_target_price = calc_frozen_target_price(buy_price, actual_init_sl)
+        actual_init_sl = calc_initial_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
+        actual_init_trail = calc_initial_trailing_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
+        actual_target_price = calc_frozen_target_price(buy_price, actual_init_sl, ticker=ticker, security_profile=security_profile)
         return actual_init_sl, actual_init_trail, actual_target_price
 
     resolved_init_sl = init_sl
@@ -107,7 +109,7 @@ def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, tar
     resolved_target_price = target_price
     if resolved_target_price is None or pd.isna(resolved_target_price):
         target_basis = buy_price if limit_price is None else limit_price
-        resolved_target_price = calc_frozen_target_price(target_basis, resolved_init_sl)
+        resolved_target_price = calc_frozen_target_price(target_basis, resolved_init_sl, ticker=ticker, security_profile=security_profile)
     return resolved_init_sl, resolved_init_trail, resolved_target_price
 
 
@@ -155,6 +157,8 @@ def build_position_from_entry_fill(
     target_price=None,
     limit_price=None,
     entry_atr=None,
+    ticker=None,
+    security_profile=None,
 ):
     if params is None:
         raise ValueError("build_position_from_entry_fill 需要 params")
@@ -169,6 +173,8 @@ def build_position_from_entry_fill(
         target_price=target_price,
         limit_price=limit_price,
         params=params,
+        ticker=ticker,
+        security_profile=security_profile,
     )
     if pd.isna(resolved_init_sl) or pd.isna(resolved_init_trail) or pd.isna(resolved_target_price):
         raise ValueError("build_position_from_entry_fill 無法建立有效的 stop / trail / target")
@@ -211,6 +217,8 @@ def build_position_from_entry_fill(
         "display_realized_pnl_sum": 0.0,
         "initial_risk_total_milli": initial_risk_total_milli,
         "entry_type": entry_type,
+        "ticker": ticker,
+        "security_profile": security_profile,
         "limit_price": limit_price,
         "limit_price_milli": pure_limit_price_milli,
         "entry_day_stop_triggered": False,
@@ -222,7 +230,7 @@ def build_position_from_entry_fill(
 
 
 # # (AI註: 單一真理來源 - 盤前有效買單的當日成交 / miss buy 邏輯統一由此判斷)
-def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal"):
+def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_volume, y_close, params, entry_type="normal", ticker=None, security_profile=None):
     result = {
         "filled": False,
         "count_as_missed_buy": False,
@@ -242,8 +250,10 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         return result
 
     qty = entry_plan.get("qty", 0)
+    resolved_ticker = ticker or entry_plan.get("ticker")
+    resolved_security_profile = security_profile or entry_plan.get("security_profile")
     result["count_as_missed_buy"] = should_count_miss_buy(qty)
-    result["is_locked_limit_up"] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
+    result["is_locked_limit_up"] = is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
 
     if qty <= 0:
         result["count_as_missed_buy"] = False
@@ -256,7 +266,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     if price_to_milli(t_low) > price_to_milli(limit_price):
         return result
 
-    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price))
+    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price), ticker=resolved_ticker, security_profile=resolved_security_profile)
     result["buy_price"] = buy_price
 
     position = build_position_from_entry_fill(
@@ -269,6 +279,8 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         target_price=entry_plan.get("target_price"),
         limit_price=limit_price,
         entry_atr=entry_plan.get("entry_atr"),
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
     )
     position = _apply_entry_day_virtual_exit_trigger(position, t_high=t_high, t_low=t_low, params=params)
     result["filled"] = True

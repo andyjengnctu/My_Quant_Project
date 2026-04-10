@@ -226,14 +226,14 @@ def _build_precomputed_signals(df):
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
-    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
+    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
     return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)
 
 
 def process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
-    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals)
+    stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
     history_row = build_history_qualified_row_from_stats(
         ticker=ticker,
         stats=stats,

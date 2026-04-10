@@ -16,6 +16,7 @@ from core.exact_accounting import (
     milli_to_money,
     money_to_milli,
     price_to_milli,
+    infer_security_profile,
     round_money_for_display,
     round_price_to_tick_milli,
     sync_position_display_fields,
@@ -274,7 +275,32 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_uses_raw_price_before_milli_quantization", 0.01, get_tick_size(raw_tick_boundary), tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_array_uses_raw_price_before_milli_quantization", 0.01, get_tick_size_array(np.array([raw_tick_boundary], dtype=np.float64))[0], tol=1e-12)
 
+    profile_stock = infer_security_profile("2330")
+    profile_etf = infer_security_profile("0050")
+    profile_leveraged = infer_security_profile("00631L")
+    profile_bond = infer_security_profile("00679B")
+    profile_etn = infer_security_profile("020032")
+    profile_reit = infer_security_profile("01001T")
+
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_stock_detects_stock_family", ("stock", "stock"), (profile_stock["family"], profile_stock["broad_type"]))
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_etf_detects_etf_family", ("etf", "etf"), (profile_etf["family"], profile_etf["broad_type"]))
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_leveraged_detects_broad_type", "leveraged_inverse", profile_leveraged["broad_type"])
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_bond_detects_broad_type", "bond", profile_bond["broad_type"])
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_etn_detects_two_tier_family", ("etn", "fund_two_tier"), (profile_etn["family"], profile_etn["tick_profile"]))
+    add_check(results, "unit_exact_accounting", case_id, "security_profile_reit_detects_two_tier_family", ("reit", "fund_two_tier"), (profile_reit["family"], profile_reit["tick_profile"]))
+
+    add_check(results, "unit_exact_accounting", case_id, "etf_tick_size_uses_two_tier_profile", 0.01, get_tick_size(10.17, ticker="0050"), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "stock_tick_size_keeps_stock_ladder", 0.05, get_tick_size(10.17, ticker="1101"), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "etf_round_to_tick_preserves_legal_price", 10.17, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="0050"))), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "stock_round_to_tick_uses_stock_ladder", 10.15, round_money_for_display(milli_to_money(round_price_to_tick_milli(10.17, direction="nearest", ticker="1101"))), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "etf_limit_up_uses_two_tier_tick_profile", 11.18, calc_limit_up_price(10.17, ticker="0050"), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "etf_limit_down_uses_two_tier_tick_profile", 9.16, calc_limit_down_price(10.17, ticker="0050"), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_keeps_stock_tick_profile", 11.15, calc_limit_up_price(10.17, ticker="1101"), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "etf_limit_up_bar_uses_etf_tick_profile", True, is_limit_up_bar(11.18, 11.18, 11.18, 11.18, 10.17, ticker="0050"))
+    add_check(results, "unit_exact_accounting", case_id, "stock_limit_up_bar_uses_stock_tick_profile", True, is_limit_up_bar(11.15, 11.15, 11.15, 11.15, 10.17, ticker="1101"))
+
     summary["limit_up"] = up_limit
+    summary["etf_tick_size"] = get_tick_size(10.17, ticker="0050")
     return results, summary
 
 

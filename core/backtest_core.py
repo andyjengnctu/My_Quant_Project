@@ -16,9 +16,11 @@ from core.trade_plans import (
 )
 
 
-def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None):
+def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None):
     if params is None:
         params = V16StrategyParams()
+
+    resolved_ticker = ticker or df.attrs.get('ticker')
 
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
     L = df['Low'].to_numpy(dtype=np.float64, copy=False)
@@ -28,7 +30,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     Dates = df.index
 
     if precomputed_signals is None:
-        ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params)
+        ATR_main, buyCondition, sellCondition, buy_limits = generate_signals(df, params, ticker=resolved_ticker)
     else:
         ATR_main, buyCondition, sellCondition, buy_limits = precomputed_signals
 
@@ -45,6 +47,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     if len(C) == 0:
         stats_dict = build_backtest_stats(
             params=params,
+            ticker=resolved_ticker,
             current_capital=milli_to_money(currentCapital_milli),
             current_equity=milli_to_money(currentEquity_milli),
             max_drawdown_pct=maxDrawdownPct,
@@ -117,11 +120,11 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
 
         if isSetup_prev:
-            signal_state = create_signal_tracking_state(buy_limits[j - 1], ATR_main[j - 1], params)
+            signal_state = create_signal_tracking_state(buy_limits[j - 1], ATR_main[j - 1], params, ticker=resolved_ticker)
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params)
+            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params, ticker=resolved_ticker)
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
                 t_open=O[j],
@@ -132,6 +135,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 y_close=C[j - 1],
                 params=params,
                 entry_type='normal',
+                ticker=resolved_ticker,
             )
             if entry_result['filled']:
                 position = entry_result['position']
@@ -147,6 +151,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 sizing_cap,
                 params,
                 y_close=C[j - 1],
+                ticker=resolved_ticker,
             )
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
@@ -158,6 +163,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 y_close=C[j - 1],
                 params=params,
                 entry_type='extended',
+                ticker=resolved_ticker,
             )
             if entry_result['filled']:
                 position = entry_result['position']
@@ -172,7 +178,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
         currentEquity_milli = currentCapital_milli
         if position['qty'] > 0:
-            floating_exec_price = adjust_long_sell_fill_price(C[j])
+            floating_exec_price = adjust_long_sell_fill_price(C[j], ticker=resolved_ticker)
             floating_sell_ledger = build_sell_ledger_from_price(floating_exec_price, position['qty'], params)
             currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
 
@@ -182,6 +188,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     final_state = finalize_open_position_at_end(
         position=position,
+        ticker=resolved_ticker,
         final_close=C[-1],
         final_date=Dates[-1],
         current_capital_milli=currentCapital_milli,
@@ -216,6 +223,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
     stats_dict = build_backtest_stats(
         params=params,
+        ticker=resolved_ticker,
         current_capital=milli_to_money(currentCapital_milli),
         current_equity=milli_to_money(currentEquity_milli),
         max_drawdown_pct=maxDrawdownPct,

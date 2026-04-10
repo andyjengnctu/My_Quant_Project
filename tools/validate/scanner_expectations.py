@@ -67,7 +67,7 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
         source_df = pd.read_csv(file_path) if raw_df is None else raw_df
         min_rows_needed = get_required_min_rows(params)
         df, _sanitize_stats = sanitize_ohlcv_dataframe(source_df, ticker, min_rows=min_rows_needed)
-        return run_v16_backtest(df.copy(), params)
+        return run_v16_backtest(df.copy(), params, ticker=ticker)
     except ValueError as e:
         if is_insufficient_data_error(e):
             return {"scanner_expected_status": "skip_insufficient"}
@@ -77,7 +77,7 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
 def run_scanner_reference_check_on_clean_df(ticker, clean_df, params):
     if clean_df is None or clean_df.empty:
         raise ValueError(f"{ticker}: clean_df 不可為空")
-    return run_v16_backtest(clean_df, params)
+    return run_v16_backtest(clean_df, params, ticker=ticker)
 
 
 def derive_expected_scanner_status(scanner_ref_stats, params):

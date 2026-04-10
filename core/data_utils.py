@@ -181,6 +181,8 @@ def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_c
     if len(working) < min_rows:
         raise ValueError(f"有效資料不足: 清洗後僅剩 {len(working)} 列")
 
+    working.attrs['ticker'] = str(ticker)
+
     stats = {
         'invalid_row_count': invalid_row_count,
         'duplicate_date_count': duplicate_date_count,

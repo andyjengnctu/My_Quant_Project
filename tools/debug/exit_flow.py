@@ -186,7 +186,7 @@ def process_debug_position_step(
         exit_context = stop_context if 'STOP' in events else ind_sell_context
         final_exit_qty = prev_qty if exit_context is None else int(exit_context['qty'])
         action_str = "停損殺出" if 'STOP' in events else "指標賣出"
-        sell_price = adjust_long_sell_fill_price(t_open) if exit_context is None else float(exit_context['exec_price'])
+        sell_price = adjust_long_sell_fill_price(t_open, ticker=position.get("ticker")) if exit_context is None else float(exit_context['exec_price'])
         sell_net_price = calc_net_sell_price(sell_price, final_exit_qty, params) if exit_context is None else float(exit_context['net_price'])
         sell_total_amount = _resolve_display_sell_total(exit_context, sell_price=sell_price, qty=final_exit_qty, params=params)
         current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
@@ -280,7 +280,7 @@ def append_debug_forced_closeout(
     stats_index=None,
     overall_max_drawdown=0.0,
 ):
-    exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
+    exec_sell_price = adjust_long_sell_fill_price(position['close_price'], ticker=position.get('ticker'))
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
     sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
     final_leg_actual_pnl_milli = sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0)

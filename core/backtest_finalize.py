@@ -31,6 +31,7 @@ def finalize_open_position_at_end(
     trade_logs,
     return_logs,
     params,
+    ticker=None,
 ):
     end_position_qty = position['qty']
     had_open_position_at_end = end_position_qty > 0
@@ -54,7 +55,8 @@ def finalize_open_position_at_end(
             'trade_logs': trade_logs,
         }
 
-    exec_price = adjust_long_sell_fill_price(final_close)
+    resolved_ticker = ticker or position.get("ticker")
+    exec_price = adjust_long_sell_fill_price(final_close, ticker=resolved_ticker)
     sell_ledger = build_sell_ledger_from_price(exec_price, position['qty'], params)
     pnl_milli = sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
     total_pnl_milli = position['realized_pnl_milli'] + pnl_milli
@@ -124,6 +126,7 @@ def build_backtest_stats(
     active_extended_signal,
     end_position_qty,
     avg_bars_held,
+    ticker=None,
 ):
     win_rate = (full_wins / trade_count * 100) if trade_count > 0 else 0
     avg_win = total_profit / full_wins if full_wins > 0 else 0
@@ -143,8 +146,9 @@ def build_backtest_stats(
     total_net_profit = current_capital - params.initial_capital
     total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
     buy_next_day = bool(buy_condition_last)
-    buy_limit = adjust_long_buy_limit(close_last) if buy_next_day else 0.0
-    stop_loss = adjust_long_stop_price(close_last - atr_last * params.atr_times_init) if buy_next_day else 0.0
+    resolved_ticker = ticker or (active_extended_signal or {}).get("ticker")
+    buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker) if buy_next_day else 0.0
+    stop_loss = adjust_long_stop_price(close_last - atr_last * params.atr_times_init, ticker=resolved_ticker) if buy_next_day else 0.0
     tp_price = close_last + (close_last - (close_last - atr_last * params.atr_times_init)) if buy_next_day else 0.0
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
@@ -153,8 +157,9 @@ def build_backtest_stats(
     extended_orderable_today = False
     if active_extended_signal is not None:
         sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
-        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_capital, params)
-        extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last)
+        resolved_ticker = resolved_ticker or active_extended_signal.get("ticker")
+        extended_candidate_today = build_extended_candidate_plan_from_signal(active_extended_signal, sizing_capital, params, ticker=resolved_ticker)
+        extended_orderable_today = is_extended_signal_orderable_for_day(active_extended_signal, extended_candidate_today, close_last, ticker=resolved_ticker)
 
     stats_dict = {
         'currentCapital': current_capital,

@@ -27,7 +27,7 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
 
         pos['last_px'] = px
 
-        floating_exec_price = adjust_long_sell_fill_price(px)
+        floating_exec_price = adjust_long_sell_fill_price(px, ticker=ticker)
         sell_ledger = build_sell_ledger_from_price(floating_exec_price, pos['qty'], params)
         equity_milli += sell_ledger['net_sell_total_milli']
 
@@ -126,16 +126,17 @@ def build_normal_setup_index(all_dfs_fast):
     return setup_index
 
 
-def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False):
+def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False, ticker=None):
     t_total_start = time.perf_counter() if profile_stats is not None else None
 
     t0 = time.perf_counter() if profile_stats is not None else None
     df = df.copy()
+    resolved_ticker = ticker or df.attrs.get('ticker')
     if profile_stats is not None:
         profile_stats['copy_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    precomputed_signals = generate_signals(df, params)
+    precomputed_signals = generate_signals(df, params, ticker=resolved_ticker)
     ATR_main, buyCondition, sellCondition, buy_limits = precomputed_signals
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
@@ -149,7 +150,7 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
         profile_stats['assign_columns_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    stats_dict, standalone_logs = run_v16_backtest(df, params, return_logs=True, precomputed_signals=precomputed_signals)
+    stats_dict, standalone_logs = run_v16_backtest(df, params, return_logs=True, precomputed_signals=precomputed_signals, ticker=resolved_ticker)
     if profile_stats is not None:
         profile_stats['run_backtest_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start

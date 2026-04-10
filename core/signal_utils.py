@@ -89,7 +89,8 @@ def tv_supertrend(high, low, close, atr, multiplier):
     return direction
 
 
-def generate_signals(df, params):
+def generate_signals(df, params, ticker=None):
+    resolved_ticker = ticker or df.attrs.get('ticker')
     if len(df) == 0:
         empty_float = np.array([], dtype=np.float64)
         empty_bool = np.array([], dtype=bool)
@@ -156,5 +157,5 @@ def generate_signals(df, params):
     buy_limits = np.full_like(C, np.nan)
     valid_buy_mask = buyCondition & ~np.isnan(raw_buy_limits)
     if np.any(valid_buy_mask):
-        buy_limits[valid_buy_mask] = adjust_long_buy_limit_array(raw_buy_limits[valid_buy_mask])
+        buy_limits[valid_buy_mask] = adjust_long_buy_limit_array(raw_buy_limits[valid_buy_mask], ticker=resolved_ticker)
     return ATR_main, buyCondition, sellCondition, buy_limits

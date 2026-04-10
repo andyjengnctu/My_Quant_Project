@@ -155,7 +155,7 @@ def try_rotate_weakest_position(
             continue
 
         pos = portfolio[weakest_ticker]
-        est_sell_px = adjust_long_sell_fill_price(w_open)
+        est_sell_px = adjust_long_sell_fill_price(w_open, ticker=ticker)
         sell_ledger = build_sell_ledger_from_price(est_sell_px, pos['qty'], params)
         est_freed_cash_milli = sell_ledger['net_sell_total_milli']
         pnl_milli = est_freed_cash_milli - pos['remaining_cost_basis_milli']
@@ -289,6 +289,7 @@ def settle_portfolio_positions(
                     get_fast_close(fast_df, pos=t_pos),
                     get_fast_value(fast_df, 'Volume', pos=t_pos),
                     get_fast_close(fast_df, pos=y_pos),
+                    ticker=ticker,
                 )
                 reason_note = {
                     'NO_VOLUME': '零量，當日無法賣出',
@@ -330,7 +331,7 @@ def closeout_open_positions(
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
         raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
-        exec_price = adjust_long_sell_fill_price(raw_exit_price)
+        exec_price = adjust_long_sell_fill_price(raw_exit_price, ticker=ticker)
         sell_ledger = build_sell_ledger_from_price(exec_price, pos['qty'], params)
         final_cash += sell_ledger['net_sell_total_milli']
 

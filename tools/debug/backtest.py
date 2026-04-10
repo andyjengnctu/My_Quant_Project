@@ -201,9 +201,9 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     if precomputed_signals is None:
         precomputed_signals = _extract_precomputed_signals(df)
     if precomputed_signals is None:
-        precomputed_signals = generate_signals(df, params)
+        precomputed_signals = generate_signals(df, params, ticker=ticker)
     atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals
-    stats_dict, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals)
+    stats_dict, standalone_logs = run_v16_backtest(df.copy(), params, return_logs=True, precomputed_signals=precomputed_signals, ticker=ticker)
     stats_index = build_trade_stats_index(standalone_logs)
     position = {'qty': 0}
     active_extended_signal = None
@@ -218,7 +218,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params)
+            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params, ticker=ticker)
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=signal_date,
@@ -278,6 +278,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             trade_logs=trade_logs,
             chart_context=chart_context,
             current_capital=current_capital,
+            ticker=ticker,
         )
         current_capital -= spent_cash
         if chart_context is not None and position['qty'] > 0:
@@ -296,7 +297,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params) if not np.isnan(atr_main[-1]) else None
+            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params, ticker=ticker) if not np.isnan(atr_main[-1]) else None
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=dates[-1],
@@ -309,7 +310,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)
         elif chart_context is not None and position.get('qty', 0) == 0 and active_extended_signal is not None:
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params)
+            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params, ticker=ticker)
             if latest_history_snapshot.get('is_candidate', False):
                 _apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)
         if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):

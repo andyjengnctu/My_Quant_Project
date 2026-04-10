@@ -55,7 +55,7 @@ def rate_to_ppm(rate) -> int:
     return _round_decimal_to_int(_to_decimal(rate) * _DECIMAL_PPM)
 
 
-MILLI_TICK_LADDER = (
+STOCK_MILLI_TICK_LADDER = (
     (1_000, 1),
     (10_000, 10),
     (50_000, 50),
@@ -63,33 +63,170 @@ MILLI_TICK_LADDER = (
     (500_000, 500),
     (1_000_000, 1000),
 )
+FUND_MILLI_TICK_LADDER = (
+    (50_000, 10),
+)
+MILLI_TICK_LADDER = STOCK_MILLI_TICK_LADDER
+
+_STOCK_DEFAULT_TICK_MILLI = 5000
+_FUND_DEFAULT_TICK_MILLI = 50
+_TICK_PROFILE_STOCK = "stock_six_tier"
+_TICK_PROFILE_FUND = "fund_two_tier"
+
+_SECURITY_BROAD_STOCK = "stock"
+_SECURITY_BROAD_ETF = "etf"
+_SECURITY_BROAD_LEVERAGED_INVERSE = "leveraged_inverse"
+_SECURITY_BROAD_BOND = "bond"
+
+_LEVERAGED_INVERSE_SUFFIXES = frozenset({"L", "M", "R", "S"})
+_BOND_SUFFIXES = frozenset({"B", "C", "D"})
+_ETF_GENERAL_SUFFIXES = frozenset({"A", "K", "T", "U", "V"})
+_ETN_PREFIX = "02"
+
+
+def normalize_security_symbol(symbol) -> str:
+    if symbol is None:
+        return ""
+    normalized = str(symbol).strip().upper()
+    if not normalized:
+        return ""
+    for suffix in (".CSV", ".TW", ".TWO"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+    return normalized.strip()
+
+
+def _normalize_security_name(security_name) -> str:
+    if security_name is None:
+        return ""
+    return str(security_name).strip().upper()
+
+
+def _build_security_profile(*, code: str, family: str, broad_type: str, tick_profile: str) -> Dict[str, str]:
+    return {
+        "normalized_code": code,
+        "family": family,
+        "broad_type": broad_type,
+        "tick_profile": tick_profile,
+    }
+
+
+def infer_security_profile(symbol=None, *, cfi_code=None, security_name=None) -> Dict[str, str]:
+    code = normalize_security_symbol(symbol)
+    cfi = "" if cfi_code is None else str(cfi_code).strip().upper()
+    name = _normalize_security_name(security_name)
+
+    def _etf_like_profile(*, family: str, broad_type: str) -> Dict[str, str]:
+        return _build_security_profile(code=code, family=family, broad_type=broad_type, tick_profile=_TICK_PROFILE_FUND)
+
+    if cfi.startswith("ES"):
+        return _build_security_profile(code=code, family="stock", broad_type=_SECURITY_BROAD_STOCK, tick_profile=_TICK_PROFILE_STOCK)
+
+    if code:
+        if len(code) == 6 and code.startswith(_ETN_PREFIX) and code[:5].isdigit() and (code[-1].isalpha() or code.isdigit()):
+            broad_type = _SECURITY_BROAD_ETF
+            if code[-1:] in _LEVERAGED_INVERSE_SUFFIXES:
+                broad_type = _SECURITY_BROAD_LEVERAGED_INVERSE
+            elif code[-1:] in {"B"}:
+                broad_type = _SECURITY_BROAD_BOND
+            elif "債" in name or "BOND" in name:
+                broad_type = _SECURITY_BROAD_BOND
+            return _etf_like_profile(family="etn", broad_type=broad_type)
+
+        if code.startswith("00") and code[:-1].isdigit() and code[-1:].isalpha():
+            suffix = code[-1]
+            if suffix in _LEVERAGED_INVERSE_SUFFIXES:
+                return _etf_like_profile(family="etf", broad_type=_SECURITY_BROAD_LEVERAGED_INVERSE)
+            if suffix in _BOND_SUFFIXES:
+                return _etf_like_profile(family="etf", broad_type=_SECURITY_BROAD_BOND)
+            if suffix in _ETF_GENERAL_SUFFIXES:
+                return _etf_like_profile(family="etf", broad_type=_SECURITY_BROAD_ETF)
+
+        if code.startswith("00") and code.isdigit() and len(code) in {4, 5, 6}:
+            return _etf_like_profile(family="etf", broad_type=_SECURITY_BROAD_ETF)
+
+        if len(code) == 6 and code[:-1].isdigit() and code[-1] == "T" and code.startswith("01"):
+            return _etf_like_profile(family="reit", broad_type=_SECURITY_BROAD_ETF)
+
+        if code.isdigit() and len(code) == 4:
+            return _build_security_profile(code=code, family="stock", broad_type=_SECURITY_BROAD_STOCK, tick_profile=_TICK_PROFILE_STOCK)
+
+    if cfi.startswith("CE") or "ETF" in name or "交易所交易基金" in name:
+        broad_type = _SECURITY_BROAD_ETF
+        if any(token in name for token in ("槓桿", "反向", "正2", "反1", "LEVERAGED", "INVERSE")):
+            broad_type = _SECURITY_BROAD_LEVERAGED_INVERSE
+        elif any(token in name for token in ("債", "固定收益", "BOND")):
+            broad_type = _SECURITY_BROAD_BOND
+        return _etf_like_profile(family="etf", broad_type=broad_type)
+
+    if "ETN" in name:
+        broad_type = _SECURITY_BROAD_BOND if any(token in name for token in ("債", "BOND")) else _SECURITY_BROAD_ETF
+        if any(token in name for token in ("槓桿", "反向", "LEVERAGED", "INVERSE")):
+            broad_type = _SECURITY_BROAD_LEVERAGED_INVERSE
+        return _etf_like_profile(family="etn", broad_type=broad_type)
+
+    if any(token in name for token in ("REIT", "不動產投資信託")):
+        return _etf_like_profile(family="reit", broad_type=_SECURITY_BROAD_ETF)
+
+    return _build_security_profile(code=code, family="stock", broad_type=_SECURITY_BROAD_STOCK, tick_profile=_TICK_PROFILE_STOCK)
+
+
+def resolve_security_profile(security_profile=None, *, ticker=None, cfi_code=None, security_name=None) -> Dict[str, str]:
+    if isinstance(security_profile, dict) and security_profile:
+        return security_profile
+    return infer_security_profile(ticker, cfi_code=cfi_code, security_name=security_name)
+
+
+def _resolve_tick_rule(*, security_profile=None, ticker=None, cfi_code=None, security_name=None):
+    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+    if resolved_profile.get("tick_profile") == _TICK_PROFILE_FUND:
+        return FUND_MILLI_TICK_LADDER, _FUND_DEFAULT_TICK_MILLI, resolved_profile
+    return STOCK_MILLI_TICK_LADDER, _STOCK_DEFAULT_TICK_MILLI, resolved_profile
 
 
 def _tick_decimal_from_milli(tick_milli: int) -> Decimal:
     return Decimal(int(tick_milli)) / _DECIMAL_THOUSAND
 
 
-def get_tick_milli(price_milli: int) -> int:
-    for threshold_milli, tick_milli in MILLI_TICK_LADDER:
+def get_tick_milli(price_milli: int, *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
+    tick_ladder, default_tick_milli, _resolved_profile = _resolve_tick_rule(
+        security_profile=security_profile,
+        ticker=ticker,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    for threshold_milli, tick_milli in tick_ladder:
         if price_milli < threshold_milli:
             return tick_milli
-    return 5000
+    return default_tick_milli
 
 
-def get_tick_milli_from_price(price) -> int:
+def get_tick_milli_from_price(price, *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
     price_decimal = _to_decimal(price)
-    for threshold_milli, tick_milli in MILLI_TICK_LADDER:
+    tick_ladder, default_tick_milli, _resolved_profile = _resolve_tick_rule(
+        security_profile=security_profile,
+        ticker=ticker,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    for threshold_milli, tick_milli in tick_ladder:
         if price_decimal < (Decimal(int(threshold_milli)) / _DECIMAL_THOUSAND):
             return tick_milli
-    return 5000
+    return default_tick_milli
 
 
 def tv_round_int(number: int, denominator: int) -> int:
     return (number + denominator // 2) // denominator
 
 
-def round_price_milli_to_tick(price_milli: int, direction: str = "nearest") -> int:
-    tick_milli = get_tick_milli(price_milli)
+def round_price_milli_to_tick(price_milli: int, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
+    tick_milli = get_tick_milli(
+        price_milli,
+        ticker=ticker,
+        security_profile=security_profile,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
     if direction == "up":
         return ((price_milli + tick_milli - 1) // tick_milli) * tick_milli
     if direction == "down":
@@ -97,9 +234,15 @@ def round_price_milli_to_tick(price_milli: int, direction: str = "nearest") -> i
     return tv_round_int(price_milli, tick_milli) * tick_milli
 
 
-def round_price_to_tick_milli(price, direction: str = "nearest") -> int:
+def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
     price_decimal = _to_decimal(price)
-    tick_milli = get_tick_milli_from_price(price_decimal)
+    tick_milli = get_tick_milli_from_price(
+        price_decimal,
+        ticker=ticker,
+        security_profile=security_profile,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
     tick_decimal = _tick_decimal_from_milli(tick_milli)
     ratio = price_decimal / tick_decimal
     if direction == "up":
@@ -226,16 +369,16 @@ def calc_net_sell_price_from_total(exec_price, qty: int, params) -> float:
     return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], qty)
 
 
-def calc_limit_up_price_milli(reference_price_milli: int) -> int:
+def calc_limit_up_price_milli(reference_price_milli: int, *, ticker=None, security_profile=None) -> int:
     reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
     raw_limit_price = reference_price * Decimal(110) / Decimal(100)
-    return round_price_to_tick_milli(raw_limit_price, direction="down")
+    return round_price_to_tick_milli(raw_limit_price, direction="down", ticker=ticker, security_profile=security_profile)
 
 
-def calc_limit_down_price_milli(reference_price_milli: int) -> int:
+def calc_limit_down_price_milli(reference_price_milli: int, *, ticker=None, security_profile=None) -> int:
     reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
     raw_limit_price = reference_price * Decimal(90) / Decimal(100)
-    return round_price_to_tick_milli(raw_limit_price, direction="up")
+    return round_price_to_tick_milli(raw_limit_price, direction="up", ticker=ticker, security_profile=security_profile)
 
 
 def is_same_price_milli(a, b) -> bool:

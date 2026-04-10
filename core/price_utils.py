@@ -16,6 +16,7 @@ from core.exact_accounting import (
     calc_limit_up_price_milli,
     calc_risk_budget_milli,
     get_tick_milli_from_price,
+    infer_security_profile,
     milli_to_money,
     milli_to_price,
     money_to_milli,
@@ -29,94 +30,98 @@ def tv_round(number):
     return math.floor(number + 0.5)
 
 
-def get_tick_size(price):
-    return milli_to_price(get_tick_milli_from_price(price))
+def get_tick_size(price, ticker=None, security_profile=None):
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    return milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile))
 
 
 # # (AI註: 第12點 - 跳價取整方向統一收斂到單一函式，避免買/賣/停損/停利各自手寫)
-def round_to_tick(price, direction="nearest"):
+def round_to_tick(price, direction="nearest", ticker=None, security_profile=None):
     if pd.isna(price):
         return np.nan
-    return milli_to_price(round_price_to_tick_milli(price, direction=direction))
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    return milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))
 
 
-def adjust_to_tick(price):
-    return round_to_tick(price, direction="nearest")
+def adjust_to_tick(price, ticker=None, security_profile=None):
+    return round_to_tick(price, direction="nearest", ticker=ticker, security_profile=security_profile)
 
 
-def adjust_price_up_to_tick(price):
-    return round_to_tick(price, direction="up")
+def adjust_price_up_to_tick(price, ticker=None, security_profile=None):
+    return round_to_tick(price, direction="up", ticker=ticker, security_profile=security_profile)
 
 
-def adjust_price_down_to_tick(price):
-    return round_to_tick(price, direction="down")
+def adjust_price_down_to_tick(price, ticker=None, security_profile=None):
+    return round_to_tick(price, direction="down", ticker=ticker, security_profile=security_profile)
 
 
 # # (AI註: 長倉語義化封裝 - 買單/賣單/停損/停利各自固定方向，避免保守性漂移)
-def adjust_long_buy_limit(price):
-    return adjust_price_down_to_tick(price)
+def adjust_long_buy_limit(price, ticker=None, security_profile=None):
+    return adjust_price_down_to_tick(price, ticker=ticker, security_profile=security_profile)
 
 
-def adjust_long_stop_price(price):
-    return adjust_price_up_to_tick(price)
+def adjust_long_stop_price(price, ticker=None, security_profile=None):
+    return adjust_price_up_to_tick(price, ticker=ticker, security_profile=security_profile)
 
 
-def adjust_long_target_price(price):
-    return adjust_price_up_to_tick(price)
+def adjust_long_target_price(price, ticker=None, security_profile=None):
+    return adjust_price_up_to_tick(price, ticker=ticker, security_profile=security_profile)
 
 
 # # (AI註: 單一真理來源 - 首個可執行停損價格一律由入場基準價與 ATR 倍數計算)
-def calc_initial_stop_from_reference(reference_price, atr, params):
+def calc_initial_stop_from_reference(reference_price, atr, params, ticker=None, security_profile=None):
     if pd.isna(reference_price) or pd.isna(atr):
         return np.nan
-    return adjust_long_stop_price(reference_price - atr * params.atr_times_init)
+    return adjust_long_stop_price(reference_price - atr * params.atr_times_init, ticker=ticker, security_profile=security_profile)
 
 
 # # (AI註: 單一真理來源 - 初始 trailing 基準價一律由入場基準價與 ATR 倍數計算)
-def calc_initial_trailing_stop_from_reference(reference_price, atr, params):
+def calc_initial_trailing_stop_from_reference(reference_price, atr, params, ticker=None, security_profile=None):
     if pd.isna(reference_price) or pd.isna(atr):
         return np.nan
-    return adjust_long_stop_price(reference_price - atr * params.atr_times_trail)
+    return adjust_long_stop_price(reference_price - atr * params.atr_times_trail, ticker=ticker, security_profile=security_profile)
 
 
 # # (AI註: 單一真理來源 - 目標價一律由入場基準價與停損價差推導；可用於盤前 sizing 基準或實際成交後首個可執行停利)
-def calc_frozen_target_price(entry_reference_price, stop_price):
+def calc_frozen_target_price(entry_reference_price, stop_price, ticker=None, security_profile=None):
     if pd.isna(entry_reference_price) or pd.isna(stop_price):
         return np.nan
-    return adjust_long_target_price(entry_reference_price + (entry_reference_price - stop_price))
+    return adjust_long_target_price(entry_reference_price + (entry_reference_price - stop_price), ticker=ticker, security_profile=security_profile)
 
 
-def adjust_long_buy_fill_price(price):
-    return adjust_price_up_to_tick(price)
+def adjust_long_buy_fill_price(price, ticker=None, security_profile=None):
+    return adjust_price_up_to_tick(price, ticker=ticker, security_profile=security_profile)
 
 
-def adjust_long_sell_fill_price(price):
-    return adjust_price_down_to_tick(price)
+def adjust_long_sell_fill_price(price, ticker=None, security_profile=None):
+    return adjust_price_down_to_tick(price, ticker=ticker, security_profile=security_profile)
 
 
-def get_tick_size_array(prices):
+def get_tick_size_array(prices, ticker=None, security_profile=None):
     prices = np.asarray(prices, dtype=np.float64)
     ticks = np.full(prices.shape, np.nan, dtype=np.float64)
     valid = ~np.isnan(prices)
     if not np.any(valid):
         return ticks
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
     ticks[valid] = np.fromiter(
-        (milli_to_price(get_tick_milli_from_price(price)) for price in prices[valid]),
+        (milli_to_price(get_tick_milli_from_price(price, security_profile=resolved_profile)) for price in prices[valid]),
         dtype=np.float64,
         count=int(np.count_nonzero(valid)),
     )
     return ticks
 
 
-def round_to_tick_array(prices, direction="nearest"):
+def round_to_tick_array(prices, direction="nearest", ticker=None, security_profile=None):
     prices = np.asarray(prices, dtype=np.float64)
     out = np.full(prices.shape, np.nan, dtype=np.float64)
     valid = ~np.isnan(prices)
     if not np.any(valid):
         return out
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
     out[valid] = np.fromiter(
         (
-            milli_to_price(round_price_to_tick_milli(price, direction=direction))
+            milli_to_price(round_price_to_tick_milli(price, direction=direction, security_profile=resolved_profile))
             for price in prices[valid]
         ),
         dtype=np.float64,
@@ -125,12 +130,12 @@ def round_to_tick_array(prices, direction="nearest"):
     return out
 
 
-def adjust_to_tick_array(prices):
-    return round_to_tick_array(prices, direction="nearest")
+def adjust_to_tick_array(prices, ticker=None, security_profile=None):
+    return round_to_tick_array(prices, direction="nearest", ticker=ticker, security_profile=security_profile)
 
 
-def adjust_long_buy_limit_array(prices):
-    return round_to_tick_array(prices, direction="down")
+def adjust_long_buy_limit_array(prices, ticker=None, security_profile=None):
+    return round_to_tick_array(prices, direction="down", ticker=ticker, security_profile=security_profile)
 
 
 def calc_entry_price(bPrice, bQty, params):
@@ -220,53 +225,57 @@ def calc_initial_risk_total(entry_price, net_stop_price, qty, params):
 
 
 # # (AI註: 單一真理來源 - 漲跌停價與一字漲/跌停判斷統一由此處理，避免 core / portfolio / tool 各寫各的)
-def calc_limit_up_price(reference_price):
+def calc_limit_up_price(reference_price, ticker=None, security_profile=None):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    return milli_to_price(calc_limit_up_price_milli(price_to_milli(reference_price)))
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    return milli_to_price(calc_limit_up_price_milli(price_to_milli(reference_price), security_profile=resolved_profile))
 
 
-def calc_limit_down_price(reference_price):
+def calc_limit_down_price(reference_price, ticker=None, security_profile=None):
     if pd.isna(reference_price) or reference_price <= 0:
         return np.nan
-    return milli_to_price(calc_limit_down_price_milli(price_to_milli(reference_price)))
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    return milli_to_price(calc_limit_down_price_milli(price_to_milli(reference_price), security_profile=resolved_profile))
 
 
 # # (AI註: 單一真理來源 - 盤前固定限價單今日是否仍有法定價格帶可達性統一由此判斷)
-def is_limit_buy_price_reachable_for_day(limit_price, y_close):
+def is_limit_buy_price_reachable_for_day(limit_price, y_close, ticker=None, security_profile=None):
     if pd.isna(limit_price) or limit_price <= 0 or pd.isna(y_close) or y_close <= 0:
         return False
-    limit_down_price = calc_limit_down_price(y_close)
+    limit_down_price = calc_limit_down_price(y_close, ticker=ticker, security_profile=security_profile)
     if pd.isna(limit_down_price):
         return False
     return price_to_milli(limit_price) >= price_to_milli(limit_down_price)
 
 
-def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
+def is_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    limit_up_price_milli = calc_limit_up_price_milli(price_to_milli(y_close))
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    limit_up_price_milli = calc_limit_up_price_milli(price_to_milli(y_close), security_profile=resolved_profile)
     return all(price_to_milli(v) == limit_up_price_milli for v in (t_open, t_high, t_low, t_close))
 
 
-def is_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+def is_limit_down_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
     if any(pd.isna(v) for v in (t_open, t_high, t_low, t_close, y_close)):
         return False
-    limit_down_price_milli = calc_limit_down_price_milli(price_to_milli(y_close))
+    resolved_profile = infer_security_profile(ticker) if security_profile is None else security_profile
+    limit_down_price_milli = calc_limit_down_price_milli(price_to_milli(y_close), security_profile=resolved_profile)
     return all(price_to_milli(v) == limit_down_price_milli for v in (t_open, t_high, t_low, t_close))
 
 
-def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close):
-    return is_limit_up_bar(t_open, t_high, t_low, t_close, y_close)
+def is_locked_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
+    return is_limit_up_bar(t_open, t_high, t_low, t_close, y_close, ticker=ticker, security_profile=security_profile)
 
 
-def is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
-    return is_limit_down_bar(t_open, t_high, t_low, t_close, y_close)
+def is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close, ticker=None, security_profile=None):
+    return is_limit_down_bar(t_open, t_high, t_low, t_close, y_close, ticker=ticker, security_profile=security_profile)
 
 
-def get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close):
+def get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=None, security_profile=None):
     if pd.isna(t_volume) or t_volume <= 0:
         return 'NO_VOLUME'
-    if is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close):
+    if is_locked_limit_down_bar(t_open, t_high, t_low, t_close, y_close, ticker=ticker, security_profile=security_profile):
         return 'LOCKED_DOWN'
     return None

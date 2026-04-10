@@ -16,6 +16,8 @@ def _build_candidate_plan_seed(candidate_row):
         'init_trail': candidate_row['init_trail'],
         'target_price': candidate_row.get('target_price'),
         'entry_atr': candidate_row.get('entry_atr'),
+        'ticker': candidate_row.get('ticker'),
+        'security_profile': candidate_row.get('security_profile'),
     }
 
 
@@ -106,6 +108,7 @@ def execute_reserved_entries_for_day(
             y_close=y_close,
             params=params,
             entry_type=cand['type'],
+            ticker=cand['ticker'],
         )
 
         if entry_result['filled']:

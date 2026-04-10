@@ -95,16 +95,17 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
 
 def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_volume, y_close, params, events):
     pending_action = position.get('pending_exit_action')
+    resolved_ticker = position.get('ticker')
     if pending_action not in {'STOP', 'TP_HALF'}:
         return False, 0, 0
 
-    sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)
+    sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=resolved_ticker)
     if sell_block_reason is not None:
         events.extend(['MISSED_SELL', sell_block_reason])
         return True, 0, 0
 
     trigger_price = position.get('pending_exit_trigger_price', pd.NA)
-    exec_price = adjust_long_sell_fill_price(t_open)
+    exec_price = adjust_long_sell_fill_price(t_open, ticker=resolved_ticker)
     if pending_action == 'STOP':
         freed_cash_milli, pnl_milli = _execute_sell_leg(
             position,
@@ -166,7 +167,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
 
     if y_close > position['pure_buy_price'] + (y_atr * params.atr_times_trail):
-        new_trail = adjust_long_stop_price(y_close - (y_atr * params.atr_times_trail))
+        new_trail = adjust_long_stop_price(y_close - (y_atr * params.atr_times_trail), ticker=position.get("ticker"))
         new_trail_milli = price_to_milli(new_trail)
         position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), new_trail_milli)
         position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
@@ -174,9 +175,9 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         position['sl'] = milli_to_money(position['sl_milli'])
 
     if y_ind_sell:
-        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)
+        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         if sell_block_reason is None:
-            exec_price = adjust_long_sell_fill_price(t_open)
+            exec_price = adjust_long_sell_fill_price(t_open, ticker=position.get("ticker"))
             leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
                 position,
                 event='IND_SELL',
@@ -201,7 +202,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         is_tp_hit = False
 
     if is_tp_hit and not (pd.isna(t_volume) or t_volume <= 0):
-        exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open))
+        exec_price = adjust_long_sell_fill_price(max(position['tp_half'], t_open), ticker=position.get('ticker'))
         leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
             position,
             event='TP_HALF',
@@ -217,9 +218,9 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         events.append('TP_HALF')
 
     if is_stop_hit and position['qty'] > 0:
-        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close)
+        sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         if sell_block_reason is None:
-            exec_price = adjust_long_sell_fill_price(min(position['sl'], t_open))
+            exec_price = adjust_long_sell_fill_price(min(position['sl'], t_open), ticker=position.get('ticker'))
             leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
                 position,
                 event='STOP',

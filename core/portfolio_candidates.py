@@ -103,11 +103,11 @@ def _collect_normal_candidates(
         if not is_candidate:
             continue
 
-        candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params)
+        candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params, ticker=ticker)
         if candidate_plan is None:
             continue
 
-        signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params)
+        signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params, ticker=ticker)
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
 
@@ -176,6 +176,7 @@ def _collect_extended_candidates(
             active_extended_signals[ticker],
             sizing_equity,
             params,
+            ticker=ticker,
         )
         if candidate_plan is None:
             continue
@@ -184,6 +185,7 @@ def _collect_extended_candidates(
             active_extended_signals[ticker],
             candidate_plan,
             y_close,
+            ticker=ticker,
         )
 
         candidate_row = _make_candidate_row(
