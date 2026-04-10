@@ -2279,6 +2279,26 @@ def validate_debug_forced_closeout_exact_total_pnl_contract_case(_base_params):
     summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
+def validate_unit_display_rounding_helper_contract_case(_base_params):
+    case_id = "META_UNIT_DISPLAY_ROUNDING_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "synthetic_unit_cases.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+    function_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "validate_exact_accounting_display_leg_reconciliation_case":
+            function_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+            break
+
+    add_check(results, "meta_contract", case_id, "unit_display_reconciliation_uses_shared_rounding_helper", True, 'round_money_for_display(position["display_realized_pnl_sum"] + reconciled_exit_pnl)' in function_source)
+    add_check(results, "meta_contract", case_id, "unit_display_reconciliation_has_no_legacy_builtin_round", False, 'round(position["display_realized_pnl_sum"] + reconciled_exit_pnl, 2)' in function_source)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
 
 def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
     case_id = "META_SYNTHETIC_META_SOURCE_PATH_BINDING_CONTRACT"

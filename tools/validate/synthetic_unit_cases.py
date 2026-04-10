@@ -15,6 +15,7 @@ from core.exact_accounting import (
     milli_to_money,
     money_to_milli,
     price_to_milli,
+    round_money_for_display,
     sync_position_display_fields,
 )
 from core.history_filters import evaluate_history_candidate_metrics
@@ -299,7 +300,7 @@ def validate_exact_accounting_display_leg_reconciliation_case(_base_params):
     reconciled_exit_pnl = calc_reconciled_exit_display_pnl(position, total_trade_pnl)
 
     add_check(results, "unit_exact_accounting", case_id, "reconciled_exit_leg_absorbs_rounding_residual", 16.99, reconciled_exit_pnl, tol=1e-12)
-    add_check(results, "unit_exact_accounting", case_id, "display_leg_sum_matches_total_trade_pnl", 29.33, round(position["display_realized_pnl_sum"] + reconciled_exit_pnl, 2), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "display_leg_sum_matches_total_trade_pnl", 29.33, round_money_for_display(position["display_realized_pnl_sum"] + reconciled_exit_pnl), tol=1e-12)
 
     summary["reconciled_exit_pnl"] = reconciled_exit_pnl
     return results, summary

@@ -55,6 +55,7 @@
 17. 凡以可見 trade log / history row 重建 completed trades 的 helper / consumer，也必須以共享 money-rounding helper 正規化逐列金額並累加；不得在重建路徑另用內建 `round(..., 2)`，否則會把顯示值重建成不同於核心 completed trades 的序列。
 18. debug / GUI / history 的期末強制結算若需合成整筆 completed-trade `total_pnl`，必須以 `realized_pnl_milli + final_leg_pnl_milli` 走整數 ledger 路徑後再轉顯示；不得以 float 將既有已實現損益與尾倉損益直接相加。
 19. `tools/validate/synthetic_meta_cases.py` 內任何 validator 若以 `summary["source_path"]` 或類似欄位回報來源檔，所使用的 path 變數必須在該函式內明確宣告；不得引用其他 validator 的局部變數名稱，避免 synthetic suite 因 `NameError` 中斷。
+20. 凡 unit / synthetic validator 需要比對顯示金額、rounded leg pnl 或 completed-trade 顯示總損益時，也必須使用共享 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生與正式顯示口徑不同的 oracle。
 
 ## E. 交易與策略原則
 
