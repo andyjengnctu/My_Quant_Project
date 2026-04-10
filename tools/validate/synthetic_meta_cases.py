@@ -2025,7 +2025,7 @@ def validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case(
     add_check(results, "meta_contract", case_id, "synthetic_contract_cases_no_legacy_case_price_df_access", [], legacy_hits)
 
     summary["legacy_hits"] = legacy_hits
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2062,7 +2062,7 @@ def validate_gui_trade_count_contract_no_legacy_exit_snippet_case(_base_params):
     add_check(results, "meta_contract", case_id, "gui_trade_count_contract_uses_forced_close_behavior_probe", True, "append_debug_forced_closeout(" in function_source and "build_trade_stats_index(" in function_source)
 
     summary["legacy_literals"] = legacy_literals
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2115,7 +2115,7 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "single_backtest_stats_declares_legacy_schema_keys", [], missing_keys)
 
     summary["missing_keys"] = missing_keys
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2195,7 +2195,7 @@ def validate_real_case_completed_trade_rounding_oracle_contract_case(_base_param
     add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_trade_pnls", False, 'expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]' in source_text)
     add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_realized_sum", False, 'expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)' in source_text)
 
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
@@ -2212,7 +2212,7 @@ def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "trade_rebuild_full_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
     add_check(results, "meta_contract", case_id, "trade_rebuild_has_no_legacy_builtin_round_total_pnl", False, 'active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)' in source_text)
 
-    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2277,6 +2277,56 @@ def validate_debug_forced_closeout_exact_total_pnl_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "forced_closeout_has_no_legacy_float_total_pnl_path", False, "total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)" in function_source)
 
     summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+def validate_synthetic_meta_source_path_binding_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_META_SOURCE_PATH_BINDING_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "synthetic_meta_cases.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    offenders = []
+    for node in parsed.body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("validate_"):
+            continue
+        assigned_names = {arg.arg for arg in node.args.args}
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Assign):
+                for target in inner.targets:
+                    if isinstance(target, ast.Name):
+                        assigned_names.add(target.id)
+            elif isinstance(inner, ast.AnnAssign) and isinstance(inner.target, ast.Name):
+                assigned_names.add(inner.target.id)
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Assign):
+                continue
+            if len(inner.targets) != 1 or not isinstance(inner.targets[0], ast.Subscript):
+                continue
+            sub = inner.targets[0]
+            if not isinstance(sub.value, ast.Name) or sub.value.id != "summary":
+                continue
+            slice_node = sub.slice
+            if not (isinstance(slice_node, ast.Constant) and slice_node.value == "source_path"):
+                continue
+            value = inner.value
+            if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
+                continue
+            relative_call = value.func.value
+            if not isinstance(relative_call, ast.Call) or not isinstance(relative_call.func, ast.Attribute):
+                continue
+            if relative_call.func.attr != "relative_to":
+                continue
+            base_obj = relative_call.func.value
+            if isinstance(base_obj, ast.Name) and base_obj.id not in assigned_names:
+                offenders.append(f"{node.name}:{base_obj.id}:L{inner.lineno}")
+
+    add_check(results, "meta_contract", case_id, "synthetic_meta_source_path_assignments_bind_declared_locals", [], offenders)
+    summary["offenders"] = offenders
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
