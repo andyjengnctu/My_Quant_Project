@@ -47,6 +47,17 @@ def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
     return milli_to_money(sell_ledger['net_sell_total_milli'])
 
 
+def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_price, fallback_net_price):
+    allocated_cost_milli = 0 if exit_context is None else int(exit_context.get('allocated_cost_milli', 0) or 0)
+    pnl_milli = 0 if exit_context is None else int(exit_context.get('pnl_milli', 0) or 0)
+    if allocated_cost_milli > 0:
+        return float(milli_to_money(pnl_milli) / milli_to_money(allocated_cost_milli) * 100.0)
+    entry_price = float(position.get('entry', fallback_entry_price) or fallback_entry_price or 0.0)
+    if entry_price <= 0:
+        return 0.0
+    return float((float(fallback_net_price) - entry_price) / entry_price * 100.0)
+
+
 def _build_completed_trade_snapshot(stats_index, current_date, params, current_capital_after_event, overall_max_drawdown):
     if stats_index is None or current_capital_after_event is None:
         return None
@@ -136,7 +147,12 @@ def process_debug_position_step(
             meta={
                 'current_capital': current_capital_after_tp,
                 'pnl_value': tp_leg_pnl,
-                'pnl_pct': float(((sell_net_price_half - float(position.get('entry', exec_sell_price_half))) / float(position.get('entry', exec_sell_price_half)) * 100.0) if float(position.get('entry', 0.0) or 0.0) > 0 else 0.0),
+                'pnl_pct': _resolve_display_leg_return_pct(
+                    position,
+                    tp_context,
+                    fallback_entry_price=exec_sell_price_half,
+                    fallback_net_price=sell_net_price_half,
+                ),
                 'sell_capital': float(tp_sell_total),
                 'payoff_ratio': None if history_snapshot is None else float(history_snapshot.get('payoff_ratio', 0.0)),
                 'win_rate': None if history_snapshot is None else float(history_snapshot.get('win_rate', 0.0)),
