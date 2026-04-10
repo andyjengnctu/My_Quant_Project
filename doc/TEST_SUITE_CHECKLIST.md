@@ -200,6 +200,7 @@
 | B133 | P1 | Meta / 驗證 Oracle 契約 | unit / synthetic validator 若比對可見 rounded 金額、display leg pnl 或 completed-trade 顯示總損益，必須與正式顯示層共用同一 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生不同 rounding oracle | DONE | 已補 static meta contract，直接掃描 `tools/validate/synthetic_unit_cases.py` 的 `validate_exact_accounting_display_leg_reconciliation_case`，釘死 display-leg reconciliation validator 必須委派 `round_money_for_display(...)`，且不得殘留內建 `round(..., 2)`；避免 unit validator 自己用不同 rounding 規則把顯示口徑誤判成核心差異 | `tools/validate/synthetic_meta_cases.py` |
 | B134 | P1 | Meta / 顯示總額契約 | debug / GUI / history 的可見交易明細或 marker 若顯示 `buy_capital`、`sell_capital`、`gross_amount`、`total_return_pct` 等正式交易總額或報酬率，必須由 exact ledger total（如 `net_buy_total_milli`、`net_total_milli`）推導；不得再以含費每股顯示價或 `per-share × qty` 回推可見總額，避免把可見值重新拉回浮點攤提路徑 | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py`，釘死 debug exit flow 的 full-entry capital、half/full exit `gross_amount` 與 marker `sell_capital` 都必須優先使用 ledger total，且不得殘留 `sell_net_price * qty` 舊路徑；避免 debug trade row / marker 顯示金額與正式帳務總額再度分叉 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py` |
 | B135 | P1 | Meta / 顯示報酬率分母契約 | debug / GUI / history 若已有 `entry_capital_total`、`net_buy_total_milli` 等既存 full-entry capital total，計算 `total_return_pct` 或其他以 full-entry capital 為分母的可見報酬率時，必須優先使用該總額欄位；不得跳過既有 total 而直接退回 `entry * qty` 等 per-share fallback，避免可見報酬率在 partial-exit / rounded entry 顯示下再次偏離 exact ledger | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py` 的 `_resolve_full_entry_capital()`，釘死 helper 必須先看 `net_buy_total_milli`，再看 `entry_capital_total`，最後才允許 per-share fallback，且 display total fallback 也必須經共享 money-rounding helper；避免 debug `total_return_pct` 分母在已有 total 欄位時仍退回 `entry * qty` | `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py` |
+| B136 | P1 | Meta / 買進顯示總額契約 | debug / GUI / history 的買進可見欄位或 marker 若顯示 `buy_capital`、買進 `gross_amount` 或其他 entry total，必須優先使用 `net_buy_total_milli`、`entry_cost` 或共享 exact-total helper；不得以 `entry_price * qty`、`entry * qty` 等 per-share fallback 回推買進總額，避免買進可見資本再次偏離 exact ledger | DONE | 已補 static meta contract，直接掃描 `tools/debug/entry_flow.py`，釘死 debug entry flow 的買進 `gross_amount` 與 marker `buy_capital` 都必須優先使用 `net_buy_total_milli` / `entry_cost` / exact-total helper，且不得殘留 `entry_result['entry_price'] * entry_plan['qty']` 舊 fallback；避免 debug 買進可見金額再度分叉 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/entry_flow.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -459,6 +460,7 @@
 | T219 | `validate_unit_display_rounding_helper_contract_case` | B133 |
 | T220 | `validate_debug_exit_display_capital_uses_ledger_totals_contract_case` | B134 |
 | T221 | `validate_debug_exit_entry_capital_fallback_contract_case` | B135 |
+| T222 | `validate_debug_entry_display_capital_uses_exact_total_contract_case` | B136 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -849,6 +851,7 @@
 | 2026-04-10 | B133 | 新增 unit-display rounding-helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-10 | B134 | 新增 debug exit display-capital exact-ledger static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/exit_flow.py` |
 | 2026-04-10 | B135 | 新增 debug exit entry-capital fallback exact-ledger static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/exit_flow.py` |
+| 2026-04-10 | B136 | 新增 debug entry display-capital exact-total static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/entry_flow.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
@@ -857,3 +860,4 @@
 | 2026-04-10 | T219 | 新增 unit-display rounding-helper static contract 並驗證 | NEW -> DONE | `validate_unit_display_rounding_helper_contract_case` |
 | 2026-04-10 | T220 | 新增 debug exit display-capital exact-ledger static contract 並驗證 | NEW -> DONE | `validate_debug_exit_display_capital_uses_ledger_totals_contract_case` |
 | 2026-04-10 | T221 | 新增 debug exit entry-capital fallback exact-ledger static contract 並驗證 | NEW -> DONE | `validate_debug_exit_entry_capital_fallback_contract_case` |
+| 2026-04-10 | T222 | 新增 debug entry display-capital exact-total static contract 並驗證 | NEW -> DONE | `validate_debug_entry_display_capital_uses_exact_total_contract_case` |

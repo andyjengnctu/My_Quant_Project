@@ -7,10 +7,21 @@ from core.extended_signals import (
     create_signal_tracking_state,
     should_clear_extended_signal,
 )
-from core.exact_accounting import calc_entry_total_cost
-from core.price_utils import calc_entry_price
+from core.exact_accounting import calc_entry_total_cost, milli_to_money, round_money_for_display
 from tools.debug.charting import record_active_levels, record_limit_order, record_trade_marker
 from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
+
+
+def _resolve_display_entry_total(entry_result, *, qty, params):
+    position = entry_result.get("position") or {}
+    exact_entry_total_milli = int(position.get("net_buy_total_milli", 0) or 0)
+    if exact_entry_total_milli > 0:
+        return milli_to_money(exact_entry_total_milli)
+    display_entry_cost = float(entry_result.get("entry_cost", 0.0) or 0.0)
+    if display_entry_cost > 0:
+        return round_money_for_display(display_entry_cost)
+    buy_price = float(entry_result.get("buy_price", 0.0) or 0.0)
+    return calc_entry_total_cost(buy_price, int(qty or 0), params)
 
 
 def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_type, entry_result, note=""):
@@ -109,7 +120,7 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
-            spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))
+            spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -208,7 +219,7 @@ def process_debug_entry_for_day(
             position['limit_price'] = entry_plan['limit_price']
             buy_triggered = True
             active_extended_signal = None
-            spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))
+            spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,

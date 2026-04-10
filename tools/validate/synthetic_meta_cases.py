@@ -2142,7 +2142,7 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
 
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_flow_returns_spent_cash", True, "position, active_extended_signal, spent_cash = process_debug_entry_for_day(" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_cash_subtracts_spent_cash", True, "current_capital -= spent_cash" in debug_backtest_source)
-    add_check(results, "meta_contract", case_id, "debug_entry_flow_tracks_exact_entry_cost", True, "spent_cash = float(entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty']))" in debug_entry_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_flow_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in debug_entry_source)
     add_check(results, "meta_contract", case_id, "debug_entry_flow_returns_spent_cash", True, "return position, active_extended_signal, spent_cash" in debug_entry_source)
 
     summary["source_paths"] = [
@@ -2295,6 +2295,35 @@ def validate_unit_display_rounding_helper_contract_case(_base_params):
 
     add_check(results, "meta_contract", case_id, "unit_display_reconciliation_uses_shared_rounding_helper", True, 'round_money_for_display(position["display_realized_pnl_sum"] + reconciled_exit_pnl)' in function_source)
     add_check(results, "meta_contract", case_id, "unit_display_reconciliation_has_no_legacy_builtin_round", False, 'round(position["display_realized_pnl_sum"] + reconciled_exit_pnl, 2)' in function_source)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+
+def validate_debug_entry_display_capital_uses_exact_total_contract_case(_base_params):
+    case_id = "META_DEBUG_ENTRY_DISPLAY_CAPITAL_USES_EXACT_TOTAL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "debug", "entry_flow.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    helper_source = ""
+    step_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_display_entry_total":
+            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_entry_for_day":
+            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+
+    add_check(results, "meta_contract", case_id, "debug_entry_has_exact_entry_total_helper", True, bool(helper_source))
+    add_check(results, "meta_contract", case_id, "debug_entry_helper_prefers_position_net_buy_total_milli", True, 'exact_entry_total_milli = int(position.get("net_buy_total_milli", 0) or 0)' in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_helper_uses_entry_cost_before_any_recompute", True, 'display_entry_cost = float(entry_result.get("entry_cost", 0.0) or 0.0)' in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_helper_final_fallback_uses_exact_total_helper", True, 'return calc_entry_total_cost(buy_price, int(qty or 0), params)' in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_process_uses_exact_entry_total_helper", True, "spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_entry_has_no_legacy_per_share_entry_cost_fallback", False, "entry_result.get('entry_cost', entry_result['entry_price'] * entry_plan['qty'])" in step_source)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

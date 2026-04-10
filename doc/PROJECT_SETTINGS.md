@@ -58,6 +58,7 @@
 20. 凡 unit / synthetic validator 需要比對顯示金額、rounded leg pnl 或 completed-trade 顯示總損益時，也必須使用共享 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生與正式顯示口徑不同的 oracle。
 21. debug / GUI / history 的可見交易明細或 marker 若要顯示 `buy_capital`、`sell_capital`、`gross_amount`、`total_return_pct` 等正式交易總額或報酬率，必須以 exact ledger total（如 `net_buy_total_milli`、`net_total_milli`）推導；不得再以含費每股顯示價或 `per-share × qty` 回推可見總額。
 22. debug / GUI / history 若已有 `entry_capital_total`、`net_buy_total_milli` 等既存總額欄位可用，計算 `total_return_pct` 或其他以 full-entry capital 為分母的可見報酬率時，必須優先使用該總額欄位；不得跳過既有 total 而直接退回 `entry * qty` 等 per-share fallback。
+23. debug / GUI / history 的買進可見欄位或 marker 若顯示 `buy_capital`、買進 `gross_amount` 或其他 entry total，必須優先使用 `net_buy_total_milli`、`entry_cost` 或共享 exact-total helper；不得以 `entry_price * qty`、`entry * qty` 等 per-share fallback 回推買進總額。
 
 ## E. 交易與策略原則
 
