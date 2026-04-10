@@ -231,8 +231,9 @@ def append_debug_forced_closeout(
     exec_sell_price = adjust_long_sell_fill_price(position['close_price'])
     sell_net_price = calc_net_sell_price(exec_sell_price, position['qty'], params)
     sell_ledger = build_sell_ledger_from_price(exec_sell_price, position['qty'], params)
-    final_leg_actual_pnl = milli_to_money(sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0))
-    total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)
+    final_leg_actual_pnl_milli = sell_ledger['net_sell_total_milli'] - position.get('remaining_cost_basis_milli', 0)
+    total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)
+    total_pnl = milli_to_money(total_pnl_milli)
     final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
     current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + milli_to_money(sell_ledger['net_sell_total_milli'])
     completed_trade_snapshot = _build_completed_trade_snapshot(

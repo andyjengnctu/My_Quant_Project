@@ -195,6 +195,7 @@
 | B128 | P1 | Meta / 顯示一致性 契約 | 凡屬會被下游以可見金額欄位重建 completed trades 或彙總損益的 debug / portfolio trade log，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 造成 0.01 級可見口徑分叉 | DONE | 已補 static meta contract，直接掃描 `core/exact_accounting.py`、`core/portfolio_exits.py` 與 `tools/debug/log_rows.py`，釘死 shared display rounding 必須使用 Decimal HALF_UP，且 history/log row helper 必須委派共享 rounding helper；避免之後又在單一模組偷回內建 `round(..., 2)` 造成 completed-trade 顯示重建漂移 | `tools/validate/synthetic_meta_cases.py`, `core/exact_accounting.py`, `tools/debug/log_rows.py` |
 | B129 | P1 | Meta / 驗證 Oracle 契約 | 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，必須與共享 money-rounding helper 使用同一 HALF_UP 口徑；不得混用內建 `round(..., 2)` 將顯示 rounding 誤判成核心差異 | DONE | 已補 static meta contract，直接掃描 `tools/validate/real_case_assertions.py`，釘死 real-case completed-trade expected oracle 必須委派共享 rounding helper，且不得再用內建 `round(float(...), 2)` / `round(sum(...), 2)`；避免 consistency 因 validation consumer 與顯示層 rounding 規則分叉而虛假 FAIL | `tools/validate/synthetic_meta_cases.py`, `tools/validate/real_case_assertions.py` |
 | B130 | P1 | Meta / 重建契約 | 凡以可見 trade log / history row 重建 completed trades 的 helper / consumer，必須以共享 money-rounding helper 正規化逐列金額並累加；不得在重建路徑另用內建 `round(..., 2)`，否則會把同一批可見 row 重建成不同於核心 completed trades 的序列與總損益 | DONE | 已補 static meta contract，直接掃描 `tools/validate/trade_rebuild.py`，釘死 trade rebuild helper 必須匯入共享 rounding helper、逐列 `pnl` 先正規化後再累加 completed-trade total，且不得殘留內建 `round(..., 2)`；避免 debug / portfolio completed-trade sequence 因重建 helper 使用不同 rounding 規則而再度漂移 0.01 | `tools/validate/synthetic_meta_cases.py`, `tools/validate/trade_rebuild.py` |
+| B131 | P1 | Meta / 顯示一致性契約 | debug / GUI / history 的期末強制結算若需合成整筆 completed-trade `total_pnl`，必須以 `realized_pnl_milli + final_leg_pnl_milli` 走整數 ledger 路徑後再轉顯示；不得以 float 將既有已實現損益與尾倉損益直接相加，否則會在最後一筆 forced closeout 殘留 0.01 級漂移 | DONE | 已補 static meta contract，直接掃描 `tools/debug/exit_flow.py` 的 `append_debug_forced_closeout()`，釘死整筆 `total_pnl` 必須先組 `total_pnl_milli` 再 `milli_to_money(...)`，且不得殘留舊 `float(realized_pnl + final_leg_actual_pnl)` 路徑；避免 debug completed-trade sequence / realized-pnl-sum 只在期末結算尾筆分叉 0.01 | `tools/validate/synthetic_meta_cases.py`, `tools/debug/exit_flow.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -449,6 +450,7 @@
 | T214 | `validate_display_money_rounding_helper_contract_case` | B128 |
 | T215 | `validate_real_case_completed_trade_rounding_oracle_contract_case` | B129 |
 | T216 | `validate_trade_rebuild_rounding_helper_contract_case` | B130 |
+| T217 | `validate_debug_forced_closeout_exact_total_pnl_contract_case` | B131 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -834,6 +836,8 @@
 | 2026-04-10 | B128 | 新增 shared display money-rounding helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-10 | B129 | 新增 real-case completed-trade rounding oracle static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/real_case_assertions.py` |
 | 2026-04-10 | B130 | 新增 trade-rebuild shared rounding helper static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/trade_rebuild.py` |
+| 2026-04-10 | B131 | 新增 debug forced-closeout exact total-pnl static contract 後主表收斂為 DONE | NEW -> DONE | `tools/debug/exit_flow.py` |
 | 2026-04-10 | T214 | 新增 shared display money-rounding helper static contract 並驗證 | NEW -> DONE | `validate_display_money_rounding_helper_contract_case` |
 | 2026-04-10 | T215 | 新增 real-case completed-trade rounding oracle static contract 並驗證 | NEW -> DONE | `validate_real_case_completed_trade_rounding_oracle_contract_case` |
 | 2026-04-10 | T216 | 新增 trade-rebuild shared rounding helper static contract 並驗證 | NEW -> DONE | `validate_trade_rebuild_rounding_helper_contract_case` |
+| 2026-04-10 | T217 | 新增 debug forced-closeout exact total-pnl static contract 並驗證 | NEW -> DONE | `validate_debug_forced_closeout_exact_total_pnl_contract_case` |

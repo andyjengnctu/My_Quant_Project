@@ -53,6 +53,7 @@
 15. 凡屬可見 trade log / history row 的金額欄位，若後續工具會以其重建 completed trades 或彙總損益，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 形成 0.01 級顯示口徑分叉。
 16. 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，也必須使用共享 money-rounding helper；不得混用內建 `round(..., 2)` 與 HALF_UP，否則會把顯示 rounding 口徑誤判成核心不一致。
 17. 凡以可見 trade log / history row 重建 completed trades 的 helper / consumer，也必須以共享 money-rounding helper 正規化逐列金額並累加；不得在重建路徑另用內建 `round(..., 2)`，否則會把顯示值重建成不同於核心 completed trades 的序列。
+18. debug / GUI / history 的期末強制結算若需合成整筆 completed-trade `total_pnl`，必須以 `realized_pnl_milli + final_leg_pnl_milli` 走整數 ledger 路徑後再轉顯示；不得以 float 將既有已實現損益與尾倉損益直接相加。
 
 ## E. 交易與策略原則
 

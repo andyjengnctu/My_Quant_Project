@@ -2025,7 +2025,7 @@ def validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case(
     add_check(results, "meta_contract", case_id, "synthetic_contract_cases_no_legacy_case_price_df_access", [], legacy_hits)
 
     summary["legacy_hits"] = legacy_hits
-    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2062,7 +2062,7 @@ def validate_gui_trade_count_contract_no_legacy_exit_snippet_case(_base_params):
     add_check(results, "meta_contract", case_id, "gui_trade_count_contract_uses_forced_close_behavior_probe", True, "append_debug_forced_closeout(" in function_source and "build_trade_stats_index(" in function_source)
 
     summary["legacy_literals"] = legacy_literals
-    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2115,7 +2115,7 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "single_backtest_stats_declares_legacy_schema_keys", [], missing_keys)
 
     summary["missing_keys"] = missing_keys
-    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2195,7 +2195,7 @@ def validate_real_case_completed_trade_rounding_oracle_contract_case(_base_param
     add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_trade_pnls", False, 'expected_trade_pnls = [round(float(log["pnl"]), 2) for log in standalone_logs]' in source_text)
     add_check(results, "meta_contract", case_id, "real_case_assertions_has_no_legacy_builtin_round_for_realized_sum", False, 'expected_realized_pnl_sum = round(sum(expected_trade_pnls), 2)' in source_text)
 
-    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
@@ -2212,7 +2212,7 @@ def validate_trade_rebuild_rounding_helper_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "trade_rebuild_full_exit_accumulates_with_shared_helper", True, 'active_trade["total_pnl"] = round_money_for_display(active_trade["total_pnl"] + realized_pnl)' in source_text)
     add_check(results, "meta_contract", case_id, "trade_rebuild_has_no_legacy_builtin_round_total_pnl", False, 'active_trade["total_pnl"] = round(active_trade["total_pnl"] + realized_pnl, 2)' in source_text)
 
-    summary["source_path"] = str(source_path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
@@ -2254,6 +2254,29 @@ def validate_single_backtest_exact_cash_path_contract_case(_base_params):
         str(debug_exit_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
         str(forced_close_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
     ]
+    return results, summary
+
+
+
+def validate_debug_forced_closeout_exact_total_pnl_contract_case(_base_params):
+    case_id = "META_DEBUG_FORCED_CLOSEOUT_EXACT_TOTAL_PNL_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    forced_close_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_text = forced_close_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(forced_close_path))
+    function_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "append_debug_forced_closeout":
+            function_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+            break
+
+    add_check(results, "meta_contract", case_id, "forced_closeout_total_pnl_uses_integer_ledger_path", True, "total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0) + int(final_leg_actual_pnl_milli)" in function_source)
+    add_check(results, "meta_contract", case_id, "forced_closeout_total_pnl_derives_display_from_milli", True, "total_pnl = milli_to_money(total_pnl_milli)" in function_source)
+    add_check(results, "meta_contract", case_id, "forced_closeout_has_no_legacy_float_total_pnl_path", False, "total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)" in function_source)
+
+    summary["source_path"] = forced_close_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
 
