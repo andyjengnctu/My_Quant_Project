@@ -4,7 +4,6 @@ import tempfile
 import pandas as pd
 
 from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
-from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.entry_plans import (
     build_cash_capped_entry_plan,
@@ -13,6 +12,7 @@ from core.entry_plans import (
     execute_pre_market_entry_plan,
 )
 from core.position_step import execute_bar_step
+from core.exact_accounting import build_buy_ledger_from_price, build_sell_ledger_from_price, milli_to_money
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_prepared_stock_data, prep_stock_data_and_trades
 from core.portfolio_engine import run_portfolio_timeline
@@ -67,8 +67,8 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
 
     expected_exec_price = adjust_long_sell_fill_price(min(stop_level, 100.0))
     expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)
-    expected_freed_cash = milli_to_money(expected_sell_ledger['net_sell_total_milli'])
-    expected_pnl = milli_to_money(expected_sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli'])
+    expected_freed_cash = milli_to_money(expected_sell_ledger["net_sell_total_milli"])
+    expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - position["remaining_cost_basis_milli"])
 
     add_check(results, "synthetic_same_bar_stop_priority", case_id, "stop_event_emitted", True, "STOP" in events)
     add_check(results, "synthetic_same_bar_stop_priority", case_id, "tp_half_event_suppressed", False, "TP_HALF" in events, note="同 K 棒同時碰到停損 / 停利時，必須以最壞停損計算。")
@@ -181,7 +181,8 @@ def validate_synthetic_fee_tax_net_equity_case(base_params):
             raise ValueError("synthetic_fee_tax_net_equity_case 應在 entry_date 成交")
 
         entry_qty = int(entry_plan["qty"])
-        entry_cash_after_buy = float(params.initial_capital - entry_result["entry_price"] * entry_qty)
+        entry_cost = milli_to_money(entry_result["position"]["net_buy_total_milli"])
+        entry_cash_after_buy = float(params.initial_capital - entry_cost)
         expected_entry_day_equity = calc_mark_to_market_equity(
             entry_cash_after_buy,
             {"9821": dict(entry_result["position"])},

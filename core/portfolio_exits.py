@@ -34,34 +34,44 @@ def _round_money_for_history(value):
     return round_money_for_display(value)
 
 
-def _resolve_full_entry_capital_milli(pos):
-    net_buy_total_milli = int(pos.get('net_buy_total_milli', 0) or 0)
-    if net_buy_total_milli > 0:
-        return net_buy_total_milli
-    entry_capital_total = pos.get('entry_capital_total', 0.0)
-    if entry_capital_total not in (None, 0, 0.0):
-        entry_capital_milli = coerce_money_like_to_milli(entry_capital_total)
-        if entry_capital_milli > 0:
-            return entry_capital_milli
-    entry_price = float(pos.get('entry', 0.0) or 0.0)
-    initial_qty = int(pos.get('initial_qty', pos.get('qty', 0)) or 0)
-    if entry_price <= 0 or initial_qty <= 0:
+
+
+def _resolve_full_entry_capital_milli(position, fallback_qty):
+    exact_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
+    if exact_total_milli > 0:
+        return exact_total_milli
+
+    display_total = float(position.get('entry_capital_total', 0.0) or 0.0)
+    if display_total > 0:
+        return coerce_money_like_to_milli(round_money_for_display(display_total))
+
+    avg_entry_price = float(position.get('entry', 0.0) or 0.0)
+    initial_qty = int(position.get('initial_qty', fallback_qty) or fallback_qty or 0)
+    if avg_entry_price <= 0 or initial_qty <= 0:
         return 0
-    return calc_total_from_average_price_milli(entry_price, initial_qty)
+    return calc_total_from_average_price_milli(avg_entry_price, initial_qty)
 
 
-def _calc_position_mark_to_market_return(pos, mark_price, params):
-    full_entry_capital_milli = _resolve_full_entry_capital_milli(pos)
-    if full_entry_capital_milli <= 0:
-        return float('-inf')
-    qty = int(pos.get('qty', 0) or 0)
-    if qty <= 0:
-        return float('-inf')
-    floating_exec_price = adjust_long_sell_fill_price(mark_price)
-    sell_ledger = build_sell_ledger_from_price(floating_exec_price, qty, params)
-    floating_pnl_milli = sell_ledger['net_sell_total_milli'] - int(pos.get('remaining_cost_basis_milli', 0) or 0)
-    total_trade_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0) + floating_pnl_milli
-    return total_trade_pnl_milli / full_entry_capital_milli
+def _calc_position_mark_to_market_return(position, mark_price, params):
+    remaining_qty = int(position.get('qty', 0) or 0)
+    if remaining_qty <= 0:
+        return float('inf')
+
+    full_entry_total_milli = _resolve_full_entry_capital_milli(position, remaining_qty)
+    if full_entry_total_milli <= 0:
+        return float('inf')
+
+    realized_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
+    remaining_cost_basis_milli = int(position.get('remaining_cost_basis_milli', 0) or 0)
+    sell_ledger = build_sell_ledger_from_price(mark_price, remaining_qty, params)
+
+    if remaining_cost_basis_milli > 0:
+        floating_pnl_milli = sell_ledger['net_sell_total_milli'] - remaining_cost_basis_milli
+        total_trade_pnl_milli = realized_pnl_milli + floating_pnl_milli
+    else:
+        total_trade_pnl_milli = sell_ledger['net_sell_total_milli'] - full_entry_total_milli
+
+    return milli_to_money(total_trade_pnl_milli) / milli_to_money(full_entry_total_milli)
 
 
 def try_rotate_weakest_position(

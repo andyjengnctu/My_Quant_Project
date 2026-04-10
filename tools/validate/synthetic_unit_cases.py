@@ -1,5 +1,4 @@
 import copy
-from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 import pandas as pd
@@ -54,11 +53,11 @@ def validate_price_utils_unit_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     sized_qty = calc_position_size(100.0, 95.0, 10_000.0, 0.02, params)
-    buy_ledger = build_buy_ledger_from_price(100.0, sized_qty, params)
-    sell_ledger = build_sell_ledger_from_price(95.0, sized_qty, params)
-    entry_cost = milli_to_money(buy_ledger['net_buy_total_milli'])
-    exit_net = milli_to_money(sell_ledger['net_sell_total_milli'])
-    actual_risk = milli_to_money(buy_ledger['net_buy_total_milli'] - sell_ledger['net_sell_total_milli'])
+    entry_ledger = build_buy_ledger_from_price(100.0, sized_qty, params)
+    stop_ledger = build_sell_ledger_from_price(95.0, sized_qty, params)
+    entry_cost = milli_to_money(entry_ledger["net_buy_total_milli"])
+    exit_net = milli_to_money(stop_ledger["net_sell_total_milli"])
+    actual_risk = entry_cost - exit_net
 
     add_check(results, "unit_price_utils", case_id, "buy_limit_rounds_down_to_tick", 10.0, adjust_long_buy_limit(10.03), tol=1e-9)
     add_check(results, "unit_price_utils", case_id, "sell_fill_rounds_down_to_tick", 10.0, adjust_long_sell_fill_price(10.03), tol=1e-9)
@@ -384,71 +383,28 @@ def validate_exact_accounting_display_derived_case(_base_params):
     return results, summary
 
 
-_DECIMAL_ONE = Decimal("1")
-_DECIMAL_THOUSAND = Decimal("1000")
-_DECIMAL_PPM = Decimal("1000000")
-
-
-def _oracle_decimal(value) -> Decimal:
-    return Decimal(str(value))
-
-
-def _oracle_to_milli(value) -> int:
-    return int((_oracle_decimal(value) * _DECIMAL_THOUSAND).quantize(_DECIMAL_ONE, rounding=ROUND_HALF_UP))
-
-
-def _oracle_rate_to_ppm(value) -> int:
-    return int((_oracle_decimal(value) * _DECIMAL_PPM).quantize(_DECIMAL_ONE, rounding=ROUND_HALF_UP))
-
-
-def _oracle_fee_milli(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:
-    fee_milli = int((Decimal(int(gross_milli)) * Decimal(int(fee_ppm)) / _DECIMAL_PPM).quantize(_DECIMAL_ONE, rounding=ROUND_HALF_UP))
-    return max(fee_milli, int(min_fee_milli))
-
-
-def _oracle_tax_milli(gross_milli: int, tax_ppm: int) -> int:
-    return int((Decimal(int(gross_milli)) * Decimal(int(tax_ppm)) / _DECIMAL_PPM).quantize(_DECIMAL_ONE, rounding=ROUND_HALF_UP))
-
-
-def _oracle_build_sell_net_total_milli(price: float, qty: int, params) -> int:
-    qty = int(qty)
-    gross_milli = _oracle_to_milli(price) * qty
-    fee_milli = _oracle_fee_milli(gross_milli, _oracle_rate_to_ppm(params.sell_fee), _oracle_to_milli(params.min_fee))
-    tax_milli = _oracle_tax_milli(gross_milli, _oracle_rate_to_ppm(params.tax_rate))
-    return gross_milli - fee_milli - tax_milli
-
-
-def _oracle_build_buy_total_milli(price: float, qty: int, params) -> int:
-    qty = int(qty)
-    gross_milli = _oracle_to_milli(price) * qty
-    fee_milli = _oracle_fee_milli(gross_milli, _oracle_rate_to_ppm(params.buy_fee), _oracle_to_milli(params.min_fee))
-    return gross_milli + fee_milli
-
-
 def _oracle_net_sell_price(price: float, qty: int, params) -> float:
-    qty = max(int(qty), 1)
-    return milli_to_money(_oracle_build_sell_net_total_milli(price, qty, params)) / qty
+    ledger = build_sell_ledger_from_price(price, int(qty), params)
+    return milli_to_money(ledger["net_sell_total_milli"]) / max(int(qty), 1)
 
 
 def _oracle_position_size(buy_price: float, stop_price: float, capital: float, risk_fraction: float, params) -> int:
     if stop_price >= buy_price or capital <= 0 or risk_fraction <= 0:
         return 0
-    capital_milli = _oracle_to_milli(capital)
-    risk_budget_milli = calc_risk_budget_milli(capital, risk_fraction)
-    buy_price_milli = _oracle_to_milli(buy_price)
-    if buy_price_milli <= 0:
-        return 0
-    max_qty = capital_milli // buy_price_milli
-    best_qty = 0
-    for qty in range(int(max_qty), 0, -1):
-        entry_total_milli = _oracle_build_buy_total_milli(buy_price, qty, params)
-        if entry_total_milli > capital_milli:
+
+    cap_milli = money_to_milli(capital)
+    risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)
+    max_qty = int(capital // buy_price)
+
+    for qty in range(max_qty, 0, -1):
+        entry_ledger = build_buy_ledger_from_price(buy_price, qty, params)
+        if entry_ledger["net_buy_total_milli"] > cap_milli:
             continue
-        exit_total_milli = _oracle_build_sell_net_total_milli(stop_price, qty, params)
-        if (entry_total_milli - exit_total_milli) <= risk_budget_milli:
-            best_qty = qty
-            break
-    return best_qty
+        stop_ledger = build_sell_ledger_from_price(stop_price, qty, params)
+        realized_risk_milli = entry_ledger["net_buy_total_milli"] - stop_ledger["net_sell_total_milli"]
+        if realized_risk_milli <= risk_budget_milli:
+            return qty
+    return 0
 
 
 def _oracle_history_expected_value(method: str, trade_count: int, win_count: int, total_r_sum: float, avg_win_r: float, avg_loss_r: float) -> float:

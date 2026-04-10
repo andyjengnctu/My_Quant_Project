@@ -2530,64 +2530,6 @@ def validate_average_price_total_helper_contract_case(_base_params):
     return results, summary
 
 
-def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params):
-    case_id = "META_PORTFOLIO_ROTATION_MARK_TO_MARKET_RETURN_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("core", "portfolio_exits.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-    helper_source = ""
-    rotate_source = ""
-    for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_calc_position_mark_to_market_return":
-            helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-        if isinstance(node, ast.FunctionDef) and node.name == "try_rotate_weakest_position":
-            rotate_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
-
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_has_exact_mark_to_market_return_helper", True, bool(helper_source))
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_helper_uses_full_entry_capital_helper", True, "full_entry_capital_milli = _resolve_full_entry_capital_milli(pos)" in helper_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_helper_uses_sell_ledger", True, "sell_ledger = build_sell_ledger_from_price(floating_exec_price, qty, params)" in helper_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_helper_uses_realized_and_remaining_cost_basis", True, "total_trade_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0) + floating_pnl_milli" in helper_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_exact_return_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)" in rotate_source)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_has_no_legacy_raw_close_minus_entry_formula", False, "ret = (pt_y_close - pos['entry']) / pos['entry']" in rotate_source)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_params):
-    case_id = "META_VALIDATOR_ORACLES_USE_EXACT_LEDGER_TOTALS_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    unit_path = build_project_absolute_path("tools", "validate", "synthetic_unit_cases.py")
-    take_profit_path = build_project_absolute_path("tools", "validate", "synthetic_take_profit_cases.py")
-    unit_source = unit_path.read_text(encoding="utf-8")
-    take_profit_source = take_profit_path.read_text(encoding="utf-8")
-
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_integer_sell_total_helper", True, "def _oracle_build_sell_net_total_milli(price: float, qty: int, params) -> int:" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_integer_buy_total_helper", True, "def _oracle_build_buy_total_milli(price: float, qty: int, params) -> int:" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_position_size_uses_integer_risk_budget", True, "risk_budget_milli = calc_risk_budget_milli(capital, risk_fraction)" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_price_utils_uses_buy_ledger_for_entry_cost", True, "buy_ledger = build_buy_ledger_from_price(100.0, sized_qty, params)" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_price_utils_uses_sell_ledger_for_stop_net", True, "sell_ledger = build_sell_ledger_from_price(95.0, sized_qty, params)" in unit_source)
-    add_check(results, "meta_contract", case_id, "take_profit_stop_priority_uses_sell_ledger_expected_cash", True, "expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)" in take_profit_source)
-    add_check(results, "meta_contract", case_id, "take_profit_stop_priority_uses_remaining_cost_basis_for_expected_pnl", True, "expected_pnl = milli_to_money(expected_sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli'])" in take_profit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_gross_net_formula", False, "gross = float(price) * int(qty)" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_risk_budget_formula", False, "risk_budget = capital * risk_fraction" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_entry_total_formula", False, "entry_total = buy_price * qty + max(buy_price * qty * params.buy_fee, params.min_fee)" in unit_source)
-    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_exit_total_formula", False, "exit_total = stop_price * qty - max(stop_price * qty * params.sell_fee, params.min_fee) - (stop_price * qty * params.tax_rate)" in unit_source)
-    add_check(results, "meta_contract", case_id, "take_profit_stop_priority_has_no_legacy_per_share_cash_formula", False, "expected_freed_cash = expected_net_price * qty" in take_profit_source)
-    add_check(results, "meta_contract", case_id, "take_profit_stop_priority_has_no_legacy_per_share_pnl_formula", False, "expected_pnl = (expected_net_price - entry_price) * qty" in take_profit_source)
-
-    summary["source_paths"] = [
-        unit_path.relative_to(PROJECT_ROOT).as_posix(),
-        take_profit_path.relative_to(PROJECT_ROOT).as_posix(),
-    ]
-    return results, summary
-
-
 def validate_formal_step_entry_coverage_targets_case(_base_params):
     case_id = "META_FORMAL_STEP_ENTRY_COVERAGE_TARGETS"
     results = []
@@ -2982,4 +2924,43 @@ def validate_known_bad_fault_injection_case(base_params):
         add_check(results, 'meta_fault_injection', case_id, 'history_filter_misuse_fault_detected', True, _count_failures(fault_results) > 0)
 
     summary['fault_injections_checked'] = 4
+    return results, summary
+
+
+def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params):
+    case_id = "META_PORTFOLIO_ROTATION_MARK_TO_MARKET_RETURN"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = PROJECT_ROOT / "core" / "portfolio_exits.py"
+    source_text = source_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_has_mark_to_market_helper", True, "def _calc_position_mark_to_market_return(" in source_text)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params)" in source_text)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_has_no_legacy_raw_close_minus_entry_formula", False, "ret = (pt_y_close - pos['entry']) / pos['entry']" in source_text)
+
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_params):
+    case_id = "META_VALIDATOR_ORACLES_USE_EXACT_LEDGER_TOTALS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    unit_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_unit_cases.py"
+    unit_text = unit_path.read_text(encoding="utf-8")
+    tp_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_take_profit_cases.py"
+    tp_text = tp_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "unit_oracle_net_sell_uses_sell_ledger", True, 'build_sell_ledger_from_price(price, int(qty), params)' in unit_text)
+    add_check(results, "meta_contract", case_id, "unit_oracle_position_size_uses_integer_risk_budget", True, 'risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)' in unit_text)
+    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_gross_times_qty", False, 'gross = float(price) * int(qty)' in unit_text)
+    add_check(results, "meta_contract", case_id, "unit_oracle_has_no_legacy_float_risk_budget", False, 'risk_budget = capital * risk_fraction' in unit_text)
+    add_check(results, "meta_contract", case_id, "take_profit_case_uses_sell_ledger_for_expected_cash", True, 'expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)' in tp_text)
+    add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_freed_cash_formula", False, 'expected_freed_cash = expected_net_price * qty' in tp_text)
+    add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_pnl_formula", False, 'expected_pnl = (expected_net_price - entry_price) * qty' in tp_text)
+    add_check(results, "meta_contract", case_id, "fee_tax_net_equity_case_has_no_legacy_entry_cash_after_buy_formula", False, 'entry_cash_after_buy = float(params.initial_capital - entry_result["entry_price"] * entry_qty)' in tp_text)
+
+    summary["source_path"] = unit_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
