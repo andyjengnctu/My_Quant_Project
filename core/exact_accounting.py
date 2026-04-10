@@ -65,9 +65,21 @@ MILLI_TICK_LADDER = (
 )
 
 
+def _tick_decimal_from_milli(tick_milli: int) -> Decimal:
+    return Decimal(int(tick_milli)) / _DECIMAL_THOUSAND
+
+
 def get_tick_milli(price_milli: int) -> int:
     for threshold_milli, tick_milli in MILLI_TICK_LADDER:
         if price_milli < threshold_milli:
+            return tick_milli
+    return 5000
+
+
+def get_tick_milli_from_price(price) -> int:
+    price_decimal = _to_decimal(price)
+    for threshold_milli, tick_milli in MILLI_TICK_LADDER:
+        if price_decimal < (Decimal(int(threshold_milli)) / _DECIMAL_THOUSAND):
             return tick_milli
     return 5000
 
@@ -83,6 +95,20 @@ def round_price_milli_to_tick(price_milli: int, direction: str = "nearest") -> i
     if direction == "down":
         return (price_milli // tick_milli) * tick_milli
     return tv_round_int(price_milli, tick_milli) * tick_milli
+
+
+def round_price_to_tick_milli(price, direction: str = "nearest") -> int:
+    price_decimal = _to_decimal(price)
+    tick_milli = get_tick_milli_from_price(price_decimal)
+    tick_decimal = _tick_decimal_from_milli(tick_milli)
+    ratio = price_decimal / tick_decimal
+    if direction == "up":
+        rounded_ratio = ratio.quantize(Decimal("1"), rounding=ROUND_CEILING)
+    elif direction == "down":
+        rounded_ratio = ratio.quantize(Decimal("1"), rounding=ROUND_FLOOR)
+    else:
+        rounded_ratio = ratio.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return price_to_milli(rounded_ratio * tick_decimal)
 
 
 def calc_fee_milli(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:

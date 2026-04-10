@@ -15,13 +15,13 @@ from core.exact_accounting import (
     calc_limit_down_price_milli,
     calc_limit_up_price_milli,
     calc_risk_budget_milli,
-    get_tick_milli,
+    get_tick_milli_from_price,
     milli_to_money,
     milli_to_price,
     money_to_milli,
     price_to_milli,
     rate_to_ppm,
-    round_price_milli_to_tick,
+    round_price_to_tick_milli,
 )
 
 
@@ -30,14 +30,14 @@ def tv_round(number):
 
 
 def get_tick_size(price):
-    return milli_to_price(get_tick_milli(price_to_milli(price)))
+    return milli_to_price(get_tick_milli_from_price(price))
 
 
 # # (AI註: 第12點 - 跳價取整方向統一收斂到單一函式，避免買/賣/停損/停利各自手寫)
 def round_to_tick(price, direction="nearest"):
     if pd.isna(price):
         return np.nan
-    return milli_to_price(round_price_milli_to_tick(price_to_milli(price), direction=direction))
+    return milli_to_price(round_price_to_tick_milli(price, direction=direction))
 
 
 def adjust_to_tick(price):
@@ -101,7 +101,7 @@ def get_tick_size_array(prices):
     if not np.any(valid):
         return ticks
     ticks[valid] = np.fromiter(
-        (milli_to_price(get_tick_milli(price_to_milli(price))) for price in prices[valid]),
+        (milli_to_price(get_tick_milli_from_price(price)) for price in prices[valid]),
         dtype=np.float64,
         count=int(np.count_nonzero(valid)),
     )
@@ -116,7 +116,7 @@ def round_to_tick_array(prices, direction="nearest"):
         return out
     out[valid] = np.fromiter(
         (
-            milli_to_price(round_price_milli_to_tick(price_to_milli(price), direction=direction))
+            milli_to_price(round_price_to_tick_milli(price, direction=direction))
             for price in prices[valid]
         ),
         dtype=np.float64,

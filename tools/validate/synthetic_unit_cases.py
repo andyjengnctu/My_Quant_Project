@@ -17,6 +17,7 @@ from core.exact_accounting import (
     money_to_milli,
     price_to_milli,
     round_money_for_display,
+    round_price_to_tick_milli,
     sync_position_display_fields,
 )
 from core.history_filters import evaluate_history_candidate_metrics
@@ -251,6 +252,8 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     down_limit = calc_limit_down_price(95.1)
     near_up = np.nextafter(up_limit, 0.0)
     near_down = np.nextafter(down_limit, np.inf)
+    raw_stop = 34.35033333333333
+    raw_tick_boundary = 9.9996
 
     add_check(results, "unit_exact_accounting", case_id, "limit_up_price_rounds_to_expected_tick", 104.6, up_limit, tol=1e-12)
     add_check(results, "unit_exact_accounting", case_id, "limit_down_price_rounds_to_expected_tick", 85.6, down_limit, tol=1e-12)
@@ -258,6 +261,12 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
     add_check(results, "unit_exact_accounting", case_id, "nearby_float_normalizes_to_same_limit_down_milli", price_to_milli(down_limit), price_to_milli(near_down))
     add_check(results, "unit_exact_accounting", case_id, "limit_up_bar_uses_integer_price_comparison", True, is_limit_up_bar(near_up, near_up, near_up, near_up, 95.1))
     add_check(results, "unit_exact_accounting", case_id, "limit_down_bar_uses_integer_price_comparison", True, is_limit_down_bar(near_down, near_down, near_down, near_down, 95.1))
+    add_check(results, "unit_exact_accounting", case_id, "directional_up_rounding_preserves_raw_price_ceiling", 34.4, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "directional_up_rounding_result_not_below_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="up")) >= raw_stop)
+    add_check(results, "unit_exact_accounting", case_id, "directional_down_rounding_preserves_raw_price_floor", 34.35, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "directional_down_rounding_result_not_above_raw_price", True, milli_to_money(round_price_to_tick_milli(raw_stop, direction="down")) <= raw_stop)
+    add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_uses_raw_price_before_milli_quantization", 0.01, get_tick_size(raw_tick_boundary), tol=1e-12)
+    add_check(results, "unit_exact_accounting", case_id, "tick_band_lookup_array_uses_raw_price_before_milli_quantization", 0.01, get_tick_size_array(np.array([raw_tick_boundary], dtype=np.float64))[0], tol=1e-12)
 
     summary["limit_up"] = up_limit
     return results, summary

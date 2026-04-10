@@ -2599,8 +2599,12 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     price_path = build_project_absolute_path("core", "price_utils.py")
     price_source = price_path.read_text(encoding="utf-8")
 
-    add_check(results, "meta_contract", case_id, "price_utils_array_tick_size_uses_shared_tick_helper", True, "milli_to_price(get_tick_milli(price_to_milli(price)))" in price_source)
-    add_check(results, "meta_contract", case_id, "price_utils_array_rounding_uses_shared_round_price_milli_to_tick_helper", True, "milli_to_price(round_price_milli_to_tick(price_to_milli(price), direction=direction))" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_scalar_tick_size_uses_shared_raw_price_tick_helper", True, "milli_to_price(get_tick_milli_from_price(price))" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_array_tick_size_uses_shared_raw_price_tick_helper", True, "milli_to_price(get_tick_milli_from_price(price)) for price in prices[valid]" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_scalar_rounding_uses_shared_raw_price_tick_helper", True, "milli_to_price(round_price_to_tick_milli(price, direction=direction))" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_array_rounding_uses_shared_raw_price_tick_helper", True, "milli_to_price(round_price_to_tick_milli(price, direction=direction))" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_tick_lookup_has_no_price_to_milli_prequantize_path", False, "get_tick_milli(price_to_milli(price))" in price_source)
+    add_check(results, "meta_contract", case_id, "price_utils_rounding_has_no_price_to_milli_prequantize_path", False, "round_price_milli_to_tick(price_to_milli(price), direction=direction)" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_float_ratio_path", False, "ratios = valid_prices / ticks" in price_source)
     add_check(results, "meta_contract", case_id, "price_utils_array_rounding_has_no_legacy_numpy_ceil_floor_tick_path", False, "np.ceil(ratios - 1e-12) * ticks" in price_source or "np.floor(ratios + 1e-12) * ticks" in price_source or "np.floor(ratios + 0.5) * ticks" in price_source)
 
