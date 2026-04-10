@@ -96,13 +96,15 @@ def adjust_long_sell_fill_price(price):
 
 def get_tick_size_array(prices):
     prices = np.asarray(prices, dtype=np.float64)
-    ticks = np.full(prices.shape, 5.0, dtype=np.float64)
-    ticks[prices < 1000] = 1.0
-    ticks[prices < 500] = 0.5
-    ticks[prices < 100] = 0.1
-    ticks[prices < 50] = 0.05
-    ticks[prices < 10] = 0.01
-    ticks[prices < 1] = 0.001
+    ticks = np.full(prices.shape, np.nan, dtype=np.float64)
+    valid = ~np.isnan(prices)
+    if not np.any(valid):
+        return ticks
+    ticks[valid] = np.fromiter(
+        (milli_to_price(get_tick_milli(price_to_milli(price))) for price in prices[valid]),
+        dtype=np.float64,
+        count=int(np.count_nonzero(valid)),
+    )
     return ticks
 
 
@@ -112,15 +114,14 @@ def round_to_tick_array(prices, direction="nearest"):
     valid = ~np.isnan(prices)
     if not np.any(valid):
         return out
-    valid_prices = prices[valid]
-    ticks = get_tick_size_array(valid_prices)
-    ratios = valid_prices / ticks
-    if direction == "up":
-        out[valid] = np.ceil(ratios - 1e-12) * ticks
-    elif direction == "down":
-        out[valid] = np.floor(ratios + 1e-12) * ticks
-    else:
-        out[valid] = np.floor(ratios + 0.5) * ticks
+    out[valid] = np.fromiter(
+        (
+            milli_to_price(round_price_milli_to_tick(price_to_milli(price), direction=direction))
+            for price in prices[valid]
+        ),
+        dtype=np.float64,
+        count=int(np.count_nonzero(valid)),
+    )
     return out
 
 

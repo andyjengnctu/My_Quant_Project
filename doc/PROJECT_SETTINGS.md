@@ -68,6 +68,7 @@
 30. 凡 validator / oracle 呼叫會原地修改 position、portfolio 或其他可變狀態的 producer 後，再比對依賴「呼叫前成本基礎 / 持倉狀態」的 expected 值時，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle。
 31. 編輯 `doc/TEST_SUITE_CHECKLIST.md` 的摘要表時，必須維持合法 markdown table header + separator 結構；不得讓 parser 把表頭列當成資料列。
 32. 凡將共享 helper 替換進既有 producer / core 路徑時，必須同輪同步更新 import 與 static contract；不得只改函式呼叫而漏掉 import，避免 `py_compile` 可過但 runtime 因 `NameError` 失敗。
+33. 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉。
 
 ## E. 交易與策略原則
 
