@@ -2153,6 +2153,13 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
         missing_keys = sorted(required_keys - declared_keys)
 
     add_check(results, "meta_contract", case_id, "single_backtest_stats_declares_legacy_schema_keys", [], missing_keys)
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_signature_accepts_final_date", True, "final_date=None" in source_text)
+
+    backtest_core_path = build_project_absolute_path("core", "backtest_core.py")
+    backtest_core_source = backtest_core_path.read_text(encoding="utf-8")
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_empty_path_threads_final_date_none", True, "final_date=None" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_final_path_threads_dates_last", True, "final_date=Dates[-1]" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_extended_candidate_uses_threaded_final_date", True, "trade_date=final_date" in source_text)
 
     summary["missing_keys"] = missing_keys
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()

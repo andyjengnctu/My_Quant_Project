@@ -133,6 +133,7 @@ def build_backtest_stats(
     active_extended_signal,
     end_position_qty,
     avg_bars_held,
+    final_date=None,
     ticker=None,
 ):
     win_rate = (full_wins / trade_count * 100) if trade_count > 0 else 0
