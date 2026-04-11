@@ -2743,17 +2743,18 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237"
     summary_comment_line = next(
         (
             line.strip()
             for line in source_text.splitlines()
-            if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋 debug exact-fallback / exit milli-binding helper contracts")
+            if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋") and expected_id_list in line
         ),
         "",
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t237", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t237", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)

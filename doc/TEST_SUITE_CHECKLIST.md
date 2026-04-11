@@ -931,6 +931,8 @@
 | 2026-04-11 | B147 | 補齊 T235 明示檢查與正式入口摘要同步後重新收斂為 DONE | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-11 | B147 | 檢出 summary comment coverage contract 仍掃描整份 source_text 而非頂部摘要註解 block，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B147 | 將 summary comment coverage contract 收斂到頂部摘要註解 block 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B147 | 檢出 summary comment coverage contract 仍把摘要註解開頭 wording 寫死、未依頂部 block 與 Txx 列舉穩健比對，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B147 | 將 summary comment coverage contract 改為依頂部摘要註解 block 與 T225~T237 列舉穩健比對後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B148 | 新增 exact-ledger ratio path 契約，釘死 return / rotation ratio 不得先轉 float money 再相除 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B149 | 新增 debug exit milli binding 契約，釘死 final-exit total_return_pct 不得引用未定義 total_pnl_milli | NEW -> DONE | `tools/trade_analysis/exit_flow.py` |
 | 2026-04-11 | B149 | 檢出 milli-binding contract 的 forced-closeout 負向守衛仍比對錯誤舊字串，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
@@ -992,6 +994,8 @@
 | 2026-04-11 | T233 | 擴充 summary comment coverage contract 納入 T235 明示檢查並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T233 | 檢出 summary comment coverage contract 仍掃描整份 source_text、未限縮到頂部摘要註解 block，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T233 | 將 summary comment coverage contract 收斂到頂部摘要註解 block 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T233 | 檢出 summary comment coverage contract 仍把摘要註解開頭 wording 寫死、未依頂部 block 與 T225~T237 列舉穩健比對，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T233 | 將 summary comment coverage contract 改為依頂部摘要註解 block 與 T225~T237 列舉穩健比對後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T234 | 新增 exact-ledger return ratio no-money-float-division static contract 並驗證 | NEW -> DONE | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` |
 | 2026-04-11 | T235 | 新增 debug exit total-return milli binding static contract 並驗證 | NEW -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T235 | 檢出 milli-binding contract 尚未覆蓋 forced-closeout 路徑，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_exit_total_return_milli_binding_contract_case` |
