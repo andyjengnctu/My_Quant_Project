@@ -2933,7 +2933,7 @@ def validate_module_path_normalizer_accepts_path_objects_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     debug_path = build_project_absolute_path("tools", "trade_analysis", "trade_log.py")
-    gui_path = build_project_absolute_path("apps", "gui.py")
+    gui_path = build_project_absolute_path("apps", "workbench.py")
 
     add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_debug", "tools/trade_analysis/trade_log.py", normalize_project_relative_path(debug_path))
     add_check(results, "output_contract", case_id, "normalize_module_path_from_path_object_gui", "apps/workbench.py", normalize_project_relative_path(gui_path))
