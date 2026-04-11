@@ -18,7 +18,7 @@ REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 
 STEP_LABELS = TEST_SUITE_STEP_LABELS
 
-# consistency step 透過 synthetic registry 覆蓋 debug exact-fallback / exit milli-binding helper contracts（含 T225/T226/T229/T230/T231/T232/T233/T234/T235/T236；T235 同時約束 process_debug_position_step 與 append_debug_forced_closeout）。
+# consistency step 透過 synthetic registry 覆蓋最新 exact-ledger / summary-comment / GUI 文件同步 contracts（含 T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237；T235 同時約束 process_debug_position_step 與 append_debug_forced_closeout）。
 
 class ConsoleProgress:
     def __init__(self) -> None:
