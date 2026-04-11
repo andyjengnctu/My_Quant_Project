@@ -345,11 +345,13 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     allowed_g_to_statuses = set(STATUS_VALUES)
     invalid_g_transition_rows = []
     invalid_g_new_transition_rows = []
+    invalid_g_transition_sequence_rows = []
     no_op_convergence_rows = []
     invalid_g_note_rows = []
     invalid_g_note_validate_rows = []
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
     seen_g_ids: Set[str] = set()
+    previous_g_status_by_id: Dict[str, str] = {}
     for row in tables["G"]:
         if len(row) < 4:
             continue
@@ -364,6 +366,15 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             invalid_g_transition_rows.append({"id": row_id, "transition": transition})
             seen_g_ids.add(row_id)
             continue
+        previous_to_status = previous_g_status_by_id.get(row_id)
+        if previous_to_status is not None and from_status != previous_to_status:
+            invalid_g_transition_sequence_rows.append(
+                {
+                    "id": row_id,
+                    "previous_to_status": previous_to_status,
+                    "transition": transition,
+                }
+            )
         if from_status == "NEW" and row_id in seen_g_ids:
             invalid_g_new_transition_rows.append({"id": row_id, "transition": transition})
         if from_status == to_status:
@@ -387,6 +398,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
                     "invalid_entries": invalid_validate_entries,
                 }
             )
+        previous_g_status_by_id[row_id] = to_status
         seen_g_ids.add(row_id)
     results.append(
         summarize_result(
@@ -402,6 +414,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_g_new_transition_rows,
             detail=f"invalid={invalid_g_new_transition_rows}",
             extra={"invalid_new_transition_rows": invalid_g_new_transition_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_g_rows_follow_previous_status_chain",
+            not invalid_g_transition_sequence_rows,
+            detail=f"invalid={invalid_g_transition_sequence_rows}",
+            extra={"invalid_transition_sequence_rows": invalid_g_transition_sequence_rows},
         )
     )
     results.append(
