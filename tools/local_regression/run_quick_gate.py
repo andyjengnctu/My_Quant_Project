@@ -25,7 +25,7 @@ from tools.validate.meta_contracts import summarize_synthetic_cases_import_targe
 
 PYTHON_FILES_EXCLUDE_PARTS = {".git", "__pycache__", "outputs", ".venv", "venv"}
 HELP_TARGETS = [
-    ([sys.executable, "apps/gui.py", "--help"], "python apps/gui.py"),
+    ([sys.executable, "apps/workbench.py", "--help"], "python apps/workbench.py"),
     ([sys.executable, "apps/ml_optimizer.py", "--help"], "python apps/ml_optimizer.py"),
     ([sys.executable, "apps/package_zip.py", "--help"], "python apps/package_zip.py"),
     ([sys.executable, "apps/portfolio_sim.py", "--help"], "python apps/portfolio_sim.py"),
@@ -33,7 +33,7 @@ HELP_TARGETS = [
     ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),
     ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
     ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
-    ([sys.executable, "tools/debug/trade_log.py", "--help"], "python tools/debug/trade_log.py"),
+    ([sys.executable, "tools/trade_analysis/trade_log.py", "--help"], "python tools/trade_analysis/trade_log.py"),
     ([sys.executable, "tools/downloader/main.py", "--help"], "python tools/downloader/main.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
     ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
@@ -491,7 +491,7 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         "apps/portfolio_sim.py",
         "apps/vip_scanner.py",
         "apps/ml_optimizer.py",
-        "tools/debug/trade_log.py",
+        "tools/trade_analysis/trade_log.py",
     ]
     cases = [
         (["--dataset", "bad"], "不支援的資料集模式"),

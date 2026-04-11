@@ -1558,7 +1558,7 @@ def validate_debug_backtest_history_snapshot_patch_seam_contract_case(_base_para
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
 
@@ -1614,7 +1614,7 @@ def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_p
     )
     has_explicit_import = _parsed_module_declares_specific_from_import(
         parsed,
-        module_name="tools.debug.charting",
+        module_name="tools.trade_analysis.charting",
         imported_name="bind_matplotlib_chart_navigation",
     )
 
@@ -1656,7 +1656,7 @@ def validate_gui_buy_signal_annotation_helper_import_contract_case(_base_params)
     )
     has_explicit_import = _parsed_module_declares_specific_from_import(
         parsed,
-        module_name="tools.debug.backtest",
+        module_name="tools.trade_analysis.backtest",
         imported_name="_record_buy_signal_annotation",
     )
 
@@ -2193,8 +2193,8 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
                 return source_path, func_source
         return source_path, ""
 
-    debug_backtest_path, debug_backtest_source = _get_function_source("tools/debug/backtest.py", "run_debug_analysis")
-    debug_entry_path, debug_entry_source = _get_function_source("tools/debug/entry_flow.py", "process_debug_entry_for_day")
+    debug_backtest_path, debug_backtest_source = _get_function_source("tools/trade_analysis/backtest.py", "run_debug_analysis")
+    debug_entry_path, debug_entry_source = _get_function_source("tools/trade_analysis/entry_flow.py", "process_debug_entry_for_day")
 
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_flow_returns_spent_cash", True, "position, active_extended_signal, spent_cash = process_debug_entry_for_day(" in debug_backtest_source)
     add_check(results, "meta_contract", case_id, "debug_backtest_entry_cash_subtracts_spent_cash", True, "current_capital -= spent_cash" in debug_backtest_source)
@@ -2224,7 +2224,7 @@ def validate_display_money_rounding_helper_contract_case(_base_params):
 
     exact_path = build_project_absolute_path("core", "exact_accounting.py")
     portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
-    log_rows_path = build_project_absolute_path("tools", "debug", "log_rows.py")
+    log_rows_path = build_project_absolute_path("tools", "trade_analysis", "log_rows.py")
 
     exact_text = exact_path.read_text(encoding="utf-8")
     portfolio_text = portfolio_path.read_text(encoding="utf-8")
@@ -2296,9 +2296,9 @@ def validate_single_backtest_exact_cash_path_contract_case(_base_params):
 
     core_path, backtest_core_source = _get_function_source("core/backtest_core.py", "run_v16_backtest")
     finalize_path, finalize_source = _get_function_source("core/backtest_finalize.py", "finalize_open_position_at_end")
-    debug_backtest_path, debug_backtest_source = _get_function_source("tools/debug/backtest.py", "run_debug_analysis")
-    debug_exit_path, debug_exit_source = _get_function_source("tools/debug/exit_flow.py", "process_debug_position_step")
-    forced_close_path, forced_close_source = _get_function_source("tools/debug/exit_flow.py", "append_debug_forced_closeout")
+    debug_backtest_path, debug_backtest_source = _get_function_source("tools/trade_analysis/backtest.py", "run_debug_analysis")
+    debug_exit_path, debug_exit_source = _get_function_source("tools/trade_analysis/exit_flow.py", "process_debug_position_step")
+    forced_close_path, forced_close_source = _get_function_source("tools/trade_analysis/exit_flow.py", "append_debug_forced_closeout")
 
     add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_adds_freed_cash", True, "currentCapital_milli += freed_cash_milli" in backtest_core_source)
     add_check(results, "meta_contract", case_id, "single_backtest_exit_cash_has_no_legacy_pnl_addition", False, "currentCapital_milli += pnl_realized_milli" in backtest_core_source)
@@ -2326,7 +2326,7 @@ def validate_debug_forced_closeout_exact_total_pnl_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    forced_close_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    forced_close_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     source_text = forced_close_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(forced_close_path))
     function_source = ""
@@ -2369,7 +2369,7 @@ def validate_debug_entry_display_capital_uses_exact_total_contract_case(_base_pa
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "entry_flow.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "entry_flow.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
 
@@ -2396,7 +2396,7 @@ def validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case(_b
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
     helper_source = ""
@@ -2423,7 +2423,7 @@ def validate_debug_exit_display_capital_uses_ledger_totals_contract_case(_base_p
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
     helper_source = ""
@@ -2453,7 +2453,7 @@ def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
     entry_helper_source = ""
@@ -2543,7 +2543,7 @@ def validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_cas
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
     source_text = source_path.read_text(encoding="utf-8")
     parsed = ast.parse(source_text, filename=str(source_path))
     helper_source = ""
@@ -2574,9 +2574,9 @@ def validate_debug_exact_fallback_helpers_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    exit_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    exit_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     exit_source = exit_path.read_text(encoding="utf-8")
-    backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    backtest_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
 
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in exit_source)
@@ -2685,9 +2685,9 @@ def validate_exact_ledger_return_ratio_no_money_float_division_contract_case(_ba
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    exit_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    exit_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     exit_source = exit_path.read_text(encoding="utf-8")
-    backtest_path = build_project_absolute_path("tools", "debug", "backtest.py")
+    backtest_path = build_project_absolute_path("tools", "trade_analysis", "backtest.py")
     backtest_source = backtest_path.read_text(encoding="utf-8")
     portfolio_path = build_project_absolute_path("core", "portfolio_exits.py")
     portfolio_source = portfolio_path.read_text(encoding="utf-8")
@@ -2761,7 +2761,7 @@ def validate_debug_exit_total_return_milli_binding_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    source_path = build_project_absolute_path("tools", "debug", "exit_flow.py")
+    source_path = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py")
     source_text = source_path.read_text(encoding="utf-8")
 
     process_start = source_text.index("def process_debug_position_step(")

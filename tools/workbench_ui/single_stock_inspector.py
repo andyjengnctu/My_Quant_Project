@@ -12,8 +12,8 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
 from core.scanner_display import build_scanner_sort_probe_text
-from tools.debug.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
-from tools.debug.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
+from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
+from tools.trade_analysis.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 
 try:

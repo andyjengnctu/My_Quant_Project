@@ -4,7 +4,7 @@ import tkinter as tk
 import warnings
 from tkinter import ttk
 
-from tools.gui.single_stock_inspector import SingleStockBacktestInspectorPanel
+from tools.workbench_ui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -42,9 +42,9 @@ PANEL_SPECS = (
     {
         "panel_id": "single_stock_backtest_inspector",
         "tab_label": "單股回測檢視",
-        "backend_runner": "tools.debug.trade_log.run_debug_ticker_analysis",
+        "backend_runner": "tools.trade_analysis.trade_log.run_debug_ticker_analysis",
         "artifact_keys": ("excel_path",),
-        "inline_chart_backend": "tools.debug.charting.create_matplotlib_debug_chart_figure",
+        "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_debug_chart_figure",
         "default_show_volume": False,
         "panel_factory": SingleStockBacktestInspectorPanel,
     },
@@ -54,7 +54,7 @@ PANEL_SPECS = (
 def build_workbench_spec():
     return {
         "app_id": "stock_tools_workbench",
-        "entry_module": "apps.gui",
+        "entry_module": "apps.workbench",
         "title": WORKBENCH_TITLE,
         "geometry": WORKBENCH_GEOMETRY,
         "startup_window_mode": "maximized",

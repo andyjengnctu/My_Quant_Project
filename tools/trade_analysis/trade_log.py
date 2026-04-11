@@ -116,7 +116,7 @@ def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFIL
 
 
 def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None, output_dir=None):
-    from tools.debug.backtest import run_debug_analysis as _run_debug_analysis
+    from tools.trade_analysis.backtest import run_debug_analysis as _run_debug_analysis
 
     return _run_debug_analysis(
         df=df,
@@ -198,7 +198,7 @@ def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
-        program_name = resolve_cli_program_name(argv, "tools/debug/trade_log.py")
+        program_name = resolve_cli_program_name(argv, "tools/trade_analysis/trade_log.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0

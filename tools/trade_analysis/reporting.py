@@ -2,7 +2,7 @@ import os
 
 import pandas as pd
 
-from tools.debug.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
+from tools.trade_analysis.charting import build_debug_chart_payload, create_debug_chart_context, export_debug_chart_html
 
 
 def _build_placeholder_price_df(chart_context=None):

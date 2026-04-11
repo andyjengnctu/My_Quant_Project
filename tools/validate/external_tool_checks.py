@@ -98,7 +98,7 @@ def run_downloader_tool_check(ticker):
 def run_debug_trade_log_check(ticker, df, params, *, prepared_df=None):
     module, module_path = load_module_from_candidates(
         "debug_trade_log_module",
-        ["tools/debug/trade_log.py"],
+        ["tools/trade_analysis/trade_log.py"],
         required_attrs=["run_debug_backtest"],
     )
     runner = getattr(module, "run_debug_prepared_backtest", None) if prepared_df is not None else None

@@ -8,8 +8,8 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, round_money_for_display
-from tools.debug.charting import record_active_levels, record_limit_order, record_trade_marker
-from tools.debug.log_rows import append_debug_trade_row, get_debug_tp_half_price
+from tools.trade_analysis.charting import record_active_levels, record_limit_order, record_trade_marker
+from tools.trade_analysis.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
 
 def _resolve_display_entry_total(entry_result, *, qty, params):

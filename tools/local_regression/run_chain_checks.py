@@ -18,7 +18,7 @@ from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, s
 from core.params_io import load_params_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
-from tools.debug.trade_log import run_debug_backtest
+from tools.trade_analysis.trade_log import run_debug_backtest
 from tools.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text

@@ -1,21 +1,13 @@
 ## Going
 
 - TV-based UI & Debug 
-=========
-    - 確認Traling stop物理意議
-=========
-    - 目前GUI這個名稱怪怪，應改叫viewer
-    - Debug也是，要取一個正式名稱，目的是支援viewer
+    - GUI - > workbench
+    - Debug -> trade_analysis
 
-- R-based Trailing Stop update
+- 確認Traling stop物理意議，R-based Trailing Stop update
 - 先提升訓練分數
 - 訓練/測試樣本分離
 - overfitting量化驗證工具
-
-13. 如果使用者沒有提供 boundle結果，代表已在本地端執行過`apps/test_suite.py`，並且結果為All Passed; 如果使用者提供bBoudle結果，GPT 必須修正錯誤。
-9. 提供patch前必需在GPT端做過最嚴格檢查，如確認沒有問題才提供。
-2.  `PROJECT_SETTINGS.md` 與`TEST_SUITE_CHECKLIST.md`更新原則: `PROJECT_SETTINGS.md` 只保留原則性條款，具備泛化舉一反三能力，文字必需者用者易讀易維護，避免使用程式內名稱作為定義; `/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊; 兩者不可違反單一真理原則; 各文件內也不可有任何重覆性描述，保持文件至最精簡。
-
 
 ## To do
 - 如何精準公式算出停利%，讓先停利後停損絕對不會是負的?
