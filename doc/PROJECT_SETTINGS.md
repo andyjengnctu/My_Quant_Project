@@ -1,7 +1,7 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
-2.  `PROJECT_SETTINGS.md` 與`TEST_SUITE_CHECKLIST.md`更新原則: `PROJECT_SETTINGS.md` 只保留原則性條款; `/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊; 兩者不可違反單一真理原則; 各文件內也不可有任何重覆性描述，保持文件至最精簡。
+2. 文件更新原則：`PROJECT_SETTINGS.md` 只保留原則性條款，須易讀、易維護、可泛化，且避免以程式內名稱作為定義；`/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊；兩者都必須遵守單一真理來源，且各自不得重覆描述; 各文件內也不可有任何重覆性描述，保持文件至最精簡。
 
 
 ## A. 工作基準與執行紀律
@@ -19,10 +19,10 @@
 6. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
 7. 檢查到問題就直接在本輪提供修改。
 8. 修改問題後，也提出避免 GPT再發生類似問題的作法，透過 `/doc/PROJECT_SETTINGS.md` 或 `/doc/TEST_SUITE_CHECKLIST.md`來強制。
-9. 每輪更新完，要同步更新 `doc/TEST_SUITE_CHECKLIST.md` 狀態；主表狀態為唯一真理來源，`E` 僅作同輪無法一次清空時的未完成暫存索引，`T` / `G` 僅為同步索引；主表追蹤 ID 與建議測試項追蹤 ID 的實際格式與欄位限制一律定義於 `doc/TEST_SUITE_CHECKLIST.md`。
-10. 文件分工固定：PROJECT_SETTINGS.md 管原則與權責，TEST_SUITE_CHECKLIST.md 管測試清單、狀態、映射、收斂紀錄與欄位細則。除必要短引用外，同一要求只能保留一份原文。
-11. 提交前必須將checklist主表與G表依日期、ID重排; 摘要區只保留最小必要索引，時間軸與完成日期只記於收斂紀錄，不得保留無關敘事。追蹤 ID 必須穩定；若更名，必須同輪同步更新 checklist、parser、guard 與正式入口摘要。
-12. 如果使用者沒有提供 boundle結果，代表已在本地端執行過`apps/test_suite.py`，並且結果為All Passed; 如果使用者提供bBoudle結果，GPT 必須修正錯誤。
+9. 每輪更新完，須同步維護 `doc/TEST_SUITE_CHECKLIST.md`；主表狀態為唯一真理來源，其餘摘要與收斂紀錄僅作同步索引。實際欄位、排序、格式與機械規則一律以 checklist 為準。
+10. 文件分工固定：`PROJECT_SETTINGS.md` 管原則與權責；`TEST_SUITE_CHECKLIST.md` 管可機械比對的測試清單、狀態、映射、收斂紀錄與細部 contract。同一要求只能保留一份原文。
+11. 提交前必須完成 checklist 所需的同步與機械整理；追蹤 ID 必須穩定，若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
+12. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
 13. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
 
 
@@ -40,7 +40,7 @@
 
 ## D. Coding 與架構原則
 
-D 節只保留跨模組、長期穩定的原則；會隨實作演進而調整的細部 contract、欄位、helper、signature、rounding、fallback 與 formal guard，一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 維護，不在本檔重複展開。
+D 節只保留跨模組、長期穩定、可泛化的原則；會隨實作演進而調整的細部契約與驗證細節，一律下沉到 `doc/TEST_SUITE_CHECKLIST.md`。
 
 1. 單一真理來源：相同邏輯不得重複實作。
 2. 統計口徑必須完全一致：成交、未成交、miss buy、EV、勝率、Round-Trip PnL 不得分叉。
@@ -51,15 +51,15 @@ D 節只保留跨模組、長期穩定的原則；會隨實作演進而調整的
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。
 8. 架構或模組責任有變動時，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 9. 凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-10. 正式帳務、價格正規化、費稅、sizing 與可見統計，必須共享同一套核心規則與資料來源；任何顯示、重建、排序、比較或 validator oracle 都不得另建分叉公式。
-11. 涉及商品別、tick、漲跌停、費稅、日期、ticker、security profile、position 等上下文的跨模組規則，必須由共享 helper 與明確參數傳遞維持一致；不得依賴自由變數、隱式 fallback 或模組私有特例。
-12. 凡 shared helper、public payload、stats schema、keyword 參數或跨工具契約有變動，必須同輪同步更新 producer、caller、consumer、formal contract 與相關文件；不得只改其中一側。
-13. debug / GUI / history / reporting / scanner / validator / local regression 等非核心路徑，仍必須服從與正式交易邏輯相同的單一真理來源；不得因 fallback、顯示需求或 optional dependency 而繞開核心規則。
-14. validator 與 oracle 必須優先驗證 invariant、契約與單一真理來源，不得重寫一份分叉實作；若需依賴可變狀態，必須先 snapshot 再比對。
+10. 核心規則、帳務、價格與統計的衍生結果，必須共享同一規則來源；顯示、重建、排序、比較與驗證不得分叉。
+11. 跨模組所需上下文必須以明確介面傳遞；不得依賴隱式狀態、自由變數或私有特例。
+12. 共享契約有變動時，相關實作、呼叫端、使用端、驗證與文件必須同輪同步。
+13. 非核心路徑仍須服從正式規則，不得因顯示、fallback 或 optional dependency 而繞開。
+14. validator 與 oracle 只驗 invariant、契約與單一真理來源，不重寫分叉實作。
 
 ## E. 交易與策略原則
 
-E 節只保留交易決策、執行邊界與統計口徑的長期原則；會隨策略與 formal contract 演進而調整的細部交易規則、日序、barrier、hit 判斷、延續候選、價格基準、觸發/執行欄位與驗證細節，一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 維護，不在本檔重複展開。
+E 節只保留交易決策、執行邊界與統計口徑的原則；細部交易契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md`。
 
 1. 杜絕未來函數：任何候選、掛單、成交、停損、停利、延續判斷與統計，都不得偷看當下尚未知的未來資料。
 2. 同一事件的判斷與執行口徑必須一致，且在不確定時一律採最保守、最不利於績效的可執行解讀。
@@ -69,7 +69,6 @@ E 節只保留交易決策、執行邊界與統計口徑的長期原則；會隨
 6. 風險 sizing、停損/停利、trailing stop、延續候選與 barrier 的關係，必須遵守單一真理來源與角色分離；候選規則不得冒充已持倉規則，保護性機制不得回寫成交前基準。
 7. hit 判斷、觸發紀錄、執行條件與統計口徑必須在全專案保持一致；不得依工具、顯示路徑或資料流向切換比較符號或語意。
 8. 單筆風險上限、候選存續、miss buy、rotation、forced exit 與同日資金可用性，必須統一服從相同的交易日序、可執行邊界與資金回收規則。
-9. checklist 負責維護 E 節細部交易 contract、formal guard、狀態與時間軸；本檔只保留原則，不再承載會頻繁變動的細項清單。
 
 
 ## F. 專案特例
