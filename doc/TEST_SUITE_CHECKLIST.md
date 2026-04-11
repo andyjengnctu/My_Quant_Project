@@ -175,6 +175,7 @@
 | B148 | P1 | Meta / exact-ledger ratio path 契約 | 凡 debug / GUI / history / rotation 以 exact ledger 或 integer total 計算報酬率、持倉優劣比較或 leg return 時，分子分母必須直接使用 milli / integer total 相除；不得先各自 `milli_to_money(...)` 轉回 float 金額後再相除，避免浮點偏移在可見報酬率與 rotation 排序產生微小分叉 | DONE | 已補 static meta contract，直接掃描 `tools/trade_analysis/exit_flow.py`、`tools/trade_analysis/backtest.py` 與 `core/portfolio_exits.py`，釘死 total/leg/sell-signal/rotation return 必須直接以 integer total 計算，且不得保留 `milli_to_money(...)/milli_to_money(...)` 舊路徑 | `doc/PROJECT_SETTINGS.md`, `tools/validate/synthetic_meta_cases.py`, `tools/trade_analysis/exit_flow.py`, `tools/trade_analysis/backtest.py`, `core/portfolio_exits.py` |
 | B149 | P1 | Meta / debug exit milli binding 契約 | 凡 debug / GUI / history 的 final-exit `total_return_pct` 等可見公式改為引用 `total_pnl_milli`、`full_entry_capital_milli` 等整數 ledger 變數時，必須先在同一路徑明確綁定該 `*_milli` 變數，再由其推導顯示值；不得殘留未定義局部變數或混用舊 float `total_pnl` 路徑，避免 consistency / chain checks 因 runtime `NameError` 全面中斷 | DONE | 已補 static meta contract，直接掃描 `tools/trade_analysis/exit_flow.py` 的 `process_debug_position_step()` 與 `append_debug_forced_closeout()`，釘死 final-exit `total_return_pct` 必須先綁定對應 `total_pnl_milli`，再以 `milli_to_money(total_pnl_milli)` 推導顯示 `total_pnl`；不得保留 `float(position.get('realized_pnl', pnl_realized))` 或 `float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)` 等舊 float 路徑 | `tools/validate/synthetic_meta_cases.py`, `tools/trade_analysis/exit_flow.py` |
 | B150 | P1 | Meta / core R-multiple exact-ledger 契約 | 核心回測與投組統計若需累計 `R_Multiple` / `r_mult`、勝負 R 與 EV，必須以 `*_pnl_milli` 與 `initial_risk_total_milli` 直接走整數 ledger ratio helper；不得回退成 `float total_pnl / float initial_risk_total`，避免 closed-trades stats、單股與投組統計在邊界值因浮點路徑再度分叉 | DONE | 已補 static meta contract 與共享 ratio helper，直接掃描 `core/exact_accounting.py`、`core/backtest_core.py`、`core/backtest_finalize.py` 與 `core/portfolio_exits.py`，釘死核心 `trade_r_mult` / `total_r` 必須委派 `calc_ratio_from_milli(...)`，且不得殘留 `total_pnl / position['initial_risk_total']` 或 `total_pnl / pos['initial_risk_total']` 舊浮點公式；避免單股回測、期末結算、rotation 與投組 closeout 的 `R_Multiple` / EV 統計只在核心路徑分叉 | `tools/validate/synthetic_meta_cases.py`, `core/exact_accounting.py`, `core/backtest_core.py`, `core/backtest_finalize.py`, `core/portfolio_exits.py` |
+| B151 | P2 | 文件 / GUI workbench 文件同步契約 | `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 的 GUI workbench 頁籤敘述必須與實作一致；在已移除執行摘要分頁後，文件不得再殘留 summary-tab 描述 | DONE | 已補 static document-sync contract，直接比對 `single_stock_inspector.py` 的 notebook tabs 與兩份文件中的 workbench 描述；釘死文件必須描述為 `K 線圖 / 交易明細 / Console` 三分頁，且不得再殘留執行摘要分頁敘述 | `tools/validate/synthetic_meta_cases.py`, `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/workbench_ui/single_stock_inspector.py` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -449,6 +450,7 @@
 | T234 | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` | B148 |
 | T235 | `validate_debug_exit_total_return_milli_binding_contract_case` | B149 |
 | T236 | `validate_core_r_multiple_exact_ledger_contract_case` | B150 |
+| T237 | `validate_gui_workbench_documentation_sync_case` | B151 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -934,6 +936,7 @@
 | 2026-04-11 | B149 | 檢出 milli-binding contract 的 forced-closeout 負向守衛仍比對錯誤舊字串，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B149 | 補齊 forced-closeout 舊 float total-pnl 路徑負向守衛後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B150 | 新增 core R-multiple exact-ledger 契約，釘死核心回測 / 投組統計不得以 float `total_pnl / initial_risk_total` 累計 `r_mult` | NEW -> DONE | `core/backtest_core.py` |
+| 2026-04-11 | B151 | 新增 GUI workbench 文件同步 static contract，並修正文檔殘留的執行摘要分頁敘述後收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | T40 | 以 full dataset 額外審計檢出 portfolio export reporting synthetic case 尚未覆蓋 Plotly import failure fallback，改回 PARTIAL | DONE -> PARTIAL | `validate_portfolio_export_report_artifacts_case` |
 | 2026-04-11 | T40 | 擴充 portfolio export reporting synthetic case 納入 Plotly import failure fallback artifact / traceability 後重新驗證 | PARTIAL -> DONE | `validate_portfolio_export_report_artifacts_case` |
 | 2026-04-11 | T174 | 檢出 GUI extended preview continuity static contract 仍比對舊 counterfactual signature，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_extended_preview_continuity_contract_case` |
@@ -996,3 +999,4 @@
 | 2026-04-11 | T235 | 檢出 forced-closeout milli-binding contract 的舊 float total-pnl 負向守衛仍比對錯誤字串，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T235 | 補齊 forced-closeout 舊 float total-pnl 負向守衛後重新驗證 | PARTIAL -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T236 | 新增 core R-multiple exact-ledger static contract 並驗證 | NEW -> DONE | `validate_core_r_multiple_exact_ledger_contract_case` |
+| 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |

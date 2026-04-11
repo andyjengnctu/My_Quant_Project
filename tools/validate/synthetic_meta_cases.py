@@ -330,6 +330,38 @@ def validate_cmd_document_contract_case(_base_params):
     summary["project_command_count"] = project_command_count
     return results, summary
 
+
+def validate_gui_workbench_documentation_sync_case(_base_params):
+    case_id = "META_GUI_WORKBENCH_DOCUMENTATION_SYNC"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    inspector_source = (PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
+
+    cmd_required_fragment = "交易明細與 Console 為獨立分頁"
+    cmd_forbidden_fragment = "執行摘要、交易明細與 Console 為獨立分頁"
+    architecture_apps_required_fragment = "交易明細與 Console 改以獨立分頁承接"
+    architecture_ui_required_fragment = "交易明細與 Console 以獨立分頁承接"
+    architecture_forbidden_fragment = "執行摘要與交易明細改以獨立分頁承接"
+    architecture_ui_forbidden_fragment = "摘要與明細 / Console 以獨立分頁承接"
+
+    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
+    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_console_tab", True, 'text="Console"' in inspector_source)
+    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_omits_summary_tab", False, 'text="執行摘要"' in inspector_source)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_mentions_trade_detail_console_tabs", True, cmd_required_fragment in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_omits_summary_tab_description", False, cmd_forbidden_fragment in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "architecture_apps_workbench_mentions_trade_detail_console_tabs", True, architecture_apps_required_fragment in architecture_text)
+    add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_mentions_trade_detail_console_tabs", True, architecture_ui_required_fragment in architecture_text)
+    add_check(results, "meta_cmd_contract", case_id, "architecture_workbench_omits_summary_tab_description", False, architecture_forbidden_fragment in architecture_text)
+    add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_omits_summary_tab_description", False, architecture_ui_forbidden_fragment in architecture_text)
+
+    summary["cmd_required_fragment"] = cmd_required_fragment
+    summary["architecture_required_fragments"] = [architecture_apps_required_fragment, architecture_ui_required_fragment]
+    summary["tabs"] = ["K 線圖", "交易明細", "Console"]
+    return results, summary
+
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
     case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
     results = []
