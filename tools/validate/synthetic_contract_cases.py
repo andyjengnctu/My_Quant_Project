@@ -36,7 +36,7 @@ from tools.trade_analysis.charting import (
     normalize_chart_payload_contract,
     compute_visible_value_ranges,
     create_debug_chart_context,
-    create_matplotlib_debug_chart_figure,
+    create_matplotlib_trade_chart_figure,
     get_matplotlib_cjk_font_candidates,
     record_signal_annotation,
     set_chart_status_box,
@@ -1699,7 +1699,7 @@ def validate_gui_embedded_chart_contract_case(base_params):
 
     workbench_spec = importlib.import_module("tools.workbench_ui").build_workbench_spec()
     panel_spec = workbench_spec.get("panels", [])[0]
-    add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "tools.trade_analysis.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
+    add_check(results, "output_contract", case_id, "gui_embedded_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_default_show_volume", False, panel_spec.get("default_show_volume"))
 
     case = build_synthetic_competing_candidates_case(base_params, make_synthetic_validation_params)
@@ -1748,14 +1748,14 @@ def validate_gui_embedded_chart_contract_case(base_params):
     outlier_ranges = compute_visible_value_ranges(outlier_payload, start_idx=outlier_window_start, end_idx=outlier_window_end)
     add_check(results, "output_contract", case_id, "gui_embedded_chart_offscreen_outlier_ignored", base_outlier_ranges["price_max"], outlier_ranges["price_max"])
 
-    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=False)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=False)
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "gui_embedded_chart_figure_axes_count_without_volume", 1, len(figure.axes))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_volume_hidden", False, contract.get("volume_visible"))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_default_view_preserved", True, contract.get("default_view", {}).get("end_idx", -1) >= contract.get("default_view", {}).get("start_idx", 0))
     figure.clear()
 
-    figure_with_volume = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=True)
+    figure_with_volume = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=True)
     contract_with_volume = getattr(figure_with_volume, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "gui_embedded_chart_contract_volume_visible", True, contract_with_volume.get("volume_visible"))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_volume_overlay_mode", "inset", contract_with_volume.get("volume_overlay_mode"))
@@ -1780,7 +1780,7 @@ def validate_gui_embedded_chart_contract_case(base_params):
         "trade_markers": [{"trace_name": "買進", "date": large_dates[-20], "price": 128.0, "hover_text": "買進"}],
     }
     large_chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
-    large_figure = create_matplotlib_debug_chart_figure(chart_payload=large_chart_payload, ticker="LARGE", show_volume=False)
+    large_figure = create_matplotlib_trade_chart_figure(chart_payload=large_chart_payload, ticker="LARGE", show_volume=False)
     large_contract = getattr(large_figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "gui_embedded_chart_full_history_render_window", large_contract.get("total_bar_count", 0), large_contract.get("render_bar_count", 0))
     add_check(results, "output_contract", case_id, "gui_embedded_chart_full_history_navigation_enabled", True, large_contract.get("full_history_navigation_enabled"))
@@ -1819,7 +1819,7 @@ def validate_chart_payload_optional_overlay_keys_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "chart_payload_optional_summary_box_defaulted", [], normalized_payload.get("summary_box"))
     add_check(results, "output_contract", case_id, "chart_payload_optional_status_box_defaulted", {}, normalized_payload.get("status_box"))
 
-    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "chart_payload_optional_overlay_keys_figure_builds_successfully", True, contract.get("total_bar_count", 0) == len(minimal_payload["x"]))
     figure.clear()
@@ -1856,7 +1856,7 @@ def validate_gui_mouse_navigation_contract_case(_base_params):
         "focus_positions": [2, 5],
         "default_view": {"start_idx": 1, "end_idx": 6},
     }
-    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=False)
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "figure_contract_toolbar_not_required", False, contract.get("toolbar_required"))
     add_check(results, "output_contract", case_id, "figure_contract_mouse_zoom_flag_default_false_until_canvas_bind", False, contract.get("mouse_wheel_zoom_enabled"))
@@ -1961,7 +1961,7 @@ def validate_gui_dark_theme_and_keyboard_pan_contract_case(_base_params):
         "focus_positions": [100],
         "default_view": {"start_idx": 84, "end_idx": 119},
     }
-    figure = create_matplotlib_debug_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=True)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=minimal_payload, ticker="2330", show_volume=True)
 
     canvas = _build_matplotlib_canvas_stub()
     figure.canvas = canvas
@@ -2003,7 +2003,7 @@ def validate_gui_chart_workspace_contract_case(_base_params):
         index=large_dates,
     )
     chart_payload = build_debug_chart_payload(large_frame, create_debug_chart_context(large_frame))
-    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
     contract = getattr(figure, "_stock_chart_contract", {})
     add_check(results, "output_contract", case_id, "gui_chart_workspace_full_history_bar_count", len(chart_payload["x"]), contract.get("render_bar_count"))
     add_check(results, "output_contract", case_id, "gui_chart_workspace_volume_overlay_ratio_leq_quarter", True, contract.get("volume_overlay_ratio", 1.0) <= 0.25)
@@ -2668,7 +2668,7 @@ def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
         "focus_positions": [20, 30],
         "default_view": {"start_idx": 10, "end_idx": 45},
     }
-    figure = create_matplotlib_debug_chart_figure(chart_payload=payload, ticker="2330", show_volume=True)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=payload, ticker="2330", show_volume=True)
     contract = getattr(figure, "_stock_chart_contract", {})
     state = getattr(figure, "_stock_chart_navigation_state", {})
     add_check(results, "output_contract", case_id, "figure_contract_status_chip_layout_right_bottom", "right_bottom", contract.get("status_chip_layout"))
@@ -2711,7 +2711,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
     set_chart_summary_box(large_chart_context, summary_lines=["資產成長: 10.0%", "交易次數: 5"])
     set_chart_status_box(large_chart_context, status_lines=["無賣訊", "出現買入訊號", "歷史績效符合"], ok=True)
     chart_payload = build_debug_chart_payload(large_frame, large_chart_context)
-    figure = create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
+    figure = create_matplotlib_trade_chart_figure(chart_payload=chart_payload, ticker="LARGE", show_volume=True)
     contract = getattr(figure, "_stock_chart_contract", {})
     default_view = contract.get("default_view", {})
 
