@@ -2453,9 +2453,21 @@ def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
             helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
             break
 
+    step_source = ""
+    for node in parsed.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "process_debug_position_step":
+            step_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
+            break
+
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_prefers_display_total_before_exact_total_fallback", True, "display_entry_capital = float(position.get('entry_capital_total', 0.0) or 0.0)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_coerces_display_total_with_shared_helper", True, "return coerce_money_like_to_milli(round_money_for_display(display_entry_capital))" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_final_fallback_uses_average_price_total_helper", True, "return calc_total_from_average_price_milli(entry_price, initial_qty)" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_signature_accepts_position_and_current_date", True, "def _resolve_display_sell_total_milli(exit_context, *, position, current_date, sell_price, qty, params):" in source_text)
+    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_helper_uses_explicit_context", True, "ticker=position.get('ticker')" in helper_source and "trade_date=current_date" in helper_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_tp_marker_threads_position_and_current_date", True, "tp_sell_total = _resolve_display_sell_total(\n            tp_context,\n            position=position,\n            current_date=current_date," in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_full_sell_threads_position_and_current_date", True, "sell_total_amount = _resolve_display_sell_total(\n            exit_context,\n            position=position,\n            current_date=current_date," in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_leg_return_threads_current_date", True, "current_date=current_date," in step_source and "fallback_sell_price=exec_sell_price_half" in step_source)
+    add_check(results, "meta_contract", case_id, "debug_exit_display_sell_total_has_no_free_position_reference", False, "ticker=position.get('ticker')" in helper_source and "def _resolve_display_sell_total_milli(exit_context, *, sell_price, qty, params):" in source_text)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_gross_price_helper_on_net_average_entry", False, "return calc_entry_total_cost(entry_price, initial_qty, params)" in helper_source)
     add_check(results, "meta_contract", case_id, "debug_exit_entry_capital_has_no_legacy_per_share_fallback", False, "return round_money_for_display(entry_price * initial_qty)" in helper_source)
 

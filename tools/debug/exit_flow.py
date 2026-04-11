@@ -44,7 +44,7 @@ def _resolve_full_entry_capital_milli(position, fallback_qty, params):
     return calc_total_from_average_price_milli(entry_price, initial_qty)
 
 
-def _resolve_display_sell_total_milli(exit_context, *, sell_price, qty, params):
+def _resolve_display_sell_total_milli(exit_context, *, position, current_date, sell_price, qty, params):
     if exit_context is not None and int(exit_context.get('net_total_milli', 0) or 0) > 0:
         return int(exit_context.get('net_total_milli', 0) or 0)
     sell_ledger = build_sell_ledger_from_price(
@@ -58,11 +58,20 @@ def _resolve_display_sell_total_milli(exit_context, *, sell_price, qty, params):
     return int(sell_ledger['net_sell_total_milli'])
 
 
-def _resolve_display_sell_total(exit_context, *, sell_price, qty, params):
-    return milli_to_money(_resolve_display_sell_total_milli(exit_context, sell_price=sell_price, qty=qty, params=params))
+def _resolve_display_sell_total(exit_context, *, position, current_date, sell_price, qty, params):
+    return milli_to_money(
+        _resolve_display_sell_total_milli(
+            exit_context,
+            position=position,
+            current_date=current_date,
+            sell_price=sell_price,
+            qty=qty,
+            params=params,
+        )
+    )
 
 
-def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_price, fallback_sell_price, fallback_qty, params):
+def _resolve_display_leg_return_pct(position, exit_context, *, current_date, fallback_entry_price, fallback_sell_price, fallback_qty, params):
     allocated_cost_milli = 0 if exit_context is None else int(exit_context.get('allocated_cost_milli', 0) or 0)
     pnl_milli = 0 if exit_context is None else int(exit_context.get('pnl_milli', 0) or 0)
     if allocated_cost_milli <= 0 and exit_context is not None:
@@ -79,7 +88,14 @@ def _resolve_display_leg_return_pct(position, exit_context, *, fallback_entry_pr
     entry_total_milli = calc_total_from_average_price_milli(entry_price, sold_qty)
     if entry_total_milli <= 0:
         return 0.0
-    sell_total_milli = _resolve_display_sell_total_milli(exit_context, sell_price=fallback_sell_price, qty=sold_qty, params=params)
+    sell_total_milli = _resolve_display_sell_total_milli(
+        exit_context,
+        position=position,
+        current_date=current_date,
+        sell_price=fallback_sell_price,
+        qty=sold_qty,
+        params=params,
+    )
     return float((sell_total_milli - entry_total_milli) * 100.0 / entry_total_milli)
 
 
@@ -147,7 +163,14 @@ def process_debug_position_step(
         exec_sell_price_half = float(tp_context['exec_price'])
         sell_net_price_half = float(tp_context['net_price'])
         tp_leg_pnl = round_money_for_display(tp_context['pnl'])
-        tp_sell_total = _resolve_display_sell_total(tp_context, sell_price=exec_sell_price_half, qty=sold_qty, params=params)
+        tp_sell_total = _resolve_display_sell_total(
+            tp_context,
+            position=position,
+            current_date=current_date,
+            sell_price=exec_sell_price_half,
+            qty=sold_qty,
+            params=params,
+        )
         current_capital_after_tp = None if current_capital_before_event is None else float(current_capital_before_event) + tp_sell_total
         append_debug_trade_row(
             trade_logs,
@@ -175,6 +198,7 @@ def process_debug_position_step(
                 'pnl_pct': _resolve_display_leg_return_pct(
                     position,
                     tp_context,
+                    current_date=current_date,
                     fallback_entry_price=exec_sell_price_half,
                     fallback_sell_price=exec_sell_price_half,
                     fallback_qty=sold_qty,
@@ -202,7 +226,14 @@ def process_debug_position_step(
             security_profile=position.get('security_profile'),
             trade_date=current_date,
         ) if exit_context is None else float(exit_context['net_price'])
-        sell_total_amount = _resolve_display_sell_total(exit_context, sell_price=sell_price, qty=final_exit_qty, params=params)
+        sell_total_amount = _resolve_display_sell_total(
+            exit_context,
+            position=position,
+            current_date=current_date,
+            sell_price=sell_price,
+            qty=final_exit_qty,
+            params=params,
+        )
         current_capital_after_exit = None if current_capital_before_event is None else float(current_capital_before_event) + float(freed_cash)
         completed_trade_snapshot = _build_completed_trade_snapshot(
             stats_index,

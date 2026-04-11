@@ -307,6 +307,26 @@ def validate_portfolio_export_report_artifacts_case(_base_params):
         add_check(results, "reporting_schema", case_id, "portfolio_export_html_trace_count", True, "trace_count=2" in html_text)
         add_check(results, "reporting_schema", case_id, "portfolio_export_console_paths", True, str(xlsx_path) in export_text and str(html_path) in export_text)
 
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        xlsx_path = Path(tmp_dir) / "portfolio_report_fallback.xlsx"
+        html_path = Path(tmp_dir) / "portfolio_dashboard_fallback.html"
+        with patch.object(portfolio_reporting, "REPORT_XLSX_PATH", str(xlsx_path)), \
+             patch.object(portfolio_reporting, "DASHBOARD_HTML_PATH", str(html_path)), \
+             patch.dict(sys.modules, {"plotly": None, "plotly.graph_objects": None}):
+            fallback_text = _capture_output(
+                lambda: portfolio_reporting.export_portfolio_reports(
+                    df_eq=df_eq,
+                    df_tr=df_tr,
+                    df_yearly=df_yearly,
+                    benchmark_ticker="0050",
+                    start_year=2024,
+                )
+            )
+
+        add_check(results, "reporting_schema", case_id, "portfolio_export_fallback_xlsx_still_exists", True, xlsx_path.is_file())
+        add_check(results, "reporting_schema", case_id, "portfolio_export_fallback_html_skipped_on_import_error", False, html_path.exists())
+        add_check(results, "reporting_schema", case_id, "portfolio_export_fallback_reports_traceable_error", True, "Plotly 圖表輸出或開啟失敗" in fallback_text and "plotly" in fallback_text.lower())
+
     summary["portfolio_export_rows"] = int(len(df_eq))
     return results, summary
 

@@ -1,9 +1,10 @@
 import os
+import webbrowser
 
 import numpy as np
 import pandas as pd
 
-from core.display import C_CYAN, C_GREEN, C_GRAY, C_RESET, C_YELLOW
+from core.display import C_CYAN, C_GREEN, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary
 from core.output_paths import build_output_dir
 

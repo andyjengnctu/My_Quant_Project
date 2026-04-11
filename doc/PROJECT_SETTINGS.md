@@ -79,6 +79,8 @@
 41. 凡共享 tick / 漲跌停 / 價格合法性 helper 需要判定升降單位時，必須先由 ticker 與可得 metadata 解析商品 profile，再依 profile 選擇 tick 規則；股票、ETF / ETN / REIT 類與其槓反 / 債券型商品不得混用同一套 stock tick ladder，也不得只對特定資料集硬編碼例外。任何 rotation / exit / sell-fill caller 若需傳入 `ticker` / `security_profile`，也必須使用當前路徑已在作用域中的實際標的來源（如 `weakest_ticker`、`position.get("ticker")`）；不得引用未宣告的自由變數名稱。
 42. 凡正式帳務計算賣出手續費 / 交易稅 / net sell total 時，稅率也必須由共享 security-profile helper 依商品別與交易日期決定；不得再對股票、ETF / ETN、債券 ETF、REIT 類共用單一 `tax_rate`。至少必須支援股票 0.3%、ETF / ETN 0.1%、REIT 免稅，以及債券 ETF 於免徵期限內 0 稅率、到期後回到基金類稅率。
 43. 凡 public/helper producer（如 `build_backtest_stats()`）開始把 `current_date`、`final_date`、`trade_date` 等日期上下文往下傳給共享 builder / preview helper 時，必須在同輪同步把該日期納入函式簽名、全部 caller 與 formal static contract；不得在函式內直接引用未宣告的自由變數日期名稱。
+44. debug / GUI / history 的私有 helper 若需要 `position`、`current_date`、`trade_date`、`ticker`、`security_profile` 等上下文，必須由函式簽名明確接受，並由 caller 顯式傳入；不得在 helper 內直接引用未宣告的自由變數名稱。
+45. reporting / optional-dependency fallback 的 `except (...)` tuple 只能引用本模組已匯入或內建保證存在的例外型別；若 chart / HTML / browser 等 optional 輸出失敗，主要 artifact 匯出仍須成功並輸出可追蹤的錯誤摘要。
 ## E. 交易與策略原則
 
 1. 杜絕未來函數：不可偷看未來資料。
