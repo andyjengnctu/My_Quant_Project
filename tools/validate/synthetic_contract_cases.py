@@ -2380,6 +2380,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     backtest_source = build_project_absolute_path("tools", "trade_analysis", "backtest.py").read_text(encoding="utf-8")
     exit_flow_source = build_project_absolute_path("tools", "trade_analysis", "exit_flow.py").read_text(encoding="utf-8")
     trade_log_source = build_project_absolute_path("tools", "trade_analysis", "trade_log.py").read_text(encoding="utf-8")
+    inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
 
     add_check(results, "output_contract", case_id, "debug_view_initial_capital_uses_scanner_live_capital_basis", True, 'cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)' in trade_log_source)
     add_check(results, "output_contract", case_id, "buy_signal_annotation_includes_current_capital_and_reserved_capital", True, '資金:' in backtest_source and '預留:' in backtest_source)
@@ -2435,6 +2436,8 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)' in charting_source and 'base_y = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_offsets_when_signal_or_nearby_trade_boxes_cluster", True, '_count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)' in charting_source and 'collision_window = 5 if placement == "below" else 4' in charting_source and 'occupied_positions.append({"x": x_value, "placement": placement})' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_trade_info_includes_actual_spend_field", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_actual_spend_var' in inspector_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_sets_actual_spend_from_hover_snapshot", True, 'self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))' in inspector_source and '"buy_capital": buy_trade_meta.get("buy_capital")' in charting_source)
     add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_total_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_total_pnl", True, "資金: 2,012,345" in exit_label_text and "總損益: +3,333" in exit_label_text)
