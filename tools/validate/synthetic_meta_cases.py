@@ -2711,12 +2711,21 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
+    summary_comment_line = next(
+        (
+            line.strip()
+            for line in source_text.splitlines()
+            if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋 debug exact-fallback / exit milli-binding helper contracts")
+        ),
+        "",
+    )
 
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t236", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t236", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
@@ -2773,7 +2782,7 @@ def validate_debug_exit_total_return_milli_binding_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "debug_exit_total_return_pct_has_no_unbound_total_pnl_milli_path", False, "total_pnl = float(position.get('realized_pnl', pnl_realized))" in process_source)
     add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_return_pct_binds_total_pnl_milli_before_use", True, forced_closeout_binding_index != -1 and forced_closeout_total_return_index != -1 and forced_closeout_binding_index < forced_closeout_total_return_index)
     add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_pnl_display_derives_from_milli_binding", True, "total_pnl = milli_to_money(total_pnl_milli)" in forced_closeout_source)
-    add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_return_pct_has_no_unbound_total_pnl_milli_path", False, "total_pnl = float(position.get('realized_pnl', pnl_realized))" in forced_closeout_source)
+    add_check(results, "meta_contract", case_id, "debug_forced_closeout_total_return_pct_has_no_legacy_float_total_pnl_path", False, "total_pnl = float(position.get('realized_pnl', 0.0) + final_leg_actual_pnl)" in forced_closeout_source)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
