@@ -511,9 +511,9 @@ def validate_optional_dependency_fallback_traceability_contract_case(_base_param
     summary = {"ticker": case_id, "synthetic": True}
 
     scan_targets = [
-        PROJECT_ROOT / "tools" / "debug" / "charting.py",
+        PROJECT_ROOT / "tools" / "trade_analysis" / "charting.py",
         PROJECT_ROOT / "tools" / "downloader" / "runtime.py",
-        PROJECT_ROOT / "tools" / "gui" / "single_stock_inspector.py",
+        PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py",
         PROJECT_ROOT / "tools" / "validate" / "main.py",
     ]
     syntax_errors = []
