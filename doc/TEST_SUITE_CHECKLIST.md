@@ -1010,14 +1010,14 @@
 | 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |
 | 2026-04-12 | B114 | 修正 GUI 買入資訊框缺少實支且 T193 contract 誤寫成禁止實支後，主表維持 DONE | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B114 | 補上買入資訊框實支最後一行與 sidebar 同步 contract 後主表恢復 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-12 | T193 | 修正 GUI trade-box contract 誤把買入框實支視為禁止項後重新驗證 | DONE -> PARTIAL | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
-| 2026-04-12 | T193 | 補上買入資訊框實支最後一行 contract 並重新驗證 | PARTIAL -> DONE | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T238，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T238 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T239，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T239 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B152 | 新增 trade_analysis rename 相容文件契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B153 | 新增 trade_analysis canonical alias export 契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | T193 | 修正 GUI trade-box contract 誤把買入框實支視為禁止項後重新驗證 | DONE -> PARTIAL | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
+| 2026-04-12 | T193 | 補上買入資訊框實支最後一行 contract 並重新驗證 | PARTIAL -> DONE | `validate_gui_trade_box_capital_and_round_trip_contract_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T238，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T238 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T239，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
