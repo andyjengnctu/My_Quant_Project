@@ -61,16 +61,29 @@ def build_debug_view_params(params):
     cloned_params.initial_capital = resolve_scanner_live_capital(cloned_params)
     return cloned_params
 
+
+def build_trade_analysis_view_params(params):
+    return build_debug_view_params(params)
+
+
+def resolve_trade_analysis_data_dir(dataset_profile_key=DEFAULT_DATASET_PROFILE):
+    return resolve_debug_data_dir(dataset_profile_key)
+
+
 def resolve_debug_data_dir(dataset_profile_key=DEFAULT_DATASET_PROFILE):
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
     return get_dataset_dir(BASE_DIR, normalized_key)
+
+
+def resolve_trade_analysis_file_path(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
+    return resolve_debug_file_path(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
 
 
 def resolve_debug_file_path(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
     from core.data_utils import discover_unique_csv_inputs, resolve_unique_csv_path
 
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
-    resolved_data_dir = resolve_debug_data_dir(normalized_key) if data_dir is None else os.path.abspath(str(data_dir))
+    resolved_data_dir = resolve_trade_analysis_data_dir(normalized_key) if data_dir is None else os.path.abspath(str(data_dir))
 
     manual_csv_path = os.path.abspath(f"{ticker}.csv")
     if os.path.exists(manual_csv_path):
@@ -87,12 +100,16 @@ def resolve_debug_file_path(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFI
     return file_path, resolved_data_dir, "DATASET"
 
 
+def load_trade_analysis_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
+    return load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
+
+
 def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
     from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
     import pandas as pd
 
     normalized_key = normalize_dataset_profile_key(dataset_profile_key, default=DEFAULT_DATASET_PROFILE)
-    file_path, resolved_data_dir, source = resolve_debug_file_path(
+    file_path, resolved_data_dir, source = resolve_trade_analysis_file_path(
         ticker,
         dataset_profile_key=normalized_key,
         data_dir=data_dir,
@@ -268,7 +285,7 @@ def main(argv=None, environ=None):
             environ,
             default=DEFAULT_DATASET_PROFILE,
         )
-        DATA_DIR = resolve_debug_data_dir(dataset_profile_key)
+        DATA_DIR = resolve_trade_analysis_data_dir(dataset_profile_key)
     except ValueError as e:
         raise ValueError(str(e)) from e
 
@@ -295,7 +312,7 @@ def main(argv=None, environ=None):
         f"來源: {dataset_source} | 路徑: {DATA_DIR}"
     )
 
-    analysis_result = run_debug_ticker_analysis(
+    analysis_result = run_ticker_analysis(
         ticker,
         dataset_profile_key=dataset_profile_key,
         export_excel=True,
@@ -339,9 +356,13 @@ if __name__ == "__main__":
 
 __all__ = [
     "load_params",
+    "build_trade_analysis_view_params",
     "build_debug_view_params",
+    "resolve_trade_analysis_data_dir",
     "resolve_debug_data_dir",
+    "resolve_trade_analysis_file_path",
     "resolve_debug_file_path",
+    "load_trade_analysis_price_frame",
     "load_debug_price_frame",
     "run_trade_analysis",
     "run_trade_backtest",

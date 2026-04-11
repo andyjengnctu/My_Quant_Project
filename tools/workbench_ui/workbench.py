@@ -42,9 +42,9 @@ PANEL_SPECS = (
     {
         "panel_id": "single_stock_backtest_inspector",
         "tab_label": "單股回測檢視",
-        "backend_runner": "tools.trade_analysis.trade_log.run_debug_ticker_analysis",
+        "backend_runner": "tools.trade_analysis.trade_log.run_ticker_analysis",
         "artifact_keys": ("excel_path",),
-        "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_debug_chart_figure",
+        "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,
         "panel_factory": SingleStockBacktestInspectorPanel,
     },

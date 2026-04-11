@@ -12,8 +12,8 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
 from core.scanner_display import build_scanner_sort_probe_text
-from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_debug_chart_figure, scroll_chart_to_latest
-from tools.trade_analysis.trade_log import load_params, resolve_debug_data_dir, run_debug_ticker_analysis
+from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
+from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 
 try:
@@ -246,7 +246,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._status_var.set("執行中：掃描候選股")
         self.update_idletasks()
         try:
-            data_dir = resolve_debug_data_dir(DEFAULT_DATASET_PROFILE)
+            data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
             params = load_params(verbose=False)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 scan_result = run_daily_scanner(data_dir, params)
@@ -275,7 +275,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._status_var.set("執行中：掃描歷史績效股")
         self.update_idletasks()
         try:
-            data_dir = resolve_debug_data_dir(DEFAULT_DATASET_PROFILE)
+            data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
             params = load_params(verbose=False)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 scan_result = run_history_qualified_scanner(data_dir, params)
@@ -305,7 +305,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self.update_idletasks()
 
         try:
-            result = run_debug_ticker_analysis(
+            result = run_ticker_analysis(
                 ticker,
                 dataset_profile_key=DEFAULT_DATASET_PROFILE,
                 export_excel=True,
@@ -454,7 +454,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._status_var.set(backend_error_text)
             return
         try:
-            figure = create_matplotlib_debug_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
+            figure = create_matplotlib_trade_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
         except Exception as exc:
             self._clear_embedded_chart()
             error_text = f"圖表渲染失敗：{type(exc).__name__}: {exc}"

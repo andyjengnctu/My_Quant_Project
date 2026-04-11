@@ -71,7 +71,7 @@ python apps/smart_downloader.py
 python tools/trade_analysis/trade_log.py
 ```
 
-`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口；package `tools.trade_analysis` 與 `trade_log.py` 現已同步提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases，並為維持既有工具鏈相容保留 legacy `run_debug_*` / `debug_trade_log` 命名。`tools/trade_analysis/backtest.py` 只保留主控 façade，進場流程在 `tools/trade_analysis/entry_flow.py`，出場 / 錯失賣出 / 期末結算在 `tools/trade_analysis/exit_flow.py`，明細列建構 helper 在 `tools/trade_analysis/log_rows.py`，K 線 payload / HTML 輸出 / GUI 內嵌 matplotlib figure 在 `tools/trade_analysis/charting.py`，輸出摘要在 `tools/trade_analysis/reporting.py`。
+`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口；package `tools.trade_analysis` 與 `trade_log.py` 現已同步提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases，並為維持既有工具鏈相容保留 legacy `run_debug_*` / `debug_trade_log` 命名。`tools/workbench_ui/` 內部整合則優先使用 canonical `run_ticker_analysis` / `resolve_trade_analysis_data_dir` / `create_matplotlib_trade_chart_figure` aliases，不再把 legacy debug 命名當成 workbench 內部正式介面。`tools/trade_analysis/backtest.py` 只保留主控 façade，進場流程在 `tools/trade_analysis/entry_flow.py`，出場 / 錯失賣出 / 期末結算在 `tools/trade_analysis/exit_flow.py`，明細列建構 helper 在 `tools/trade_analysis/log_rows.py`，K 線 payload / HTML 輸出 / GUI 內嵌 matplotlib figure 在 `tools/trade_analysis/charting.py`，輸出摘要在 `tools/trade_analysis/reporting.py`。
 
 ## GUI 工作台
 

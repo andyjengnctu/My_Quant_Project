@@ -980,6 +980,10 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
+def create_matplotlib_trade_chart_figure(*, chart_payload, ticker, show_volume=False):
+    return create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=show_volume)
+
+
 def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=False):
     chart_payload = normalize_chart_payload_contract(chart_payload)
     try:

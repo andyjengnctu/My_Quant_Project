@@ -2824,10 +2824,18 @@ def validate_gui_workbench_contract_case(base_params):
     if panel_specs:
         panel_spec = panel_specs[0]
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
-        add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.trade_analysis.trade_log.run_debug_ticker_analysis", panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_backend_runner", "tools.trade_analysis.trade_log.run_ticker_analysis", panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
-        add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.trade_analysis.charting.create_matplotlib_debug_chart_figure", panel_spec.get("inline_chart_backend"))
+        add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
+
+    inspector_source = (PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
+    workbench_source = (PROJECT_ROOT / "tools" / "workbench_ui" / "workbench.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_runner", True, "run_ticker_analysis" in inspector_source and "run_debug_ticker_analysis" not in inspector_source)
+    add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_data_dir_helper", True, "resolve_trade_analysis_data_dir" in inspector_source and "resolve_debug_data_dir" not in inspector_source)
+    add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_chart_figure_alias", True, "create_matplotlib_trade_chart_figure" in inspector_source and "create_matplotlib_debug_chart_figure" not in inspector_source)
+    add_check(results, "output_contract", case_id, "workbench_panel_registry_omits_legacy_debug_runner_alias", False, "run_debug_ticker_analysis" in workbench_source)
+    add_check(results, "output_contract", case_id, "workbench_panel_registry_omits_legacy_debug_chart_alias", False, "create_matplotlib_debug_chart_figure" in workbench_source)
 
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):
@@ -2843,6 +2851,9 @@ def validate_gui_workbench_contract_case(base_params):
     clean_df, _sanitize_stats = sanitize_ohlcv_dataframe(frame.copy(), ticker, min_rows=min_rows_needed)
 
     debug_module = importlib.import_module("tools.trade_analysis.trade_log")
+    charting_module = importlib.import_module("tools.trade_analysis.charting")
+    add_check(results, "output_contract", case_id, "trade_log_exposes_canonical_trade_analysis_data_dir_helper", True, hasattr(debug_module, "resolve_trade_analysis_data_dir"))
+    add_check(results, "output_contract", case_id, "charting_exposes_canonical_trade_chart_alias", True, hasattr(charting_module, "create_matplotlib_trade_chart_figure"))
     legacy_df = debug_module.run_debug_backtest(clean_df.copy(), ticker, case["params"], export_excel=False, verbose=False)
     with tempfile.TemporaryDirectory(prefix="gui_workbench_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(
