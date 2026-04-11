@@ -18,7 +18,7 @@ REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 
 STEP_LABELS = TEST_SUITE_STEP_LABELS
 
-# consistency step 透過 synthetic registry 覆蓋 debug exact-fallback helper contracts（含 T225/T226/T229/T230/T231/T232/T233/T234/T235）。
+# consistency step 透過 synthetic registry 覆蓋 debug exact-fallback helper contracts（含 T225/T226/T229/T230/T231/T232/T233/T234/T235/T236）。
 
 class ConsoleProgress:
     def __init__(self) -> None:

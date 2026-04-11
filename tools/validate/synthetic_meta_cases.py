@@ -2712,10 +2712,10 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
 
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t235", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t236", True, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236" in source_text)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in source_text)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in source_text)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in source_text)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
