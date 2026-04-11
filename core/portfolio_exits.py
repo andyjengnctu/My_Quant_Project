@@ -2,6 +2,7 @@ from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.exact_accounting import (
     build_sell_ledger_from_price,
+    calc_ratio_from_milli,
     calc_reconciled_exit_display_pnl,
     calc_total_from_average_price_milli,
     coerce_money_like_to_milli,
@@ -178,7 +179,7 @@ def try_rotate_weakest_position(
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
         total_pnl = milli_to_money(total_pnl_milli)
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
-        total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+        total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
         )
@@ -267,7 +268,7 @@ def settle_portfolio_positions(
 
         if 'STOP' in events or 'IND_SELL' in events:
             total_pnl = pos['realized_pnl']
-            total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+            total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
             closed_trades_stats.append(
                 {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
             )
@@ -361,7 +362,7 @@ def closeout_open_positions(
         total_pnl_milli = pos['realized_pnl_milli'] + pnl_milli
         total_pnl = milli_to_money(total_pnl_milli)
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
-        total_r = total_pnl / pos['initial_risk_total'] if pos['initial_risk_total'] > 0 else 0
+        total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
             {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
         )

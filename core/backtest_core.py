@@ -2,7 +2,7 @@ import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
-from core.exact_accounting import build_sell_ledger_from_price, milli_to_money, money_to_milli
+from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price
@@ -102,7 +102,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             currentCapital_milli += freed_cash_milli
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
-                trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0
+                trade_r_mult = calc_ratio_from_milli(position['realized_pnl_milli'], position.get('initial_risk_total_milli', 0))
                 total_r_multiple += trade_r_mult
                 tradeCount += 1
                 if return_logs:

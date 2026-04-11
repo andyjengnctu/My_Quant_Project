@@ -2721,6 +2721,31 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     return results, summary
 
 
+def validate_core_r_multiple_exact_ledger_contract_case(_base_params):
+    case_id = "META_CORE_R_MULTIPLE_EXACT_LEDGER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    exact_path = build_project_absolute_path("core", "exact_accounting.py")
+    exact_source = exact_path.read_text(encoding="utf-8")
+    backtest_core_path = build_project_absolute_path("core", "backtest_core.py")
+    backtest_core_source = backtest_core_path.read_text(encoding="utf-8")
+    backtest_finalize_path = build_project_absolute_path("core", "backtest_finalize.py")
+    backtest_finalize_source = backtest_finalize_path.read_text(encoding="utf-8")
+    portfolio_exits_path = build_project_absolute_path("core", "portfolio_exits.py")
+    portfolio_exits_source = portfolio_exits_path.read_text(encoding="utf-8")
+
+    add_check(results, "meta_contract", case_id, "exact_accounting_exposes_shared_milli_ratio_helper", True, "def calc_ratio_from_milli(numerator_milli: int, denominator_milli: int) -> float:" in exact_source)
+    add_check(results, "meta_contract", case_id, "backtest_core_r_multiple_uses_exact_ledger_helper", True, "trade_r_mult = calc_ratio_from_milli(position['realized_pnl_milli'], position.get('initial_risk_total_milli', 0))" in backtest_core_source)
+    add_check(results, "meta_contract", case_id, "backtest_finalize_r_multiple_uses_exact_ledger_helper", True, "trade_r_mult = calc_ratio_from_milli(total_pnl_milli, position.get('initial_risk_total_milli', 0))" in backtest_finalize_source)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_r_multiple_uses_exact_ledger_helper", True, "total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))" in portfolio_exits_source)
+    add_check(results, "meta_contract", case_id, "portfolio_exit_r_multiple_uses_exact_ledger_helper", True, "total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))" in portfolio_exits_source)
+    add_check(results, "meta_contract", case_id, "core_has_no_legacy_float_total_pnl_divided_by_initial_risk_total", False, "total_pnl / position['initial_risk_total']" in backtest_core_source or "total_pnl / position['initial_risk_total']" in backtest_finalize_source or "total_pnl / pos['initial_risk_total']" in portfolio_exits_source)
+
+    summary["source_path"] = backtest_core_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
 def validate_debug_exit_total_return_milli_binding_contract_case(_base_params):
     case_id = "META_DEBUG_EXIT_TOTAL_RETURN_MILLI_BINDING_CONTRACT"
     results = []

@@ -482,6 +482,13 @@ def calc_risk_budget_milli(cap, risk_pct) -> int:
     return _round_decimal_to_int(Decimal(int(cap_milli)) * Decimal(int(risk_ppm)) / _DECIMAL_PPM)
 
 
+def calc_ratio_from_milli(numerator_milli: int, denominator_milli: int) -> float:
+    denominator = int(denominator_milli)
+    if denominator <= 0:
+        return 0.0
+    return float(Decimal(int(numerator_milli)) / Decimal(denominator))
+
+
 def get_display_realized_pnl_sum(position: Dict[str, Any]) -> float:
     return round_money_for_display(position.get("display_realized_pnl_sum", 0.0) or 0.0)
 

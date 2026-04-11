@@ -1,4 +1,4 @@
-from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
+from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -69,7 +69,7 @@ def finalize_open_position_at_end(
     pnl_milli = sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
     total_pnl_milli = position['realized_pnl_milli'] + pnl_milli
     total_pnl = milli_to_money(total_pnl_milli)
-    trade_r_mult = total_pnl / position['initial_risk_total'] if position['initial_risk_total'] > 0 else 0.0
+    trade_r_mult = calc_ratio_from_milli(total_pnl_milli, position.get('initial_risk_total_milli', 0))
 
     total_r_multiple += trade_r_mult
     trade_count += 1
