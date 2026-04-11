@@ -38,6 +38,16 @@ def build_scanner_validation_params(base_params):
     return copy.deepcopy(base_params)
 
 
+def _resolve_trade_date_from_clean_df(clean_df):
+    if clean_df is None or clean_df.empty:
+        return None
+    if "Date" in clean_df.columns:
+        return pd.Timestamp(clean_df["Date"].iloc[-1])
+    if "Time" in clean_df.columns:
+        return pd.Timestamp(clean_df["Time"].iloc[-1])
+    return pd.Timestamp(clean_df.index[-1])
+
+
 def normalize_scanner_result(raw_result):
     if raw_result is None:
         return None
@@ -67,7 +77,9 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
         source_df = pd.read_csv(file_path) if raw_df is None else raw_df
         min_rows_needed = get_required_min_rows(params)
         df, _sanitize_stats = sanitize_ohlcv_dataframe(source_df, ticker, min_rows=min_rows_needed)
-        return run_v16_backtest(df.copy(), params, ticker=ticker)
+        stats = run_v16_backtest(df.copy(), params, ticker=ticker)
+        stats["trade_date"] = _resolve_trade_date_from_clean_df(df)
+        return stats
     except ValueError as e:
         if is_insufficient_data_error(e):
             return {"scanner_expected_status": "skip_insufficient"}
@@ -77,10 +89,12 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
 def run_scanner_reference_check_on_clean_df(ticker, clean_df, params):
     if clean_df is None or clean_df.empty:
         raise ValueError(f"{ticker}: clean_df 不可為空")
-    return run_v16_backtest(clean_df, params, ticker=ticker)
+    stats = run_v16_backtest(clean_df, params, ticker=ticker)
+    stats["trade_date"] = _resolve_trade_date_from_clean_df(clean_df)
+    return stats
 
 
-def derive_expected_scanner_status(scanner_ref_stats, params):
+def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, trade_date=None):
     if scanner_ref_stats.get("scanner_expected_status") == "skip_insufficient":
         return "skip_insufficient"
 
@@ -91,7 +105,9 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         proj_qty = calc_reference_candidate_qty(
             scanner_ref_stats["buy_limit"],
             scanner_ref_stats["stop_loss"],
-            params
+            params,
+            ticker=ticker,
+            trade_date=trade_date,
         )
         return "buy" if proj_qty > 0 else "candidate"
 
@@ -103,14 +119,14 @@ def derive_expected_scanner_status(scanner_ref_stats, params):
         init_sl = extended_candidate_today.get("init_sl")
         if limit_price is None or init_sl is None:
             return "candidate"
-        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
         return "extended" if proj_qty > 0 else "candidate"
 
     return "candidate"
 
 
-def build_expected_scanner_payload(scanner_ref_stats, params):
-    status = derive_expected_scanner_status(scanner_ref_stats, params)
+def build_expected_scanner_payload(scanner_ref_stats, params, *, ticker=None, trade_date=None):
+    status = derive_expected_scanner_status(scanner_ref_stats, params, ticker=ticker, trade_date=trade_date)
     payload = {
         "status": status,
         "expected_value": None,
@@ -124,7 +140,7 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
     if status == "buy":
         limit_price = scanner_ref_stats["buy_limit"]
         stop_loss = scanner_ref_stats["stop_loss"]
-        proj_qty = calc_reference_candidate_qty(limit_price, stop_loss, params)
+        proj_qty = calc_reference_candidate_qty(limit_price, stop_loss, params, ticker=ticker, trade_date=trade_date)
     else:
         extended_candidate = scanner_ref_stats.get("extended_candidate_today")
         if extended_candidate is None:
@@ -133,7 +149,7 @@ def build_expected_scanner_payload(scanner_ref_stats, params):
         init_sl = extended_candidate.get("init_sl")
         if init_sl is None:
             return payload
-        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
 
     proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
     sort_value = calc_buy_sort_value(

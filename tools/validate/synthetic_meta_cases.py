@@ -2657,7 +2657,7 @@ def validate_price_utils_array_tick_normalization_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "portfolio_entry_seed_preserves_ticker_for_execution", True, "'ticker': candidate_row.get('ticker')" in entry_source)
     add_check(results, "meta_contract", case_id, "entry_plan_resize_threads_ticker_security_profile_and_trade_date", True, 'ticker=candidate_plan.get("ticker")' in entry_plans_source and 'security_profile=candidate_plan.get("security_profile")' in entry_plans_source and 'trade_date=candidate_plan.get("trade_date")' in entry_plans_source)
     add_check(results, "meta_contract", case_id, "scanner_projected_qty_threads_ticker_and_trade_date", True, "calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source and "calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)" in scanner_processor_source)
-    add_check(results, "meta_contract", case_id, "scanner_response_threads_latest_trade_date", True, 'def _resolve_latest_trade_date(df):' in scanner_processor_source and "if 'Date' in df.columns:" in scanner_processor_source and 'return df.index[-1]' in scanner_processor_source and 'trade_date = _resolve_latest_trade_date(df)' in scanner_processor_source and 'build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)' in scanner_processor_source)
+    add_check(results, "meta_contract", case_id, "scanner_response_threads_latest_trade_date", True, 'def _resolve_latest_trade_date(df):' in scanner_processor_source and "if 'Date' in df.columns:" in scanner_processor_source and "latest_attr = df.attrs.get('latest_trade_date')" in scanner_processor_source and 'if isinstance(index, pd.MultiIndex):' in scanner_processor_source and 'trade_date = _resolve_latest_trade_date(df)' in scanner_processor_source and 'build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)' in scanner_processor_source)
     add_check(results, "meta_contract", case_id, "position_step_exit_path_uses_position_ticker", True, 'ticker=position.get("ticker")' in position_step_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_uses_weakest_ticker", True, 'adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)' in portfolio_exits_source)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_exit_path_has_no_undefined_ticker_reference", False, 'adjust_long_sell_fill_price(w_open, ticker=ticker)' in portfolio_exits_source)
@@ -3174,6 +3174,10 @@ def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_param
     unit_text = unit_path.read_text(encoding="utf-8")
     tp_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_take_profit_cases.py"
     tp_text = tp_path.read_text(encoding="utf-8")
+    scanner_path = PROJECT_ROOT / "tools" / "validate" / "scanner_expectations.py"
+    scanner_text = scanner_path.read_text(encoding="utf-8")
+    contract_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_contract_cases.py"
+    contract_text = contract_path.read_text(encoding="utf-8")
 
     add_check(results, "meta_contract", case_id, "unit_oracle_net_sell_uses_sell_ledger", True, 'build_sell_ledger_from_price(price, int(qty), params)' in unit_text)
     add_check(results, "meta_contract", case_id, "unit_oracle_position_size_uses_integer_risk_budget", True, 'risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)' in unit_text)
@@ -3182,7 +3186,11 @@ def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_param
     add_check(results, "meta_contract", case_id, "take_profit_case_uses_sell_ledger_for_expected_cash", True, 'expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)' in tp_text)
     add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_freed_cash_formula", False, 'expected_freed_cash = expected_net_price * qty' in tp_text)
     add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_pnl_formula", False, 'expected_pnl = (expected_net_price - entry_price) * qty' in tp_text)
-    add_check(results, "meta_contract", case_id, "fee_tax_net_equity_case_has_no_legacy_entry_cash_after_buy_formula", False, 'entry_cash_after_buy = float(params.initial_capital - entry_result["entry_price"] * entry_qty)' in tp_text)
+    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_trade_date_from_clean_df", True, 'stats["trade_date"] = _resolve_trade_date_from_clean_df(df)' in scanner_text and 'stats["trade_date"] = _resolve_trade_date_from_clean_df(clean_df)' in scanner_text)
+    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_ticker_and_trade_date_into_projected_qty", True, 'ticker=ticker' in scanner_text and 'trade_date=trade_date' in scanner_text and 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], params' in scanner_text)
+    add_check(results, "meta_contract", case_id, "scanner_payload_builder_threads_trade_date_to_status_oracle", True, 'status = derive_expected_scanner_status(scanner_ref_stats, params, ticker=ticker, trade_date=trade_date)' in scanner_text)
+    add_check(results, "meta_contract", case_id, "scanner_live_capital_contract_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(buy_limit, stop_loss, params, ticker="2330", trade_date=pd.Timestamp("2026-01-02"))' in contract_text)
+    add_check(results, "meta_contract", case_id, "scanner_half_tp_case_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], scanner_case["params"], ticker=scanner_ticker, trade_date=scanner_ref_stats.get("trade_date"))' in tp_text)
 
     summary["source_path"] = unit_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

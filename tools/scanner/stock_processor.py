@@ -224,12 +224,30 @@ def _build_precomputed_signals(df):
     )
 
 
+def _normalize_trade_date_value(value):
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return value
+    return ts
+
+
 def _resolve_latest_trade_date(df):
-    if df.empty:
+    if df is None or df.empty:
         return None
     if 'Date' in df.columns:
-        return df["Date"].iloc[-1]
-    return df.index[-1]
+        return _normalize_trade_date_value(df["Date"].iloc[-1])
+    if 'Time' in df.columns:
+        return _normalize_trade_date_value(df["Time"].iloc[-1])
+    latest_attr = df.attrs.get('latest_trade_date')
+    if latest_attr is not None:
+        return _normalize_trade_date_value(latest_attr)
+    index = df.index
+    if isinstance(index, pd.MultiIndex):
+        return _normalize_trade_date_value(index.get_level_values(-1)[-1])
+    return _normalize_trade_date_value(index[-1])
 
 
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):

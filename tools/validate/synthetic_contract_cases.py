@@ -1559,7 +1559,7 @@ def validate_scanner_live_capital_contract_case(base_params):
 
     buy_limit = 100.0
     stop_loss = 90.0
-    projected_qty = calc_reference_candidate_qty(buy_limit, stop_loss, params)
+    projected_qty = calc_reference_candidate_qty(buy_limit, stop_loss, params, ticker="2330", trade_date=pd.Timestamp("2026-01-02"))
     projected_cost = calc_entry_total_cost(buy_limit, projected_qty, params)
 
     scanner_result = build_scanner_response_from_stats(

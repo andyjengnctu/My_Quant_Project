@@ -31,7 +31,7 @@ def append_real_case_checks(
     downloader_error,
     debug_df,
 ):
-    expected_scanner_payload = build_expected_scanner_payload(scanner_ref_stats, params)
+    expected_scanner_payload = build_expected_scanner_payload(scanner_ref_stats, params, ticker=ticker, trade_date=scanner_ref_stats.get("trade_date"))
     expected_scanner_status = expected_scanner_payload["status"]
 
     sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
