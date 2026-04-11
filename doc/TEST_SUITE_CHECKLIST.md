@@ -925,6 +925,8 @@
 | 2026-04-11 | B147 | 補齊正式入口摘要註解與 summary meta contract 對 T234/T235 的同步後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B147 | 檢出正式入口摘要註解與 summary meta contract 尚未同步新增的 T236，主表改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-11 | B147 | 將正式入口摘要註解與 summary meta contract 同步擴充到 T236 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B147 | 檢出 summary comment contract 尚未明確釘死 T235 明示檢查，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-11 | B147 | 補齊 T235 明示檢查與正式入口摘要同步後重新收斂為 DONE | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-11 | B148 | 新增 exact-ledger ratio path 契約，釘死 return / rotation ratio 不得先轉 float money 再相除 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-11 | B149 | 新增 debug exit milli binding 契約，釘死 final-exit total_return_pct 不得引用未定義 total_pnl_milli | NEW -> DONE | `tools/debug/exit_flow.py` |
 | 2026-04-11 | B150 | 新增 core R-multiple exact-ledger 契約，釘死核心回測 / 投組統計不得以 float `total_pnl / initial_risk_total` 累計 `r_mult` | NEW -> DONE | `core/backtest_core.py` |
@@ -979,6 +981,10 @@
 | 2026-04-11 | T233 | 擴充 summary comment coverage contract 納入 T234/T235 並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T236，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T233 | 擴充 summary comment coverage contract 納入 T236 並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T233 | 檢出 summary comment coverage contract 尚未明確釘死 T235，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-11 | T233 | 擴充 summary comment coverage contract 納入 T235 明示檢查並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-11 | T234 | 新增 exact-ledger return ratio no-money-float-division static contract 並驗證 | NEW -> DONE | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` |
 | 2026-04-11 | T235 | 新增 debug exit total-return milli binding static contract 並驗證 | NEW -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
+| 2026-04-11 | T235 | 檢出 milli-binding contract 尚未覆蓋 forced-closeout 路徑，改回 PARTIAL | DONE -> PARTIAL | `validate_debug_exit_total_return_milli_binding_contract_case` |
+| 2026-04-11 | T235 | 擴充 milli-binding contract 納入 forced-closeout 路徑後重新驗證 | PARTIAL -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T236 | 新增 core R-multiple exact-ledger static contract 並驗證 | NEW -> DONE | `validate_core_r_multiple_exact_ledger_contract_case` |
