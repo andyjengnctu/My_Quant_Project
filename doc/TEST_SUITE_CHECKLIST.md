@@ -4,7 +4,7 @@
 
 文件分工：
 - 本檔維護測試清單、覆蓋狀態、測試入口映射、收斂紀錄，以及 `PROJECT_SETTINGS.md` 中需要形式化追蹤的細部 contract。
-- `PROJECT_SETTINGS.md` 只保留原則、權責、前置順序與禁止事項；凡 D 節會隨實作演進而調整的細節要求，一律以本檔主表、formal contract 與收斂紀錄為唯一真理來源。
+- `PROJECT_SETTINGS.md` 只保留原則、權責、前置順序與禁止事項；凡 D 節與 E 節會隨實作演進而調整的細節要求，一律以本檔主表、formal contract 與收斂紀錄為唯一真理來源。
 
 範圍：
 - 納入 `PROJECT_SETTINGS.md` 中的長期規則。
