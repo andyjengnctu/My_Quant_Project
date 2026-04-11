@@ -1,7 +1,7 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
-2. 文件更新原則：`PROJECT_SETTINGS.md` 只保留原則性條款，須易讀、易維護、可泛化，且避免以程式內名稱作為定義；`/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊；兩者都必須遵守單一真理來源，且各自不得重覆描述; 各文件內也不可有任何重覆性描述，保持文件至最精簡。
+2. 文件更新原則：`PROJECT_SETTINGS.md` 只保留原則性條款，須易讀、易維護、可泛化，且避免以程式內名稱作為定義；`/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊；兩者都必須遵守單一真理來源；各文件內外都不得重覆描述，保持最精簡。
 
 
 ## A. 工作基準與執行紀律
@@ -11,19 +11,14 @@
 
 ## B. 標準測試流程
 
-1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目、不得執行任何動態測試，且不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
+1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
-3. 每輪檢查開始前，GPT 端必須先檢查目前未列在 `doc/TEST_SUITE_CHECKLIST.md`、但必須被`apps/test_suite.py`涵蓋的缺口。
-4. 缺口包含已定義在專案設定中規則、也包含未定義在專案設定中但應考慮的規則。
-5. 如發現缺口，必須更新 `doc/TEST_SUITE_CHECKLIST.md`，並先提供 `apps/test_suite.py` 補全。
-6. 如果確認沒有再發現額外缺口，也須回報`apps/test_suite.py`已涵蓋完整專案測試需求。
-7. 檢查到問題就直接在本輪提供修改。
-8. 修改問題後，也提出避免 GPT再發生類似問題的作法，透過 `/doc/PROJECT_SETTINGS.md` 或 `/doc/TEST_SUITE_CHECKLIST.md`來強制。
-9. 每輪更新完，須同步維護 `doc/TEST_SUITE_CHECKLIST.md`；主表狀態為唯一真理來源，其餘摘要與收斂紀錄僅作同步索引。實際欄位、排序、格式與機械規則一律以 checklist 為準。
-10. 文件分工固定：`PROJECT_SETTINGS.md` 管原則與權責；`TEST_SUITE_CHECKLIST.md` 管可機械比對的測試清單、狀態、映射、收斂紀錄與細部 contract。同一要求只能保留一份原文。
-11. 提交前必須完成 checklist 所需的同步與機械整理；追蹤 ID 必須穩定，若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
-12. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
-13. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
+3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 checklist 與正式入口，再處理其他問題。
+4. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
+5. 每輪更新完，必須同步維護 `doc/TEST_SUITE_CHECKLIST.md`；主表狀態為唯一真理來源，其餘摘要與收斂紀錄僅作同步索引。實際欄位、排序、格式與機械規則一律以 checklist 為準。
+6. 文件分工固定：`PROJECT_SETTINGS.md` 管原則與權責；`TEST_SUITE_CHECKLIST.md` 管可機械比對的測試清單、狀態、映射、收斂紀錄與細部 contract。同一要求只保留一份原文；追蹤 ID 必須穩定，若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
+7. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
+8. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
 
 
 ## C. 回覆、交付與輸出
@@ -36,7 +31,7 @@
 6. 如架構調整需刪檔，須提供可執行的 command，避免使用者手動刪錯。
 7. `outputs/` 根目錄只放工具分類資料夾；各工具輸出必須落到各自資料夾，禁止再把檔案散落到 `outputs/` 根目錄。
 8. 修改 `/doc/PROJECT_SETTINGS.md` 時，必須以 assistant 可明確遵守、使用者易讀易維護、兼顧後續泛用性為原則；應保持文字精簡、嚴禁重複條文。
-9. 提供patch前必需在GPT端做過最嚴格檢查，如確認沒有問題才提供。
+9. 提供 patch 前必須先做 GPT 端最嚴格檢查，確認無已知問題後再交付。
 
 ## D. Coding 與架構原則
 
