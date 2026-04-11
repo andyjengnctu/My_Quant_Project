@@ -8,6 +8,7 @@
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
+3. PROJECT_SETTINGS.md 與架構文件應描述模組責任、邊界與資料流，不以暫時函式名、舊名稱或局部實作細節作為定義；會隨實作演進變動的名稱、字串與精細契約，應下沉至 checklist 與 formal contract。
 
 ## B. 標準測試流程
 
@@ -60,7 +61,17 @@
 8. 單筆風險上限、候選存續、miss buy、rotation、forced exit 與同日資金可用性，必須統一服從相同的交易日序、可執行邊界與資金回收規則。
 
 
-## F. 專案特例
+## F. 契約同步與命名收斂原則
+
+
+1. 凡共享契約、公開名稱、模組責任、顯示 schema、輸出 schema、正式入口摘要或測試索引變動，必須同輪同步更新實作、呼叫端、validator、正式入口摘要與文件；不得局部更新。
+2. validator 與 meta guard 應驗 invariant、角色與必要關鍵資訊；除非字面本身就是正式契約，否則不得以單一句型、單一路徑字串或可等價改寫的完整文案作為唯一通過條件。
+3. rename 後必須明確區分 canonical 名稱與 compatibility alias；內部實作、正式呼叫鏈、文件與 validator 一律以 canonical 名稱為準，legacy alias 僅作相容邊界。
+4. 顯示、摘要、排序、hover snapshot、sidebar 與 reporting 只能消費共享資料契約，不得自行重定義、猜測、改名或省略核心欄位；共享 schema 變動時，顯示端與驗證端必須同輪同步。
+5. 跨模組的 path、資料根目錄、輸出位置與共享上下文，必須由正式 helper 或介面取得；不得裸用未宣告的自由變數、隱式全域名稱或模組私有特例。
+6. 正式入口摘要、checklist 主表、測試映射與收斂紀錄必須保持可機械推出的一致性；不得互相矛盾，或需依人工解讀才能判定最新狀態。
+
+## G. 專案特例
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. 暫時只使用還原價，不考慮 raw。
