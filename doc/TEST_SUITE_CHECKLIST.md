@@ -2,7 +2,7 @@
 
 用途：正式 test suite 維護清單；主表為唯一真理來源。
 
-文件分工：`PROJECT_SETTINGS.md` 管原則；本檔管可機械比對的主表、狀態、測試入口、收斂紀錄與 D/E 細部 contract。
+文件分工：`PROJECT_SETTINGS.md` 管原則；本檔管主表、狀態、測試入口與收斂索引。
 
 範圍：納入長期規則與必要 formal contract；不納入暫時特例：`apps/portfolio_sim.py` 自動開瀏覽器、只使用還原價不考慮 raw。
 
@@ -17,7 +17,7 @@
 2. `T` 只留最小索引；每列一個 `Txx` 與一個測試入口，依 ID 升冪排序。
 3. `G` 只記錄實際狀態變更；依日期升冪、同日再依 tracking ID 排序；`NEW -> *` 只能出現在首筆，且不得出現 no-op transition。
 4. `G` 備註欄只留單一代表 entry；日期只記於 `G`。
-5. 其餘文字只保留最小必要；會隨實作變動的細節一律由主表、formal contract 與收斂紀錄承接。
+5. 其餘文字只保留最小必要；會隨實作變動的細節由主表、formal contract 與收斂紀錄承接。
 
 ## A. 分層原則
 
