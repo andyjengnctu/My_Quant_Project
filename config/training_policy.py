@@ -27,7 +27,7 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響
 # None = 由 optimizer 搜尋 tp_percent
 # 0.0 = 固定關閉停利
 # 其他數值 = 固定停利比例
-OPTIMIZER_FIXED_TP_PERCENT = 0.51
+OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
@@ -35,7 +35,7 @@ MIN_ANNUAL_TRADES = 5.0  # 最小年化交易次數門檻
 MIN_BUY_FILL_RATE = 70.0  # 最小保留後買進成交率門檻
 MIN_TRADE_WIN_RATE = 30.0  # 最小完整交易勝率門檻
 # 績效風險
-MIN_FULL_YEAR_RETURN_PCT = -30.0  # 完整年度最差報酬率下限
+MIN_FULL_YEAR_RETURN_PCT = -35.0  # 完整年度最差報酬率下限
 MAX_PORTFOLIO_MDD_PCT = 45.0  # 投組最大回撤上限
 # 穩定度
 MIN_MONTHLY_WIN_RATE = 35.0  # 最小月勝率門檻

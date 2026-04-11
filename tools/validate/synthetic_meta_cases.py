@@ -362,6 +362,29 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
     summary["tabs"] = ["K 線圖", "交易明細", "Console"]
     return results, summary
 
+def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_params):
+    case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_described_as_formal_entry", True, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_mentions_legacy_debug_api_labels", True, "legacy `run_debug_*` / `debug_trade_log` 命名" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_output_dir_explicitly_marked_legacy", True, "`outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_retention_section_marks_legacy_output_dir", True, "`debug_trade_log`（trade_analysis legacy output dir）" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_stale_debug_formal_entry_label", False, "為 debug 正式入口" in cmd_text)
+
+    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `tools/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_mentions_legacy_debug_api_labels", True, "legacy `run_debug_*` / `debug_trade_log` 命名以維持相容性" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_output_section_marks_legacy_output_dir", True, "`debug_trade_log`（trade_analysis legacy output dir）" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_stale_debug_subsystem_label", False, "交易除錯子系統" in architecture_text)
+
+    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md"]
+    return results, summary
+
+
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
     case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
     results = []
@@ -2743,7 +2766,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238"
     summary_comment_line = next(
         (
             line.strip()
@@ -2754,12 +2777,13 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t237", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t238", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t237", True, "T237" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_list", False, "T225/T226/T229/T230/T231/T232/T233）。" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t238", True, "T238" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_t238_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
