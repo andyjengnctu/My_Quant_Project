@@ -1025,11 +1025,11 @@
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T239 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T240，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T240 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T241，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T241 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B152 | 新增 trade_analysis rename 相容文件契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B153 | 新增 trade_analysis canonical alias export 契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B154 | 新增 synthetic_contract_cases shared path helper 契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T241，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T241 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B155 | 新增 checklist G transition-chain contract 並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | T145 | 檢出 GUI workbench contract 尚未禁止 panel registry / inspector 使用 legacy debug aliases，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_workbench_contract_case` |
 | 2026-04-12 | T145 | 擴充 GUI workbench contract 納入 canonical trade_analysis alias 偏好後重新驗證 | PARTIAL -> DONE | `validate_gui_workbench_contract_case` |
@@ -1045,10 +1045,10 @@
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T239 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T240，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T240 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
-| 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T241，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
-| 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T241 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T238 | 新增 trade_analysis rename 相容文件契約並驗證 | NEW -> DONE | `validate_trade_analysis_legacy_naming_documentation_contract_case` |
 | 2026-04-12 | T239 | 新增 trade_analysis canonical alias export 契約並驗證 | NEW -> DONE | `validate_trade_analysis_canonical_alias_export_contract_case` |
+| 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T241，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
+| 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T241 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T240 | 新增 synthetic_contract_cases shared path helper 契約並驗證 | NEW -> DONE | `validate_synthetic_contract_cases_project_root_path_helper_contract_case` |
 | 2026-04-12 | T241 | 新增 checklist G transition-chain contract 並驗證 | NEW -> DONE | `validate_checklist_g_transition_sequence_case` |
 
