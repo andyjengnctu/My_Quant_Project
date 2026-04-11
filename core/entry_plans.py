@@ -34,7 +34,16 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
         return None
 
     resized_plan = dict(candidate_plan)
-    qty = calc_position_size(limit_price, init_sl, sizing_capital, params.fixed_risk, params)
+    qty = calc_position_size(
+        limit_price,
+        init_sl,
+        sizing_capital,
+        params.fixed_risk,
+        params,
+        ticker=candidate_plan.get("ticker"),
+        security_profile=candidate_plan.get("security_profile"),
+        trade_date=candidate_plan.get("trade_date"),
+    )
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
     return resized_plan

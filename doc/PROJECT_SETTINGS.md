@@ -81,6 +81,8 @@
 43. 凡 public/helper producer（如 `build_backtest_stats()`）開始把 `current_date`、`final_date`、`trade_date` 等日期上下文往下傳給共享 builder / preview helper 時，必須在同輪同步把該日期納入函式簽名、全部 caller 與 formal static contract；不得在函式內直接引用未宣告的自由變數日期名稱。
 44. debug / GUI / history 的私有 helper 若需要 `position`、`current_date`、`trade_date`、`ticker`、`security_profile` 等上下文，必須由函式簽名明確接受，並由 caller 顯式傳入；不得在 helper 內直接引用未宣告的自由變數名稱。
 45. reporting / optional-dependency fallback 的 `except (...)` tuple 只能引用本模組已匯入或內建保證存在的例外型別；若 chart / HTML / browser 等 optional 輸出失敗，主要 artifact 匯出仍須成功並輸出可追蹤的錯誤摘要。
+46. 凡 public stats / preview payload（如 `build_backtest_stats()` 的 `buyPrice` / `sellPrice` / `tpPrice`）若需顯示隔日掛單、停損或停利價格，必須重用共享 entry/target helper 或 candidate-plan 同源公式；不得以手寫浮點公式直接推導，避免 GUI / scanner / backtest stats 的可見價格與正式交易規則分叉。
+47. 凡 candidate-plan 重算、cash-capped resize、scanner projected qty / projected cost 等 sizing 路徑若依賴 `calc_position_size(...)`、`calc_reference_candidate_qty(...)` 或其他含商品別稅率的共享 helper，必須同輪同步傳遞 `ticker`、可得 `security_profile` 與 `trade_date`；不得在重算 qty / proj_cost 時退回 stock-only 稅率或遺漏日期上下文。
 ## E. 交易與策略原則
 
 1. 杜絕未來函數：不可偷看未來資料。

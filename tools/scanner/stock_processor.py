@@ -43,7 +43,7 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
-def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats):
+def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     if not stats or not stats['is_candidate']:
         return None
 
@@ -54,7 +54,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     asset_growth_pct = float(stats.get('asset_growth', 0.0))
 
     if stats['is_setup_today']:
-        proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params)
+        proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
         if proj_qty > 0:
             proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
             half_tp_note = " | 半倉停利:股數不足" if not can_execute_half_take_profit(proj_qty, params.tp_percent) else ""
@@ -112,7 +112,7 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
 
         proj_qty = 0
         if limit_price is not None and init_sl is not None and not pd.isna(limit_price) and not pd.isna(init_sl):
-            proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params)
+            proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
             if proj_qty > 0:
                 proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
                 barrier_parts.append(f"參考投入:{proj_cost:>7,.0f}")
@@ -187,12 +187,13 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     }
 
 
-def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats):
+def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     history_row = build_history_qualified_row_from_stats(
         ticker=ticker,
         stats=stats,
         params=params,
         sanitize_stats=sanitize_stats,
+        trade_date=trade_date,
     )
     if history_row is None:
         return None
@@ -227,18 +228,21 @@ def process_prepared_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
-    return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats)
+    trade_date = None if df.empty else df["Date"].iloc[-1]
+    return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)
 
 
 def process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
+    trade_date = None if df.empty else df["Date"].iloc[-1]
     history_row = build_history_qualified_row_from_stats(
         ticker=ticker,
         stats=stats,
         params=params,
         sanitize_stats=sanitize_stats,
+        trade_date=trade_date,
     )
     if history_row is None:
         return None

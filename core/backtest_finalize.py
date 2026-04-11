@@ -2,7 +2,8 @@ from core.exact_accounting import build_sell_ledger_from_price, milli_to_money
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
-    adjust_long_stop_price,
+    calc_frozen_target_price,
+    calc_initial_stop_from_reference,
 )
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
@@ -155,9 +156,10 @@ def build_backtest_stats(
     total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
     buy_next_day = bool(buy_condition_last)
     resolved_ticker = ticker or (active_extended_signal or {}).get("ticker")
-    buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker) if buy_next_day else 0.0
-    stop_loss = adjust_long_stop_price(close_last - atr_last * params.atr_times_init, ticker=resolved_ticker) if buy_next_day else 0.0
-    tp_price = close_last + (close_last - (close_last - atr_last * params.atr_times_init)) if buy_next_day else 0.0
+    resolved_security_profile = (active_extended_signal or {}).get("security_profile")
+    buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
+    stop_loss = calc_initial_stop_from_reference(close_last, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
+    tp_price = calc_frozen_target_price(close_last, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
 
