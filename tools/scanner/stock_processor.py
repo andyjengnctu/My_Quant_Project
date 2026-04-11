@@ -224,11 +224,19 @@ def _build_precomputed_signals(df):
     )
 
 
+def _resolve_latest_trade_date(df):
+    if df.empty:
+        return None
+    if 'Date' in df.columns:
+        return df["Date"].iloc[-1]
+    return df.index[-1]
+
+
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
-    trade_date = None if df.empty else df["Date"].iloc[-1]
+    trade_date = _resolve_latest_trade_date(df)
     return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)
 
 
@@ -236,7 +244,7 @@ def process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
-    trade_date = None if df.empty else df["Date"].iloc[-1]
+    trade_date = _resolve_latest_trade_date(df)
     history_row = build_history_qualified_row_from_stats(
         ticker=ticker,
         stats=stats,
