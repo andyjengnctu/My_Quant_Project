@@ -590,7 +590,8 @@ def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    scan_targets = sorted((PROJECT_ROOT / "tools" / "gui").rglob("*.py"))
+    scan_root = PROJECT_ROOT / "tools" / "workbench_ui"
+    scan_targets = sorted(scan_root.rglob("*.py"))
     syntax_errors = []
     gui_tcl_fallback_traceability_failures = []
     scanned_files = []
@@ -635,9 +636,11 @@ def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
             if not _handler_uses_exception_name(node, node.name):
                 gui_tcl_fallback_traceability_failures.append(f"{rel_path}:{node.lineno}: GUI TclError fallback must use bound exception or re-raise")
 
+    add_check(results, "meta_contract", case_id, "gui_tcl_fallback_scan_targets_present", True, bool(scanned_files))
     add_check(results, "meta_contract", case_id, "gui_tcl_fallback_handler_files_parse", [], syntax_errors)
     add_check(results, "meta_contract", case_id, "gui_tcl_fallbacks_bind_and_trace_or_reraise", [], gui_tcl_fallback_traceability_failures)
 
+    summary["scan_root"] = scan_root.relative_to(PROJECT_ROOT).as_posix()
     summary["scanned_file_count"] = len(scanned_files)
     summary["failure_count"] = len(gui_tcl_fallback_traceability_failures)
     summary["syntax_error_count"] = len(syntax_errors)
