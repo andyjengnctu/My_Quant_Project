@@ -385,6 +385,46 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     return results, summary
 
 
+def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
+    case_id = "META_TRADE_ANALYSIS_CANONICAL_ALIAS_EXPORT_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    package_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
+    trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
+    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    canonical_aliases = [
+        "run_trade_analysis",
+        "run_trade_backtest",
+        "run_prepared_trade_backtest",
+        "run_ticker_analysis",
+    ]
+    legacy_aliases = [
+        "run_debug_analysis",
+        "run_debug_backtest",
+        "run_debug_prepared_backtest",
+        "run_debug_ticker_analysis",
+    ]
+
+    for alias_name in canonical_aliases:
+        add_check(results, "meta_contract", case_id, f"package_exports_{alias_name}", True, f'def {alias_name}(' in package_text and f'"{alias_name}"' in package_text)
+        add_check(results, "meta_contract", case_id, f"trade_log_exports_{alias_name}", True, f'def {alias_name}(' in trade_log_text and f'"{alias_name}"' in trade_log_text)
+
+    for alias_name in legacy_aliases:
+        add_check(results, "meta_contract", case_id, f"package_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in package_text and f'"{alias_name}"' in package_text)
+        add_check(results, "meta_contract", case_id, f"trade_log_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in trade_log_text and f'"{alias_name}"' in trade_log_text)
+
+    canonical_doc_fragment = "canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases"
+    add_check(results, "meta_cmd_contract", case_id, "cmd_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in cmd_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in architecture_text)
+
+    summary["canonical_aliases"] = canonical_aliases
+    summary["legacy_aliases"] = legacy_aliases
+    return results, summary
+
+
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
     case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
     results = []
@@ -2766,7 +2806,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239"
     summary_comment_line = next(
         (
             line.strip()
@@ -2777,13 +2817,14 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t238", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t239", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t237", True, "T237" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t238", True, "T238" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_t238_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t239", True, "T239" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_t238_t239_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

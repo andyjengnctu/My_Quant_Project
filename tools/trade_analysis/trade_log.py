@@ -115,7 +115,9 @@ def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFIL
     }
 
 
-def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None, output_dir=None):
+
+
+def run_trade_analysis(df, ticker, params, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None, output_dir=None):
     from tools.trade_analysis.backtest import run_debug_analysis as _run_debug_analysis
 
     return _run_debug_analysis(
@@ -132,8 +134,22 @@ def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True,
     )
 
 
-def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True, precomputed_signals=None):
-    result = run_debug_analysis(
+def run_debug_analysis(df, ticker, params, export_excel=True, export_chart=True, return_chart_payload=False, verbose=True, precomputed_signals=None, output_dir=None):
+    return run_trade_analysis(
+        df=df,
+        ticker=ticker,
+        params=params,
+        export_excel=export_excel,
+        export_chart=export_chart,
+        return_chart_payload=return_chart_payload,
+        verbose=verbose,
+        precomputed_signals=precomputed_signals,
+        output_dir=output_dir,
+    )
+
+
+def run_trade_backtest(df, ticker, params, export_excel=True, verbose=True, precomputed_signals=None):
+    result = run_trade_analysis(
         df=df,
         ticker=ticker,
         params=params,
@@ -145,9 +161,19 @@ def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True, prec
     return result["trade_logs_df"]
 
 
+def run_debug_backtest(df, ticker, params, export_excel=True, verbose=True, precomputed_signals=None):
+    return run_trade_backtest(
+        df,
+        ticker,
+        params,
+        export_excel=export_excel,
+        verbose=verbose,
+        precomputed_signals=precomputed_signals,
+    )
 
-def run_debug_prepared_backtest(prepared_df, ticker, params, export_excel=True, verbose=True):
-    return run_debug_backtest(
+
+def run_prepared_trade_backtest(prepared_df, ticker, params, export_excel=True, verbose=True):
+    return run_trade_backtest(
         prepared_df,
         ticker,
         params,
@@ -157,8 +183,17 @@ def run_debug_prepared_backtest(prepared_df, ticker, params, export_excel=True, 
     )
 
 
+def run_debug_prepared_backtest(prepared_df, ticker, params, export_excel=True, verbose=True):
+    return run_prepared_trade_backtest(
+        prepared_df,
+        ticker,
+        params,
+        export_excel=export_excel,
+        verbose=verbose,
+    )
 
-def run_debug_ticker_analysis(
+
+def run_ticker_analysis(
     ticker,
     *,
     dataset_profile_key=DEFAULT_DATASET_PROFILE,
@@ -173,7 +208,7 @@ def run_debug_ticker_analysis(
     load_result = load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
     resolved_params = load_result["params"] if params is None else params
     debug_params = build_debug_view_params(resolved_params)
-    analysis_result = run_debug_analysis(
+    analysis_result = run_trade_analysis(
         load_result["clean_df"],
         ticker,
         debug_params,
@@ -188,6 +223,30 @@ def run_debug_ticker_analysis(
         **analysis_result,
     }
 
+
+def run_debug_ticker_analysis(
+    ticker,
+    *,
+    dataset_profile_key=DEFAULT_DATASET_PROFILE,
+    data_dir=None,
+    params=None,
+    export_excel=True,
+    export_chart=True,
+    return_chart_payload=False,
+    verbose=False,
+    output_dir=None,
+):
+    return run_ticker_analysis(
+        ticker,
+        dataset_profile_key=dataset_profile_key,
+        data_dir=data_dir,
+        params=params,
+        export_excel=export_excel,
+        export_chart=export_chart,
+        return_chart_payload=return_chart_payload,
+        verbose=verbose,
+        output_dir=output_dir,
+    )
 
 
 def main(argv=None, environ=None):
@@ -276,3 +335,21 @@ if __name__ == "__main__":
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         raise SystemExit(1)
+
+
+__all__ = [
+    "load_params",
+    "build_debug_view_params",
+    "resolve_debug_data_dir",
+    "resolve_debug_file_path",
+    "load_debug_price_frame",
+    "run_trade_analysis",
+    "run_trade_backtest",
+    "run_prepared_trade_backtest",
+    "run_ticker_analysis",
+    "run_debug_analysis",
+    "run_debug_backtest",
+    "run_debug_prepared_backtest",
+    "run_debug_ticker_analysis",
+    "main",
+]
