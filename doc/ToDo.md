@@ -1,6 +1,6 @@
 ## Going
 
-- TV-based UI & Debug
+- TV-based UI & Debug 
 =========
     - 確認Traling stop物理意議
 =========
