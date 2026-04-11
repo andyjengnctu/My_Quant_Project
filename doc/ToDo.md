@@ -16,6 +16,10 @@
 - 訓練/測試樣本分離
 - overfitting量化驗證工具
 
+13. 如果使用者沒有提供 boundle結果，代表已在本地端執行過`apps/test_suite.py`，並且結果為All Passed; 如果使用者提供bBoudle結果，GPT 必須修正錯誤。
+9. 提供patch前必需在GPT端做過最嚴格檢查，如確認沒有問題才提供。
+
+
 ## To do
 - ajd/raw整合交易策略 
 - 加入大盤過濾
