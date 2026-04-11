@@ -2430,8 +2430,8 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text)
-    add_check(results, "output_contract", case_id, "buy_trade_label_omits_actual_spend_wording", True, "實支:" not in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "實支: 123,456" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_includes_actual_spend_wording_last", "實支: 123,456", buy_label_text.split("\n")[-1] if buy_label_text else "")
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)' in charting_source and 'base_y = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_offsets_when_signal_or_nearby_trade_boxes_cluster", True, '_count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)' in charting_source and 'collision_window = 5 if placement == "below" else 4' in charting_source and 'occupied_positions.append({"x": x_value, "placement": placement})' in charting_source)

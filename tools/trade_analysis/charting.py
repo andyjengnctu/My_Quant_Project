@@ -726,6 +726,9 @@ def _build_trade_label_text(trace_name, marker):
             if value is None or pd.isna(value):
                 continue
             lines.append(f"{label}: {float(value):.2f}")
+        buy_capital = meta.get("buy_capital")
+        if buy_capital is not None and not pd.isna(buy_capital):
+            lines.append(f"實支: {float(buy_capital):,.0f}")
         return "\n".join(lines)
     if trace_name == "半倉停利":
         lines = ["停利"]
