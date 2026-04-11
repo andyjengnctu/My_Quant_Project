@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Set, Tuple
 PROJECT_SETTINGS_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 為所有已實作測試的單一正式入口"
 PROJECT_SETTINGS_REGISTRY_SOURCE_TEXT = "`tools/local_regression/formal_pipeline.py` 為單一真理來源"
 PROJECT_SETTINGS_NO_DYNAMIC_TEST_TEXT = "GPT 端不得重覆執行 `apps/test_suite.py` 已涵蓋項目、不得執行任何動態測試"
+PROJECT_SETTINGS_NO_DYNAMIC_TEST_FALLBACK_TEXT = "GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試"
 PROJECT_SETTINGS_NO_BYPASS_TEXT = "不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式"
 CMD_SINGLE_ENTRY_TEXT = "正式對外入口為 `apps/test_suite.py`"
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口"
@@ -453,8 +454,12 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
 
 def summarize_project_settings_dynamic_test_boundary_contract(project_root: Path) -> Dict[str, Any]:
     project_settings_text = (project_root / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
+    declares_no_dynamic_test_rerun = (
+        PROJECT_SETTINGS_NO_DYNAMIC_TEST_TEXT in project_settings_text
+        or PROJECT_SETTINGS_NO_DYNAMIC_TEST_FALLBACK_TEXT in project_settings_text
+    )
     return {
-        "project_settings_declares_no_dynamic_test_rerun": PROJECT_SETTINGS_NO_DYNAMIC_TEST_TEXT in project_settings_text,
+        "project_settings_declares_no_dynamic_test_rerun": declares_no_dynamic_test_rerun,
         "project_settings_declares_no_formal_step_bypass": PROJECT_SETTINGS_NO_BYPASS_TEXT in project_settings_text,
     }
 

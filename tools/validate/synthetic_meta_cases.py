@@ -421,23 +421,28 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     project_settings_text = (PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
-    minimal_constraint_text = "除「只能盤前掛單」與「持倉後才能設定 / 執行停損停利」這兩項最小物理限制外，不得另加非最小、非物理且非必要的交易限制"
-    l_only_text = "`L` 只作盤前最高可接受買入價、資金占用估算與最壞情境風險 sizing 上界"
-    pfill_text = "其基準為 `P_fill` 與盤前已知波動尺度，預設使用 `ATR_t`，並自 `t+2` 起生效"
-    continuation_barrier_text = "未成交延續候選不得預先具有可執行停損 / 停利；只有當首個待掛單日曾進入可買區時，才可用當日反事實進場價 `P' = min(Open, L)` 建立固定的失效 / 達標 barrier。"
-    inclusive_hit_text = "長倉一律採 inclusive 口徑：`Low <= line`、`High >= line`"
+    checklist_text = (PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md").read_text(encoding="utf-8")
+
+    governance_text = "細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md`"
+    minimal_constraint_text = "最小必要約束"
+    l_only_text = "`L` 只作進場上限 / 最壞風險 sizing 上界"
+    pfill_text = "`P_fill + ATR_t`"
+    continuation_barrier_text = "固定反事實 `P' = min(Open, L)`"
+    inclusive_hit_text = "長倉 hit 採 `Low <= line` / `High >= line`"
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_minimal_physical_constraint_priority", True, minimal_constraint_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_l_is_entry_and_sizing_only", True, l_only_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_first_actionable_stop_uses_pfill_and_atr", True, pfill_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_extended_candidate_fixed_counterfactual_barrier", True, continuation_barrier_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_inclusive_hit_semantics", True, inclusive_hit_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_trading_detail_sink_to_checklist", True, governance_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "checklist_declares_l_is_entry_and_sizing_only", True, l_only_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "checklist_declares_first_actionable_stop_uses_pfill_and_atr", True, pfill_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "checklist_declares_extended_candidate_fixed_counterfactual_barrier", True, continuation_barrier_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "checklist_declares_inclusive_hit_semantics", True, inclusive_hit_text in checklist_text)
 
     summary["project_settings_declares_minimal_physical_constraint_priority"] = minimal_constraint_text in project_settings_text
-    summary["project_settings_declares_l_is_entry_and_sizing_only"] = l_only_text in project_settings_text
-    summary["project_settings_declares_first_actionable_stop_uses_pfill_and_atr"] = pfill_text in project_settings_text
-    summary["project_settings_declares_extended_candidate_fixed_counterfactual_barrier"] = continuation_barrier_text in project_settings_text
-    summary["project_settings_declares_inclusive_hit_semantics"] = inclusive_hit_text in project_settings_text
+    summary["project_settings_declares_trading_detail_sink_to_checklist"] = governance_text in project_settings_text
+    summary["checklist_declares_l_is_entry_and_sizing_only"] = l_only_text in checklist_text
+    summary["checklist_declares_first_actionable_stop_uses_pfill_and_atr"] = pfill_text in checklist_text
+    summary["checklist_declares_extended_candidate_fixed_counterfactual_barrier"] = continuation_barrier_text in checklist_text
+    summary["checklist_declares_inclusive_hit_semantics"] = inclusive_hit_text in checklist_text
     return results, summary
 
 
@@ -2453,7 +2458,7 @@ def validate_debug_exit_entry_capital_fallback_contract_case(_base_params):
     parsed = ast.parse(source_text, filename=str(source_path))
     helper_source = ""
     for node in parsed.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_full_entry_capital_milli":
+        if isinstance(node, ast.FunctionDef) and node.name == "_resolve_display_sell_total_milli":
             helper_source = "\n".join(source_text.splitlines()[node.lineno - 1:node.end_lineno])
             break
 
@@ -3176,8 +3181,11 @@ def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_param
     tp_text = tp_path.read_text(encoding="utf-8")
     scanner_path = PROJECT_ROOT / "tools" / "validate" / "scanner_expectations.py"
     scanner_text = scanner_path.read_text(encoding="utf-8")
+    scanner_compact_text = re.sub(r"\s+", "", scanner_text)
     contract_path = PROJECT_ROOT / "tools" / "validate" / "synthetic_contract_cases.py"
     contract_text = contract_path.read_text(encoding="utf-8")
+    contract_compact_text = re.sub(r"\s+", "", contract_text)
+    tp_compact_text = re.sub(r"\s+", "", tp_text)
 
     add_check(results, "meta_contract", case_id, "unit_oracle_net_sell_uses_sell_ledger", True, 'build_sell_ledger_from_price(price, int(qty), params)' in unit_text)
     add_check(results, "meta_contract", case_id, "unit_oracle_position_size_uses_integer_risk_budget", True, 'risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)' in unit_text)
@@ -3187,10 +3195,10 @@ def validate_validator_oracles_use_exact_ledger_totals_contract_case(_base_param
     add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_freed_cash_formula", False, 'expected_freed_cash = expected_net_price * qty' in tp_text)
     add_check(results, "meta_contract", case_id, "take_profit_case_has_no_legacy_expected_pnl_formula", False, 'expected_pnl = (expected_net_price - entry_price) * qty' in tp_text)
     add_check(results, "meta_contract", case_id, "scanner_expectations_threads_trade_date_from_clean_df", True, 'stats["trade_date"] = _resolve_trade_date_from_clean_df(df)' in scanner_text and 'stats["trade_date"] = _resolve_trade_date_from_clean_df(clean_df)' in scanner_text)
-    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_ticker_and_trade_date_into_projected_qty", True, 'ticker=ticker' in scanner_text and 'trade_date=trade_date' in scanner_text and 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], params' in scanner_text)
-    add_check(results, "meta_contract", case_id, "scanner_payload_builder_threads_trade_date_to_status_oracle", True, 'status = derive_expected_scanner_status(scanner_ref_stats, params, ticker=ticker, trade_date=trade_date)' in scanner_text)
-    add_check(results, "meta_contract", case_id, "scanner_live_capital_contract_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(buy_limit, stop_loss, params, ticker="2330", trade_date=pd.Timestamp("2026-01-02"))' in contract_text)
-    add_check(results, "meta_contract", case_id, "scanner_half_tp_case_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], scanner_case["params"], ticker=scanner_ticker, trade_date=scanner_ref_stats.get("trade_date"))' in tp_text)
+    add_check(results, "meta_contract", case_id, "scanner_expectations_threads_ticker_and_trade_date_into_projected_qty", True, 'ticker=ticker' in scanner_compact_text and 'trade_date=trade_date' in scanner_compact_text and 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"],scanner_ref_stats["stop_loss"],params,' in scanner_compact_text)
+    add_check(results, "meta_contract", case_id, "scanner_payload_builder_threads_trade_date_to_status_oracle", True, 'status=derive_expected_scanner_status(scanner_ref_stats,params,ticker=ticker,trade_date=trade_date)' in scanner_compact_text)
+    add_check(results, "meta_contract", case_id, "scanner_live_capital_contract_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(buy_limit,stop_loss,params,ticker="2330",trade_date=pd.Timestamp("2026-01-02"))' in contract_compact_text)
+    add_check(results, "meta_contract", case_id, "scanner_half_tp_case_threads_ticker_and_trade_date", True, 'calc_reference_candidate_qty(scanner_ref_stats["buy_limit"],scanner_ref_stats["stop_loss"],scanner_case["params"],ticker=scanner_ticker,trade_date=scanner_ref_stats.get("trade_date"))' in tp_compact_text)
 
     summary["source_path"] = unit_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
