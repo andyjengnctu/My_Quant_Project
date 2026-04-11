@@ -430,6 +430,44 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     summary["legacy_aliases"] = legacy_aliases
     return results, summary
 
+def validate_synthetic_contract_cases_project_root_path_helper_contract_case(_base_params):
+    case_id = "META_SYNTHETIC_CONTRACT_CASES_PROJECT_ROOT_PATH_HELPER_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
+    source_text = source_path.read_text(encoding="utf-8")
+    parsed = ast.parse(source_text, filename=str(source_path))
+
+    bare_project_root_loads = []
+    for node in ast.walk(parsed):
+        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != "PROJECT_ROOT":
+            continue
+        bare_project_root_loads.append(f"L{node.lineno}")
+
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_omits_bare_project_root_symbol_loads",
+        [],
+        bare_project_root_loads,
+    )
+    add_check(
+        results,
+        "meta_contract",
+        case_id,
+        "synthetic_contract_cases_gui_workbench_contract_uses_shared_path_helper",
+        True,
+        'build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py")' in source_text
+        and 'build_project_absolute_path("tools", "workbench_ui", "workbench.py")' in source_text,
+    )
+
+    summary["bare_project_root_loads"] = bare_project_root_loads
+    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
 
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
     case_id = "META_NO_REVERSE_APP_LAYER_DEPENDENCIES"
@@ -2812,7 +2850,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240"
     summary_comment_line = next(
         (
             line.strip()
@@ -2823,14 +2861,15 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t239", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t240", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t237", True, "T237" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t238", True, "T238" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t239", True, "T239" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_t238_t239_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t240", True, "T240" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_t234_t235_t236_t237_t238_t239_t240_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
