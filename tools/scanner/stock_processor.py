@@ -3,9 +3,9 @@ import pandas as pd
 from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
-from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.data_utils import get_required_min_rows, resolve_latest_trade_date_from_frame, sanitize_ohlcv_dataframe
 from core.exact_accounting import calc_entry_total_cost
-from core.price_utils import calc_entry_price, calc_reference_candidate_qty, can_execute_half_take_profit
+from core.price_utils import calc_reference_candidate_qty, can_execute_half_take_profit
 from core.scanner_display import build_scanner_sort_probe_text
 from .runtime_common import is_insufficient_data_error
 
@@ -224,37 +224,11 @@ def _build_precomputed_signals(df):
     )
 
 
-def _normalize_trade_date_value(value):
-    if value is None:
-        return None
-    try:
-        ts = pd.Timestamp(value)
-    except (TypeError, ValueError):
-        return value
-    return ts
-
-
-def _resolve_latest_trade_date(df):
-    if df is None or df.empty:
-        return None
-    if 'Date' in df.columns:
-        return _normalize_trade_date_value(df["Date"].iloc[-1])
-    if 'Time' in df.columns:
-        return _normalize_trade_date_value(df["Time"].iloc[-1])
-    latest_attr = df.attrs.get('latest_trade_date')
-    if latest_attr is not None:
-        return _normalize_trade_date_value(latest_attr)
-    index = df.index
-    if isinstance(index, pd.MultiIndex):
-        return _normalize_trade_date_value(index.get_level_values(-1)[-1])
-    return _normalize_trade_date_value(index[-1])
-
-
 def process_prepared_stock(df, ticker, params, sanitize_stats=None):
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
-    trade_date = _resolve_latest_trade_date(df)
+    trade_date = resolve_latest_trade_date_from_frame(df)
     return build_scanner_response_from_stats(ticker=ticker, stats=stats, params=params, sanitize_stats=sanitize_stats, trade_date=trade_date)
 
 
@@ -262,7 +236,7 @@ def process_prepared_history_qualified_stock(df, ticker, params, sanitize_stats=
     sanitize_stats = sanitize_stats or {}
     precomputed_signals = _build_precomputed_signals(df)
     stats = run_v16_backtest(df, params, precomputed_signals=precomputed_signals, ticker=ticker)
-    trade_date = _resolve_latest_trade_date(df)
+    trade_date = resolve_latest_trade_date_from_frame(df)
     history_row = build_history_qualified_row_from_stats(
         ticker=ticker,
         stats=stats,

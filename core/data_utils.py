@@ -124,6 +124,34 @@ def get_max_required_min_rows(params_list, base_min_rows=LOAD_DATA_MIN_ROWS, ext
     return max_needed
 
 
+
+
+# # (AI註: 單一真理來源 - 統一由欄位 / index / attrs 解析資料框最新交易日，避免 scanner runtime 與 validator/oracle 各自維護一套日期解析邏輯)
+def normalize_trade_date_value(value):
+    if value is None:
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return value
+    return ts
+
+
+def resolve_latest_trade_date_from_frame(df):
+    if df is None or df.empty:
+        return None
+    if 'Date' in df.columns:
+        return normalize_trade_date_value(df['Date'].iloc[-1])
+    if 'Time' in df.columns:
+        return normalize_trade_date_value(df['Time'].iloc[-1])
+    latest_attr = df.attrs.get('latest_trade_date')
+    if latest_attr is not None:
+        return normalize_trade_date_value(latest_attr)
+    index = df.index
+    if isinstance(index, pd.MultiIndex):
+        return normalize_trade_date_value(index.get_level_values(-1)[-1])
+    return normalize_trade_date_value(index[-1])
+
 # # (AI註: 單一真理來源 - 統一所有模組的 OHLCV 清洗規則，禁止 optimizer / sim / scanner / tools 各自為政)
 # # (AI註: 保留 Volume<=0 的日期以避免壓縮時間序列；僅修正負成交量為 0，禁止把成交量異常日從歷史中抹掉)
 def sanitize_ohlcv_dataframe(df, ticker, min_rows=LOAD_DATA_MIN_ROWS, required_cols=LOAD_DATA_REQUIRED_COLS):

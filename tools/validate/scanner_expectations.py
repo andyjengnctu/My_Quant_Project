@@ -6,8 +6,8 @@ from core.backtest_core import run_v16_backtest
 from core.buy_sort import calc_buy_sort_value
 from core.config import BUY_SORT_METHOD
 from core.exact_accounting import calc_entry_total_cost
-from core.price_utils import calc_entry_price, calc_reference_candidate_qty
-from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
+from core.price_utils import calc_reference_candidate_qty
+from core.data_utils import get_required_min_rows, resolve_latest_trade_date_from_frame, sanitize_ohlcv_dataframe
 
 from .check_result_utils import is_insufficient_data_error, make_consistency_params
 
@@ -36,16 +36,6 @@ def make_synthetic_validation_params(base_params, *, tp_percent=None):
 
 def build_scanner_validation_params(base_params):
     return copy.deepcopy(base_params)
-
-
-def _resolve_trade_date_from_clean_df(clean_df):
-    if clean_df is None or clean_df.empty:
-        return None
-    if "Date" in clean_df.columns:
-        return pd.Timestamp(clean_df["Date"].iloc[-1])
-    if "Time" in clean_df.columns:
-        return pd.Timestamp(clean_df["Time"].iloc[-1])
-    return pd.Timestamp(clean_df.index[-1])
 
 
 def normalize_scanner_result(raw_result):
@@ -78,7 +68,7 @@ def run_scanner_reference_check(ticker, file_path, params, *, raw_df=None):
         min_rows_needed = get_required_min_rows(params)
         df, _sanitize_stats = sanitize_ohlcv_dataframe(source_df, ticker, min_rows=min_rows_needed)
         stats = run_v16_backtest(df.copy(), params, ticker=ticker)
-        stats["trade_date"] = _resolve_trade_date_from_clean_df(df)
+        stats["trade_date"] = resolve_latest_trade_date_from_frame(df)
         return stats
     except ValueError as e:
         if is_insufficient_data_error(e):
@@ -90,7 +80,7 @@ def run_scanner_reference_check_on_clean_df(ticker, clean_df, params):
     if clean_df is None or clean_df.empty:
         raise ValueError(f"{ticker}: clean_df 不可為空")
     stats = run_v16_backtest(clean_df, params, ticker=ticker)
-    stats["trade_date"] = _resolve_trade_date_from_clean_df(clean_df)
+    stats["trade_date"] = resolve_latest_trade_date_from_frame(clean_df)
     return stats
 
 
