@@ -10,6 +10,7 @@ from core.trade_plans import (
 from core.portfolio_fast_data import (
     get_fast_close,
     get_fast_pos,
+    get_fast_security_profile,
     get_fast_value,
     get_pit_stats_from_index,
 )
@@ -100,6 +101,7 @@ def _collect_normal_candidates(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        security_profile = get_fast_security_profile(fast_df)
 
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
             pit_stats_index[ticker], today, params
@@ -107,11 +109,25 @@ def _collect_normal_candidates(
         if not is_candidate:
             continue
 
-        candidate_plan = build_normal_candidate_plan(y_buy_limit, y_atr, sizing_equity, params, ticker=ticker, trade_date=today)
+        candidate_plan = build_normal_candidate_plan(
+            y_buy_limit,
+            y_atr,
+            sizing_equity,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=today,
+        )
         if candidate_plan is None:
             continue
 
-        signal_state = create_signal_tracking_state(y_buy_limit, y_atr, params, ticker=ticker)
+        signal_state = create_signal_tracking_state(
+            y_buy_limit,
+            y_atr,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+        )
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
 
@@ -178,11 +194,13 @@ def _collect_extended_candidates(
             continue
 
         y_close = get_fast_close(fast_df, pos=y_pos)
+        security_profile = get_fast_security_profile(fast_df)
         candidate_plan = build_extended_candidate_plan_from_signal(
             active_extended_signals[ticker],
             sizing_equity,
             params,
             ticker=ticker,
+            security_profile=security_profile,
             trade_date=today,
         )
         if candidate_plan is None:

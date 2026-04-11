@@ -21,6 +21,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         params = V16StrategyParams()
 
     resolved_ticker = ticker or df.attrs.get('ticker')
+    resolved_security_profile = df.attrs.get('security_profile')
 
     H = df['High'].to_numpy(dtype=np.float64, copy=False)
     L = df['Low'].to_numpy(dtype=np.float64, copy=False)
@@ -68,6 +69,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             end_position_qty=0,
             avg_bars_held=0,
             final_date=None,
+            security_profile=resolved_security_profile,
         )
         stats_dict['is_candidate'] = False
         if return_logs:
@@ -122,11 +124,25 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
 
         if isSetup_prev:
-            signal_state = create_signal_tracking_state(buy_limits[j - 1], ATR_main[j - 1], params, ticker=resolved_ticker)
+            signal_state = create_signal_tracking_state(
+                buy_limits[j - 1],
+                ATR_main[j - 1],
+                params,
+                ticker=resolved_ticker,
+                security_profile=resolved_security_profile,
+            )
             if signal_state is not None:
                 active_extended_signal = signal_state
 
-            entry_plan = build_normal_entry_plan(buy_limits[j - 1], ATR_main[j - 1], sizing_cap, params, ticker=resolved_ticker, trade_date=Dates[j])
+            entry_plan = build_normal_entry_plan(
+                buy_limits[j - 1],
+                ATR_main[j - 1],
+                sizing_cap,
+                params,
+                ticker=resolved_ticker,
+                security_profile=resolved_security_profile,
+                trade_date=Dates[j],
+            )
             entry_result = execute_pre_market_entry_plan(
                 entry_plan=entry_plan,
                 t_open=O[j],
@@ -155,6 +171,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params,
                 y_close=C[j - 1],
                 ticker=resolved_ticker,
+                security_profile=active_extended_signal.get('security_profile'),
                 trade_date=Dates[j],
             )
             entry_result = execute_pre_market_entry_plan(
@@ -256,6 +273,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         end_position_qty=end_position_qty,
         avg_bars_held=avg_bars_held,
         final_date=Dates[-1],
+        security_profile=resolved_security_profile,
     )
 
     if return_logs:

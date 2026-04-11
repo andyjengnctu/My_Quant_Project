@@ -50,6 +50,7 @@ def pack_prepared_stock_data(df):
         '_packed_market_data': True,
         'dates': tuple(df.index.tolist()),
         'date_to_pos': {dt: i for i, dt in enumerate(df.index)},
+        'security_profile': df.attrs.get('security_profile'),
     }
     for field in FAST_FLOAT_FIELDS:
         packed[field] = df[field].to_numpy(dtype=np.float64, copy=True)
@@ -60,6 +61,12 @@ def pack_prepared_stock_data(df):
 
 def is_packed_market_data(data):
     return isinstance(data, dict) and data.get('_packed_market_data', False) is True
+
+
+def get_fast_security_profile(data):
+    if is_packed_market_data(data):
+        return data.get('security_profile')
+    return None
 
 
 def get_fast_dates(data):

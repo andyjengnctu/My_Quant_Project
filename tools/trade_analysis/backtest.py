@@ -212,6 +212,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     o = df['Open'].to_numpy(dtype=np.float64, copy=False)
     v = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     dates = df.index
+    resolved_security_profile = df.attrs.get('security_profile')
     if precomputed_signals is None:
         precomputed_signals = _extract_precomputed_signals(df)
     if precomputed_signals is None:
@@ -232,7 +233,15 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         signal_history_snapshot = _build_pit_history_snapshot(stats_index, signal_date, params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and buy_condition[j - 1] and pos_qty_start_of_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            entry_plan_preview = build_normal_entry_plan(buy_limits[j - 1], atr_main[j - 1], sizing_cap, params, ticker=ticker, trade_date=dates[j])
+            entry_plan_preview = build_normal_entry_plan(
+                buy_limits[j - 1],
+                atr_main[j - 1],
+                sizing_cap,
+                params,
+                ticker=ticker,
+                security_profile=resolved_security_profile,
+                trade_date=dates[j],
+            )
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=signal_date,
@@ -293,6 +302,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             chart_context=chart_context,
             current_capital=current_capital,
             ticker=ticker,
+            security_profile=resolved_security_profile,
             trade_date=dates[j],
         )
         current_capital -= spent_cash
@@ -312,7 +322,15 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
         latest_history_snapshot = _build_pit_history_snapshot(stats_index, dates[-1], params, current_capital, stats_dict.get('max_drawdown', 0.0))
         if chart_context is not None and position.get('qty', 0) == 0 and bool(buy_condition[-1]):
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_entry_plan_preview = build_normal_candidate_plan(buy_limits[-1], atr_main[-1], latest_sizing_cap, params, ticker=ticker, trade_date=dates[-1]) if not np.isnan(atr_main[-1]) else None
+            latest_entry_plan_preview = build_normal_candidate_plan(
+                buy_limits[-1],
+                atr_main[-1],
+                latest_sizing_cap,
+                params,
+                ticker=ticker,
+                security_profile=resolved_security_profile,
+                trade_date=dates[-1],
+            ) if not np.isnan(atr_main[-1]) else None
             _record_buy_signal_annotation(
                 chart_context=chart_context,
                 signal_date=dates[-1],
@@ -325,7 +343,14 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 _apply_chart_future_preview_from_plan(chart_context, latest_entry_plan_preview)
         elif chart_context is not None and position.get('qty', 0) == 0 and active_extended_signal is not None:
             latest_sizing_cap = resolve_single_backtest_sizing_capital(params, current_capital)
-            latest_extended_preview = build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params, ticker=ticker, trade_date=dates[-1])
+            latest_extended_preview = build_extended_candidate_plan_from_signal(
+                active_extended_signal,
+                latest_sizing_cap,
+                params,
+                ticker=ticker,
+                security_profile=resolved_security_profile,
+                trade_date=dates[-1],
+            )
             if latest_history_snapshot.get('is_candidate', False):
                 _apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)
         if chart_context is not None and position.get('qty', 0) > 0 and bool(sell_condition[-1]):

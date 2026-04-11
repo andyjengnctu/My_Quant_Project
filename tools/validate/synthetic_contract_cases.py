@@ -2536,7 +2536,7 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
 
     add_check(results, "output_contract", case_id, "single_stock_chart_tightens_left_bottom_margins_for_more_candle_space", True, 'MATPLOTLIB_SUBPLOT_LEFT = 0.046' in charting_source and 'MATPLOTLIB_SUBPLOT_BOTTOM = 0.058' in charting_source and 'axis_price.tick_params(axis="y", colors=MATPLOTLIB_TEXT_COLOR, labelsize=11, pad=6)' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_legend_keeps_small_inset_gap_from_top_left_boundary", True, 'bbox_to_anchor=(0.012, 1.012)' in charting_source and 'MATPLOTLIB_SUBPLOT_TOP = 0.986' in charting_source)
-    add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(active_extended_signal, latest_sizing_cap, params, ticker=ticker, trade_date=dates[-1])' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
+    add_check(results, "output_contract", case_id, "single_stock_latest_extended_candidate_uses_future_preview_helper", True, 'build_extended_candidate_plan_from_signal(' in backtest_source and 'latest_extended_preview = build_extended_candidate_plan_from_signal(' in backtest_source and 'security_profile=resolved_security_profile' in backtest_source and 'trade_date=dates[-1]' in backtest_source and '_apply_chart_future_preview_from_plan(chart_context, latest_extended_preview)' in backtest_source)
 
     params = make_synthetic_validation_params(base_params)
     params.initial_capital = 2_000_000.0
@@ -2619,9 +2619,10 @@ def validate_gui_latest_raw_signal_preview_helper_contract_case(_base_params):
         elif isinstance(node, ast.Name):
             referenced_names.add(node.id)
 
-    add_check(results, "output_contract", case_id, "latest_raw_signal_preview_uses_normal_entry_plan_helper", True, "build_normal_entry_plan" in backtest_source and "entry_plan_preview = build_normal_entry_plan(" in backtest_source)
+    add_check(results, "output_contract", case_id, "latest_raw_signal_preview_uses_normal_entry_plan_helper", True, "build_normal_entry_plan" in backtest_source and "entry_plan_preview = build_normal_entry_plan(" in backtest_source and "security_profile=resolved_security_profile" in backtest_source)
     add_check(results, "output_contract", case_id, "latest_raw_signal_preview_helper_is_imported_from_core_entry_plans", True, "build_normal_entry_plan" in referenced_names and "build_normal_entry_plan" in imported_entry_plan_symbols)
     add_check(results, "output_contract", case_id, "latest_tail_preview_candidate_helper_is_imported_from_core_entry_plans", True, "build_normal_candidate_plan" in referenced_names and "build_normal_candidate_plan" in imported_entry_plan_symbols)
+    add_check(results, "output_contract", case_id, "latest_tail_preview_threads_security_profile", True, "latest_entry_plan_preview = build_normal_candidate_plan(" in backtest_source and "security_profile=resolved_security_profile" in backtest_source)
     return results, summary
 
 def validate_gui_chart_overlay_layout_and_pan_contract_case(_base_params):
