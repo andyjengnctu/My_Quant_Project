@@ -3,8 +3,8 @@
 目的：整理 `apps/test_suite.py` 與其本地動態測試組成步驟的覆蓋範圍、缺口、優先順序與建議落點，供後續逐項收斂。
 
 文件分工：
-- 本檔只維護測試清單、覆蓋狀態、測試入口映射與收斂紀錄。
-- 原則、權責、前置順序與禁止事項一律引用 `doc/PROJECT_SETTINGS.md`；本檔不重寫該等規則。
+- 本檔維護測試清單、覆蓋狀態、測試入口映射、收斂紀錄，以及 `PROJECT_SETTINGS.md` 中需要形式化追蹤的細部 contract。
+- `PROJECT_SETTINGS.md` 只保留原則、權責、前置順序與禁止事項；凡 D 節會隨實作演進而調整的細節要求，一律以本檔主表、formal contract 與收斂紀錄為唯一真理來源。
 
 範圍：
 - 納入 `PROJECT_SETTINGS.md` 中的長期規則。
@@ -27,7 +27,7 @@
 - `Txx` 為建議測試項目的 stable tracking ID namespace；出現結構調整時，仍以穩定追蹤與同輪同步更新為原則。
 
 收斂原則：
-1. 本檔主責維護主表、覆蓋狀態、對應測試入口與收斂紀錄；原則性規則不在本檔重寫。
+1. 本檔主責維護主表、覆蓋狀態、對應測試入口、收斂紀錄與需形式化追蹤的細部 contract；原則性規則仍以 `PROJECT_SETTINGS.md` 為準。
 2. 先補長期固定測試，再補可隨策略升級調整的測試；優先補 synthetic / unit / contract test，避免讓 GPT 端重跑本地完整動態流程。
 3. test suite 應優先驗證規格、契約與 invariant，避免綁死當前 ML / DRL / LLM 策略實作細節。
 4. 每完成一項，需同步更新本表狀態、對應測試入口與結果摘要；若新增測試導致模組責任改變，再更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。

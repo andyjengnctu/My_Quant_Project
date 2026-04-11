@@ -39,53 +39,24 @@
 
 ## D. Coding 與架構原則
 
+D 節只保留跨模組、長期穩定的原則；會隨實作演進而調整的細部 contract、欄位、helper、signature、rounding、fallback 與 formal guard，一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 維護，不在本檔重複展開。
+
 1. 單一真理來源：相同邏輯不得重複實作。
 2. 統計口徑必須完全一致：成交、未成交、miss buy、EV、勝率、Round-Trip PnL 不得分叉。
 3. 避免 magic number；公式與參數必須可解釋。
-4. 禁止裸 except；所有被捕捉且非純 control-flow / feature probe 的異常都必須可追蹤，連 optional dependency / GUI fallback 也不得 silent swallow。
+4. 禁止裸 except；所有被捕捉且非純 control-flow / feature probe 的異常都必須可追蹤。
 5. 架構調整不得明顯犧牲效率；若提高未來策略修改或 ML / DRL / LLM 升級複雜度，必須先明確說明。
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動、重新命名檔案時，必須遵守：單一職責、上層呼叫下層、禁止反向依賴、禁止循環依賴、禁止規則分叉、禁止重複實作。
 8. 架構或模組責任有變動時，必須同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 9. 凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-10. 正式帳務中的 `cash`、`pnl`、`equity`、`reserved_cost`、`risk` 必須以整筆總額 ledger 的單一真理來源計算；不得以含費每股價或 per-share × qty 回推正式總額。
-11. 凡屬買入、停損、停利、漲跌停與一字鎖死等交易狀態判斷，必須經共享價格正規化 helper；不得以 raw float equality 或未正規化浮點值直接判定。
-12. 凡共享價格正規化 helper 需要做 tick 區間判定或 directional tick rounding（up / down）時，必須以 raw price 先決定 tick band 與方向，再轉為合法 tick 價；不得先以 `price_to_milli(...)` 或其他 0.001 量化截斷 raw price 後再判定，避免在 9.9996、34.350333... 等邊界把應向上取整或原屬較小 tick band 的價格誤判。
-13. 凡變更 `run_v16_backtest`、scanner reference 或其他跨工具共用 public payload / stats key 時，必須同輪檢索全部 consumer 與 formal contract，維持既有欄位相容或同步改完所有 caller；不得只改 producer。
-14. 凡共享 helper、debug helper、producer 或其他跨模組公用函式新增 / 調整 keyword 參數（如 `ticker`、`security_profile`）時，必須同輪同步更新 callee 函式簽名、全部 caller 與 formal static contract；不得只改 caller 或只改函式內部實作，避免 runtime 因 `unexpected keyword argument` 或商品 profile 傳遞中斷而失敗。
-15. 凡 synthetic static / output contract 以 literal source signature 比對 helper 呼叫時，若共享函式新增 / 調整 keyword 參數（如 `ticker`、`security_profile`），必須同輪同步更新 contract 內的 literal call signature；不得讓 formal contract 仍比對舊呼叫字串而產生假性 FAIL。
-16. 單股 backtest 與 debug 路徑中的 `currentCapital` 一律代表可用現金；任何半倉、全倉或期末結算只能加回實際 `net sell total`，不得只加 `realized pnl`；持倉中的 `currentEquity` 一律以 `cash + 當前可變現淨值` 計。
-17. debug / GUI / 單股模擬凡重播 entry/exit 現金路徑時，買進當下也必須同步扣除實際 `net buy total`；不得只在賣出時更新現金，否則 sizing、trade log 與 completed-trade 重建都會分叉。
-18. 凡屬可見 trade log / history row 的金額欄位，若後續工具會以其重建 completed trades 或彙總損益，必須統一使用共享 money-rounding helper；不得在各模組散落內建 `round(..., 2)` 形成 0.01 級顯示口徑分叉。
-19. 凡 validator / consumer 以可見 completed-trade 或 standalone log 的 rounded 金額作 expected oracle 時，也必須使用共享 money-rounding helper；不得混用內建 `round(..., 2)` 與 HALF_UP，否則會把顯示 rounding 口徑誤判成核心不一致。
-20. 凡以可見 trade log / history row 重建 completed trades 的 helper / consumer，也必須以共享 money-rounding helper 正規化逐列金額並累加；不得在重建路徑另用內建 `round(..., 2)`，否則會把顯示值重建成不同於核心 completed trades 的序列。
-21. debug / GUI / history 的期末強制結算若需合成整筆 completed-trade `total_pnl`，必須以 `realized_pnl_milli + final_leg_pnl_milli` 走整數 ledger 路徑後再轉顯示；不得以 float 將既有已實現損益與尾倉損益直接相加。
-22. `tools/validate/synthetic_meta_cases.py` 內任何 validator 若以 `summary["source_path"]` 或類似欄位回報來源檔，所使用的 path 變數必須在該函式內明確宣告；不得引用其他 validator 的局部變數名稱，避免 synthetic suite 因 `NameError` 中斷。
-23. 凡 unit / synthetic validator 需要比對顯示金額、rounded leg pnl 或 completed-trade 顯示總損益時，也必須使用共享 money-rounding helper；不得在 validator 內另用內建 `round(..., 2)` 產生與正式顯示口徑不同的 oracle。
-24. debug / GUI / history 的可見交易明細或 marker 若要顯示 `buy_capital`、`sell_capital`、`gross_amount`、`total_return_pct` 等正式交易總額或報酬率，必須以 exact ledger total（如 `net_buy_total_milli`、`net_total_milli`）推導；不得再以含費每股顯示價或 `per-share × qty` 回推可見總額。
-25. debug / GUI / history 若已有 `entry_capital_total`、`net_buy_total_milli` 等既存總額欄位可用，計算 `total_return_pct` 或其他以 full-entry capital 為分母的可見報酬率時，必須優先使用該總額欄位；不得跳過既有 total 而直接退回 `entry * qty` 等 per-share fallback。
-26. debug / GUI / history 的買進可見欄位或 marker 若顯示 `buy_capital`、買進 `gross_amount` 或其他 entry total，必須優先使用 `net_buy_total_milli`、`entry_cost` 或共享 exact-total helper；不得以 `entry_price * qty`、`entry * qty` 等 per-share fallback 回推買進總額。
-27. debug / GUI / history 若顯示半倉停利或其他單腿 exit 的可見 `pnl_pct` / 報酬率，必須優先以 exact ledger 的 `allocated_cost_milli` 與該腿 `pnl_milli` 計算；不得以 `(net_price - entry) / entry` 等 per-share 浮點差價公式回推單腿報酬率。
-28. debug / GUI / history 若顯示賣訊 annotation 的可見 `profit_pct`、盈虧顏色或其他 signal-day 持倉報酬率，必須優先以 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `(close - entry) / entry` 等 raw close 與 per-share 成本的浮點差價公式回推。
-29. debug / GUI / history 的 fallback helper 若在缺少預先儲存的 total / allocated-cost 時仍需回推可見資本、單腿報酬率或持倉報酬率，必須優先使用共享 exact-total / exact-ledger helper（如 `calc_entry_total_cost(...)`、`net_total_milli - pnl_milli`）；不得再以 `entry * qty`、`entry_price * qty`、`(net_price - entry) / entry` 等 raw per-share 浮點公式作最後 fallback。
-30. 凡 fallback helper 只握有 `entry` / `entry_price` 這類由既有總額反推的「已含費或已正規化每股平均價格」時，不得再把該價格當原始買價餵給 `calc_entry_total_cost(...)` 之類會重新加費的 gross-price helper；必須改用共享 average-price total helper 以每股平均價格回推總額，避免 double-count 手續費。
-31. 投組 rotation、汰弱賣出候選比較或其他持倉優劣排序，若需以持倉報酬率做比較，必須優先使用 exact ledger 的 full-entry capital、已實現損益與剩餘部位 mark-to-market 淨值計算；不得以 `close` 與 `entry` 的 per-share 浮點差價公式回推。
-32. 凡 unit / synthetic validator、oracle、expected 值建構若需比較正式帳務 total、risk budget、freed cash、realized pnl 或 entry cash after buy，必須使用共享 exact ledger / integer budget helper；不得以 `price * qty`、`net_price * qty`、`capital * risk_fraction` 等 per-share float 公式自行重建 oracle。
-33. 凡 validator / oracle 呼叫會原地修改 position、portfolio 或其他可變狀態的 producer 後，再比對依賴「呼叫前成本基礎 / 持倉狀態」的 expected 值時，必須先 snapshot 呼叫前狀態；不得在 producer 執行後再讀取已被修改的物件作 oracle。
-34. 編輯 `doc/TEST_SUITE_CHECKLIST.md` 的摘要表時，必須維持合法 markdown table header + separator 結構；不得讓 parser 把表頭列當成資料列。
-35. 凡將共享 helper 替換進既有 producer / core 路徑時，必須同輪同步更新 import 與 static contract；不得只改函式呼叫而漏掉 import，避免 `py_compile` 可過但 runtime 因 `NameError` 失敗。
-36. 任何 vectorized / array 版價格正規化 helper（如批次 tick 對齊、批次買入上限正規化）也必須委派共享 milli price helper；不得另寫 threshold/tick ladder、`valid_prices / ticks`、`np.ceil` / `np.floor` 的獨立浮點取整實作，避免訊號路徑與正式價格正規化分叉。
-37. `apps/test_suite.py` 若保留頂部 coverage / contract 摘要註解並列舉 `Txx`，凡新增或擴充該註解所涵蓋的 formal contract 範圍時，必須同輪同步更新列舉的 `Txx`；不得讓正式入口摘要註解落後於實際 synthetic registry。
-38. 凡 exact ledger / integer total 已存在的報酬率、風報比或持倉優劣比較分母分子計算，必須直接使用 milli / integer total 相除；不得先各自 `milli_to_money(...)` 轉回 float 金額後再相除，避免 display / rotation 排序因浮點偏移產生微小分叉。
-39. 凡將 debug / GUI / history 的 `total_return_pct`、`pnl_pct` 或類似可見公式改為引用 `*_milli` 局部變數時，必須在同一函式同一路徑先明確綁定該變數並由其推導顯示值；不得引用未定義的 `*_milli` 名稱，避免 runtime `NameError`。
-40. 凡計算漲跌停價格或其他由「基準價 × 比率」先得到 raw 結果、再對齊合法 tick 的價格時，tick band 必須依 raw 結果本身決定；不得沿用基準價原 band 的 tick，否則像 `9.22 × 1.1 = 10.142` 這類跨 band 案例會產生不合法的漲跌停價。
-41. 凡共享 tick / 漲跌停 / 價格合法性 helper 需要判定升降單位時，必須先由 ticker 與可得 metadata 解析商品 profile，再依 profile 選擇 tick 規則；股票、ETF / ETN / REIT 類與其槓反 / 債券型商品不得混用同一套 stock tick ladder，也不得只對特定資料集硬編碼例外。任何 rotation / exit / sell-fill caller 若需傳入 `ticker` / `security_profile`，也必須使用當前路徑已在作用域中的實際標的來源（如 `weakest_ticker`、`position.get("ticker")`）；不得引用未宣告的自由變數名稱。
-42. 凡正式帳務計算賣出手續費 / 交易稅 / net sell total 時，稅率也必須由共享 security-profile helper 依商品別與交易日期決定；不得再對股票、ETF / ETN、債券 ETF、REIT 類共用單一 `tax_rate`。至少必須支援股票 0.3%、ETF / ETN 0.1%、REIT 免稅，以及債券 ETF 於免徵期限內 0 稅率、到期後回到基金類稅率。
-43. 凡 public/helper producer（如 `build_backtest_stats()`）開始把 `current_date`、`final_date`、`trade_date` 等日期上下文往下傳給共享 builder / preview helper 時，必須在同輪同步把該日期納入函式簽名、全部 caller 與 formal static contract；不得在函式內直接引用未宣告的自由變數日期名稱。
-44. debug / GUI / history 的私有 helper 若需要 `position`、`current_date`、`trade_date`、`ticker`、`security_profile` 等上下文，必須由函式簽名明確接受，並由 caller 顯式傳入；不得在 helper 內直接引用未宣告的自由變數名稱。
-45. reporting / optional-dependency fallback 的 `except (...)` tuple 只能引用本模組已匯入或內建保證存在的例外型別；若 chart / HTML / browser 等 optional 輸出失敗，主要 artifact 匯出仍須成功並輸出可追蹤的錯誤摘要。
-46. 凡 public stats / preview payload（如 `build_backtest_stats()` 的 `buyPrice` / `sellPrice` / `tpPrice`）若需顯示隔日掛單、停損或停利價格，必須重用共享 entry/target helper 或 candidate-plan 同源公式；不得以手寫浮點公式直接推導，避免 GUI / scanner / backtest stats 的可見價格與正式交易規則分叉。
-47. 凡 candidate-plan 重算、cash-capped resize、scanner projected qty / projected cost 等 sizing 路徑若依賴 `calc_position_size(...)`、`calc_reference_candidate_qty(...)` 或其他含商品別稅率的共享 helper，必須同輪同步傳遞 `ticker`、可得 `security_profile` 與 `trade_date`；不得在重算 qty / proj_cost 時退回 stock-only 稅率或遺漏日期上下文。
+10. 正式帳務、價格正規化、費稅、sizing 與可見統計，必須共享同一套核心規則與資料來源；任何顯示、重建、排序、比較或 validator oracle 都不得另建分叉公式。
+11. 涉及商品別、tick、漲跌停、費稅、日期、ticker、security profile、position 等上下文的跨模組規則，必須由共享 helper 與明確參數傳遞維持一致；不得依賴自由變數、隱式 fallback 或模組私有特例。
+12. 凡 shared helper、public payload、stats schema、keyword 參數或跨工具契約有變動，必須同輪同步更新 producer、caller、consumer、formal contract 與相關文件；不得只改其中一側。
+13. debug / GUI / history / reporting / scanner / validator / local regression 等非核心路徑，仍必須服從與正式交易邏輯相同的單一真理來源；不得因 fallback、顯示需求或 optional dependency 而繞開核心規則。
+14. validator 與 oracle 必須優先驗證 invariant、契約與單一真理來源，不得重寫一份分叉實作；若需依賴可變狀態，必須先 snapshot 再比對。
+15. checklist 負責維護 D 節細部 contract、formal guard、收斂狀態與時間軸；本檔只保留原則，不再承載會頻繁變動的細項清單。
+
 ## E. 交易與策略原則
 
 1. 杜絕未來函數：不可偷看未來資料。
