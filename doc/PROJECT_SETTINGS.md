@@ -1,7 +1,7 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
-2.  `PROJECT_SETTINGS.md` 與`TEST_SUITE_CHECKLIST.md`更新原則: `PROJECT_SETTINGS.md` 只保留原則性條款; `/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊; 兩者不可違反單一真理原則; 各文件內也不可有重覆性描述，保持文件最精簡。
+2.  `PROJECT_SETTINGS.md` 與`TEST_SUITE_CHECKLIST.md`更新原則: `PROJECT_SETTINGS.md` 只保留原則性條款; `/doc/TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊; 兩者不可違反單一真理原則; 各文件內也不可有任何重覆性描述，保持文件至最精簡。
 
 
 ## A. 工作基準與執行紀律
