@@ -70,6 +70,6 @@ python apps/workbench.py
 
 # 文件分工
 
-- `PROJECT_SETTINGS.md`：上層原則、模組責任、邊界與資料流。
 - `TEST_SUITE_CHECKLIST.md`：本地 formal test suite 主表、狀態與收斂索引。
-- `GPT_DELIVERY_CHECKLIST.md`：GPT 交付前操作檢查；不納入本地 formal 驗證。
+- `ARCHITECTURE.md`：穩定子系統、正式入口、依賴方向與必要 shipped 模組索引。
+- `CMD.md`：常用指令、入口與輸出位置。

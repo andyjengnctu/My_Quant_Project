@@ -29,9 +29,7 @@ project/
 │  ├─ output_retention.py         # outputs retention 雙門檻清理 helper
 │  └─ display.py                      # 顯示 façade
 ├─ doc/
-│  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則
 │  ├─ TEST_SUITE_CHECKLIST.md         # formal test suite 主表與索引
-│  ├─ GPT_DELIVERY_CHECKLIST.md       # GPT 交付前操作檢查表
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
@@ -108,7 +106,7 @@ project/
 - `tools/`：下載、最佳化、單股分析、validate、local regression 與 GUI 子系統。
 - `config/`：共用政策與執行預設。
 - `models/`：最佳參數檔與模型相關輸入。
-- `doc/`：治理文件；上層原則在 `PROJECT_SETTINGS.md`，formal 主表在 `TEST_SUITE_CHECKLIST.md`，操作步驟在 `CMD.md`。
+- `doc/`：formal 世界僅以 `TEST_SUITE_CHECKLIST.md`、`ARCHITECTURE.md` 與 `CMD.md` 承接主表、架構與操作資訊。
 
 ## GUI / workbench
 
@@ -122,7 +120,7 @@ project/
 - 上層呼叫下層：`apps/ -> tools/ -> core/`。
 - `core/` 不反向依賴 `tools/` 或 `apps/`。
 - `tools/*/__init__.py` 與 façade 檔維持穩定公開介面；子模組可再細拆，但外部匯入路徑應盡量不變。
-- formal test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂；`doc/GPT_DELIVERY_CHECKLIST.md` 不納入本地 formal 驗證。
+- formal test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂。
 
 ## 輸出與相容邊界
 
