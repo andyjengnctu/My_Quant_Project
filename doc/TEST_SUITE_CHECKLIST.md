@@ -467,7 +467,7 @@
 | T241 | `validate_checklist_g_transition_sequence_case` | B155 |
 | T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
 | T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
-| T244 | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` | B158 |
+| T244 | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` | B158 |
 | T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
@@ -1085,7 +1085,7 @@
 | 2026-04-12 | B157 | 擴充正式入口 help 摘要與對應 meta contract 納入 `summary-section-heading-uniqueness` 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B157 | 最嚴格檢查檢出正式入口 `--help` 長說明尚未同步新增 `conservative-executable-exit interpretation contract` 主題，改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-12 | B157 | 補齊正式入口 `--help` 長說明與 help meta contract 對新主題的同步後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B158 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B158 | 新增正式入口 help 舊 wording / 裸用詞排除契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
 | 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
@@ -1150,7 +1150,7 @@
 | 2026-04-12 | T243 | 擴充正式入口 help 穩定主題 token 契約納入摘要標題唯一性主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
 | 2026-04-12 | T243 | 最嚴格檢查檢出 help 穩定主題 token 契約尚未同步新增「保守可執行出場解讀」主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
 | 2026-04-12 | T243 | 擴充 help 穩定主題 token 契約納入新主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
-| 2026-04-12 | T244 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` |
+| 2026-04-12 | T244 | 新增正式入口 help 舊 wording / 裸用詞排除契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | T249 | 新增 ARCHITECTURE apps 檔案樹 workbench 入口同步契約並驗證 | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |

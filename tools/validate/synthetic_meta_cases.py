@@ -3175,8 +3175,8 @@ def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params
     return results, summary
 
 
-def validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case(_base_params):
-    case_id = "META_TEST_SUITE_HELP_TEXT_HAS_NO_STALE_RENAMED_EXACT_CONTRACT_THEME"
+def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_params):
+    case_id = "META_TEST_SUITE_HELP_TEXT_HAS_NO_STALE_WORDING_OR_BARE_TERM"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
