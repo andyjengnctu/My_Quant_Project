@@ -641,6 +641,10 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     required_doc_text = "`/doc/GPT_DELIVERY_CHECKLIST.md`"
     role_text = "GPT 交付前操作檢查表"
     scope_text = "assistant 每輪交付前操作檢查表"
+    project_settings_project_role_text = "`PROJECT_SETTINGS.md` 為最高優先規則"
+    project_settings_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單"
+    project_settings_gpt_role_text = "`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表"
+    project_settings_governance_split_text = "文件治理與同步原則"
     not_formal_text = "不作本地端 formal test 主表"
     self_audit_text = "逐項自檢 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard"
     bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
@@ -667,6 +671,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist", True, required_doc_text in project_settings_text and role_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_disambiguates_three_document_roles", True, project_settings_project_role_text in project_settings_text and project_settings_test_suite_role_text in project_settings_text and project_settings_gpt_role_text in project_settings_text and project_settings_governance_split_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_file_exists", True, checklist_path.exists())
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_scope_and_non_formal_boundary", True, scope_text in checklist_text and not_formal_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_start_basis_report_fields", True, basis_report_text in checklist_text)
