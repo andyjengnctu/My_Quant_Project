@@ -674,6 +674,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
+    add_check(results, "meta_entry_contract", case_id, "architecture_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in architecture_text and "正式檢查 `doc/TEST_SUITE_CHECKLIST.md` 主表" in architecture_text)
+    add_check(results, "meta_entry_contract", case_id, "cmd_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in cmd_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
 
