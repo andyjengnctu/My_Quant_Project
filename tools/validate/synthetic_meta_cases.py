@@ -757,28 +757,24 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     project_settings_text = project_settings_path.read_text(encoding="utf-8")
     test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
     test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
-    test_suite_path = build_project_absolute_path("apps", "test_suite.py")
-    test_suite_text = test_suite_path.read_text(encoding="utf-8")
 
     mechanical_sort_text = "維持既有排序 guard 可通過"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
     gpt_not_test_target_text = "不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容"
-    theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
-
-    help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
+    stable_summary_text = "治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊"
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_gpt_delivery_checklist_not_local_formal_target", True, gpt_not_test_target_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_test_suite_help_uses_stable_theme_summary", True, stable_summary_text in project_settings_text)
 
     b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
     b159_item_text = b159_row[3] if b159_row else ""
     b159_gap_text = b159_row[5] if b159_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "GPT checklist 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "不驗 GPT checklist 內容" in b159_gap_text and len(b159_gap_text) <= 120)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and "GPT checklist 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and "不驗 GPT checklist 內容" in b159_gap_text and len(b159_gap_text) <= 120)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
@@ -3243,13 +3239,13 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
+    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline' in line), '')
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_single_backtest_public_profit_equity_consistency_contract", True, "single-backtest public profit/equity consistency contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_contract", True, "conservative-executable-exit interpretation contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_file_tree_sync_contracts", True, "architecture file-tree sync contracts" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_contract", True, "project-settings exhaustive-check / checklist-sort-guard contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_public_profit_equity_consistency_theme", True, "單股公開盈虧/權益一致性" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_theme", True, "保守可執行出場解讀" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_file_tree_sync_theme", True, "架構文件檔案樹同步" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_project_settings_and_test_suite_checklist_guard_theme", True, "PROJECT_SETTINGS / TEST_SUITE_CHECKLIST guard" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
@@ -3262,11 +3258,13 @@ def validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
+    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline' in line), '')
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_contract", True, "debug-backtest entry cash-path static contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_debug_backtest_entry_cash_deduction_contract", False, "debug-backtest entry cash deduction static contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_exact_contract_enumeration", False, "single-backtest public profit/equity consistency contract" in help_line or "project-settings exhaustive-check / checklist-sort-guard contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, "checklist-sort-guard" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
