@@ -94,6 +94,7 @@ from .synthetic_meta_cases import (
     validate_price_utils_array_tick_normalization_contract_case,
     validate_exact_ledger_return_ratio_no_money_float_division_contract_case,
     validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case,
+    validate_test_suite_help_text_mentions_latest_exact_contract_theme_case,
     validate_debug_exit_total_return_milli_binding_contract_case,
     validate_core_r_multiple_exact_ledger_contract_case,
     validate_single_backtest_public_profit_equity_consistency_contract_case,
