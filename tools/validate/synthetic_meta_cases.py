@@ -598,6 +598,8 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     mechanical_sort_text = "整段重排並對照既有排序 guard"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
+    self_audit_text = "交付前必須逐項自檢同一 target 是否已實際出現在定義、import、registry、checklist、正式入口摘要與 help"
+    bundle_close_text = "若提供 bundle，交付前另須逐條對照原始失敗項確認已消失"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
@@ -606,6 +608,8 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_reorder_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_formal_chain_target_self_audit_before_delivery", True, self_audit_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_bundle_failure_disappearance_check_before_delivery", True, bundle_close_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
