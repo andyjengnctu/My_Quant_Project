@@ -639,6 +639,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     self_audit_text = "逐項自檢 definition、import、registry、checklist、parser、guard、正式入口摘要、help 與對應 meta guard"
     bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
     reorder_text = "整段重排並對照既有排序 guard"
+    same_day_g_block_text = "重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
     checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
@@ -653,6 +654,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_formal_chain_self_audit", True, self_audit_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)

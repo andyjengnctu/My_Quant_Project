@@ -14,6 +14,7 @@
 1. 對同一 target 逐項自檢 definition、import、registry、checklist、parser、guard、正式入口摘要、help 與對應 meta guard 是否已實際同步。
 2. 追蹤 ID 或 canonical 主題更名時，須同步檢查所有引用層，不得只改局部別名、摘要或相鄰文件。
 3. 若修改 checklist 主表、`T`、`G`、`E` 等機械排序區塊，交付前必須整段重排並對照既有排序 guard。
+4. 若本輪新增 `G` 紀錄，交付前必須重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位；不得將新列直接追加在同日區塊尾端、留在空白行之後，或只改局部單列後跳過整段重排。
 
 ## C. Bundle 修復時
 
