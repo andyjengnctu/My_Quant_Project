@@ -15,8 +15,8 @@
 1. 對同一 target 逐項自檢 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard 是否已實際同步。
 2. 追蹤 ID 或 canonical 主題更名時，須同步檢查所有引用層，不得只改局部別名、摘要或相鄰文件。
 3. 若修改 `doc/TEST_SUITE_CHECKLIST.md` 主表、`T`、`G`、`E` 等機械排序區塊，交付前必須整段重排並對照既有排序 guard。
-4. 若本輪新增 `G` 紀錄，交付前必須重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位；不得將新列直接追加在同日區塊尾端、留在空白行之後，或只改局部單列後跳過整段重排。
-5. 只要本輪動到 `G` 區，交付前除對應日期區塊重排外，還必須再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查；不得只檢當前日期區塊就交付。
+4. 若本輪新增 `G` 紀錄，交付前必須重新抽出整個對應日期區塊，依 formal tracking ID sort key（prefix / numeric / suffix）穩定排序後整段覆寫回原位；不得以人工目測、字典序、尾端追加或局部插入取代正式排序。不得將新列直接追加在同日區塊尾端、留在空白行之後，或只改局部單列後跳過整段重排。
+5. 只要本輪動到 `G` 區，交付前除對應日期區塊重排外，還必須再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查，並確認同日區塊內 `B` / `T` 等追蹤列皆符合 formal tracking ID sort key；不得只檢當前日期區塊就交付。
 6. 若本輪修改 `doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 等雙 checklist 分工文件，交付前必須逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞；不得以語意接近或既有段落已同步視為完成。
 
 ## C. Bundle 修復時
