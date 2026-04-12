@@ -658,6 +658,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     exact_literal_text = "若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal"
     literal_reverse_scan_scope_text = "若本輪修改任何會被 formal contract / parser / meta guard 逐字比對的 literal，或其對應的 canonical 名稱、追蹤 ID、正式入口摘要 / help 關鍵字"
     literal_reverse_scan_method_text = "必須從對應 validator、meta guard、parser 的 expected literal、禁止字串與比對條件反查，逐項核對所有正向與反向 literal"
+    file_division_text = "PROJECT_SETTINGS / TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST 文件分工"
+    summary_file_division_text = "PROJECT_SETTINGS-TEST_SUITE_CHECKLIST-GPT_DELIVERY_CHECKLIST file-division sync"
     theme_text = "gpt-delivery-checklist governance contract"
     entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
 
@@ -690,6 +692,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "cmd_has_no_bare_checklist_wording", [], [line.strip() for line in cmd_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_checklist_file_division_sync_theme", True, summary_file_division_text in summary_comment_line)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_checklist_file_division_sync_theme", True, file_division_text in help_line)
 
     summary["source_path"] = checklist_path.relative_to(PROJECT_ROOT).as_posix() if checklist_path.exists() else "doc/GPT_DELIVERY_CHECKLIST.md"
     return results, summary
