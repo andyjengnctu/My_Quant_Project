@@ -8,6 +8,7 @@ import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
+from .module_loader import build_project_absolute_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
