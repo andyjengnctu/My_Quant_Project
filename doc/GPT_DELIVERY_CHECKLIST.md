@@ -18,13 +18,13 @@
 4. 若本輪新增 `G` 紀錄，交付前必須重新抽出整個對應日期區塊，依 formal tracking ID sort key（prefix / numeric / suffix）穩定排序後整段覆寫回原位；不得以人工目測、字典序、尾端追加或局部插入取代正式排序。不得將新列直接追加在同日區塊尾端、留在空白行之後，或只改局部單列後跳過整段重排。
 5. 只要本輪動到 `G` 區，交付前除對應日期區塊重排外，還必須再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查，並確認同日區塊內 `B` / `T` 等追蹤列皆符合 formal tracking ID sort key；不得只檢當前日期區塊就交付。
 6. 若本輪修改 `doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 等雙 checklist 分工文件，交付前必須逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞；不得以語意接近或既有段落已同步視為完成。
-7. 若本輪新增或調整 validator / `Txx` / `Bxx`，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 `Txx` / contract 主題；不得只更新 registry、checklist 或 meta guard。
+7. 若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 `Txx` / contract 主題；不得只更新 registry、checklist 或 meta guard。
 
 ## C. Bundle 修復時
 
 1. 逐條對照 bundle 原始失敗項完成閉環；不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
 2. 交付前必須逐條確認 bundle 原始失敗項已消失。
-3. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔，補上可直接防止同類錯誤再犯的檢查條款。
+3. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔，補上可直接防止同類錯誤再犯的檢查條款；若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal，不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫。
 
 ## D. 交付前
 

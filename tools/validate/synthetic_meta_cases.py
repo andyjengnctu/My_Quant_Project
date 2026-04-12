@@ -654,6 +654,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
     checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
+    exact_literal_text = "若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal"
     theme_text = "gpt-delivery-checklist governance contract"
     entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
 
@@ -675,6 +676,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_exact_string_literal_preflight", True, exact_literal_text in checklist_text and "不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_apps_test_suite_summary_help_sync_scan", True, entry_sync_text in checklist_text and "不得只更新 registry、checklist 或 meta guard" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
