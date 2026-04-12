@@ -3224,7 +3224,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249/T250/T251/T252/T253"
+    expected_id_list = "T225/T226/T227/T228/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249/T250/T251/T252/T253"
     summary_comment_line = next(
         (
             line.strip()
@@ -3235,10 +3235,12 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t253", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t253_without_skipping_existing_same_theme_ids", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t227", True, "T227" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t228", True, "T228" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t237", True, "T237" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t238", True, "T238" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t239", True, "T239" in summary_comment_line)
@@ -3255,6 +3257,8 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t251", True, "T251" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t252", True, "T252" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t253", True, "T253" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_portfolio_rotation_return_theme", True, "portfolio-rotation-return" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_validator_oracle_exact_ledger_theme", True, "validator-oracle exact-ledger" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_conservative_executable_exit_interpretation_theme", True, "conservative-executable-exit interpretation" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_workbench_file_tree_sync_theme", True, "architecture-workbench-file-tree sync" in summary_comment_line)
