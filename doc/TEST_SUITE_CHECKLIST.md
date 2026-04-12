@@ -1176,6 +1176,8 @@
 | 2026-04-12 | B160 | 將 `unfinished_test_ids` 收斂為僅計入 `PARTIAL` / `TODO` 後重新驗證為 N/A | PARTIAL -> N/A | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-12 | B160 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` / `doc/CMD.md` 對 GPT checklist 仍只寫成一般文件分工，未同步明示不納入本地 formal 驗證邊界，改回 PARTIAL | N/A -> PARTIAL | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | B160 | 同步更新 `doc/ARCHITECTURE.md` / `doc/CMD.md` 與 GPT checklist 邊界檢查條款後重新回復 N/A | PARTIAL -> N/A | `doc/CMD.md` |
+| 2026-04-12 | B160 | 最嚴格檢查檢出 `doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md` 與 `apps/test_suite.py` 摘要註解 / `--help` 說明仍殘留裸 `checklist` 混稱，與三份文件分工要求不一致，改回 PARTIAL | N/A -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
+| 2026-04-12 | B160 | 將治理文件與正式入口摘要註解 / `--help` 說明中的裸 `checklist` 混稱改為顯式 `doc/TEST_SUITE_CHECKLIST.md` / `TEST_SUITE_CHECKLIST` 後重新回復 N/A | PARTIAL -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
 | 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
