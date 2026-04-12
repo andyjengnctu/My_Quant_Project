@@ -232,7 +232,7 @@ tools/local_regression/
 ├── run_all.bat
 ├── run_chain_checks.py
 ├── run_ml_smoke.py
-├── run_meta_quality.py（含 `run_all.py` helper path coverage probe）
+├── run_meta_quality.py
 ├── meta_quality_coverage.py
 ├── meta_quality_targets.py
 └── run_quick_gate.py
