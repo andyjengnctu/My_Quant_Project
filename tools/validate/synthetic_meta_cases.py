@@ -594,6 +594,8 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     project_settings_text = project_settings_path.read_text(encoding="utf-8")
     test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
     test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
+    checklist_path = build_project_absolute_path("doc", "GPT_DELIVERY_CHECKLIST.md")
+    checklist_text = checklist_path.read_text(encoding="utf-8")
     test_suite_path = build_project_absolute_path("apps", "test_suite.py")
     test_suite_text = test_suite_path.read_text(encoding="utf-8")
 
@@ -603,6 +605,9 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     moved_basis_detail_text = "ZIP 檔名、SHA256 與全新解壓目錄"
     moved_no_gap_report_text = "若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。"
     moved_strict_delivery_text = "提供 patch 前必須先做 GPT 端最嚴格檢查，確認無已知問題後再交付。"
+    checklist_basis_report_text = "當前工作基準、ZIP 檔名、SHA256、全新解壓目錄與已讀文件"
+    checklist_no_gap_report_text = "若確認沒有新增 formal coverage gap，交付時明確回報正式入口已涵蓋目前需求。"
+    checklist_strict_delivery_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
@@ -614,6 +619,9 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_basis_report_detail_fields", True, moved_basis_detail_text not in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_no_gap_report_action", True, moved_no_gap_report_text not in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_strict_delivery_action", True, moved_strict_delivery_text not in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_basis_report_detail_fields_for_b159_sink", True, checklist_basis_report_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_no_gap_report_action_for_b159_sink", True, checklist_no_gap_report_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_strict_delivery_action_for_b159_sink", True, checklist_strict_delivery_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
