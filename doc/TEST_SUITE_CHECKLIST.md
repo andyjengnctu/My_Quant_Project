@@ -1162,13 +1162,17 @@
 | 2026-04-13 | B11 | 補齊 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 並排除已退役的 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 最嚴格檢查檢出 output contract 仍以退役欄位名直掛 active sub-check 與 checklist 摘要，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 將 active sub-check 與 checklist 摘要改為中性「退役舊鍵排除」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-04-13 | T18 | 最嚴格檢查檢出 output contract case 尚未覆蓋 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
-| 2026-04-13 | T18 | 擴充 output contract case，補齊 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
-| 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | B26 | 最嚴格檢查檢出 `G` 同日區塊未重排導致 `B158` 落在 `T124` 後方，主表改回 PARTIAL | DONE -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-13 | B26 | 依日期與 tracking ID 重新排序 `G` 同日區塊並補強交付前整段重排 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約仍以 `exact-contract` 直掛 active sub-check 與主表摘要，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 active sub-check 與主表摘要改為中性「舊契約 wording」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 stale-wording 排除檢查仍殘留較長完整舊短語，未收斂到較短已足夠覆蓋的最小必要片段，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 stale-wording 排除檢查收斂為較短已足夠覆蓋的最小必要片段後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-13 | T18 | 最嚴格檢查檢出 output contract case 尚未覆蓋 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
+| 2026-04-13 | T18 | 擴充 output contract case，補齊 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
+| 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | T124 | 最嚴格檢查檢出 `G` 同日區塊排序斷裂並命中 `checklist_g_rows_sorted_by_date_then_id`，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | T124 | 將 2026-04-13 同日區塊依日期與 tracking ID 重排後重新收斂為 DONE | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約的 active sub-check 名稱仍殘留 `exact-contract` 舊語意，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 active sub-check 名稱改為中性「舊契約 wording 列舉」語意後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約的負向檢查仍硬掛較長完整舊短語，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
