@@ -83,6 +83,104 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
     return results, summary
 
 
+def validate_synthetic_conservative_executable_exit_interpretation_case(base_params):
+    params = make_synthetic_validation_params(base_params, tp_percent=0.5)
+    params.atr_times_init = 2.0
+    params.atr_times_trail = 1.0
+    case_id = "SYNTH_CONSERVATIVE_EXECUTABLE_EXIT_INTERPRETATION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    ambiguous_position = build_position_from_entry_fill(
+        buy_price=100.0,
+        qty=10,
+        init_sl=95.0,
+        init_trail=95.0,
+        params=params,
+        entry_type="normal",
+    )
+
+    stop_level = float(ambiguous_position["sl"])
+    tp_half_level = float(ambiguous_position["tp_half"])
+    original_cost_basis_milli = int(ambiguous_position["remaining_cost_basis_milli"])
+    updated_position, freed_cash, pnl_realized, events = execute_bar_step(
+        ambiguous_position,
+        y_atr=1.0,
+        y_ind_sell=False,
+        y_close=100.0,
+        t_open=90.0,
+        t_high=tp_half_level + 1.0,
+        t_low=89.0,
+        t_close=91.0,
+        t_volume=1000.0,
+        params=params,
+    )
+    stop_exec_context = next((ctx for ctx in updated_position.get("_last_exec_contexts", []) if ctx.get("event") == "STOP"), None)
+    expected_same_bar_exec_price = adjust_long_sell_fill_price(90.0)
+    expected_same_bar_sell_ledger = build_sell_ledger_from_price(expected_same_bar_exec_price, 10, params)
+    expected_same_bar_freed_cash = milli_to_money(expected_same_bar_sell_ledger["net_sell_total_milli"])
+    expected_same_bar_pnl = milli_to_money(expected_same_bar_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)
+
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_ambiguous_exit_prefers_stop", True, "STOP" in events)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_ambiguous_exit_suppresses_tp_half", False, "TP_HALF" in events, note="同一事件若同棒同時滿足停損 / 停利，只能採最保守、最不利於績效的停損解讀。")
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_executes_at_first_worse_executable_open", 90.0, None if stop_exec_context is None else float(stop_exec_context["exec_price"]))
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_freed_cash_uses_worse_executable_open", expected_same_bar_freed_cash, float(freed_cash), tol=0.01)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_realized_pnl_uses_worse_executable_open", expected_same_bar_pnl, float(pnl_realized), tol=0.01)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "same_bar_stop_closes_position", 0, int(updated_position["qty"]))
+
+    limit_price = 100.0
+    atr = 5.0
+    candidate_plan = build_normal_candidate_plan(limit_price, atr, 1_000_000.0, params)
+    entry_result = execute_pre_market_entry_plan(
+        entry_plan=candidate_plan,
+        t_open=98.0,
+        t_high=100.0,
+        t_low=87.5,
+        t_close=89.0,
+        t_volume=1000.0,
+        y_close=100.0,
+        params=params,
+        entry_type="normal",
+    )
+    deferred_stop_position = entry_result.get("position")
+    if deferred_stop_position is None:
+        raise ValueError("validate_synthetic_conservative_executable_exit_interpretation_case 需要 entry-day stop 佇列部位")
+
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "entry_day_stop_is_queued_once_event_is_decided", "STOP", deferred_stop_position.get("pending_exit_action"))
+
+    deferred_original_qty = int(deferred_stop_position["qty"])
+    deferred_original_cost_basis_milli = int(deferred_stop_position["remaining_cost_basis_milli"])
+    updated_deferred_position, deferred_freed_cash, deferred_pnl_realized, deferred_events = execute_bar_step(
+        deferred_stop_position,
+        y_atr=atr,
+        y_ind_sell=False,
+        y_close=89.0,
+        t_open=92.0,
+        t_high=93.0,
+        t_low=91.5,
+        t_close=92.5,
+        t_volume=1000.0,
+        params=params,
+    )
+    deferred_stop_context = next((ctx for ctx in updated_deferred_position.get("_last_exec_contexts", []) if ctx.get("event") == "STOP"), None)
+    expected_deferred_sell_ledger = build_sell_ledger_from_price(92.0, deferred_original_qty, params)
+    expected_deferred_freed_cash = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"])
+    expected_deferred_pnl = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"] - deferred_original_cost_basis_milli)
+
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_executes_on_next_open_without_retouch", True, "DEFERRED_STOP_ON_OPEN" in deferred_events and "STOP" in deferred_events)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_uses_first_executable_open_after_prior_trigger", 92.0, None if deferred_stop_context is None else float(deferred_stop_context["exec_price"]))
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_freed_cash_uses_next_open_execution", expected_deferred_freed_cash, float(deferred_freed_cash), tol=0.01)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_realized_pnl_uses_next_open_execution", expected_deferred_pnl, float(deferred_pnl_realized), tol=0.01)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_clears_position_without_rebreak", 0, int(updated_deferred_position["qty"]))
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "deferred_stop_clears_pending_action_after_execution", None, updated_deferred_position.get("pending_exit_action"))
+
+    summary["same_bar_events"] = list(events)
+    summary["same_bar_exec_price"] = None if stop_exec_context is None else float(stop_exec_context["exec_price"])
+    summary["deferred_events"] = list(deferred_events)
+    summary["deferred_exec_price"] = None if deferred_stop_context is None else float(deferred_stop_context["exec_price"])
+    return results, summary
+
+
 def validate_synthetic_exit_orders_only_for_held_positions_case(base_params):
     params = make_synthetic_validation_params(base_params, tp_percent=0.5)
     case_id = "SYNTH_EXIT_ORDERS_ONLY_FOR_HELD_POSITIONS"
