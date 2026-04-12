@@ -1019,6 +1019,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
     canonical_model_files = [
+        Path("models/best_params.json"),
         Path("models/all_best_params_1.json"),
         Path("models/all_best_params_2.json"),
         Path("models/all_best_params_3.json"),
@@ -1042,7 +1043,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "repo_shipped_all_best_params_use_canonical_optimizer_decimal_repr",
+        "repo_shipped_best_params_artifacts_use_canonical_optimizer_decimal_repr",
         expected_shipped_repr_map,
         shipped_repr_map,
     )
