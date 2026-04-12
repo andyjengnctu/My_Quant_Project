@@ -153,7 +153,7 @@ def build_backtest_stats(
         params,
     )
 
-    total_net_profit = current_capital - params.initial_capital
+    total_net_profit = current_equity - params.initial_capital
     total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
     buy_next_day = bool(buy_condition_last)
     resolved_ticker = ticker or (active_extended_signal or {}).get("ticker")
