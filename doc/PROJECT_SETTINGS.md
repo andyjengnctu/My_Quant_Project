@@ -1,12 +1,15 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單，`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表；三者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
-2. 文件治理與同步原則：`PROJECT_SETTINGS.md` 只保留原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留本地端 formal test suite 所需、可機械比對的必要資訊；`GPT_DELIVERY_CHECKLIST.md` 只保留 GPT 交付前操作檢查，不作 formal test 主表或狀態真理來源，也不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容。`doc/TEST_SUITE_CHECKLIST.md` 不得為 `doc/GPT_DELIVERY_CHECKLIST.md` 建立 `B` / `T` / `G` / `E` 追蹤項、validator 映射、registry completeness 邊界或任何本地 formal contract。三者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串與細部契約，不得留在 `PROJECT_SETTINGS.md`。治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊；高波動敘事、暫時演進說明、可由程式或檔案樹直接推出的重複細節、完整 helper 長清單，不得作為主要承載面。需要逐字比對的文字，只能限於 canonical 名稱、正式入口、section heading 與最小必要 fragment；不得把高波動描述做成 exact-string contract。細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 與 formal contract。治理型主表項與 `DONE` 摘要只保留索引式摘要與正式 contract 入口，不得回貼操作條款全文。`GPT_DELIVERY_CHECKLIST.md` 必須優先使用可泛化、可舉一反三的交付前規則；不得長期累積只對單次事故、單一句子、單一 wording 或局部實作特例有效的補丁型條款。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+2. 文件治理與同步原則依 A3–A5 執行。
 
 ## A. 工作基準與執行紀律
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；具體回報欄位依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+3. 文件分工：`PROJECT_SETTINGS.md` 只保留原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留本地端 formal test suite 所需、可機械比對的必要資訊；`GPT_DELIVERY_CHECKLIST.md` 只保留 GPT 交付前操作檢查，不作 formal test 主表或狀態真理來源，也不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容。`doc/TEST_SUITE_CHECKLIST.md` 不得為 `doc/GPT_DELIVERY_CHECKLIST.md` 建立 `B` / `T` / `G` / `E` 追蹤項、validator 映射、registry completeness 邊界或任何本地 formal contract。
+4. 文件承載邊界：三者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串與細部契約，不得留在 `PROJECT_SETTINGS.md`。治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊；高波動敘事、暫時演進說明、可由程式或檔案樹直接推出的重複細節與完整 helper 長清單，不得作為主要承載面。需要逐字比對的文字，只能限於 canonical 名稱、正式入口、section heading 與最小必要 fragment；不得把高波動描述做成 exact-string contract。細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 與 formal contract。治理型主表項與 `DONE` 摘要只保留索引式摘要與正式 contract 入口，不得回貼操作條款全文。
+5. 文件同步原則：`GPT_DELIVERY_CHECKLIST.md` 必須優先使用可泛化、可舉一反三的交付前規則；不得長期累積只對單次事故、單一句子、單一 wording 或局部實作特例有效的補丁型條款。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 
 ## B. 標準測試流程
 
