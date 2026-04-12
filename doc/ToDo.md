@@ -1,6 +1,6 @@
 ## Going
 
-- 再確認專案設定還有哪些檢查可以移到gpt_checklist，以保持專案設定精簡
+- 
 - 確認Traling stop物理意議，R-based Trailing Stop update
 - 先提升訓練分數
 - 訓練/測試樣本分離

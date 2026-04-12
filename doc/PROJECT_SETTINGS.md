@@ -12,11 +12,11 @@
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
-3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 checklist 與正式入口，再處理其他問題。
-4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
+3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 `doc/TEST_SUITE_CHECKLIST.md` 與正式入口，再處理其他問題。
+4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
 5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
-6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、checklist、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-7. 凡修改 checklist 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+7. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
 8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若仍存在無法在本輪一併清除的阻塞原因，必須明確揭露，不得以「先修這部分」視為完成。
 9. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，補上避免再犯的操作檢查條款。
 
