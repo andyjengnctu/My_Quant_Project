@@ -640,6 +640,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
     reorder_text = "整段重排並對照既有排序 guard"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
+    project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
+    checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
     theme_text = "gpt-delivery-checklist governance contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
@@ -652,6 +654,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)

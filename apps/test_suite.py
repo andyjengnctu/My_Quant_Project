@@ -18,7 +18,7 @@ REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 
 STEP_LABELS = TEST_SUITE_STEP_LABELS
 
-# consistency step 透過 synthetic registry 覆蓋最新 exact-ledger / summary-comment / GUI / trade_analysis 文件同步 / canonical-alias / synthetic-contract-path / checklist-transition / public-stats-profit-equity / help-theme-rename / project-settings exhaustive-check / checklist-sort-guard 與 gpt-delivery-checklist governance contracts（含 T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246；T235 同時約束 process_debug_position_step 與 append_debug_forced_closeout）。
+# consistency step 透過 synthetic registry 覆蓋最新 exact-ledger / summary-comment / GUI / trade_analysis 文件同步 / canonical-alias / synthetic-contract-path / checklist-transition / public-stats-profit-equity / help-theme-rename / project-settings exhaustive-check / checklist-sort-guard contract 與 gpt-delivery-checklist governance contract（含 T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246；T235 同時約束 process_debug_position_step 與 append_debug_forced_closeout）。
 
 class ConsoleProgress:
     def __init__(self) -> None:
