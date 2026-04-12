@@ -435,7 +435,7 @@ def validate_architecture_helper_module_file_tree_sync_case(_base_params):
         "│  ├─ model_paths.py              # models 目錄與 best_params 路徑解析 helper",
         "│  ├─ output_paths.py             # outputs/<category> 目錄正規化與建立 helper",
         "   │  ├─ history_snapshot.py          # 單股分析歷史績效 snapshot / payoff / asset-growth helper",
-        "      ├─ meta_contracts.py            # checklist / 文件 / registry 的 markdown 與 AST contract helper",
+        "      ├─ meta_contracts.py            # TEST_SUITE_CHECKLIST / 文件 / registry 的 markdown 與 AST contract helper",
         "      ├─ synthetic_display_cases.py     # synthetic 顯示契約案例：scanner header / dashboard / display re-export output sanity",
         "      ├─ synthetic_reporting_cases.py   # synthetic 報表契約案例：validate / portfolio / test suite summary schema",
         "├── meta_quality_coverage.py",
