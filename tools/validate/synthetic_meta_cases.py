@@ -643,11 +643,11 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     required_doc_text = "`/doc/GPT_DELIVERY_CHECKLIST.md`"
     role_text = "GPT 交付前操作檢查表"
     scope_text = "assistant 每輪交付前操作檢查表"
-    test_suite_checklist_file_division_text = "文件分工：`PROJECT_SETTINGS.md` 管原則；`GPT_DELIVERY_CHECKLIST.md` 管 GPT 交付前操作檢查；本檔管主表、狀態、測試入口與收斂索引。"
-    checklist_file_division_text = "文件分工："
+    test_suite_checklist_file_division_text = "文件分工：`PROJECT_SETTINGS.md` 管原則；`TEST_SUITE_CHECKLIST.md` 管主表、狀態、測試入口與收斂索引；`GPT_DELIVERY_CHECKLIST.md` 管 GPT 交付前操作檢查。"
+    checklist_file_division_text = "文件分工：`PROJECT_SETTINGS.md` 管原則與邊界；`TEST_SUITE_CHECKLIST.md` 管本地端 formal test suite 收斂與維護；`GPT_DELIVERY_CHECKLIST.md` 只管 GPT 交付前操作檢查。"
     checklist_project_role_text = "`PROJECT_SETTINGS.md` 管原則與邊界"
     checklist_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 管本地端 formal test suite 收斂與維護"
-    checklist_self_role_text = "本檔只管 GPT 交付前操作檢查"
+    checklist_self_role_text = "`GPT_DELIVERY_CHECKLIST.md` 只管 GPT 交付前操作檢查"
     project_settings_project_role_text = "`PROJECT_SETTINGS.md` 為最高優先規則"
     project_settings_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單"
     project_settings_gpt_role_text = "`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表"
@@ -679,9 +679,9 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist", True, required_doc_text in project_settings_text and role_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_disambiguates_three_document_roles", True, project_settings_project_role_text in project_settings_text and project_settings_test_suite_role_text in project_settings_text and project_settings_gpt_role_text in project_settings_text and project_settings_governance_split_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_disambiguates_three_document_roles", True, test_suite_checklist_file_division_text in test_suite_checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_disambiguates_three_document_roles", True, test_suite_checklist_file_division_text in test_suite_checklist_text and "本檔管主表、狀態、測試入口與收斂索引" not in test_suite_checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_file_exists", True, checklist_path.exists())
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_disambiguates_three_document_roles", True, checklist_file_division_text in checklist_text and checklist_project_role_text in checklist_text and checklist_test_suite_role_text in checklist_text and checklist_self_role_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_disambiguates_three_document_roles", True, checklist_file_division_text in checklist_text and checklist_project_role_text in checklist_text and checklist_test_suite_role_text in checklist_text and checklist_self_role_text in checklist_text and "本檔只管 GPT 交付前操作檢查" not in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_scope_and_non_formal_boundary", True, scope_text in checklist_text and not_formal_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_start_basis_report_fields", True, basis_report_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_no_gap_report", True, no_gap_report_text in checklist_text)
