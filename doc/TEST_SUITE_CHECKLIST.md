@@ -1033,7 +1033,6 @@
 | 2026-04-11 | T236 | 新增 core R-multiple exact-ledger static contract 並驗證 | NEW -> DONE | `validate_core_r_multiple_exact_ledger_contract_case` |
 | 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |
 | 2026-04-12 | B26 | 依 bundle 再次檢出 `G` 同日追蹤列回寫後未整段重排，排序 guard 再被真實失敗擊中，主表改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
-| 2026-04-12 | B26 | 檢出 checklist 重複貼入第二組 E/T 摘要區與子標題、現有 formal guard 未攔截，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | B26 | 補上 E/T 摘要區與子標題唯一性 guard、移除重複區塊並重新驗證 | PARTIAL -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | B47 | 檢出 repo 內 `models/*best_params*.json` shipped 工件仍允許 float-schema 欄位寫成 `int`，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-12 | B47 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別一致性並同步修正 `models/all_best_params_2.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_io_schema_case` |
@@ -1099,10 +1098,8 @@
 | 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 尚未明確要求 formal-chain target 逐項自檢與 bundle 原始失敗逐條消失確認，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
 | 2026-04-12 | B159 | 擴充 PROJECT_SETTINGS 原則納入 formal-chain target 逐項自檢與 bundle 原始失敗逐條消失確認後重新驗證 | PARTIAL -> DONE | `doc/PROJECT_SETTINGS.md` |
 | 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 仍混入 assistant 交付前操作細則、文件分工不夠收斂，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 檢出正式入口摘要註解缺少精確 `project-settings exhaustive-check / checklist-sort-guard contract` 主題字串，改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-12 | B159 | 補上正式入口摘要註解精確主題字串並重新驗證 | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 仍保留開始前回報細項、無新增 formal gap 回報、formal chain 逐項自檢與交付前最嚴格自檢等操作檢查，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 最嚴格檢查檢出 B159 主表 / `DONE` 摘要仍回貼過多操作細節、未收斂為索引式摘要，改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B159 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B159 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B159 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
@@ -1174,10 +1171,8 @@
 | 2026-04-12 | T243 | 擴充 help theme contract 納入新主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
 | 2026-04-12 | T244 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` |
 | 2026-04-12 | T245 | 檢出 PROJECT_SETTINGS exact contract 仍混入 assistant 交付前操作細則、未與專用 checklist 完成分工，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 檢出正式入口摘要註解缺少精確 `project-settings exhaustive-check / checklist-sort-guard contract` 主題字串，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 補上正式入口摘要註解精確主題字串並重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 檢出 PROJECT_SETTINGS 仍混入開始前回報細項、無新增 formal gap 回報、formal chain 逐項自檢與交付前操作檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 最嚴格檢查檢出 B159 主表 / `DONE` 摘要仍保留過長操作細節、未符合索引式摘要分工，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |

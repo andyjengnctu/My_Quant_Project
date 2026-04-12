@@ -34,6 +34,7 @@
 20. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
 21. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
 22. 若 bundle 或最嚴格檢查命中 `*_done_summary_matches_convergence_status`、`checklist_done_test_summary_*` 或 `checklist_unfinished_test_summary_*`，交付前必須同步核對 `doc/TEST_SUITE_CHECKLIST.md` 的 `T` DONE 摘要、未完成摘要與 `G` 最新狀態；不得只修單一 summary 行或單一 `G` 列後交付。
+23. 若本輪改動 `doc/TEST_SUITE_CHECKLIST.md` 的 `G` 收斂紀錄，新增每一列前必須先核對該 tracking ID 最新狀態；同一 ID 在尚未經過反向狀態變更前，不得連續追加第二筆 `DONE -> PARTIAL`、`PARTIAL -> DONE` 或其他同方向 transition，必須合併到同一降階／升階事件描述。
 
 ## C. Bundle 修復時
 
