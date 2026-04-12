@@ -17,7 +17,7 @@
 1. 若本輪修改 formal test chain，同一 target 必須整鏈核對 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard；任一層未同步，不得交付。
 2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將 validator / contract 的實際被測來源改指向另一份文件或模組，必須同步檢查所有引用層並改正殘留舊來源名稱；不得只改函式本體，卻保留舊 case_id、T 項摘要、help theme 或 registry 描述。
 3. 若本輪將 validator / contract 的語意從 exact-contract、逐項列舉或舊規則轉為穩定主題 token、結構契約或新 canonical 邊界，必須同步更新函式名、case_id、registry、`doc/TEST_SUITE_CHECKLIST.md` 摘要與收斂描述；不得讓 active 名稱持續誤標實際語意。
-4. 若 validator 的實際語意已改成排除舊 wording、裸用詞、退役鍵或其他中性排除契約，active 函式名、case_id 與 checklist 映射不得再掛舊來源名稱、`exact_contract` 或 `renamed_theme` 等過時語意。
+4. 若 validator 的實際語意已改成排除舊 wording、裸用詞、退役鍵或其他中性排除契約，active 函式名、case_id、sub-check 名稱與 checklist 映射不得再掛舊來源名稱、`exact_contract` 或 `renamed_theme` 等過時語意。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。
 6. 若本輪修改任何受 formal validator 驗證的文字面，交付前必須反查對應 required fragment、required token、長度上限與排除詞；validator 若宣稱只驗穩定 token / 結構，內部也不得再依賴高波動全文、長前綴或完整文案作定位錨點。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
