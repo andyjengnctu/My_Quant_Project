@@ -673,6 +673,9 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     project_chain_sweep_text = "若屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單並逐項清空"
     checklist_chain_sweep_scope_text = "若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單"
     checklist_chain_sweep_coverage_text = "至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules、正式入口摘要註解 / `--help` 長說明、相關文件、負向 guard、唯一性 guard、排序 guard 與 bundle 原始失敗項"
+    checklist_chain_sweep_minimum_fields_text = "至少列出鏈根、掃描範圍、逐項結果與未清阻塞"
+    checklist_chain_sweep_no_handwave_text = "不得只以「已檢查」或「已同步」概括帶過"
+    checklist_chain_sweep_delivery_report_text = "交付時還必須簡要回報同源 / 同鏈 / 同契約收斂清單結果，至少包含鏈根、掃描範圍、已清項與未清阻塞；不得只回報單一命中修補"
     checklist_chain_sweep_completion_text = "未逐項核對並清空前，不得交付"
     checklist_chain_sweep_no_first_hit_stop_text = "對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得以先修第一個命中項、單一 assertion 或單一字串命中就停止交付前檢查"
     file_division_text = "PROJECT_SETTINGS / TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST 文件分工"
@@ -704,10 +707,12 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and project_recurrence_generalization_text in project_settings_text and "不得只補單一案例、單一字串或局部實作特例" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_same_chain_sweep_preflight", True, project_chain_sweep_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_same_chain_sweep_minimum_fields", True, "收斂清單至少必須列出鏈根、掃描範圍、逐項結果與未清阻塞" in project_settings_text and checklist_chain_sweep_no_handwave_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "將防再犯要求上提為可泛化、可操作的交付前檢查" in checklist_text and "不得只補單一案例、單一字串或局部實作特例" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_exact_string_literal_preflight", True, exact_literal_text in checklist_text and "不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_literal_reverse_scan_preflight", True, literal_reverse_scan_scope_text in checklist_text and literal_reverse_scan_method_text in checklist_text and "不得只憑語意相近、單一例句或局部全文搜尋視為完成" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_chain_sweep_preflight", True, checklist_chain_sweep_scope_text in checklist_text and checklist_chain_sweep_coverage_text in checklist_text and checklist_chain_sweep_completion_text in checklist_text and checklist_chain_sweep_no_first_hit_stop_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_chain_sweep_preflight", True, checklist_chain_sweep_scope_text in checklist_text and checklist_chain_sweep_coverage_text in checklist_text and checklist_chain_sweep_minimum_fields_text in checklist_text and checklist_chain_sweep_completion_text in checklist_text and checklist_chain_sweep_no_first_hit_stop_text in checklist_text and checklist_chain_sweep_no_handwave_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_chain_delivery_report", True, checklist_chain_sweep_delivery_report_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_apps_test_suite_summary_help_sync_scan", True, entry_sync_text in checklist_text and "不得只更新 registry、checklist 或 meta guard" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
