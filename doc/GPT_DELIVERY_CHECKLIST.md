@@ -20,7 +20,7 @@
 6. 若本輪新增、移動或補記同日同 ID 的 `G` 列，或修改會影響前一狀態鏈的 `G` 列，交付前必須先抽出該 ID 自首筆到當前日期的完整狀態鏈，逐筆重播 `前一列 after_status == 下一列 before_status` 是否成立，再將整個同日區塊依排序鍵重排後回插；不得只補兩筆新列、局部交換順序，或只檢查新增列本身。
 7. 若本輪修改 `doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 等雙 checklist 分工文件，或 `apps/test_suite.py` 的 `--help` 長說明，交付前必須逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞；不得以語意接近或既有段落已同步視為完成。
 8. 若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 `--help` 長說明，交付前必須全文搜尋並同步更新相關 contract 主題；不得只更新 registry、checklist 或 meta guard。
-9. 註解不納入本地 formal 驗證範圍；若同一主題另有 `--help`、文件或 checklist 的正式摘要，交付前仍須同步更新那些正式可機械比對面，不得以註解已改或未改作為完成判準。
+9. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞；不得因 AI 註解文字、摘要註解或相鄰未同步註解而單獨判定本輪未完成。正式可機械比對面仍須照常同步。
 10. 若本輪將既有 `validate_*` 契約改列 `N/A`、排除出 local formal registry，或改成僅供歷史 `G` note / parser 相容的 compatibility stub，交付前必須反查 meta-registry completeness guard、defined/imported validator set、`done/unfinished` 摘要與 checklist parser，確認該符號已同時從「必須註冊」與「未完成」語意排除；不得只移出 synthetic registry 或只把主表改成 `N/A`。
 11. 若本輪修改任何會被 formal contract / parser / meta guard 逐字比對的 literal，或其對應的 canonical 名稱、追蹤 ID、正式入口摘要 / help 關鍵字，交付前必須從對應 validator、meta guard、parser 的 expected literal、禁止字串與比對條件反查，逐項核對所有正向與反向 literal；不得只憑語意相近、單一例句或局部全文搜尋視為完成。
 12. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單，至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules、`--help` 長說明、相關文件、負向 guard、唯一性 guard、排序 guard 與 bundle 原始失敗項；並至少列出鏈根、掃描範圍、逐項結果與未清阻塞；不得只以「已檢查」或「已同步」概括帶過；未逐項核對並清空前，不得交付。
