@@ -65,8 +65,8 @@ project/
 │  ├─ tw_stock_data_vip/              # 專案內保留的資料佔位與名單檔
 │  └─ tw_stock_data_vip_reduced/      # reduced 測試資料快照；local regression / validate 直接使用，members / fingerprint 由目錄現況動態決定
 ├─ models/
-│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄
-│  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄
+│  ├─ all_best_params_1.json         # 特定評分口徑下的最佳參數紀錄
+│  ├─ all_best_params_2.json         # 特定評分口徑下的最佳參數紀錄
 │  ├─ all_best_params_3.json         # 歷史最佳參數或不同批次最佳化輸出
 │  └─ best_params.json               # 目前主要使用的最佳參數檔
 ├─ strategies/

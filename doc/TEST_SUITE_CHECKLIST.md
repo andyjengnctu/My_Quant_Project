@@ -187,6 +187,7 @@
 | B160 | P1 | Meta / GPT_DELIVERY_CHECKLIST 本地驗證邊界 | `doc/GPT_DELIVERY_CHECKLIST.md` 為 GPT 端交付前操作檢查表，供 assistant 自檢使用；不納入 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查，且 `doc/ARCHITECTURE.md` / `doc/CMD.md` 亦須維持相同邊界 | N/A | GPT 端自檢文件，不列入本地 formal test suite 驗證；若保留歷史 validator 名稱，僅作 `G` note 相容，不納入 registry completeness 或未完成摘要；`doc/ARCHITECTURE.md` / `doc/CMD.md` 不得回寫成 formal 被測物 | `N/A（GPT 端自檢文件）` |
 | B161 | P0 | Meta / 同一事件保守可執行解讀契約 | 同一事件的判斷與執行口徑必須一致，且在不確定時一律採最保守、最不利於績效的可執行解讀；同棒停損 / 停利衝突不得先取較佳結果，前日已決定的停損也不得要求隔日再觸價一次才執行 | DONE | 已補 direct synthetic case，明確釘死同棒 stop/tp 歧義必須先取 STOP、若開盤已落到更差可成交價則以該更差 open 成交、前一日已決定的 deferred stop 必須於次一日開盤直接執行且不得要求再跌破一次 | `tools/validate/synthetic_take_profit_cases.py`, `core/position_step.py`, `core/entry_plans.py` |
 | B162 | P2 | 文件 / ARCHITECTURE apps 檔案樹 GUI 入口同步契約 | `doc/ARCHITECTURE.md` 的 apps 檔案樹必須列出 `apps/workbench.py`，並明示其為 GUI 工作台正式入口；不得讓 apps 段落已同步但檔案樹漏列，避免文件樹與正式入口分叉 | DONE | 已補 static document-sync contract，直接釘死 ARCHITECTURE apps 檔案樹須包含 `workbench.py` 與 GUI 工作台正式入口描述，並同步補回遺漏的 file-tree 列 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `apps/workbench.py` |
+| B163 | P2 | 文件 / ARCHITECTURE models shipped best_params 工件同步契約 | `doc/ARCHITECTURE.md` 的 models 檔案樹必須列出實際 shipped 的 `all_best_params_1.json` / `all_best_params_2.json` / `all_best_params_3.json`；不得殘留 `all_best_params (LOG_R2).json` / `all_best_params (RoMD).json` 舊檔名，避免文件樹與 repo 工件分叉 | DONE | 已補 static document-sync contract，直接釘死 ARCHITECTURE models 檔案樹需列出 `all_best_params_1.json` / `all_best_params_2.json` / `all_best_params_3.json` 並排除舊檔名 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
 
 ### B3. 可隨策略升級調整的測試
 
@@ -473,6 +474,7 @@
 | T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
+| T250 | `validate_architecture_models_best_params_file_tree_sync_case` | B163 |
 
 ## G. 逐項收斂紀錄
 
@@ -1166,6 +1168,7 @@
 | 2026-04-12 | B160 | 同步更新 `doc/ARCHITECTURE.md` / `doc/CMD.md` 與 GPT checklist 邊界檢查條款後重新回復 N/A | PARTIAL -> N/A | `doc/CMD.md` |
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
+| 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
 | 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
 | 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
@@ -1298,3 +1301,4 @@
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | T249 | 新增 ARCHITECTURE apps 檔案樹 workbench 入口同步契約並驗證 | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
+| 2026-04-12 | T250 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
