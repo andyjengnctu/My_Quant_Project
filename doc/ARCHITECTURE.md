@@ -74,7 +74,7 @@ project/
       ├─ meta_contracts.py            # TEST_SUITE_CHECKLIST / 文件 / registry 的 markdown 與 AST contract helper
       ├─ synthetic_contract_cases.py    # synthetic 工件 lifecycle / GUI / shared helper 契約案例
       ├─ synthetic_history_cases.py     # synthetic PIT / history filter / compounding-capital 案例
-      ├─ synthetic_guardrail_cases.py   # synthetic project-settings / config / exception / fallback guardrail 案例
+      ├─ synthetic_guardrail_cases.py   # synthetic 治理原則 / config / exception / fallback guardrail 案例
       ├─ synthetic_regression_cases.py  # synthetic rerun-repeatability / cache-isolation / bundle-repeatability 案例
       ├─ synthetic_portfolio_common.py  # synthetic 投組案例共用 builder / helper
       ├─ synthetic_frame_utils.py       # synthetic DataFrame / row / assertion helper

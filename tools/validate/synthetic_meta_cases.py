@@ -474,7 +474,7 @@ def validate_architecture_support_module_file_tree_sync_case(_base_params):
         "├── formal_pipeline.py",
         "      ├─ synthetic_contract_cases.py    # synthetic 工件 lifecycle / GUI / shared helper 契約案例",
         "      ├─ synthetic_history_cases.py     # synthetic PIT / history filter / compounding-capital 案例",
-        "      ├─ synthetic_guardrail_cases.py   # synthetic project-settings / config / exception / fallback guardrail 案例",
+        "      ├─ synthetic_guardrail_cases.py   # synthetic 治理原則 / config / exception / fallback guardrail 案例",
         "      ├─ synthetic_regression_cases.py  # synthetic rerun-repeatability / cache-isolation / bundle-repeatability 案例",
         "      ├─ synthetic_portfolio_common.py  # synthetic 投組案例共用 builder / helper",
         "      ├─ synthetic_frame_utils.py       # synthetic DataFrame / row / assertion helper",
@@ -3187,7 +3187,7 @@ def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_p
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_debug_backtest_entry_cash_deduction_contract", False, "debug-backtest entry cash deduction static contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_exact_contract_enumeration", False, "single-backtest public profit/equity consistency contract" in help_line or "project-settings exhaustive-check / checklist-sort-guard contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_exact_contract_enumeration", False, "single-backtest public profit/equity consistency contract" in help_line or "治理原則 exhaustive-check / checklist-sort-guard contract" in help_line or "exhaustive-check / checklist-sort-guard contract" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, "checklist-sort-guard" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
