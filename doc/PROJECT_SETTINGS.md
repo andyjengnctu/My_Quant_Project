@@ -19,7 +19,6 @@
 5. 每輪更新完，須依總則同步維護相關文件與索引。
 6. 追蹤 ID 必須穩定；若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
 7. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
-8. 違反本節任一前置順序、禁止事項、文件分工或邊界限制，均視為違規。
 
 
 ## C. 回覆、交付與輸出
@@ -47,6 +46,8 @@
 10. 共享契約、公開名稱或 schema 有變動時，producer、consumer、轉接層、快取／packed data、顯示／預覽／摘要、驗證與文件必須同輪同步；不得局部更新或保留半套舊路徑。
 11. 非核心路徑仍須服從正式規則；顯示、除錯、fallback、preview、reporting 等輔助路徑不得自行重建、猜測、省略、改名或覆寫正式共享上下文。
 12. validator、oracle 與 meta guard 只驗 invariant、契約、角色分離與同步完整性，不重寫分叉實作；rename 後一律以 canonical 名稱為準，legacy alias 僅作相容邊界。
+13. 修正 bundle 或 formal test chain（如 checklist、validator、registry、正式入口摘要、help）相關問題時，必須逐條對照 bundle 實際失敗項完成閉環；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
+14. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要或 help 文案，必須同輪完成定義、import、registry、checklist、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。
 
 ## E. 交易與策略原則
 
