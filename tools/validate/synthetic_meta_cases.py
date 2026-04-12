@@ -624,129 +624,24 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
 
 
 def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
+    """Legacy compatibility stub for historical G-note validator references.
+
+    GPT_DELIVERY_CHECKLIST.md is a GPT-side self-check document and is intentionally
+    excluded from apps/test_suite.py, local formal validators, synthetic registry,
+    and bundle verification. The symbol is retained only so historical `G` notes that
+    reference `validate_gpt_delivery_checklist_governance_contract_case` remain
+    mechanically resolvable by local checklist/meta guards.
+    """
+
     case_id = "META_GPT_DELIVERY_CHECKLIST_GOVERNANCE"
     results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    project_settings_path = build_project_absolute_path("doc", "PROJECT_SETTINGS.md")
-    test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
-    checklist_path = build_project_absolute_path("doc", "GPT_DELIVERY_CHECKLIST.md")
-    architecture_path = build_project_absolute_path("doc", "ARCHITECTURE.md")
-    cmd_path = build_project_absolute_path("doc", "CMD.md")
-    test_suite_path = build_project_absolute_path("apps", "test_suite.py")
-
-    project_settings_text = project_settings_path.read_text(encoding="utf-8")
-    test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
-    checklist_text = checklist_path.read_text(encoding="utf-8") if checklist_path.exists() else ""
-    architecture_text = architecture_path.read_text(encoding="utf-8")
-    cmd_text = cmd_path.read_text(encoding="utf-8")
-    test_suite_text = test_suite_path.read_text(encoding="utf-8")
-
-    required_doc_text = "`/doc/GPT_DELIVERY_CHECKLIST.md`"
-    role_text = "GPT 交付前操作檢查表"
-    scope_text = "assistant 每輪交付前操作檢查表"
-    test_suite_checklist_file_division_text = "文件分工：`PROJECT_SETTINGS.md` 管原則；`TEST_SUITE_CHECKLIST.md` 管主表、狀態、測試入口與收斂索引；`GPT_DELIVERY_CHECKLIST.md` 管 GPT 交付前操作檢查。"
-    checklist_file_division_text = "文件分工：`PROJECT_SETTINGS.md` 管原則與邊界；`TEST_SUITE_CHECKLIST.md` 管本地端 formal test suite 收斂與維護；`GPT_DELIVERY_CHECKLIST.md` 只管 GPT 交付前操作檢查。"
-    checklist_project_role_text = "`PROJECT_SETTINGS.md` 管原則與邊界"
-    checklist_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 管本地端 formal test suite 收斂與維護"
-    checklist_self_role_text = "`GPT_DELIVERY_CHECKLIST.md` 只管 GPT 交付前操作檢查"
-    project_settings_project_role_text = "`PROJECT_SETTINGS.md` 為最高優先規則"
-    project_settings_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單"
-    project_settings_gpt_role_text = "`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表"
-    project_settings_governance_split_text = "文件治理與同步原則"
-    project_settings_governance_index_summary_text = "治理型主表項與 `DONE` 摘要只保留索引式摘要與正式 contract 入口，不得回貼操作條款全文"
-    not_formal_text = "不作本地端 formal test 主表"
-    self_audit_text = "逐項自檢 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard"
-    bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
-    basis_report_text = "當前工作基準、ZIP 檔名、SHA256、全新解壓目錄與已讀文件"
-    no_gap_report_text = "若確認沒有新增 formal coverage gap，交付時明確回報正式入口已涵蓋目前需求"
-    reorder_text = "整段重排並對照既有排序 guard"
-    same_day_g_block_text = "重新抽出整個對應日期區塊，依 formal tracking ID sort key（prefix / numeric / suffix）穩定排序後整段覆寫回原位"
-    full_g_table_guard_text = "再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查，並確認同日區塊內 `B` / `T` 等追蹤列皆符合 formal tracking ID sort key"
-    bare_checklist_scan_text = "逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞"
-    bare_checklist_scan_targets_text = "`doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 等雙 checklist 分工文件，或 `apps/test_suite.py` 的摘要註解 / `--help` 長說明"
-    unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
-    strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
-    project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
-    project_recurrence_generalization_text = "將防再犯要求上提為可泛化、可操作的交付前檢查"
-    checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
-    exact_literal_text = "若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal"
-    literal_reverse_scan_scope_text = "若本輪修改任何會被 formal contract / parser / meta guard 逐字比對的 literal，或其對應的 canonical 名稱、追蹤 ID、正式入口摘要 / help 關鍵字"
-    literal_reverse_scan_method_text = "必須從對應 validator、meta guard、parser 的 expected literal、禁止字串與比對條件反查，逐項核對所有正向與反向 literal"
-    project_chain_sweep_text = "若屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單並逐項清空"
-    checklist_chain_sweep_scope_text = "若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單"
-    checklist_chain_sweep_coverage_text = "至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules、正式入口摘要註解 / `--help` 長說明、相關文件、負向 guard、唯一性 guard、排序 guard 與 bundle 原始失敗項"
-    checklist_chain_sweep_minimum_fields_text = "至少列出鏈根、掃描範圍、逐項結果與未清阻塞"
-    checklist_chain_sweep_no_handwave_text = "不得只以「已檢查」或「已同步」概括帶過"
-    checklist_chain_sweep_delivery_report_text = "交付時還必須簡要回報同源 / 同鏈 / 同契約收斂清單結果，至少包含鏈根、掃描範圍、已清項與未清阻塞；不得只回報單一命中修補"
-    checklist_chain_sweep_completion_text = "未逐項核對並清空前，不得交付"
-    checklist_chain_sweep_no_first_hit_stop_text = "對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得以先修第一個命中項、單一 assertion 或單一字串命中就停止交付前檢查"
-    file_division_text = "PROJECT_SETTINGS / TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST 文件分工"
-    summary_file_division_text = "PROJECT_SETTINGS-TEST_SUITE_CHECKLIST-GPT_DELIVERY_CHECKLIST file-division sync"
-    theme_text = "gpt-delivery-checklist governance contract"
-    entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
-    governance_index_summary_text = "若更新治理型 Bxx / Txx 契約對應的主表項或 `DONE` 摘要，僅保留索引式摘要：說明 contract 邊界、正式 validator 名稱與涵蓋範圍即可；不得把 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款整段複製回 `doc/TEST_SUITE_CHECKLIST.md`"
-    index_summary_literal_guard_text = "若本輪為符合索引式摘要或長度上限而改寫主表項或 `DONE` 摘要，交付前必須同時反查對應 validator 要求的必要 literal 片段與長度上限；不得為了縮句而刪改必需 literal"
-    governance_row_forbidden_detail_text = "不得只以「已檢查」或「已同步」概括帶過"
-    governance_row_forbidden_coverage_text = "至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules"
-    governance_row_required_scope_text = "索引式摘要"
-
-    summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
-    help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
-
-    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist", True, required_doc_text in project_settings_text and role_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_disambiguates_three_document_roles", True, project_settings_project_role_text in project_settings_text and project_settings_test_suite_role_text in project_settings_text and project_settings_gpt_role_text in project_settings_text and project_settings_governance_split_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_has_single_governance_split_declaration", True, project_settings_text.count(project_settings_governance_split_text) == 1 and project_settings_text.count(project_settings_project_role_text) == 1 and project_settings_text.count(project_settings_test_suite_role_text) == 1 and project_settings_text.count(project_settings_gpt_role_text) == 1)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_disambiguates_three_document_roles", True, test_suite_checklist_file_division_text in test_suite_checklist_text and "本檔管主表、狀態、測試入口與收斂索引" not in test_suite_checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_has_single_file_division_declaration", True, test_suite_checklist_text.count("文件分工：") == 1 and test_suite_checklist_text.count(test_suite_checklist_file_division_text) == 1)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_file_exists", True, checklist_path.exists())
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_disambiguates_three_document_roles", True, checklist_file_division_text in checklist_text and checklist_project_role_text in checklist_text and checklist_test_suite_role_text in checklist_text and checklist_self_role_text in checklist_text and "本檔只管 GPT 交付前操作檢查" not in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_has_single_file_division_declaration", True, checklist_text.count("文件分工：") == 1 and checklist_text.count(checklist_file_division_text) == 1 and checklist_text.count(checklist_project_role_text) == 1 and checklist_text.count(checklist_test_suite_role_text) == 1 and checklist_text.count(checklist_self_role_text) == 1)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_scope_and_non_formal_boundary", True, scope_text in checklist_text and not_formal_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_start_basis_report_fields", True, basis_report_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_no_gap_report", True, no_gap_report_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_formal_chain_self_audit", True, self_audit_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得以人工目測、字典序、尾端追加或局部插入取代正式排序" in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_full_g_table_guard_check", True, full_g_table_guard_text in checklist_text and "不得只檢當前日期區塊就交付" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_dual_checklist_bare_word_scan", True, bare_checklist_scan_text in checklist_text and bare_checklist_scan_targets_text in checklist_text and "doc/PROJECT_SETTINGS.md" in checklist_text and "doc/ARCHITECTURE.md" in checklist_text and "doc/CMD.md" in checklist_text and "apps/test_suite.py" in checklist_text and "摘要註解 / `--help` 長說明" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and project_recurrence_generalization_text in project_settings_text and "不得只補單一案例、單一字串或局部實作特例" in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_same_chain_sweep_preflight", True, project_chain_sweep_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_same_chain_sweep_minimum_fields", True, "收斂清單至少必須列出鏈根、掃描範圍、逐項結果與未清阻塞" in project_settings_text and checklist_chain_sweep_no_handwave_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "將防再犯要求上提為可泛化、可操作的交付前檢查" in checklist_text and "不得只補單一案例、單一字串或局部實作特例" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_exact_string_literal_preflight", True, exact_literal_text in checklist_text and "不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_literal_reverse_scan_preflight", True, literal_reverse_scan_scope_text in checklist_text and literal_reverse_scan_method_text in checklist_text and "不得只憑語意相近、單一例句或局部全文搜尋視為完成" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_chain_sweep_preflight", True, checklist_chain_sweep_scope_text in checklist_text and checklist_chain_sweep_coverage_text in checklist_text and checklist_chain_sweep_minimum_fields_text in checklist_text and checklist_chain_sweep_completion_text in checklist_text and checklist_chain_sweep_no_first_hit_stop_text in checklist_text and checklist_chain_sweep_no_handwave_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_chain_delivery_report", True, checklist_chain_sweep_delivery_report_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_apps_test_suite_summary_help_sync_scan", True, entry_sync_text in checklist_text and "不得只更新 registry、checklist 或 meta guard" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
-    add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
-    add_check(results, "meta_entry_contract", case_id, "architecture_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in architecture_text and "正式檢查 `doc/TEST_SUITE_CHECKLIST.md` 主表" in architecture_text)
-    add_check(results, "meta_entry_contract", case_id, "cmd_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in cmd_text)
-    add_check(results, "meta_entry_contract", case_id, "architecture_disambiguates_three_document_roles", True, "PROJECT_SETTINGS.md" in architecture_text and "最高優先規則文件" in architecture_text and "TEST_SUITE_CHECKLIST.md" in architecture_text and "本地端 formal test suite 收斂主清單" in architecture_text and "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
-    add_check(results, "meta_entry_contract", case_id, "cmd_disambiguates_three_document_roles", True, "PROJECT_SETTINGS.md" in cmd_text and "上層原則" in cmd_text and "TEST_SUITE_CHECKLIST.md" in cmd_text and "本地端 formal test suite" in cmd_text and "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_has_no_bare_checklist_wording", [], [line.strip() for line in project_settings_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
-    add_check(results, "meta_entry_contract", case_id, "architecture_has_no_bare_checklist_wording", [], [line.strip() for line in architecture_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
-    add_check(results, "meta_entry_contract", case_id, "cmd_has_no_bare_checklist_wording", [], [line.strip() for line in cmd_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
-    add_check(results, "meta_entry_contract", case_id, "test_suite_has_no_bare_checklist_wording", [], [line.strip() for line in test_suite_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
-    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_checklist_file_division_sync_theme", True, summary_file_division_text in summary_comment_line)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_checklist_file_division_sync_theme", True, file_division_text in help_line)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_governance_index_summary_rule", True, project_settings_governance_index_summary_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_governance_index_summary_rule", True, governance_index_summary_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_index_summary_literal_length_guard", True, index_summary_literal_guard_text in checklist_text)
-
-    b160_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B160"), None)
-    b160_item_text = b160_row[3] if b160_row else ""
-    b160_gap_text = b160_row[5] if b160_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b160_item_uses_index_summary", True, bool(b160_row) and governance_row_required_scope_text in b160_item_text and "validate_gpt_delivery_checklist_governance_contract_case" in b160_item_text and "same-chain sweep" in b160_item_text and governance_row_forbidden_detail_text not in b160_item_text and governance_row_forbidden_coverage_text not in b160_item_text and len(b160_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b160_done_summary_uses_index_summary", True, bool(b160_row) and governance_row_required_scope_text in b160_gap_text and "正式 validator 入口" in b160_gap_text and "逐條操作條款全文" in b160_gap_text and governance_row_forbidden_detail_text not in b160_gap_text and governance_row_forbidden_coverage_text not in b160_gap_text and len(b160_gap_text) <= 120)
-
-    summary["source_path"] = checklist_path.relative_to(PROJECT_ROOT).as_posix() if checklist_path.exists() else "doc/GPT_DELIVERY_CHECKLIST.md"
+    summary = {
+        "ticker": case_id,
+        "synthetic": True,
+        "legacy_compatibility_only": True,
+        "excluded_from_local_formal_registry": True,
+        "source_path": "doc/GPT_DELIVERY_CHECKLIST.md",
+    }
     return results, summary
 
 
@@ -2141,7 +2036,8 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
     missing_imported_names = sorted(imported_validate_names - validator_name_set)
     extra_registry_names = sorted(validator_name_set - imported_validate_names)
-    missing_defined_names = sorted(defined_validate_names - validator_name_set)
+    compatibility_only_validate_names = {"validate_gpt_delivery_checklist_governance_contract_case"}
+    missing_defined_names = sorted((defined_validate_names - validator_name_set) - compatibility_only_validate_names)
     orphan_registry_names = sorted(validator_name_set - defined_validate_names)
 
     add_check(results, "meta_registry", case_id, "imported_validate_cases_all_registered", [], missing_imported_names)

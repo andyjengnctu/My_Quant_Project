@@ -287,7 +287,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     f_ids = _sorted_unique(f_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
     g_done_test_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status == "DONE"])
-    g_unfinished_test_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status in {"PARTIAL", "TODO", "N/A"})
+    g_unfinished_test_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status in {"PARTIAL", "TODO"})
     g_b_statuses = {item_id: status for item_id, status in convergence_statuses.items() if item_id.startswith("B")}
 
     results.append(
