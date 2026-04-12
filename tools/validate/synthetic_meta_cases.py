@@ -702,8 +702,8 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
 
 
-def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
-    case_id = "META_PROJECT_SETTINGS_PHYSICAL_TRADING_PRINCIPLES"
+def validate_checklist_physical_trading_principles_contract_case(_base_params):
+    case_id = "META_CHECKLIST_PHYSICAL_TRADING_PRINCIPLES_CONTRACT"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -3169,7 +3169,7 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_public_profit_equity_consistency_theme", True, "單股公開盈虧/權益一致性" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_theme", True, "保守可執行出場解讀" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_file_tree_sync_theme", True, "架構文件檔案樹同步" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_project_settings_and_test_suite_checklist_guard_theme", True, "PROJECT_SETTINGS / TEST_SUITE_CHECKLIST guard" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_governance_and_test_suite_checklist_guard_theme", True, "治理原則 / TEST_SUITE_CHECKLIST guard" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
