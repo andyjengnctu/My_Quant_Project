@@ -31,7 +31,6 @@ from tools.local_regression.formal_pipeline import (
 )
 
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
-PROJECT_SETTINGS_PATH = PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md"
 CMD_PATH = PROJECT_ROOT / "doc" / "CMD.md"
 ARCHITECTURE_PATH = PROJECT_ROOT / "doc" / "ARCHITECTURE.md"
 STATUS_VALUES = {"DONE", "PARTIAL", "TODO", "N/A"}
@@ -615,33 +614,6 @@ from tools.validate.meta_contracts import (
 )
 
 
-def _project_settings_declares_formal_pipeline_principles() -> Dict[str, Any]:
-    text = PROJECT_SETTINGS_PATH.read_text(encoding="utf-8")
-    results: List[Dict[str, Any]] = []
-
-    has_single_entry = "`apps/test_suite.py` 為所有已實作測試的單一正式入口" in text
-    results.append(
-        summarize_result(
-            "formal_entry_project_settings_declares_single_entry",
-            has_single_entry,
-            detail="expect=`apps/test_suite.py` 為所有已實作測試的單一正式入口",
-        )
-    )
-
-    has_registry_source = "`tools/local_regression/formal_pipeline.py` 為單一真理來源" in text
-    results.append(
-        summarize_result(
-            "formal_entry_project_settings_declares_registry_source",
-            has_registry_source,
-            detail="expect=`tools/local_regression/formal_pipeline.py` 為單一真理來源",
-        )
-    )
-
-    return {
-        "ok": all(item["status"] == "PASS" for item in results),
-        "results": results,
-    }
-
 
 def _summarize_formal_entry_consistency() -> Dict[str, Any]:
     from tools.local_regression.run_all import DATASET_REQUIRED_STEPS, SCRIPT_ORDER, STEP_NAMES
@@ -744,8 +716,6 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
         )
     )
 
-    principle_contract = _project_settings_declares_formal_pipeline_principles()
-    results.extend(principle_contract["results"])
 
     single_entry_contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
     results.append(

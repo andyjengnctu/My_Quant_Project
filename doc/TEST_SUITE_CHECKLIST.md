@@ -87,7 +87,6 @@
 | B57 | P1 | 契約 | 系統評分分子必須可在總報酬率與年化報酬率之間切換，且 score 公式不得把分子 / 分母切換混成不同 mode | DONE | 已補 direct synthetic contract，直接釘死 `SCORE_NUMERATOR_METHOD` 可在 `ANNUAL_RETURN` / `TOTAL_RETURN` 間切換，兩者都必須共用同一個 `|MDD| + 0.0001` 分母，且 `LOG_R2` 品質單調性不得被新分子選項破壞 | `tools/validate/synthetic_strategy_cases.py`, `config/training_policy.py`, `core/portfolio_stats.py` |
 | B58 | P1 | 契約 | 保留中的單一模式參數不得接受不支援值後靜默忽略；目前 `use_compounding` 必須 fail-fast 拒絕 `False` | DONE | 已補 direct guardrail case，直接釘死 `use_compounding=False` 無論 JSON 載入、dataclass 建立或 setattr 都必須報錯，避免保留參數變成靜默 no-op | `tools/validate/synthetic_guardrail_cases.py`, `core/strategy_params.py` |
 | B59 | P1 | Meta | 關鍵費稅 / sizing / 資金來源 helper 必須維持單一真理來源，不得在其他模組重複定義 | DONE | 已補 static contract，直接釘死 `calc_entry_price`、`calc_net_sell_price`、`calc_position_size`、`calc_initial_risk_total`、`resolve_single_backtest_sizing_capital`、`resolve_portfolio_sizing_equity`、`resolve_portfolio_entry_budget`、`resolve_scanner_live_capital` 只能定義在各自 canonical 模組，避免費稅 / sizing / 資金來源規則分叉 | `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py`, `core/price_utils.py`, `core/capital_policy.py` |
-| B60 | P1 | Meta | `PROJECT_SETTINGS.md` 必須明確禁止 GPT 端重跑任何動態測試，且不得繞過 `apps/test_suite.py` 直接執行 formal step / validator / 腳本 / 函式 | DONE | 已補 explicit boundary wording 與 static contract，直接釘死文件必須同時宣告『不得重覆執行 `apps/test_suite.py` 已涵蓋項目 / 不得執行任何動態測試』與『不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式』 | `doc/PROJECT_SETTINGS.md`, `tools/validate/meta_contracts.py`, `tools/validate/synthetic_meta_cases.py` |
 | B61 | P1 | Meta | 關鍵資金 / 參數 / 政策契約模組必須納入 coverage targets，避免 helper / guardrail 雖有測項但 coverage 退化時無法被 meta quality 擋下 | DONE | 已補 static coverage-target contract，直接釘死 `core/capital_policy.py`、`core/strategy_params.py`、`core/params_io.py`、`config/execution_policy.py`、`config/training_policy.py` 必須列入 coverage targets，且關鍵公開符號需可匯入 | `tools/local_regression/meta_quality_targets.py`, `tools/validate/synthetic_meta_cases.py` |
 | B62 | P1 | Meta | `doc/TEST_SUITE_CHECKLIST.md` 檔案開頭第一個非空行必須固定為 `# Test Suite 收斂清單`，避免 checklist parser / guard 前提漂移 | DONE | 已補 direct checklist contract，直接釘死檔案前置非空內容不得漂移；若有人在標題前插入額外說明、註記或其他文字，formal guard 必須 fail | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B63 | P1 | Meta | synthetic meta validators 讀取 `summarize_result` 額外欄位時，必須相容 flattened top-level payload；不得直接依賴巢狀 `result["extra"]` schema | DONE | 已補 shared summary-value accessor 與 static contract，直接釘死 `tools/validate/synthetic_meta_cases.py` 不得再用直接 `.get("extra", {}).get(...)` 讀取 meta summary 欄位，避免 formal synthetic suite 因 payload schema 讀法錯誤出現假失敗 | `tools/local_regression/common.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -127,7 +126,7 @@
 | B101 | P1 | GUI | GUI 單股回測賣訊註記必須僅表達 signal day 資訊，不得冒充已成交賣出；future preview 的限價線若超出當前 K 棒高低範圍仍必須納入可視價格範圍；期末強制結算圖示需以黃色區分 | DONE | 已補 direct contract，直接釘死賣訊框只能顯示訊號日收盤與未成交提示，不得再混入股數 / 金額 / 損益；並以 chart range case 驗證 future preview 的限價線會參與 autoscale，另釘死期末強制結算 marker color 為黃色 | `tools/trade_analysis/charting.py`, `tools/trade_analysis/backtest.py`, `tools/validate/synthetic_contract_cases.py` |
 | B102 | P1 | GUI | GUI 單股回測賣訊註記必須只顯示「賣訊」，指標賣出 marker 必須為綠色橫線，停損/賣出/結算資訊框需顯示交易次數，且買訊框中的限價價格即使未畫出 future preview 線也必須納入可視價格範圍；停利線需以黃色顯示 | DONE | 已補 direct contract，直接釘死賣訊註記不得再附任何 detail 文案、指標賣出 marker 改為綠色水平線、停損/賣出資訊框加入交易次數，並以 signal annotation meta 驗證買訊框內的限價價格會參與 autoscale；另釘死停利線顏色為黃色 | `tools/trade_analysis/charting.py`, `tools/trade_analysis/backtest.py`, `tools/trade_analysis/exit_flow.py`, `tools/validate/synthetic_contract_cases.py` |
 | B103 | P1 | GUI | GUI 買入資訊框應貼近買進 K 線位置，且停損/賣出/結算資訊框中的交易次數必須置於最後一行，並對齊最新完成 round-trip 交易次數，不得與右側歷史績效表不一致 | DONE | 已補 direct contract，直接釘死買入資訊框應留在 K 線 overlay 並貼近對應 K 線下方、不得搬到右側 sidebar；若同一 K 線或相鄰少數 K 線已有其他下方資訊框，必須以水平錯位與額外垂直分層避免重疊。另停損/賣出/結算資訊框的交易次數必須是最後一行，最終出場事件需以 completed round-trip 口徑顯示最新交易次數，避免與右側歷史績效表分叉 | `tools/workbench_ui/single_stock_inspector.py`, `tools/trade_analysis/charting.py`, `tools/trade_analysis/backtest.py`, `tools/trade_analysis/exit_flow.py`, `tools/validate/synthetic_contract_cases.py` |
-| B104 | P0 | 交易規格 | 細部交易契約必須由 checklist / formal contract 明確承接：`L` 只作進場上限 / 最壞風險 sizing 上界，首個可執行 stop / tp 只能於 `t+1` 成交後以 `P_fill + ATR_t` 在 `t+1` 收盤後 frozen，`t+1` 觸發與 `t+2` 執行必須分離，且長倉 hit 採 `Low <= line` / `High >= line` | DONE | 已補 meta contract，直接釘死 `PROJECT_SETTINGS.md` 只保留最小必要限制與細節下沉原則；上述 `L` 角色、`P_fill + ATR_t` 首個可執行 stop / tp、固定反事實 barrier 與 inclusive hit 語意則由 checklist 與 formal contract 承接，避免再次回退到舊 `L / init_sl / T` frozen 口徑 | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_meta_cases.py` |
+| B104 | P0 | 交易規格 | 細部交易契約必須由 checklist / formal contract 明確承接：`L` 只作進場上限 / 最壞風險 sizing 上界，首個可執行 stop / tp 只能於 `t+1` 成交後以 `P_fill + ATR_t` 在 `t+1` 收盤後 frozen，`t+1` 觸發與 `t+2` 執行必須分離，且長倉 hit 採 `Low <= line` / `High >= line` | DONE | 已補 meta contract，直接釘死上述 `L` 角色、`P_fill + ATR_t` 首個可執行 stop / tp、固定反事實 barrier 與 inclusive hit 語意必須由 checklist 與 formal contract 承接，避免再次回退到舊 `L / init_sl / T` frozen 口徑 | `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_meta_cases.py` |
 | B105 | P0 | 交易規格 | runtime 必須分離盤前 sizing 風險與成交後首個可執行 stop / tp：candidate plan 仍可用 `L` 推導最壞情境 sizing，但 filled position 的 `initial_stop` / `tp_half` / entry-day pending stop-tp trigger 必須改以實際成交價建構，且 `t+1` hit stop/tp 後 `t+2` 必須以開盤第一個可執行價強制執行，不得要求再次碰價 | DONE | 已補 direct synthetic case，直接釘死 candidate plan 保留 `L` 基準 sizing、filled position 改用 `P_fill + ATR_t` 建構首個可執行 stop / tp，且 entry day 觸發 stop/tp 必須排程到次日開盤執行；停利若已於 `t+1` 觸發，`t+2` 就算未再碰價也必須依 queued action 減倉或出清 | `tools/validate/synthetic_flow_cases.py`, `core/entry_plans.py`, `core/position_step.py`, `core/portfolio_exits.py` |
 | B106 | P1 | GUI / Debug 契約 | 只要 debug analysis 要求 `return_chart_payload=True` 或 `export_chart=True`，即使輸入 `price_df` 為空，也必須回傳可正規化的 placeholder chart payload，不得把空 payload 延後到 GUI figure / normalize 路徑才以 runtime 方式爆炸 | DONE | 已補 direct contract，直接釘死空 `price_df` 路徑仍須回傳單根 placeholder payload，避免 synthetic GUI / chart coverage 因空 payload 在 figure / normalize 階段 runtime 失敗而掩蓋真正規格檢查 | `tools/trade_analysis/reporting.py`, `tools/validate/synthetic_contract_cases.py` |
 | B107 | P1 | Meta / GUI 契約 | synthetic contract 若直接以 dict literal 呼叫 `normalize_chart_payload_contract(...)`，payload 必須明確提供 `x` 軸欄位；不得再以缺少 `x` 的假 payload 讓 coverage synthetic suite 在 contract 自身 runtime 失敗 | DONE | 已補 meta contract，直接 AST 掃描 `synthetic_contract_cases.py` 中所有對 `normalize_chart_payload_contract(...)` 的 dict-literal 呼叫，逐一要求 payload 含 `x` 欄位；並同步修正兩個 GUI visual contract 的合成 payload | `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_contract_cases.py` |
@@ -183,7 +182,6 @@
 | B156 | P1 | Meta / public stats 盈虧口徑契約 | 單股 backtest public stats payload 的 `totalNetProfit` / `totalNetProfitPct` 必須與 `currentEquity` 承接同一淨值口徑；只要期末仍有持倉，legacy camelCase `totalNetProfit` 也不得退回可用現金 `currentCapital` 基準，避免同一 payload 內部現金/權益語意分叉 | DONE | 已補 static meta contract，直接掃描 `core/backtest_finalize.py`，釘死 `total_net_profit` 必須以 `current_equity - initial_capital` 計，且 public payload 的 `totalNetProfit` / `totalNetProfitPct` 必須共用同一 profit/equity 基準；不得殘留 `current_capital - initial_capital` 舊路徑 | `tools/validate/synthetic_meta_cases.py`, `core/backtest_finalize.py` |
 | B157 | P1 | Meta / 正式入口 help 穩定主題摘要契約 | `apps/test_suite.py --help` 只保留穩定、跨模組、對使用者仍有意義的主題摘要；若需描述已實作測試覆蓋範圍，必須用穩定 theme token，而不得逐項列舉高波動 exact contract 名稱，避免正式入口 help 再度變成高維護同步面 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py` 的 help 說明列，釘死其必須保留單股公開盈虧/權益一致性、保守可執行出場解讀、架構文件檔案樹同步與 PROJECT_SETTINGS / TEST_SUITE_CHECKLIST guard 等穩定主題摘要；避免新增單一 validator 後反覆回寫 help 長列舉 | `tools/validate/synthetic_meta_cases.py`, `apps/test_suite.py` |
 | B158 | P1 | Meta / 正式入口 help 舊 wording / 裸用詞排除契約 | `apps/test_suite.py --help` 在文件瘦身或 canonical wording 調整後，不得殘留 legacy exact-contract 字串、過時 rename wording 或未指名的 bare `checklist` 用詞；help 摘要必須與穩定主題策略一致，避免新舊契約混排造成半套同步 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py` 的 help 說明列，釘死其必須保留 `debug-backtest` 現金路徑穩定主題，且不得再殘留 `debug-backtest entry cash deduction static contract`、舊 exact-contract 長列舉或 `checklist-sort-guard` 等裸用詞 | `tools/validate/synthetic_meta_cases.py`, `apps/test_suite.py` |
-| B159 | P1 | Meta / PROJECT_SETTINGS sort-guard 與一次找齊原則契約 | `doc/PROJECT_SETTINGS.md` 只保留 TEST_SUITE_CHECKLIST sort-guard / 同輪一次找齊 / 穩定主題摘要原則；以 `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` 驗證索引式摘要、同輪一次找齊與穩定主題摘要 | DONE | 已以單一 static meta contract 收斂 PROJECT_SETTINGS 高階原則；主表與 `DONE` 摘要僅留索引式摘要、正式 validator 入口與穩定主題摘要 | `doc/PROJECT_SETTINGS.md`, `doc/TEST_SUITE_CHECKLIST.md`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B161 | P0 | Meta / 同一事件保守可執行解讀契約 | 同一事件的判斷與執行口徑必須一致，且在不確定時一律採最保守、最不利於績效的可執行解讀；同棒停損 / 停利衝突不得先取較佳結果，前日已決定的停損也不得要求隔日再觸價一次才執行 | DONE | 已補 direct synthetic case，明確釘死同棒 stop/tp 歧義必須先取 STOP、若開盤已落到更差可成交價則以該更差 open 成交、前一日已決定的 deferred stop 必須於次一日開盤直接執行且不得要求再跌破一次 | `tools/validate/synthetic_take_profit_cases.py`, `core/position_step.py`, `core/entry_plans.py` |
 | B162 | P2 | 文件 / ARCHITECTURE apps 檔案樹 GUI 入口同步契約 | `doc/ARCHITECTURE.md` 的 apps 檔案樹必須列出 `apps/workbench.py`，並明示其為 GUI 工作台正式入口；不得讓 apps 段落已同步但檔案樹漏列，避免文件樹與正式入口分叉 | DONE | 已補 static document-sync contract，直接釘死 ARCHITECTURE apps 檔案樹須包含 `workbench.py` 與 GUI 工作台正式入口描述，並同步補回遺漏的 file-tree 列 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `apps/workbench.py` |
 | B163 | P2 | 文件 / ARCHITECTURE models shipped best_params 工件同步契約 | `doc/ARCHITECTURE.md` 的 models 檔案樹必須列出實際 shipped 的 `all_best_params_1.json` / `all_best_params_2.json` / `all_best_params_3.json`；不得殘留 `all_best_params (LOG_R2).json` / `all_best_params (RoMD).json` 舊檔名，避免文件樹與 repo 工件分叉 | DONE | 已補 static document-sync contract，直接釘死 ARCHITECTURE models 檔案樹需列出 `all_best_params_1.json` / `all_best_params_2.json` / `all_best_params_3.json` 並排除舊檔名 | `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
@@ -368,7 +366,6 @@
 | T134 | `validate_score_numerator_option_case` | B57 |
 | T135 | `validate_use_compounding_failfast_guardrail_case` | B58 |
 | T136 | `validate_critical_helper_single_source_contract_case` | B59 |
-| T137 | `validate_project_settings_dynamic_test_boundary_case` | B60 |
 | T138 | `validate_policy_contract_modules_in_coverage_targets_case` | B61 |
 | T139 | `validate_checklist_g_new_transition_first_occurrence_case` | B26 |
 | T140 | `validate_checklist_g_note_validate_reference_exists_case` | B26 |
@@ -471,7 +468,6 @@
 | T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
 | T243 | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` | B157 |
 | T244 | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` | B158 |
-| T245 | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` | B159 |
 | T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
@@ -701,7 +697,6 @@
 | 2026-04-05 | B45 | 補上 outputs-root create-path guard 後重新收斂為 DONE | PARTIAL -> DONE | `core/log_utils.py` |
 | 2026-04-05 | B58 | 補 `use_compounding` unsupported-value fail-fast guard 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_guardrail_cases.py` |
 | 2026-04-05 | B59 | 補關鍵 helper single-source-of-truth static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-05 | B60 | 補 `PROJECT_SETTINGS.md` dynamic-test / formal-step bypass boundary contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B61 | 補 policy/config coverage-target static contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B62 | 新增 checklist 首行固定標題 contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-05 | B62 | 檢出 T141 直接依賴巢狀 `result["extra"]` 讀取 summary 欄位，造成首行 guard synthetic validator 假失敗，主表改回 PARTIAL | DONE -> PARTIAL | checklist 首行契約的 synthetic validator payload 讀法仍綁定舊 schema |
@@ -744,7 +739,6 @@
 | 2026-04-05 | T124 | 修正同日區塊排序並補強前後鄰列核對流程後重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-05 | T135 | 新增 `use_compounding=False` fail-fast guardrail 並驗證 | NEW -> DONE | `validate_use_compounding_failfast_guardrail_case` |
 | 2026-04-05 | T136 | 新增關鍵 helper single-source-of-truth contract 並驗證 | NEW -> DONE | `validate_critical_helper_single_source_contract_case` |
-| 2026-04-05 | T137 | 新增 GPT 端 dynamic-test / formal-step bypass boundary contract 並驗證 | NEW -> DONE | `validate_project_settings_dynamic_test_boundary_case` |
 | 2026-04-05 | T138 | 新增 policy/config coverage-target contract 並驗證 | NEW -> DONE | `validate_policy_contract_modules_in_coverage_targets_case` |
 | 2026-04-05 | T139 | 新增 `G` 的 `NEW` 只能出現在首次收斂紀錄的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_new_transition_first_occurrence_case` |
 | 2026-04-05 | T139 | 檢出 synthetic mutation target 指到首筆合法歷史列，guard 驗證暫時失真 | DONE -> PARTIAL | `validate_checklist_g_new_transition_first_occurrence_case` |
@@ -801,7 +795,7 @@
 | 2026-04-06 | T180 | 新增 GUI 賣訊註記限縮 / future preview 限價 autoscale / 黃色強制結算圖示 contract 並驗證 | NEW -> DONE | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` |
 | 2026-04-06 | T181 | 新增 GUI 賣訊 title-only / 綠色指標賣出 marker / 停損賣出框交易次數 / 買訊限價 autoscale / 黃色停利線 contract 並驗證 | NEW -> DONE | `validate_gui_trade_marker_and_tp_visual_contract_case` |
 | 2026-04-06 | T182 | 新增 GUI 側欄停利圖示同步 / 交易次數排序與 completed round-trip 一致性 contract 並驗證 | NEW -> DONE | `validate_gui_trade_count_and_sidebar_sync_contract_case` |
-| 2026-04-07 | B104 | 新增最小物理限制優先 / `L` 僅作進場與 sizing / `P_fill` 首個可執行 stop-tp / 延續候選固定反事實 barrier 的專案設定原則後主表收斂為 DONE | NEW -> DONE | `doc/PROJECT_SETTINGS.md` |
+| 2026-04-07 | B104 | 新增 `L` 僅作進場與 sizing / `P_fill` 首個可執行 stop-tp / 延續候選固定反事實 barrier 的細部交易契約承接後主表收斂為 DONE | NEW -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-07 | B105 | 新增 runtime `init_sl` 單一真理來源 / trailing 與初始停損脫鉤 / `T` 不得依實際成交價重算的交易規格後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_flow_cases.py` |
 | 2026-04-07 | B106 | 新增空 `price_df` 仍需回傳可正規化 placeholder chart payload 的 GUI / debug 契約後主表收斂為 DONE | NEW -> DONE | `tools/trade_analysis/reporting.py` |
 | 2026-04-07 | B107 | 新增 normalize chart payload dict-literal 必須顯式提供 `x` 欄位的 meta / GUI 契約後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
@@ -817,7 +811,7 @@
 | 2026-04-07 | B117 | 新增 synthetic contract multi-ticker fixture 不得再讀取舊 `case["price_df"]` key 的 meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B118 | 新增 GUI 買訊 annotation helper 顯式 import meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-07 | B119 | 新增 GUI trade-count validator 禁止綁死過時 exit snippet 的 meta contract 後主表收斂為 DONE | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-07 | T183 | 新增專案設定最小物理限制 / `P_fill` 首個可執行 stop-tp / 延續候選固定反事實 barrier 原則 meta contract 並驗證 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
+| 2026-04-07 | T183 | 新增細部交易契約承接 meta contract 並驗證 `L` / `P_fill` / 延續候選 barrier / inclusive hit 語意 | NEW -> DONE | `validate_project_settings_init_sl_frozen_plan_principle_case` |
 | 2026-04-07 | T184 | 新增 `init_sl` 單一真理來源 runtime synthetic case 並驗證 | NEW -> DONE | `validate_synthetic_init_sl_single_source_runtime_case` |
 | 2026-04-07 | T185 | 新增空 `price_df` chart payload placeholder contract 並驗證 | NEW -> DONE | `validate_debug_empty_price_df_chart_payload_contract_case` |
 | 2026-04-07 | T186 | 新增 normalize chart payload dict-literal `x` 欄位 meta contract 並驗證 | NEW -> DONE | `validate_synthetic_case_normalize_chart_payload_literal_x_contract_case` |
@@ -1074,8 +1068,6 @@
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T243 後重新驗證 | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T244，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T244 後重新驗證 | PARTIAL -> DONE | `apps/test_suite.py` |
-| 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T245，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T245 並同步正式入口摘要後重新驗證 | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-12 | B147 | 最嚴格檢查檢出正式入口摘要註解尚未同步新增的 T247 與 `checklist-summary-heading-uniqueness` 主題，改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-12 | B147 | 擴充正式入口摘要註解與 summary meta contract 納入 T247 與 checklist 摘要標題唯一性主題後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 最嚴格檢查檢出正式入口摘要註解雖持續補尾端新增 `Txx`，但仍漏列同主題既有 `T227/T228` 與 `portfolio-rotation-return` / `validator-oracle exact-ledger` 主題，改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
@@ -1094,15 +1086,6 @@
 | 2026-04-12 | B157 | 最嚴格檢查檢出正式入口 `--help` 長說明尚未同步新增 `conservative-executable-exit interpretation contract` 主題，改回 PARTIAL | DONE -> PARTIAL | `apps/test_suite.py` |
 | 2026-04-12 | B157 | 補齊正式入口 `--help` 長說明與 help meta contract 對新主題的同步後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B158 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B159 | 新增 PROJECT_SETTINGS checklist-sort / 一次找齊原則契約並驗證，同步正式入口摘要與 help 主題 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 尚未明確要求 formal-chain target 逐項自檢與 bundle 原始失敗逐條消失確認，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 擴充 PROJECT_SETTINGS 原則納入 formal-chain target 逐項自檢與 bundle 原始失敗逐條消失確認後重新驗證 | PARTIAL -> DONE | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 仍混入 assistant 交付前操作細則、文件分工不夠收斂，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 補上正式入口摘要註解精確主題字串並重新驗證 | PARTIAL -> DONE | `apps/test_suite.py` |
-| 2026-04-12 | B159 | 檢出 PROJECT_SETTINGS 仍保留開始前回報細項、無新增 formal gap 回報、formal chain 逐項自檢與交付前最嚴格自檢等操作檢查，改回 PARTIAL | DONE -> PARTIAL | `doc/PROJECT_SETTINGS.md` |
-| 2026-04-12 | B159 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B159 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
-| 2026-04-12 | B159 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
 | 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
@@ -1148,8 +1131,6 @@
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T243 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T244，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T244 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
-| 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T245，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
-| 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T245 並重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T247 與 checklist 摘要標題唯一性主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T247 與 checklist 摘要標題唯一性主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 最嚴格檢查檢出 summary comment coverage contract 尚未同步新增 T248 與 `conservative-executable-exit interpretation` 主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
@@ -1170,12 +1151,6 @@
 | 2026-04-12 | T243 | 最嚴格檢查檢出 help theme contract 尚未同步新增 `conservative-executable-exit interpretation contract` 主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
 | 2026-04-12 | T243 | 擴充 help theme contract 納入新主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
 | 2026-04-12 | T244 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` |
-| 2026-04-12 | T245 | 檢出 PROJECT_SETTINGS exact contract 仍混入 assistant 交付前操作細則、未與專用 checklist 完成分工，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 補上正式入口摘要註解精確主題字串並重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 檢出 PROJECT_SETTINGS 仍混入開始前回報細項、無新增 formal gap 回報、formal chain 逐項自檢與交付前操作檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
-| 2026-04-12 | T245 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | T249 | 新增 ARCHITECTURE apps 檔案樹 workbench 入口同步契約並驗證 | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |

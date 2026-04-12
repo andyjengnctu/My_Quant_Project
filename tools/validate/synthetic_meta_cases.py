@@ -8,7 +8,6 @@ import tempfile
 from unittest.mock import patch
 
 from .checks import add_check
-from .module_loader import build_project_absolute_path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +24,6 @@ from .meta_contracts import (
     summarize_legacy_app_entry_doc_reference_contract,
     summarize_no_reverse_app_import_contract,
     summarize_no_top_level_import_cycles_contract,
-    summarize_project_settings_dynamic_test_boundary_contract,
     summarize_single_formal_test_entry_contract,
     summarize_synthetic_cases_import_target_resolution_contract,
 )
@@ -689,7 +687,6 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
     contract = summarize_single_formal_test_entry_contract(PROJECT_ROOT)
     add_check(results, "meta_entry_contract", case_id, "test_suite_entry_file_exists", True, contract["test_suite_exists"])
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_single_entry", True, contract["project_settings_declares_single_entry"])
     add_check(results, "meta_entry_contract", case_id, "cmd_declares_single_entry", True, contract["cmd_declares_single_entry"])
     add_check(results, "meta_entry_contract", case_id, "architecture_declares_single_entry", True, contract["architecture_declares_single_entry"])
     add_check(results, "meta_entry_contract", case_id, "no_legacy_app_test_entries", [], contract["legacy_entry_paths"])
@@ -702,19 +699,6 @@ def validate_single_formal_test_entry_contract_case(_base_params):
 
 
 
-def validate_project_settings_dynamic_test_boundary_case(_base_params):
-    case_id = "META_PROJECT_SETTINGS_DYNAMIC_TEST_BOUNDARY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    contract = summarize_project_settings_dynamic_test_boundary_contract(PROJECT_ROOT)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dynamic_test_rerun", True, contract["project_settings_declares_no_dynamic_test_rerun"])
-    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_formal_step_validator_bypass", True, contract["project_settings_declares_no_formal_step_bypass"])
-
-    summary["project_settings_declares_no_dynamic_test_rerun"] = contract["project_settings_declares_no_dynamic_test_rerun"]
-    summary["project_settings_declares_no_formal_step_bypass"] = contract["project_settings_declares_no_formal_step_bypass"]
-    return results, summary
-
 
 
 def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
@@ -722,60 +706,24 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
-    project_settings_text = (PROJECT_ROOT / "doc" / "PROJECT_SETTINGS.md").read_text(encoding="utf-8")
     checklist_text = (PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md").read_text(encoding="utf-8")
 
-    governance_text = "細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md`"
-    minimal_constraint_text = "最小必要約束"
     l_only_text = "`L` 只作進場上限 / 最壞風險 sizing 上界"
     pfill_text = "`P_fill + ATR_t`"
     continuation_barrier_text = "固定反事實 `P' = min(Open, L)`"
     inclusive_hit_text = "長倉 hit 採 `Low <= line` / `High >= line`"
 
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_minimal_physical_constraint_priority", True, minimal_constraint_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_trading_detail_sink_to_checklist", True, governance_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "checklist_declares_l_is_entry_and_sizing_only", True, l_only_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "checklist_declares_first_actionable_stop_uses_pfill_and_atr", True, pfill_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "checklist_declares_extended_candidate_fixed_counterfactual_barrier", True, continuation_barrier_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "checklist_declares_inclusive_hit_semantics", True, inclusive_hit_text in checklist_text)
 
-    summary["project_settings_declares_minimal_physical_constraint_priority"] = minimal_constraint_text in project_settings_text
-    summary["project_settings_declares_trading_detail_sink_to_checklist"] = governance_text in project_settings_text
     summary["checklist_declares_l_is_entry_and_sizing_only"] = l_only_text in checklist_text
     summary["checklist_declares_first_actionable_stop_uses_pfill_and_atr"] = pfill_text in checklist_text
     summary["checklist_declares_extended_candidate_fixed_counterfactual_barrier"] = continuation_barrier_text in checklist_text
     summary["checklist_declares_inclusive_hit_semantics"] = inclusive_hit_text in checklist_text
     return results, summary
 
-
-def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_base_params):
-    case_id = "META_PROJECT_SETTINGS_CHECKLIST_GUARD_AND_EXHAUSTIVE_INSPECTION"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    project_settings_path = build_project_absolute_path("doc", "PROJECT_SETTINGS.md")
-    project_settings_text = project_settings_path.read_text(encoding="utf-8")
-    test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
-    test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
-
-    mechanical_sort_text = "維持既有排序 guard 可通過"
-    exhaustive_text = "一次找出並修正所有目前可發現的問題"
-    no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
-    stable_summary_text = "治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊"
-
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_test_suite_help_uses_stable_theme_summary", True, stable_summary_text in project_settings_text)
-
-    b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
-    b159_item_text = b159_row[3] if b159_row else ""
-    b159_gap_text = b159_row[5] if b159_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and len(b159_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and len(b159_gap_text) <= 130)
-
-    summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
 
 
 def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
