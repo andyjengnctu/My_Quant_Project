@@ -17,6 +17,7 @@ DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
 MIN_QUALIFIED_TRIAL_VALUE = -9000.0
+OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
 
 
 def _resolve_decimal_places_from_step(step_value):
@@ -27,7 +28,10 @@ def _resolve_decimal_places_from_step(step_value):
 
 _OPTIMIZER_STEP_DECIMAL_PLACES = {
     field_name: _resolve_decimal_places_from_step(spec["step"])
-    for field_name, spec in BREAKOUT_OPTIMIZER_SEARCH_SPACE.items()
+    for field_name, spec in {
+        **BREAKOUT_OPTIMIZER_SEARCH_SPACE,
+        "tp_percent": {"kind": "float", **OPTIMIZER_TP_PERCENT_SEARCH_SPEC},
+    }.items()
     if spec.get("kind") == "float" and spec.get("step") is not None
 }
 
@@ -41,12 +45,9 @@ def _canonicalize_step_float_for_export(field_name, raw_value):
     return float(Decimal(str(float(raw_value))).quantize(quantizer))
 
 
-def _canonicalize_best_params_trial_overrides_for_export(resolved_params, trial_params):
+def _canonicalize_best_params_for_export(resolved_params):
     canonicalized = dict(resolved_params)
-    for field_name in trial_params:
-        if field_name not in canonicalized:
-            continue
-        field_value = canonicalized[field_name]
+    for field_name, field_value in canonicalized.items():
         if isinstance(field_value, bool) or not isinstance(field_value, float):
             continue
         canonicalized[field_name] = _canonicalize_step_float_for_export(field_name, field_value)
@@ -100,7 +101,12 @@ def validate_optimizer_param_overrides(param_mapping):
 
 def resolve_optimizer_tp_percent(trial, fixed_tp_percent):
     if fixed_tp_percent is None:
-        return trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01)
+        return trial.suggest_float(
+            "tp_percent",
+            OPTIMIZER_TP_PERCENT_SEARCH_SPEC["low"],
+            OPTIMIZER_TP_PERCENT_SEARCH_SPEC["high"],
+            step=OPTIMIZER_TP_PERCENT_SEARCH_SPEC["step"],
+        )
 
     validated_params = validate_optimizer_param_overrides({"tp_percent": float(fixed_tp_percent)})
     resolved_tp = float(validated_params["tp_percent"])
@@ -125,7 +131,7 @@ def build_optimizer_trial_params(param_mapping, user_attrs=None, fixed_tp_percen
 
 def build_best_params_payload_from_trial(best_trial, fixed_tp_percent=None):
     resolved_params = build_optimizer_trial_params(best_trial.params, best_trial.user_attrs, fixed_tp_percent=fixed_tp_percent)
-    canonicalized_params = _canonicalize_best_params_trial_overrides_for_export(resolved_params, best_trial.params)
+    canonicalized_params = _canonicalize_best_params_for_export(resolved_params)
     base_payload = params_to_json_dict(V16StrategyParams())
     base_payload.update(canonicalized_params)
     return params_to_json_dict(build_params_from_mapping(base_payload))

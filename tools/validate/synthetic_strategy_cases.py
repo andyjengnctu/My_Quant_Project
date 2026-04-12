@@ -20,7 +20,12 @@ from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
-from tools.optimizer.study_utils import INVALID_TRIAL_VALUE, build_best_params_payload_from_trial, build_optimizer_trial_params
+from tools.optimizer.study_utils import (
+    INVALID_TRIAL_VALUE,
+    OPTIMIZER_TP_PERCENT_SEARCH_SPEC,
+    build_best_params_payload_from_trial,
+    build_optimizer_trial_params,
+)
 from tools.scanner.reporting import print_scanner_summary
 from tools.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
@@ -104,7 +109,12 @@ class _FakeOptimizerSession:
 
     def resolve_optimizer_tp_percent(self, trial, fixed_tp_percent):
         if fixed_tp_percent is None:
-            return trial.suggest_float("tp_percent", 0.0, 0.6, step=0.01)
+            return trial.suggest_float(
+                "tp_percent",
+                OPTIMIZER_TP_PERCENT_SEARCH_SPEC["low"],
+                OPTIMIZER_TP_PERCENT_SEARCH_SPEC["high"],
+                step=OPTIMIZER_TP_PERCENT_SEARCH_SPEC["step"],
+            )
         trial.set_user_attr("fixed_tp_percent", float(fixed_tp_percent))
         return float(fixed_tp_percent)
 
@@ -905,8 +915,9 @@ def validate_optimizer_objective_export_contract_case(_base_params):
             "atr_len": 13,
             "atr_buy_tol": 1.3000000000000003,
             "min_history_ev": 0.10000000000000009,
+            "tp_percent": 0.30000000000000004,
         },
-        user_attrs={"fixed_tp_percent": 0.27},
+        user_attrs={},
         value=88.123,
     )
     rejected_export_trial = SimpleNamespace(
@@ -937,7 +948,8 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         )
 
     add_check(results, "strategy_contract", case_id, "export_best_params_success_status", 0, success_status)
-    add_check(results, "strategy_contract", case_id, "export_best_params_uses_best_trial_tp_percent", 0.27, exported_payload["tp_percent"])
+    add_check(results, "strategy_contract", case_id, "export_best_params_uses_best_trial_tp_percent", 0.3, exported_payload["tp_percent"])
+    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_tp_percent_step_float", "0.3", repr(exported_payload["tp_percent"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_preserves_best_trial_high_len", 65, exported_payload["high_len"])
     add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_atr_buy_tol_step_float", "1.3", repr(exported_payload["atr_buy_tol"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_min_history_ev_step_float", "0.1", repr(exported_payload["min_history_ev"]))
