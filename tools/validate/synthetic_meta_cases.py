@@ -649,6 +649,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     reorder_text = "整段重排並對照既有排序 guard"
     same_day_g_block_text = "重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位"
     full_g_table_guard_text = "再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查"
+    bare_checklist_scan_text = "逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
     strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
@@ -668,6 +669,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_full_g_table_guard_check", True, full_g_table_guard_text in checklist_text and "不得只檢當前日期區塊就交付" in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_dual_checklist_bare_word_scan", True, bare_checklist_scan_text in checklist_text and "doc/PROJECT_SETTINGS.md" in checklist_text and "doc/ARCHITECTURE.md" in checklist_text and "doc/CMD.md" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
@@ -676,6 +678,8 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in architecture_text and "正式檢查 `doc/TEST_SUITE_CHECKLIST.md` 主表" in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in cmd_text)
+    add_check(results, "meta_entry_contract", case_id, "architecture_has_no_bare_checklist_wording", [], [line.strip() for line in architecture_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
+    add_check(results, "meta_entry_contract", case_id, "cmd_has_no_bare_checklist_wording", [], [line.strip() for line in cmd_text.splitlines() if "checklist" in line.lower() and "TEST_SUITE_CHECKLIST" not in line and "GPT_DELIVERY_CHECKLIST" not in line])
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
 
