@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 
 from core.config import V16StrategyParams
 from core.dataset_profiles import (
@@ -8,6 +9,7 @@ from core.dataset_profiles import (
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_int
+from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
 OPTIMIZER_SEED_ENV_VAR = "V16_OPTIMIZER_SEED"
@@ -15,6 +17,40 @@ DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE = 50000
 DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
 MIN_QUALIFIED_TRIAL_VALUE = -9000.0
+
+
+def _resolve_decimal_places_from_step(step_value):
+    normalized_step = Decimal(str(step_value)).normalize()
+    exponent = normalized_step.as_tuple().exponent
+    return 0 if exponent >= 0 else -exponent
+
+
+_OPTIMIZER_STEP_DECIMAL_PLACES = {
+    field_name: _resolve_decimal_places_from_step(spec["step"])
+    for field_name, spec in BREAKOUT_OPTIMIZER_SEARCH_SPACE.items()
+    if spec.get("kind") == "float" and spec.get("step") is not None
+}
+
+
+def _canonicalize_step_float_for_export(field_name, raw_value):
+    decimal_places = _OPTIMIZER_STEP_DECIMAL_PLACES.get(field_name)
+    if decimal_places is None:
+        return float(raw_value)
+
+    quantizer = Decimal("1").scaleb(-decimal_places)
+    return float(Decimal(str(float(raw_value))).quantize(quantizer))
+
+
+def _canonicalize_best_params_trial_overrides_for_export(resolved_params, trial_params):
+    canonicalized = dict(resolved_params)
+    for field_name in trial_params:
+        if field_name not in canonicalized:
+            continue
+        field_value = canonicalized[field_name]
+        if isinstance(field_value, bool) or not isinstance(field_value, float):
+            continue
+        canonicalized[field_name] = _canonicalize_step_float_for_export(field_name, field_value)
+    return canonicalized
 
 
 def is_qualified_trial_value(value):
@@ -89,8 +125,9 @@ def build_optimizer_trial_params(param_mapping, user_attrs=None, fixed_tp_percen
 
 def build_best_params_payload_from_trial(best_trial, fixed_tp_percent=None):
     resolved_params = build_optimizer_trial_params(best_trial.params, best_trial.user_attrs, fixed_tp_percent=fixed_tp_percent)
+    canonicalized_params = _canonicalize_best_params_trial_overrides_for_export(resolved_params, best_trial.params)
     base_payload = params_to_json_dict(V16StrategyParams())
-    base_payload.update(resolved_params)
+    base_payload.update(canonicalized_params)
     return params_to_json_dict(build_params_from_mapping(base_payload))
 
 

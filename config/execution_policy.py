@@ -1,10 +1,16 @@
 """共用執行政策：資金、費用、複利與 runtime 執行預設。"""
 
+from decimal import Decimal
+
+BROKER_FEE_RATE = Decimal("0.001425")
+BROKER_FEE_DISCOUNT = Decimal("0.28")
+DEFAULT_FEE_RATE = float(BROKER_FEE_RATE * BROKER_FEE_DISCOUNT)
+
 EXECUTION_POLICY_PARAM_SPECS = {
     "initial_capital": {"type": float, "default": 1_000_000.0, "min_value": 0.0, "strict_gt": True},  # 回測/投組初始本金
     "fixed_risk": {"type": float, "default": 0.01, "min_value": 0.0, "strict_gt": True, "max_value": 1.0},  # 單筆固定風險比例
-    "buy_fee": {"type": float, "default": 0.001425 * 0.28, "min_value": 0.0},  # 買進手續費率，預設 0.001425 *
-    "sell_fee": {"type": float, "default": 0.001425 * 0.28, "min_value": 0.0},  # 賣出手續費率，預設 0.001425 * 0.28
+    "buy_fee": {"type": float, "default": DEFAULT_FEE_RATE, "min_value": 0.0},  # 買進手續費率，預設券商手續費 × 折扣
+    "sell_fee": {"type": float, "default": DEFAULT_FEE_RATE, "min_value": 0.0},  # 賣出手續費率，預設券商手續費 × 折扣
     "tax_rate": {"type": float, "default": 0.003, "min_value": 0.0},  # 賣出交易稅率
     "min_fee": {"type": float, "default": 20.0, "min_value": 0.0},  # 最低手續費金額
     "use_compounding": {"type": bool, "default": True},  # 是否使用複利資金口徑

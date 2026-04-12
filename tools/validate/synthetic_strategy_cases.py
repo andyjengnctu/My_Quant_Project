@@ -900,7 +900,12 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     export_colors = {"red": "", "green": "", "reset": ""}
     qualified_export_trial = SimpleNamespace(
         number=3,
-        params={"high_len": 65, "atr_len": 13},
+        params={
+            "high_len": 65,
+            "atr_len": 13,
+            "atr_buy_tol": 1.3000000000000003,
+            "min_history_ev": 0.10000000000000009,
+        },
         user_attrs={"fixed_tp_percent": 0.27},
         value=88.123,
     )
@@ -934,6 +939,10 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_success_status", 0, success_status)
     add_check(results, "strategy_contract", case_id, "export_best_params_uses_best_trial_tp_percent", 0.27, exported_payload["tp_percent"])
     add_check(results, "strategy_contract", case_id, "export_best_params_preserves_best_trial_high_len", 65, exported_payload["high_len"])
+    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_atr_buy_tol_step_float", "1.3", repr(exported_payload["atr_buy_tol"]))
+    add_check(results, "strategy_contract", case_id, "export_best_params_canonicalizes_min_history_ev_step_float", "0.1", repr(exported_payload["min_history_ev"]))
+    add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_buy_fee_canonical_decimal", "0.000399", repr(exported_payload["buy_fee"]))
+    add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_sell_fee_canonical_decimal", "0.000399", repr(exported_payload["sell_fee"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_status_for_unqualified_best_trial", 1, failure_status)
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
