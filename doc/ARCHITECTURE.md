@@ -115,6 +115,7 @@ project/
 - `apps/workbench.py` 為單一 GUI 啟用入口。
 - `tools/workbench_ui/workbench.py` 負責主視窗與 panel registry；`single_stock_inspector.py` 負責單股回測檢視頁籤。
 - `tools/workbench_ui/single_stock_inspector.py` 的 K 線檢視中，交易明細與 Console 改以獨立分頁承接。
+- GUI / workbench 文件同步面中，K 線圖主檢視下的交易明細與 Console 以獨立分頁承接。
 
 ## 依賴方向
 
