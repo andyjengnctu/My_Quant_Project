@@ -46,7 +46,7 @@
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
-| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract；另已釘死 early-failure `master_summary.json` 的 `payload_failures` 必須維持與正常路徑一致的語意，且不得把合法 FAIL payload 誤標成 `summary_unreadable`，主要跨工具 schema 與欄位語意已收斂 | contract tests under `tools/validate/` |
+| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract；另已釘死 early-failure `master_summary.json` 的 `payload_failures` 必須維持與正常路徑一致的語意，且不得把合法 FAIL payload 誤標成 `summary_unreadable`；並補 `meta_quality_summary.json` 的 `formal_entry` nested schema contract，要求 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 完整存在且不得回流 `project_settings_steps` 舊鍵 | `tools/validate/synthetic_contract_cases.py` |
 | B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | DONE | 已補 `run_ml_smoke.py` fixed-seed 雙跑、`run_chain_checks.py` scanner reduced snapshot 雙跑 digest、`validate_scanner_worker_repeatability_case` 與 `validate_scan_runner_repeatability_case`，正式入口與 scanner 入口重跑一致性已收斂 | `tools/local_regression/`, `tools/validate/synthetic_regression_cases.py` |
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
@@ -1158,4 +1158,8 @@
 | 2026-04-12 | T251 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_helper_module_file_tree_sync_case` |
 | 2026-04-12 | T252 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_support_module_file_tree_sync_case` |
 | 2026-04-12 | T253 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
+| 2026-04-13 | B11 | 最嚴格檢查檢出 `meta_quality_summary.json` 的 `formal_entry` nested schema contract 尚未同步目前 `run_meta_quality.py` 輸出鍵，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-13 | B11 | 補齊 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 並排除 `project_settings_steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-13 | T18 | 最嚴格檢查檢出 output contract case 尚未覆蓋 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
+| 2026-04-13 | T18 | 擴充 output contract case，補齊 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |

@@ -193,6 +193,15 @@ REQUIRED_META_QUALITY_SUMMARY_KEYS = {
     "results",
 }
 
+REQUIRED_META_QUALITY_FORMAL_ENTRY_KEYS = {
+    "ok",
+    "registry_steps",
+    "registry_commands",
+    "run_all_steps",
+    "preflight_steps",
+    "test_suite_steps",
+}
+
 REQUIRED_MASTER_SUMMARY_KEYS = {
     "overall_status",
     "dataset",
@@ -570,7 +579,14 @@ def validate_local_regression_summary_contract_case(_base_params):
                 "zero_covered_targets": [],
             },
             "checklist": {"ok": True, "status": "DONE", "partial_ids": [], "todo_ids": [], "done_ids": ["B11"], "unfinished_test_ids": []},
-            "formal_entry": {"ok": True, "project_settings_steps": [], "run_all_steps": [], "preflight_steps": []},
+            "formal_entry": {
+                "ok": True,
+                "registry_steps": [],
+                "registry_commands": [],
+                "run_all_steps": [],
+                "preflight_steps": [],
+                "test_suite_steps": [],
+            },
             "performance": {"ok": True, "skipped": False, "step_durations": {}},
             "results": [],
         }
@@ -579,6 +595,8 @@ def validate_local_regression_summary_contract_case(_base_params):
         add_check(results, "output_contract", case_id, "meta_quality_summary_required_keys", [], sorted(REQUIRED_META_QUALITY_SUMMARY_KEYS - set(meta_json.keys())))
         add_check(results, "output_contract", case_id, "meta_quality_summary_coverage_threshold_keys", [], sorted([key for key in ["status", "line_percent_covered", "branch_percent_covered", "line_min_percent", "branch_min_percent", "missing_targets", "zero_covered_targets"] if key not in meta_json.get("coverage", {})]))
         add_check(results, "output_contract", case_id, "meta_quality_summary_checklist_status_key", True, meta_json.get("checklist", {}).get("status") == "DONE")
+        add_check(results, "output_contract", case_id, "meta_quality_summary_formal_entry_required_keys", [], sorted(REQUIRED_META_QUALITY_FORMAL_ENTRY_KEYS - set(meta_json.get("formal_entry", {}).keys())))
+        add_check(results, "output_contract", case_id, "meta_quality_summary_formal_entry_has_no_stale_project_settings_steps", False, "project_settings_steps" in meta_json.get("formal_entry", {}))
 
         selected_steps = ["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"]
         completed_steps = ["quick_gate", "consistency"]
