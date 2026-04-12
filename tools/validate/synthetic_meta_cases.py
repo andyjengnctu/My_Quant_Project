@@ -661,6 +661,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     same_day_g_block_text = "重新抽出整個對應日期區塊，依 formal tracking ID sort key（prefix / numeric / suffix）穩定排序後整段覆寫回原位"
     full_g_table_guard_text = "再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查，並確認同日區塊內 `B` / `T` 等追蹤列皆符合 formal tracking ID sort key"
     bare_checklist_scan_text = "逐行檢查是否殘留未指明檔名的裸 `checklist` 用詞"
+    bare_checklist_scan_targets_text = "`doc/PROJECT_SETTINGS.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 等雙 checklist 分工文件，或 `apps/test_suite.py` 的摘要註解 / `--help` 長說明"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
     strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
@@ -693,7 +694,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得以人工目測、字典序、尾端追加或局部插入取代正式排序" in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_full_g_table_guard_check", True, full_g_table_guard_text in checklist_text and "不得只檢當前日期區塊就交付" in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_dual_checklist_bare_word_scan", True, bare_checklist_scan_text in checklist_text and "doc/PROJECT_SETTINGS.md" in checklist_text and "doc/ARCHITECTURE.md" in checklist_text and "doc/CMD.md" in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_dual_checklist_bare_word_scan", True, bare_checklist_scan_text in checklist_text and bare_checklist_scan_targets_text in checklist_text and "doc/PROJECT_SETTINGS.md" in checklist_text and "doc/ARCHITECTURE.md" in checklist_text and "doc/CMD.md" in checklist_text and "apps/test_suite.py" in checklist_text and "摘要註解 / `--help` 長說明" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and project_recurrence_generalization_text in project_settings_text and "不得只補單一案例、單一字串或局部實作特例" in project_settings_text)
