@@ -56,6 +56,7 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔；檔案樹、用途與依賴原則說明
 │  ├─ CMD.md                          # 常用指令與操作說明
 │  ├─ FINMIND_API_TOKEN.md            # API token 說明
+│  ├─ GPT_DELIVERY_CHECKLIST.md       # GPT 交付前操作檢查表
 │  ├─ PROJECT_SETTINGS.md             # 專案最高優先規則文件
 │  ├─ TEST_SUITE_CHECKLIST.md         # test suite 收斂清單；區分長期固定測試與可隨策略升級調整之測試
 │  └─ ToDo.md                         # 待辦事項與後續整理筆記
@@ -172,7 +173,7 @@ project/
 - `tools/workbench_ui/`：GUI 工作台子系統；`main.py` 只負責啟動，`workbench.py` 維護單一視窗與頁籤 registry，`single_stock_inspector.py` 承接單股回測檢視頁籤與內嵌圖表 canvas / 右側 sidebar / 候選股掃描下拉選單 / Console 分頁；圖表分頁預設優先顯示且 GUI 啟動即最大化，K 線預設顯示最近 18 個月並可滑動/縮放到完整歷史，右側 sidebar 統一承接買入訊號、歷史績效符合、全歷史摘要、選取日線值與回到最新 K 線操作，股票代號輸入後按 Enter 即執行回測、候選股下拉選取即直接回測；成交量可切換為同圖 overlay、交易明細與 Console 以獨立分頁承接，HTML K 線圖改為按鈕點擊時才 lazy export，並採 toolbar-free 互動：滑鼠滾輪直接縮放、左鍵直接拖曳時間軸、左右鍵逐根移動，避免 GUI 與交易邏輯耦合。
 - `core/`：核心規則與共用計算，應作為單一真理來源；目前 `portfolio_engine.py` 已只保留 `run_portfolio_timeline()` 總控與最終整合，當日候選池掃描 / normal / extended 候選規格與排序已抽至 `portfolio_candidates.py`，快取市場資料/PIT 統計索引抽至 `portfolio_fast_data.py`，日內操作 façade 保留於 `portfolio_ops.py`，其中盤前買進執行/延續訊號清理抽至 `portfolio_entries.py`，汰弱換股/持倉結算/期末結算抽至 `portfolio_exits.py`，曲線/年度/年化統計與分數計算抽至 `portfolio_stats.py`；全域訓練政策改由 `config/training_policy.py` 集中提供，training policy / execution policy 分別由 `config/training_policy.py`、`config/execution_policy.py` 集中提供，其中 training policy 也包含投組層 / scanner 歷史績效門檻，`core/strategy_params.py` 聚合 breakout + training gate + execution 的共用參數契約，`core/config.py` 只保留相容 façade。`backtest_core.py` 已縮為單股 K 棒推進與回測總控；單棒持倉步進抽至 `position_step.py`，回測收尾與統計彙整抽至 `backtest_finalize.py`；跳價/成本/股數/漲跌停口徑抽至 `price_utils.py`，技術指標與訊號生成抽至 `signal_utils.py`，`trade_plans.py` 已縮為 façade，歷史績效候選門檻抽至 `history_filters.py`，候選/掛單/成交後部位建立與 entry-day stop/tp 觸發排程抽至 `entry_plans.py`，延續候選固定反事實 entry-ref / invalidation-completion barrier / today-orderable 規格抽至 `extended_signals.py`。`display.py` 已縮為 façade，ANSI 色彩/表格與共用參數 helper 抽至 `display_common.py`，scanner header 輸出抽至 `scanner_display.py`，strategy dashboard 與對比表輸出抽至 `strategy_dashboard.py`。
 - `tools/`：除錯、驗證與開發輔助工具；可呼叫核心邏輯，但不得成為正式交易規則唯一來源。
-- `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件；`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂主清單，維護長期固定測試、可隨策略升級調整之測試、優先級與狀態。
+- `doc/`：文件與規則說明，以 `PROJECT_SETTINGS.md` 為最高優先規則文件；`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂主清單，維護長期固定測試、可隨策略升級調整之測試、優先級與狀態；`GPT_DELIVERY_CHECKLIST.md` 為 assistant 交付前操作檢查表，不作 formal test 主表或狀態真理來源。
 - `models/`：參數結果與最佳化輸出，不放正式交易邏輯。
 - 執行期資料集預設優先使用 `/data/`；若執行環境不存在 `/data/`，則自動退回 `project/data/`。因此 Linux 可直接使用 `/data/...`，Windows 等無 `/data` 的環境可直接使用專案根目錄下的 `data/...`。
 - `strategies/`：策略專屬參數契約、搜尋空間與未來多策略擴充插槽；目前 breakout 已先落地，後續 ML 等策略應比照同層擴充。

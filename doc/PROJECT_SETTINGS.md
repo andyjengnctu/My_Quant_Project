@@ -1,12 +1,12 @@
 # 專案設定
 
-1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
-2. 文件治理與同步原則：`PROJECT_SETTINGS.md` 只保留原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊。兩者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串與細部契約，不得留在 `PROJECT_SETTINGS.md`。細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 與 formal contract。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單，`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表；三者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
+2. 文件治理與同步原則：`PROJECT_SETTINGS.md` 只保留原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留本地端 formal test suite 所需、可機械比對的必要資訊；`GPT_DELIVERY_CHECKLIST.md` 只保留 GPT 交付前操作檢查，不作 formal test 主表或狀態真理來源。三者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串與細部契約，不得留在 `PROJECT_SETTINGS.md`。細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 與 formal contract。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 
 ## A. 工作基準與執行紀律
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
-2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
+2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 
 ## B. 標準測試流程
 
@@ -15,9 +15,9 @@
 3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 checklist 與正式入口，再處理其他問題。
 4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
 5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
-6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、checklist、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。交付前必須逐項自檢同一 target 是否已實際出現在定義、import、registry、checklist、正式入口摘要與 help；不得以「已修改其中數層」推定其餘層已同步。
-7. 凡修改 checklist 的主表、`T`、`G`、`E` 等機械排序區塊，必須整段重排並對照既有排序 guard；不得僅局部插入、追加或搬移單列。
-8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若提供 bundle，交付前另須逐條對照原始失敗項確認已消失；除非已明確說明仍存在無法在本輪一併清除的阻塞原因，否則不得以「先修這部分」視為完成。
+6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、checklist、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+7. 凡修改 checklist 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若仍存在無法在本輪一併清除的阻塞原因，必須明確揭露，不得以「先修這部分」視為完成。
 
 ## C. 回覆、交付與輸出
 

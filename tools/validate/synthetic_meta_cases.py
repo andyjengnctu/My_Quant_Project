@@ -595,25 +595,69 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     test_suite_path = build_project_absolute_path("apps", "test_suite.py")
     test_suite_text = test_suite_path.read_text(encoding="utf-8")
 
-    mechanical_sort_text = "整段重排並對照既有排序 guard"
+    mechanical_sort_text = "維持既有排序 guard 可通過"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
-    self_audit_text = "交付前必須逐項自檢同一 target 是否已實際出現在定義、import、registry、checklist、正式入口摘要與 help"
-    bundle_close_text = "若提供 bundle，交付前另須逐條對照原始失敗項確認已消失"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
     help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
 
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_reorder_guard", True, mechanical_sort_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_formal_chain_target_self_audit_before_delivery", True, self_audit_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_bundle_failure_disappearance_check_before_delivery", True, bundle_close_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
+
+
+def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
+    case_id = "META_GPT_DELIVERY_CHECKLIST_GOVERNANCE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_settings_path = build_project_absolute_path("doc", "PROJECT_SETTINGS.md")
+    checklist_path = build_project_absolute_path("doc", "GPT_DELIVERY_CHECKLIST.md")
+    architecture_path = build_project_absolute_path("doc", "ARCHITECTURE.md")
+    cmd_path = build_project_absolute_path("doc", "CMD.md")
+    test_suite_path = build_project_absolute_path("apps", "test_suite.py")
+
+    project_settings_text = project_settings_path.read_text(encoding="utf-8")
+    checklist_text = checklist_path.read_text(encoding="utf-8") if checklist_path.exists() else ""
+    architecture_text = architecture_path.read_text(encoding="utf-8")
+    cmd_text = cmd_path.read_text(encoding="utf-8")
+    test_suite_text = test_suite_path.read_text(encoding="utf-8")
+
+    required_doc_text = "`/doc/GPT_DELIVERY_CHECKLIST.md`"
+    role_text = "GPT 交付前操作檢查表"
+    scope_text = "assistant 每輪交付前操作檢查表"
+    not_formal_text = "不作本地端 formal test 主表"
+    self_audit_text = "逐項自檢 definition、import、registry、checklist、parser、guard、正式入口摘要、help 與對應 meta guard"
+    bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
+    reorder_text = "整段重排並對照既有排序 guard"
+    unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
+    theme_text = "gpt-delivery-checklist governance contract"
+
+    summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
+    help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
+
+    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist", True, required_doc_text in project_settings_text and role_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_file_exists", True, checklist_path.exists())
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_scope_and_non_formal_boundary", True, scope_text in checklist_text and not_formal_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_formal_chain_self_audit", True, self_audit_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
+    add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_gpt_delivery_checklist_theme", True, theme_text in summary_comment_line)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
+
+    summary["source_path"] = checklist_path.relative_to(PROJECT_ROOT).as_posix() if checklist_path.exists() else "doc/GPT_DELIVERY_CHECKLIST.md"
     return results, summary
 
 
@@ -2972,7 +3016,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246"
     summary_comment_line = next(
         (
             line.strip()
@@ -2983,7 +3027,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t245", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t246", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
@@ -2996,7 +3040,8 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t243", True, "T243" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t244", True, "T244" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t246", True, "T246" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
