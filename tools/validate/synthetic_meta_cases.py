@@ -648,6 +648,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     no_gap_report_text = "若確認沒有新增 formal coverage gap，交付時明確回報正式入口已涵蓋目前需求"
     reorder_text = "整段重排並對照既有排序 guard"
     same_day_g_block_text = "重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位"
+    full_g_table_guard_text = "再對整個 `G` 表執行一次由上到下的日期 / tracking ID 全表 guard 檢查"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
     strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
@@ -666,6 +667,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_full_g_table_guard_check", True, full_g_table_guard_text in checklist_text and "不得只檢當前日期區塊就交付" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
