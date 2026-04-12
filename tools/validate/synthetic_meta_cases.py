@@ -773,8 +773,8 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
     b159_item_text = b159_row[3] if b159_row else ""
     b159_gap_text = b159_row[5] if b159_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and "GPT checklist 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and "不驗 GPT checklist 內容" in b159_gap_text and len(b159_gap_text) <= 120)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and "`GPT_DELIVERY_CHECKLIST.md` 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and "不驗 `GPT_DELIVERY_CHECKLIST.md` 內容" in b159_gap_text and len(b159_gap_text) <= 130)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
