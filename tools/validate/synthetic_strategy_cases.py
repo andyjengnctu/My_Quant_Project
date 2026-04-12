@@ -625,6 +625,7 @@ def validate_strategy_minimum_viability_case(base_params):
         optimizer_value = run_optimizer_objective(session, trial)
     add_check(results, "strategy_viability", case_id, "optimizer_smoke_returns_score", 88.123, optimizer_value)
 
+    scanner_issue_log_path = "outputs/vip_scanner/issues.csv"
     scanner_summary_buffer = io.StringIO()
     with redirect_stdout(scanner_summary_buffer):
         print_scanner_summary(
@@ -636,10 +637,10 @@ def validate_strategy_minimum_viability_case(base_params):
             max_workers=1,
             pool_start_method="spawn",
             candidate_rows=[{"kind": "buy", "text": "2330 EV=1.25R", "sort_value": 1.25, "ticker": "2330"}],
-            scanner_issue_log_path="outputs/scanner/issues.csv",
+            scanner_issue_log_path=scanner_issue_log_path,
         )
     scanner_summary_text = scanner_summary_buffer.getvalue()
-    add_check(results, "strategy_viability", case_id, "scanner_reporting_smoke_runs", True, "明日候選清單" in scanner_summary_text and "issues.csv" in scanner_summary_text)
+    add_check(results, "strategy_viability", case_id, "scanner_reporting_smoke_runs", True, "明日候選清單" in scanner_summary_text and scanner_issue_log_path in scanner_summary_text)
 
     yearly_buffer = io.StringIO()
     yearly_rows = [
