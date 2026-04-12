@@ -1152,6 +1152,8 @@
 | 2026-04-12 | B160 | 使用者明確要求 GPT checklist 不應成為本地 formal 被測物，將 B160 從 local formal contract 改列 N/A | DONE -> N/A | `doc/PROJECT_SETTINGS.md` |
 | 2026-04-12 | B160 | bundle 檢出 GPT checklist 雖已改列 N/A，但 source 仍保留本地 validator 名稱與 meta-quality 未完成摘要殘留語意，改回 PARTIAL | N/A -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B160 | 將 GPT checklist 邊界收斂為僅保留歷史 validator 名稱作 `G` note 相容，並同步排除 registry completeness 與 N/A 未完成摘要後重新收斂為 N/A | PARTIAL -> N/A | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B160 | 最嚴格檢查檢出 `run_meta_quality.py` 另一條 `unfinished_test_ids` 路徑仍以 `!= "DONE"` 將 `N/A` 視為未完成摘要，與 B160 邊界語意不一致，改回 PARTIAL | N/A -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-12 | B160 | 將 `unfinished_test_ids` 收斂為僅計入 `PARTIAL` / `TODO` 後重新驗證為 N/A | PARTIAL -> N/A | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
 | 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
@@ -1267,16 +1269,14 @@
 | 2026-04-12 | T246 | bundle 檢出 GPT checklist 的同鏈收斂清單條款仍缺少「不得只以「已檢查」或「已同步」概括帶過」，governance contract 原始失敗項未實際消失，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將 GPT checklist 與 B160 摘要同步補上同鏈收斂清單不得以「已檢查」或「已同步」概括帶過後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 最嚴格檢查檢出 B160 主表 / `DONE` 摘要回貼 GPT checklist 操作條款全文，governance contract 尚未防止主表過度細化，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
-| 2026-04-12 | B160 | 最嚴格檢查檢出 `run_meta_quality.py` 另一條 `unfinished_test_ids` 路徑仍以 `!= "DONE"` 將 `N/A` 視為未完成摘要，與 B160 邊界語意不一致，改回 PARTIAL | N/A -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-12 | B160 | 將 `unfinished_test_ids` 收斂為僅計入 `PARTIAL` / `TODO` 後重新驗證為 N/A | PARTIAL -> N/A | `tools/local_regression/run_meta_quality.py` |
-| 2026-04-12 | T246 | 最嚴格檢查檢出 `run_meta_quality.py` 仍有 `N/A` 誤入未完成摘要的相鄰路徑，歷史相容 validator 邊界改回 PARTIAL | N/A -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
-| 2026-04-12 | T246 | 將 `run_meta_quality.py` 的 `N/A` 未完成摘要語意收斂為僅計入 `PARTIAL` / `TODO` 後重新回復 N/A | PARTIAL -> N/A | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將治理型主表 / `DONE` 摘要收斂為索引式摘要，並擴充 governance contract 納入防回貼全文 guard 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | bundle 檢出 B160 主表索引式摘要仍超過 governance contract 長度上限，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將 B160 主表收斂為 220 字內索引式摘要後重新驗證為 DONE | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 檢出索引式摘要縮句流程仍未被治理契約明確要求同步核對 validator 必需 literal 與長度上限，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 補上索引式摘要縮句必須同步核對 validator 必需 literal 與長度上限的交付前檢查，並擴充 governance contract 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 使用者明確要求 GPT checklist 不應成為本地 formal 被測物，將 T246 從 local formal test suite 改列 N/A | DONE -> N/A | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 最嚴格檢查檢出 `run_meta_quality.py` 仍有 `N/A` 誤入未完成摘要的相鄰路徑，歷史相容 validator 邊界改回 PARTIAL | N/A -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 將 `run_meta_quality.py` 的 `N/A` 未完成摘要語意收斂為僅計入 `PARTIAL` / `TODO` 後重新回復 N/A | PARTIAL -> N/A | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | bundle 檢出 GPT checklist 雖已改列 N/A，但 source 仍保留本地 validator completeness 殘留與 N/A 未完成摘要語意，改回 PARTIAL | N/A -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 保留歷史 validator 名稱僅作 `G` note 相容，並同步排除 registry completeness 與 N/A 未完成摘要後重新收斂為 N/A | PARTIAL -> N/A | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
