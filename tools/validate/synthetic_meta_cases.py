@@ -2197,7 +2197,10 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
     missing_imported_names = sorted(imported_validate_names - validator_name_set)
     extra_registry_names = sorted(validator_name_set - imported_validate_names)
-    compatibility_only_validate_names = {"validate_gpt_delivery_checklist_governance_contract_case"}
+    compatibility_only_validate_names = {
+        "validate_gpt_delivery_checklist_governance_contract_case",
+        "validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case",
+    }
     missing_defined_names = sorted((defined_validate_names - validator_name_set) - compatibility_only_validate_names)
     orphan_registry_names = sorted(validator_name_set - defined_validate_names)
 
