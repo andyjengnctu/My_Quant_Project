@@ -6,7 +6,7 @@
 ## A. 工作基準與執行紀律
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
-2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
+2. 每次開始前，必須先回報當前工作基準與已讀文件；具體回報欄位依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
 
 ## B. 標準測試流程
 
@@ -14,10 +14,10 @@
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
 3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 `doc/TEST_SUITE_CHECKLIST.md` 與正式入口，再處理其他問題。
 4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
-5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
+5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束。
 6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
 7. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若仍存在無法在本輪一併清除的阻塞原因，必須明確揭露，不得以「先修這部分」視為完成。
+8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若存在本輪無法清除的阻塞，不得將局部修補視為完成。
 9. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，補上避免再犯的操作檢查條款。
 
 ## C. 回覆、交付與輸出
@@ -29,7 +29,7 @@
 5. 預設以提供 ZIP為主，除非使用者要求提供程式碼片段，或只需要改一小段。
 6. 如架構調整需刪檔，須提供可執行的 command，避免使用者手動刪錯。
 7. `outputs/` 根目錄只放工具分類資料夾；各工具輸出必須落到各自資料夾，禁止再把檔案散落到 `outputs/` 根目錄。
-8. 提供 patch 前必須先做 GPT 端最嚴格檢查，確認無已知問題後再交付。
+8. 交付前必須完成 GPT 端自檢；具體檢查與交付條件依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
 
 ## D. Coding 與架構原則
 

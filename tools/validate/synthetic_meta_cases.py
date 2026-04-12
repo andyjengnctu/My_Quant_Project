@@ -598,6 +598,9 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     mechanical_sort_text = "維持既有排序 guard 可通過"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
+    moved_basis_detail_text = "ZIP 檔名、SHA256 與全新解壓目錄"
+    moved_no_gap_report_text = "若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。"
+    moved_strict_delivery_text = "提供 patch 前必須先做 GPT 端最嚴格檢查，確認無已知問題後再交付。"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
@@ -606,6 +609,9 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_basis_report_detail_fields", True, moved_basis_detail_text not in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_no_gap_report_action", True, moved_no_gap_report_text not in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_strict_delivery_action", True, moved_strict_delivery_text not in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
@@ -636,11 +642,14 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     role_text = "GPT 交付前操作檢查表"
     scope_text = "assistant 每輪交付前操作檢查表"
     not_formal_text = "不作本地端 formal test 主表"
-    self_audit_text = "逐項自檢 definition、import、registry、checklist、parser、guard、正式入口摘要、help 與對應 meta guard"
+    self_audit_text = "逐項自檢 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard"
     bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
+    basis_report_text = "當前工作基準、ZIP 檔名、SHA256、全新解壓目錄與已讀文件"
+    no_gap_report_text = "若確認沒有新增 formal coverage gap，交付時明確回報正式入口已涵蓋目前需求"
     reorder_text = "整段重排並對照既有排序 guard"
     same_day_g_block_text = "重新抽出整個對應日期區塊，依 tracking ID 穩定排序後整段覆寫回原位"
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
+    strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
     checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
     theme_text = "gpt-delivery-checklist governance contract"
@@ -651,11 +660,14 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist", True, required_doc_text in project_settings_text and role_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_file_exists", True, checklist_path.exists())
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_scope_and_non_formal_boundary", True, scope_text in checklist_text and not_formal_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_start_basis_report_fields", True, basis_report_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_no_gap_report", True, no_gap_report_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_formal_chain_self_audit", True, self_audit_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_bundle_failure_disappearance_check", True, bundle_close_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_checklist_sort_reorder_check", True, reorder_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_same_day_g_block_reextract_check", True, same_day_g_block_text in checklist_text and "不得將新列直接追加在同日區塊尾端" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
