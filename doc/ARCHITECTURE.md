@@ -38,6 +38,7 @@ project/
 │  ├─ dataset_profiles.py         # 資料集模式/CLI/ENV 解析與路徑切換單一入口
 │  ├─ model_paths.py              # models 目錄與 best_params 路徑解析 helper
 │  ├─ output_paths.py             # outputs/<category> 目錄正規化與建立 helper
+│  ├─ output_retention.py         # outputs retention 雙門檻清理 helper
 │  ├─ display.py                  # 顯示 façade：統一匯出色彩/表格/scanner header/strategy dashboard
 │  ├─ display_common.py           # ANSI 色彩、顯示寬度、表格 row 與通用參數讀取 helper
 │  ├─ scanner_display.py          # scanner header 與訓練/濾網/硬門檻輸出
@@ -131,6 +132,8 @@ project/
    │  ├─ objective_filters.py         # optimizer filter rules
    │  ├─ objective_runner.py          # trial 級評分流程、portfolio timeline 執行與 user_attrs 寫回
    │  ├─ callbacks.py                 # monitoring callback、profiling console print 與破紀錄展示
+   │  ├─ runtime.py                   # optimizer 執行期狀態、匯出控制與歷史最佳還原
+   │  ├─ session.py                   # optimizer session 狀態 façade
    │  ├─ profile.py                   # optimizer profiling CSV/JSON 輸出與摘要
    │  └─ study_utils.py               # trial / study / 參數還原共用工具
    └─ validate/
@@ -161,7 +164,14 @@ project/
       ├─ synthetic_display_cases.py     # synthetic 顯示契約案例：scanner header / dashboard / display re-export output sanity
       ├─ synthetic_cli_cases.py         # synthetic CLI 契約案例：dataset wrapper / local regression / no-arg CLI
       ├─ synthetic_reporting_cases.py   # synthetic 報表契約案例：validate / portfolio / test suite summary schema
+      ├─ synthetic_contract_cases.py    # synthetic 工件 lifecycle / GUI / shared helper 契約案例
       ├─ synthetic_strategy_cases.py    # synthetic 可隨策略升級調整案例：model I/O schema / ranking & scoring sanity / optimizer objective-export contract / strategy repeatability / minimum viability / reporting schema compatibility
+      ├─ synthetic_history_cases.py     # synthetic PIT / history filter / compounding-capital 案例
+      ├─ synthetic_guardrail_cases.py   # synthetic project-settings / config / exception / fallback guardrail 案例
+      ├─ synthetic_regression_cases.py  # synthetic rerun-repeatability / cache-isolation / bundle-repeatability 案例
+      ├─ synthetic_portfolio_common.py  # synthetic 投組案例共用 builder / helper
+      ├─ synthetic_frame_utils.py       # synthetic DataFrame / row / assertion helper
+      ├─ synthetic_case_builders.py     # synthetic chart / GUI / payload case builder helper
       ├─ tool_adapters.py             # validate 對 apps / trade_analysis 工具的動態載入 façade
       ├─ tool_check_common.py         # smoke check 共用輸出抑制與日期欄位解析
       ├─ tool_checks.py               # smoke check façade
@@ -216,6 +226,7 @@ project/
 tools/local_regression/
 ├── __init__.py
 ├── common.py
+├── formal_pipeline.py
 ├── manifest.json
 ├── run_all.py
 ├── run_all.bat

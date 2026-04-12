@@ -462,6 +462,49 @@ def validate_architecture_helper_module_file_tree_sync_case(_base_params):
     return results, summary
 
 
+def validate_architecture_support_module_file_tree_sync_case(_base_params):
+    case_id = "META_ARCHITECTURE_SUPPORT_MODULE_FILE_TREE_SYNC"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    required_tree_fragments = [
+        "│  ├─ output_retention.py         # outputs retention 雙門檻清理 helper",
+        "   │  ├─ runtime.py                   # optimizer 執行期狀態、匯出控制與歷史最佳還原",
+        "   │  ├─ session.py                   # optimizer session 狀態 façade",
+        "├── formal_pipeline.py",
+        "      ├─ synthetic_contract_cases.py    # synthetic 工件 lifecycle / GUI / shared helper 契約案例",
+        "      ├─ synthetic_history_cases.py     # synthetic PIT / history filter / compounding-capital 案例",
+        "      ├─ synthetic_guardrail_cases.py   # synthetic project-settings / config / exception / fallback guardrail 案例",
+        "      ├─ synthetic_regression_cases.py  # synthetic rerun-repeatability / cache-isolation / bundle-repeatability 案例",
+        "      ├─ synthetic_portfolio_common.py  # synthetic 投組案例共用 builder / helper",
+        "      ├─ synthetic_frame_utils.py       # synthetic DataFrame / row / assertion helper",
+        "      ├─ synthetic_case_builders.py     # synthetic chart / GUI / payload case builder helper",
+    ]
+    required_paths = [
+        "core/output_retention.py",
+        "tools/optimizer/runtime.py",
+        "tools/optimizer/session.py",
+        "tools/local_regression/formal_pipeline.py",
+        "tools/validate/synthetic_contract_cases.py",
+        "tools/validate/synthetic_history_cases.py",
+        "tools/validate/synthetic_guardrail_cases.py",
+        "tools/validate/synthetic_regression_cases.py",
+        "tools/validate/synthetic_portfolio_common.py",
+        "tools/validate/synthetic_frame_utils.py",
+        "tools/validate/synthetic_case_builders.py",
+    ]
+
+    for idx, fragment in enumerate(required_tree_fragments, start=1):
+        add_check(results, "meta_architecture_contract", case_id, f"architecture_file_tree_lists_required_support_module_{idx}", True, fragment in architecture_text)
+    for path_str in required_paths:
+        add_check(results, "meta_architecture_contract", case_id, f"repo_ships_{path_str.replace('/', '_').replace('.', '_')}", True, (PROJECT_ROOT / path_str).exists())
+
+    summary["required_tree_fragments"] = required_tree_fragments
+    summary["source_paths"] = ["doc/ARCHITECTURE.md", *required_paths]
+    return results, summary
+
+
 def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_params):
     case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
     results = []
@@ -3161,7 +3204,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249/T250/T251"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249/T250/T251/T252"
     summary_comment_line = next(
         (
             line.strip()
@@ -3190,11 +3233,13 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t249", True, "T249" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t250", True, "T250" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t251", True, "T251" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t252", True, "T252" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_conservative_executable_exit_interpretation_theme", True, "conservative-executable-exit interpretation" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_workbench_file_tree_sync_theme", True, "architecture-workbench-file-tree sync" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_models_best_params_file_tree_sync_theme", True, "architecture-models-best-params file-tree sync" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_helper_module_file_tree_sync_theme", True, "architecture-helper-module file-tree sync" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_support_module_file_tree_sync_theme", True, "architecture-support-module file-tree sync" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
@@ -3217,6 +3262,7 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_workbench_file_tree_sync_contract", True, "architecture-workbench file-tree sync contract" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_models_best_params_file_tree_sync_contract", True, "architecture-models best-params file-tree sync contract" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_helper_module_file_tree_sync_contract", True, "architecture-helper-module file-tree sync contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_support_module_file_tree_sync_contract", True, "architecture-support-module file-tree sync contract" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
