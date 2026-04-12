@@ -183,7 +183,7 @@
 | B156 | P1 | Meta / public stats 盈虧口徑契約 | 單股 backtest public stats payload 的 `totalNetProfit` / `totalNetProfitPct` 必須與 `currentEquity` 承接同一淨值口徑；只要期末仍有持倉，legacy camelCase `totalNetProfit` 也不得退回可用現金 `currentCapital` 基準，避免同一 payload 內部現金/權益語意分叉 | DONE | 已補 static meta contract，直接掃描 `core/backtest_finalize.py`，釘死 `total_net_profit` 必須以 `current_equity - initial_capital` 計，且 public payload 的 `totalNetProfit` / `totalNetProfitPct` 必須共用同一 profit/equity 基準；不得殘留 `current_capital - initial_capital` 舊路徑 | `tools/validate/synthetic_meta_cases.py`, `core/backtest_finalize.py` |
 | B157 | P1 | Meta / 正式入口 help 摘要同步契約 | `apps/test_suite.py` 若保留 `--help` 的長說明字串並列舉已實作 contract 主題，則 help 摘要也必須同步反映最新 exact contract 主題；不得只更新頂部摘要註解而遺漏 help 說明，避免正式入口的人類摘要出現半套同步 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py` 的 help 說明列，釘死其必須明確提到 `single-backtest public profit/equity consistency contract` 與 `summary-section-heading-uniqueness`；避免新增 exact contract 後只同步頂部註解、不同步 `--help` 摘要 | `tools/validate/synthetic_meta_cases.py`, `apps/test_suite.py` |
 | B158 | P1 | Meta / 正式入口 help 更名主題同步契約 | `apps/test_suite.py` 若保留 `--help` 的長說明字串並列舉已實作 contract 主題，當既有 exact contract 主題更名為 canonical wording 時，help 摘要也必須同步更新且不得殘留舊主題字串；避免正式入口表面上已同步最新主題，實際仍混入過時 wording 造成半套文件同步 | DONE | 已補 static meta contract，直接掃描 `apps/test_suite.py` 的 help 說明列，釘死其必須使用 `debug-backtest entry cash-path static contract`，且不得再殘留 `debug-backtest entry cash deduction static contract` 舊 wording；避免 exact contract rename 後 help 摘要仍混用舊名稱 | `tools/validate/synthetic_meta_cases.py`, `apps/test_suite.py` |
-| B159 | P1 | Meta / PROJECT_SETTINGS checklist-sort 與一次找齊原則契約 | `doc/PROJECT_SETTINGS.md` 只保留 checklist-sort / exhaustive-check 高階原則，交付前操作檢查下沉至 `GPT_DELIVERY_CHECKLIST.md`；正式驗證以 `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` 為準，涵蓋索引式摘要、同輪一次找齊與摘要/`--help` | DONE | 已以單一 static meta contract 收斂上述範圍與下沉目標；主表與 `DONE` 摘要只保留索引式摘要與正式 validator 入口，不重複展開 `doc/GPT_DELIVERY_CHECKLIST.md` 的操作條款 | `doc/PROJECT_SETTINGS.md`, `doc/GPT_DELIVERY_CHECKLIST.md`, `doc/TEST_SUITE_CHECKLIST.md`, `apps/test_suite.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
+| B159 | P1 | Meta / PROJECT_SETTINGS checklist-sort 與一次找齊原則契約 | `doc/PROJECT_SETTINGS.md` 只保留 checklist-sort / exhaustive-check 高階原則，交付前操作檢查下沉至 `GPT_DELIVERY_CHECKLIST.md`；正式驗證以 `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` 為準，涵蓋索引式摘要、同輪一次找齊與摘要/`--help` | DONE | 已以單一 static meta contract 收斂範圍與下沉目標；主表與 `DONE` 摘要只保留索引式摘要與正式 validator 入口，不重複展開下沉至 `doc/GPT_DELIVERY_CHECKLIST.md` 的操作條款 | `doc/PROJECT_SETTINGS.md`, `doc/GPT_DELIVERY_CHECKLIST.md`, `doc/TEST_SUITE_CHECKLIST.md`, `apps/test_suite.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B160 | P1 | Meta / GPT_DELIVERY_CHECKLIST 文件分工與交付前自檢契約 | `doc/GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表治理契約；`doc/TEST_SUITE_CHECKLIST.md` 主表與 `DONE` 摘要僅保留索引式摘要，正式驗證以 `validate_gpt_delivery_checklist_governance_contract_case` 為準，涵蓋三份文件分工、same-chain sweep 與正式入口摘要 / `--help` | DONE | 已以單一 governance contract 收斂上述範圍；主表與 `DONE` 摘要只保留索引式摘要與正式 validator 入口，不重複展開 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款全文 | `doc/GPT_DELIVERY_CHECKLIST.md`, `doc/PROJECT_SETTINGS.md`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/ARCHITECTURE.md`, `doc/CMD.md`, `apps/test_suite.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 
 ### B3. 可隨策略升級調整的測試
@@ -1093,6 +1093,8 @@
 | 2026-04-12 | B159 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B159 | 最嚴格檢查檢出 B159 主表已寫交付前操作檢查下沉至 `doc/GPT_DELIVERY_CHECKLIST.md`，但對應 validator / registry 尚未將下沉目標納入實際驗證與 impacted_modules，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B159 | 將 `doc/GPT_DELIVERY_CHECKLIST.md` 納入 B159 validator 下沉目標檢查與 T245 impacted_modules，並同步更新主表建議落點後重新驗證 | PARTIAL -> DONE | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-12 | B159 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-12 | B159 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B160 | 新增 GPT_DELIVERY_CHECKLIST 文件分工與交付前自檢契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B160 | 檢出 `doc/CMD.md` 未明確標示 GPT 交付前操作檢查表角色，且缺少前一輪修改仍錯時的防再犯條款更新要求，改回 PARTIAL | DONE -> PARTIAL | `doc/CMD.md` |
 | 2026-04-12 | B160 | 補齊 `doc/CMD.md` 角色文字並將前一輪修改仍錯時的防再犯條款更新納入 GPT_DELIVERY_CHECKLIST governance contract 後重新驗證 | PARTIAL -> DONE | `doc/GPT_DELIVERY_CHECKLIST.md` |
@@ -1144,6 +1146,8 @@
 | 2026-04-12 | B160 | 將 B160 主表 / `DONE` 摘要收斂為索引式摘要，並擴充 governance contract 納入防回貼全文 guard 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B160 | bundle 檢出 B160 主表索引式摘要仍過長、未符合 governance contract 長度上限，改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B160 | 將 B160 主表收斂為 220 字內索引式摘要後重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-12 | B160 | 檢出索引式摘要縮句流程仍未被治理契約明確要求同步核對 validator 必需 literal 與長度上限，改回 PARTIAL | DONE -> PARTIAL | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-12 | B160 | 補上索引式摘要縮句必須同步核對 validator 必需 literal 與長度上限的交付前檢查，並擴充 governance contract 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
 | 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
@@ -1207,6 +1211,8 @@
 | 2026-04-12 | T245 | 將 B159 主表 / `DONE` 摘要收斂為索引式摘要，並擴充對應 static meta contract 後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 最嚴格檢查檢出 B159 雖宣告交付前操作檢查下沉至 `doc/GPT_DELIVERY_CHECKLIST.md`，但對應 validator / registry 尚未將下沉目標納入實際驗證與 impacted_modules，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T245 | 將 `doc/GPT_DELIVERY_CHECKLIST.md` 納入 B159 validator 下沉目標檢查與 registry impacted_modules，並同步更新主表建議落點後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
+| 2026-04-12 | T245 | bundle 檢出 B159 `DONE` 摘要縮句後漏掉 validator 必需 literal `下沉至`，改回 PARTIAL | DONE -> PARTIAL | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
+| 2026-04-12 | T245 | 補回 B159 `DONE` 摘要必需 literal 並維持索引式摘要長度上限後重新驗證 | PARTIAL -> DONE | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` |
 | 2026-04-12 | T246 | 新增 GPT_DELIVERY_CHECKLIST governance contract 並驗證 | NEW -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 檢出 `doc/CMD.md` 角色文字缺少精確 `GPT 交付前操作檢查表` 與前一輪修改仍錯時的防再犯條款更新要求，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 補齊 `doc/CMD.md` 角色文字並擴充 GPT_DELIVERY_CHECKLIST governance contract 納入防再犯條款更新後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
@@ -1258,4 +1264,6 @@
 | 2026-04-12 | T246 | 將治理型主表 / `DONE` 摘要收斂為索引式摘要，並擴充 governance contract 納入防回貼全文 guard 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | bundle 檢出 B160 主表索引式摘要仍超過 governance contract 長度上限，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將 B160 主表收斂為 220 字內索引式摘要後重新驗證為 DONE | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 檢出索引式摘要縮句流程仍未被治理契約明確要求同步核對 validator 必需 literal 與長度上限，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 補上索引式摘要縮句必須同步核對 validator 必需 literal 與長度上限的交付前檢查，並擴充 governance contract 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |

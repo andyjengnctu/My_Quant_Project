@@ -700,6 +700,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     theme_text = "gpt-delivery-checklist governance contract"
     entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
     governance_index_summary_text = "若更新治理型 Bxx / Txx 契約對應的主表項或 `DONE` 摘要，僅保留索引式摘要：說明 contract 邊界、正式 validator 名稱與涵蓋範圍即可；不得把 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款整段複製回 `doc/TEST_SUITE_CHECKLIST.md`"
+    index_summary_literal_guard_text = "若本輪為符合索引式摘要或長度上限而改寫主表項或 `DONE` 摘要，交付前必須同時反查對應 validator 要求的必要 literal 片段與長度上限；不得為了縮句而刪改必需 literal"
     governance_row_forbidden_detail_text = "不得只以「已檢查」或「已同步」概括帶過"
     governance_row_forbidden_coverage_text = "至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules"
     governance_row_required_scope_text = "索引式摘要"
@@ -751,6 +752,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_checklist_file_division_sync_theme", True, file_division_text in help_line)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_governance_index_summary_rule", True, project_settings_governance_index_summary_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_governance_index_summary_rule", True, governance_index_summary_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_index_summary_literal_length_guard", True, index_summary_literal_guard_text in checklist_text)
 
     b160_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B160"), None)
     b160_item_text = b160_row[3] if b160_row else ""
