@@ -362,6 +362,27 @@ def validate_gui_workbench_documentation_sync_case(_base_params):
     summary["tabs"] = ["K 線圖", "交易明細", "Console"]
     return results, summary
 
+def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
+    case_id = "META_ARCHITECTURE_WORKBENCH_ENTRY_FILE_TREE_SYNC"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    workbench_source = (PROJECT_ROOT / "apps" / "workbench.py").read_text(encoding="utf-8")
+
+    required_tree_fragment = "│  └─ workbench.py                    # GUI 工作台正式入口（薄入口）"
+    stale_missing_tree_fragment = "│  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）"
+
+    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_lists_workbench_entry", True, required_tree_fragment in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_has_no_stale_missing_workbench_tail", False, stale_missing_tree_fragment in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_section_mentions_workbench_single_gui_entry", True, "`apps/workbench.py` 為單一 GUI 啟用入口" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "workbench_app_remains_thin_gui_entry", True, "from tools.workbench_ui import main" in workbench_source and '__all__ = ["main"]' in workbench_source)
+
+    summary["required_tree_fragment"] = required_tree_fragment
+    summary["source_paths"] = ["doc/ARCHITECTURE.md", "apps/workbench.py"]
+    return results, summary
+
+
 def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_params):
     case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
     results = []
@@ -3061,7 +3082,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249"
     summary_comment_line = next(
         (
             line.strip()
@@ -3087,8 +3108,10 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t247", True, "T247" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t248", True, "T248" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t249", True, "T249" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_conservative_executable_exit_interpretation_theme", True, "conservative-executable-exit interpretation" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_workbench_file_tree_sync_theme", True, "architecture-workbench-file-tree sync" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
@@ -3108,6 +3131,7 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_single_backtest_public_profit_equity_consistency_contract", True, "single-backtest public profit/equity consistency contract" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_checklist_summary_section_heading_uniqueness_guard", True, "summary-section-heading-uniqueness" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_contract", True, "conservative-executable-exit interpretation contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_workbench_file_tree_sync_contract", True, "architecture-workbench file-tree sync contract" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

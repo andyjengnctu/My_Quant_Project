@@ -14,7 +14,8 @@ project/
 │  ├─ smart_downloader.py             # 資料下載正式入口（薄入口）
 │  ├─ package_zip.py                  # 專案打包正式入口
 │  ├─ test_suite.py                   # 一鍵測試正式入口（reduced）
-│  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）
+│  ├─ vip_scanner.py                  # 掃描器正式入口（薄入口）
+│  └─ workbench.py                    # GUI 工作台正式入口（薄入口）
 ├─ config/
 │  ├─ __init__.py                     # 純設定資料套件
 │  ├─ training_policy.py              # selection gate、EV/買入排序/score、optimizer 固定停利比例與硬門檻
