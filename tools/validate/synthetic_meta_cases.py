@@ -653,6 +653,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     unresolved_text = "若仍有無法同輪清除的阻塞，必須明確揭露"
     strict_preflight_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
+    project_recurrence_generalization_text = "將防再犯要求上提為可泛化、可操作的交付前檢查"
     checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
     exact_literal_text = "若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal"
     literal_reverse_scan_scope_text = "若本輪修改任何會被 formal contract / parser / meta guard 逐字比對的 literal，或其對應的 canonical 名稱、追蹤 ID、正式入口摘要 / help 關鍵字"
@@ -676,7 +677,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_dual_checklist_bare_word_scan", True, bare_checklist_scan_text in checklist_text and "doc/PROJECT_SETTINGS.md" in checklist_text and "doc/ARCHITECTURE.md" in checklist_text and "doc/CMD.md" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_unresolved_issue_disclosure", True, unresolved_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and project_recurrence_generalization_text in project_settings_text and "不得只補單一案例、單一字串或局部實作特例" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_exact_string_literal_preflight", True, exact_literal_text in checklist_text and "不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_literal_reverse_scan_preflight", True, literal_reverse_scan_scope_text in checklist_text and literal_reverse_scan_method_text in checklist_text and "不得只憑語意相近、單一例句或局部全文搜尋視為完成" in checklist_text)
