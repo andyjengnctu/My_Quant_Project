@@ -3239,7 +3239,7 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline' in line), '')
+    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明:' in line), '')
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_public_profit_equity_consistency_theme", True, "單股公開盈虧/權益一致性" in help_line)
@@ -3258,7 +3258,7 @@ def validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline' in line), '')
+    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明:' in line), '')
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)

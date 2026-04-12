@@ -23,13 +23,14 @@
 9. 若本輪修改上述三個面，交付前必須確認逐字比對只剩 canonical 名稱、正式入口、section heading 與最小必要 fragment；不得把高波動描述做成 exact-string contract。
 10. 若本輪修改 `apps/test_suite.py --help` 或對應 help meta contract，交付前必須確認 help 只保留穩定 theme token，不再逐項列舉 validator / exact-contract 名稱，且涉及 TEST_SUITE_CHECKLIST 時必須顯式指名，不得回退成 bare `checklist` 用詞。
 11. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 主表項目、`DONE` 摘要或索引式摘要縮句，且對應 meta contract 仍要求最小必要 literal / theme token，交付前必須反查對應 validator 的 required fragment 與長度上限；不得只縮字數而漏掉穩定必需詞。
-12. 若本輪進行文件瘦身，不得移除既有 formal contract 仍明確要求的最小必要 fragment；至少必須反查 `tools/validate/meta_contracts.py` 與 `tools/validate/synthetic_meta_cases.py` 中既有 single-entry 與 shipped module fragment contract 是否仍被文件保留。
-13. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
-14. 若本輪將既有 `validate_*` 契約改列 `N/A` 或改成 compatibility stub，交付前必須反查 meta-registry completeness guard、defined/imported validator set、`done/unfinished` 摘要與 `doc/TEST_SUITE_CHECKLIST.md` parser。
-15. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單；至少列出鏈根、掃描範圍、逐項結果與未清阻塞。
-16. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得只修第一個命中項就交付。
-17. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
-18. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
+12. 若本輪修改 help theme token 類 validator，交付前不得再用整句人類說明、長前綴或完整 help 文案作定位錨點；必須改以穩定前綴、結構位置或最小必要 token 抽取目標列，避免 theme-token contract 表面瘦身、內部仍綁高波動 exact-string。
+13. 若本輪進行文件瘦身，不得移除既有 formal contract 仍明確要求的最小必要 fragment；至少必須反查 `tools/validate/meta_contracts.py` 與 `tools/validate/synthetic_meta_cases.py` 中既有 single-entry 與 shipped module fragment contract 是否仍被文件保留。
+14. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
+15. 若本輪將既有 `validate_*` 契約改列 `N/A` 或改成 compatibility stub，交付前必須反查 meta-registry completeness guard、defined/imported validator set、`done/unfinished` 摘要與 `doc/TEST_SUITE_CHECKLIST.md` parser。
+16. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單；至少列出鏈根、掃描範圍、逐項結果與未清阻塞。
+17. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得只修第一個命中項就交付。
+18. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
+19. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
 
 ## C. Bundle 修復時
 
