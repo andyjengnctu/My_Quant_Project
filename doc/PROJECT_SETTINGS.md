@@ -10,15 +10,14 @@
 2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 3. PROJECT_SETTINGS.md 與架構文件應描述模組責任、邊界與資料流，不以暫時函式名、舊名稱或局部實作細節作為定義；會隨實作演進變動的名稱、字串與精細契約，應下沉至 checklist 與 formal contract。
 
-## B. 標準測試流程
+## B. 標準測試流程 
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
 3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 checklist 與正式入口，再處理其他問題。
 4. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
-5. 每輪更新完，須依總則同步維護相關文件與索引。
-6. 追蹤 ID 必須穩定；若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
-7. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
+5. 追蹤 ID 必須穩定；若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
+6. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
 
 
 ## C. 回覆、交付與輸出
@@ -41,13 +40,11 @@
 5. 架構調整不得明顯犧牲效率；若提高未來策略修改或 ML / DRL / LLM 升級複雜度，必須先明確說明。
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動或重新命名檔案時，必須遵守單一職責、分層呼叫、禁止反向依賴、禁止循環依賴、禁止規則分叉與禁止重複實作。
-8. 架構、模組責任或正式入口有變動時，必須同輪同步更新相關實作、文件與索引。
-9. 跨模組所需上下文、path、資料根目錄、輸出位置與共享欄位，必須由明確介面或正式 helper 傳遞；不得依賴隱式狀態、自由變數、隱式全域或模組私有特例。
-10. 共享契約、公開名稱或 schema 有變動時，producer、consumer、轉接層、快取／packed data、顯示／預覽／摘要、驗證與文件必須同輪同步；不得局部更新或保留半套舊路徑。
+8. 架構、模組責任、正式入口或共享資料流有變動時，必須同輪同步更新相關實作、文件與索引。
+9. 跨模組所需上下文、path、資料根目錄、輸出位置、共享欄位與公開名稱，必須由明確介面或正式 helper 傳遞；不得依賴隱式狀態、自由變數、隱式全域或模組私有特例。
+10. 共享契約、公開 schema 或 canonical 名稱有變動時，producer、consumer、轉接層、快取／packed data、顯示／預覽／摘要、驗證與文件必須同輪同步；不得局部更新、保留半套舊路徑，或讓輔助路徑偏離正式共享上下文。
 11. 非核心路徑仍須服從正式規則；顯示、除錯、fallback、preview、reporting 等輔助路徑不得自行重建、猜測、省略、改名或覆寫正式共享上下文。
 12. validator、oracle 與 meta guard 只驗 invariant、契約、角色分離與同步完整性，不重寫分叉實作；rename 後一律以 canonical 名稱為準，legacy alias 僅作相容邊界。
-13. 修正 bundle 或 formal test chain（如 checklist、validator、registry、正式入口摘要、help）相關問題時，必須逐條對照 bundle 實際失敗項完成閉環；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
-14. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要或 help 文案，必須同輪完成定義、import、registry、checklist、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。
 
 ## E. 交易與策略原則
 
