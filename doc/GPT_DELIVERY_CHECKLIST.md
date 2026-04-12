@@ -1,6 +1,6 @@
 # GPT 交付前檢查表
 
-用途：assistant 每輪交付前操作檢查表；不作本地端 formal test 主表、不記 `B` / `T` / `G` / `E` 狀態，也不取代 `PROJECT_SETTINGS.md` 與 `TEST_SUITE_CHECKLIST.md`；本地端 formal test、`apps/test_suite.py`、synthetic registry 與 bundle 檢查均不驗證本檔內容。
+用途：assistant 每輪交付前操作檢查表；不作本地端 formal test 主表、不記 `B` / `T` / `G` / `E` 狀態，也不取代 `PROJECT_SETTINGS.md` 與 `TEST_SUITE_CHECKLIST.md`；本地端 formal test、`apps/test_suite.py`、synthetic registry 與 bundle 檢查均不驗證本檔內容。 `doc/TEST_SUITE_CHECKLIST.md` 亦不得為本檔建立 `B` / `T` / `G` / `E` 追蹤項、validator 映射或其他本地 formal contract。
 
 文件分工：`PROJECT_SETTINGS.md` 管原則與邊界；`TEST_SUITE_CHECKLIST.md` 管本地端 formal test suite 收斂與維護；`GPT_DELIVERY_CHECKLIST.md` 只管 GPT 交付前操作檢查。
 

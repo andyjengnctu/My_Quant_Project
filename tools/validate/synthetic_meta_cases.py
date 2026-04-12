@@ -761,44 +761,20 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     mechanical_sort_text = "維持既有排序 guard 可通過"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
-    gpt_not_test_target_text = "不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容"
     stable_summary_text = "治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊"
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_gpt_delivery_checklist_not_local_formal_target", True, gpt_not_test_target_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_test_suite_help_uses_stable_theme_summary", True, stable_summary_text in project_settings_text)
 
     b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
     b159_item_text = b159_row[3] if b159_row else ""
     b159_gap_text = b159_row[5] if b159_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and "`GPT_DELIVERY_CHECKLIST.md` 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and "不驗 `GPT_DELIVERY_CHECKLIST.md` 內容" in b159_gap_text and len(b159_gap_text) <= 130)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "穩定主題摘要" in b159_item_text and len(b159_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "穩定主題摘要" in b159_gap_text and len(b159_gap_text) <= 130)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
-
-def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
-    """Legacy compatibility stub for historical G-note validator references.
-
-    GPT_DELIVERY_CHECKLIST.md is a GPT-side self-check document and is intentionally
-    excluded from apps/test_suite.py, local formal validators, synthetic registry,
-    and bundle verification. The symbol is retained only so historical `G` notes that
-    reference `validate_gpt_delivery_checklist_governance_contract_case` remain
-    mechanically resolvable by local checklist/meta guards.
-    """
-
-    case_id = "META_GPT_DELIVERY_CHECKLIST_GOVERNANCE"
-    results = []
-    summary = {
-        "ticker": case_id,
-        "synthetic": True,
-        "legacy_compatibility_only": True,
-        "excluded_from_local_formal_registry": True,
-        "source_path": "doc/GPT_DELIVERY_CHECKLIST.md",
-    }
     return results, summary
 
 
@@ -2194,7 +2170,6 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     missing_imported_names = sorted(imported_validate_names - validator_name_set)
     extra_registry_names = sorted(validator_name_set - imported_validate_names)
     compatibility_only_validate_names = {
-        "validate_gpt_delivery_checklist_governance_contract_case",
         "validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case",
     }
     missing_defined_names = sorted((defined_validate_names - validator_name_set) - compatibility_only_validate_names)
