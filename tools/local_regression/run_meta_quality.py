@@ -579,7 +579,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    unfinished_test_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] != "DONE")
+    unfinished_test_ids = sorted(row[0] for row in tables["E3"] if len(row) > 2 and row[2] in {"PARTIAL", "TODO"})
     results.append(
         summarize_result(
             "checklist_unfinished_test_summary_nonempty_when_main_has_gaps",

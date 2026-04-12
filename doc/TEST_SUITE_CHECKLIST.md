@@ -1267,6 +1267,10 @@
 | 2026-04-12 | T246 | bundle 檢出 GPT checklist 的同鏈收斂清單條款仍缺少「不得只以「已檢查」或「已同步」概括帶過」，governance contract 原始失敗項未實際消失，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將 GPT checklist 與 B160 摘要同步補上同鏈收斂清單不得以「已檢查」或「已同步」概括帶過後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 最嚴格檢查檢出 B160 主表 / `DONE` 摘要回貼 GPT checklist 操作條款全文，governance contract 尚未防止主表過度細化，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | B160 | 最嚴格檢查檢出 `run_meta_quality.py` 另一條 `unfinished_test_ids` 路徑仍以 `!= "DONE"` 將 `N/A` 視為未完成摘要，與 B160 邊界語意不一致，改回 PARTIAL | N/A -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-12 | B160 | 將 `unfinished_test_ids` 收斂為僅計入 `PARTIAL` / `TODO` 後重新驗證為 N/A | PARTIAL -> N/A | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-12 | T246 | 最嚴格檢查檢出 `run_meta_quality.py` 仍有 `N/A` 誤入未完成摘要的相鄰路徑，歷史相容 validator 邊界改回 PARTIAL | N/A -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 將 `run_meta_quality.py` 的 `N/A` 未完成摘要語意收斂為僅計入 `PARTIAL` / `TODO` 後重新回復 N/A | PARTIAL -> N/A | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將治理型主表 / `DONE` 摘要收斂為索引式摘要，並擴充 governance contract 納入防回貼全文 guard 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | bundle 檢出 B160 主表索引式摘要仍超過 governance contract 長度上限，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 將 B160 主表收斂為 220 字內索引式摘要後重新驗證為 DONE | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
