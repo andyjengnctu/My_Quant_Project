@@ -214,6 +214,19 @@ def _checklist_first_nonempty_line_matches_title() -> bool:
     return False
 
 
+def _checklist_summary_section_heading_occurrences() -> Dict[str, int]:
+    text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    target_headings = (
+        "## E. 未完成缺口摘要",
+        "### E1. 目前所有 `PARTIAL` 的主表項目摘要",
+        "### E2. 目前所有 `TODO` 的主表項目摘要",
+        "### E3. 目前所有未完成的建議測試項目摘要",
+        "## T. 已完成建議測試映射",
+        "### T. 目前所有 `DONE` 的建議測試項目摘要",
+    )
+    return {heading: text.count(heading) for heading in target_headings}
+
+
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     tables = _load_checklist_tables()
     main_statuses = _load_main_statuses(tables)
@@ -226,6 +239,24 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             first_nonempty_line_ok,
             detail=f"matches={first_nonempty_line_ok}",
             extra={"matches": first_nonempty_line_ok},
+        )
+    )
+
+    summary_heading_occurrences = _checklist_summary_section_heading_occurrences()
+    invalid_summary_heading_occurrences = {
+        heading: count
+        for heading, count in summary_heading_occurrences.items()
+        if count != 1
+    }
+    results.append(
+        summarize_result(
+            "checklist_summary_section_headings_unique",
+            not invalid_summary_heading_occurrences,
+            detail=f"invalid={invalid_summary_heading_occurrences}",
+            extra={
+                "summary_heading_occurrences": summary_heading_occurrences,
+                "invalid_summary_heading_occurrences": invalid_summary_heading_occurrences,
+            },
         )
     )
 

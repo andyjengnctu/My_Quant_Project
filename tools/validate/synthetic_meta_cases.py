@@ -1574,6 +1574,66 @@ def validate_checklist_g_ordering_case(_base_params):
 
 
 
+
+def validate_checklist_summary_section_headings_unique_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_SUMMARY_SECTION_HEADINGS_UNIQUE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    if original_text.count("## E. 未完成缺口摘要") != 1 or original_text.count("## T. 已完成建議測試映射") != 1:
+        add_check(results, "meta_checklist", case_id, "baseline_summary_section_headings_unique", True, False)
+        return results, summary
+
+    duplicate_block = (
+        "## E. 未完成缺口摘要\n\n"
+        "使用方式：僅在存在未完成項時填寫；平時維持空表。\n\n"
+        "### E1. 目前所有 `PARTIAL` 的主表項目摘要\n\n"
+        "| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |\n"
+        "|---|---|---|---|---|\n\n"
+        "### E2. 目前所有 `TODO` 的主表項目摘要\n\n"
+        "| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |\n"
+        "|---|---|---|---|---|\n\n"
+        "### E3. 目前所有未完成的建議測試項目摘要\n\n"
+        "| ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |\n"
+        "|---|---|---|---|\n\n"
+        "## T. 已完成建議測試映射\n\n"
+        "使用方式：只保留 `DONE` 項的最小索引；詳情仍以主表與 `G` 為準。\n\n"
+        "維護規則：`T` 只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。\n\n"
+        "### T. 目前所有 `DONE` 的建議測試項目摘要\n\n"
+        "| ID | 建議測試名稱 | 對應主表項目 |\n"
+        "|---|---|---|\n"
+        "| T01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |\n\n"
+    )
+
+    insertion_target = "## G. 逐項收斂紀錄"
+    if insertion_target not in original_text:
+        add_check(results, "meta_checklist", case_id, "target_g_section_exists_for_mutation", True, False)
+        return results, summary
+    mutated_text = original_text.replace(insertion_target, duplicate_block + insertion_target, 1)
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_summary_section_headings_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    unique_result = result_by_name.get("checklist_summary_section_headings_unique", {})
+    invalid_counts = unique_result.get("invalid_summary_heading_occurrences")
+    if invalid_counts is None:
+        invalid_counts = _read_summary_value(unique_result, "invalid_summary_heading_occurrences", {})
+
+    add_check(results, "meta_checklist", case_id, "mutated_summary_section_heading_uniqueness_guard_fails", "FAIL", unique_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_summary_section_heading_uniqueness_reports_e_heading", True, "## E. 未完成缺口摘要" in invalid_counts)
+    add_check(results, "meta_checklist", case_id, "mutated_summary_section_heading_uniqueness_reports_t_heading", True, "## T. 已完成建議測試映射" in invalid_counts)
+
+    summary["guard_status"] = unique_result.get("status")
+    summary["invalid_summary_heading_occurrences"] = invalid_counts
+    return results, summary
+
 def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
     from tools.local_regression import run_meta_quality as meta_quality_module
 

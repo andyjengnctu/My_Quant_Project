@@ -61,7 +61,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要維持單一測試入口欄位，但 formal step 類 script/CLI 必須以 `formal_pipeline.py` 註冊的完整 command string 原樣記錄，仍視為單一入口，不得裁成裸 script path；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard，正式步驟單一真理來源已收斂到 `tools/local_regression/formal_pipeline.py` | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、formal command string 在 `T` 必須仍被視為單一測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱、檔案開頭第一個非空行漂移，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，並阻擋 convergence 紀錄失同步、`T` 以 `+`、`/`、`,` 或多個 code reference 混寫多個測試入口、formal command string 在 `T` 必須仍被視為單一測試入口、`G` 備註欄混寫多個測試入口、`G` transition 缺少合法狀態轉移格式、同一 tracking ID 在已有歷史列後重複寫 `NEW -> *`、`G` 備註欄殘留已退役 validator 名稱、檔案開頭第一個非空行漂移、`E` / `T` 摘要區與其子標題不得重複出現，以及 legacy `D` / `F1` 區不得回流；checklist 自身完整性已納入正式 gate | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -469,278 +469,8 @@
 | T244 | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` | B158 |
 | T245 | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` | B159 |
 | T246 | `validate_gpt_delivery_checklist_governance_contract_case` | B160 |
+| T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 
-## E. 未完成缺口摘要
-
-使用方式：僅在存在未完成項時填寫；平時維持空表。
-
-### E1. 目前所有 `PARTIAL` 的主表項目摘要
-
-| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
-|---|---|---|---|---|
-
-### E2. 目前所有 `TODO` 的主表項目摘要
-
-| 類型 | ID | 項目 | 缺口摘要 | 建議落點 |
-|---|---|---|---|---|
-
-### E3. 目前所有未完成的建議測試項目摘要
-
-| ID | 建議測試名稱 | 目前狀態 | 對應主表項目 |
-|---|---|---|---|
-
-## T. 已完成建議測試映射
-
-使用方式：只保留 `DONE` 項的最小索引；詳情仍以主表與 `G` 為準。
-
-維護規則：`T` 只留「ID / 建議測試名稱 / 對應主表項目」，並依 ID 升冪排序。
-
-### T. 目前所有 `DONE` 的建議測試項目摘要
-
-| ID | 建議測試名稱 | 對應主表項目 |
-|---|---|---|
-| T01 | `validate_synthetic_same_day_buy_sell_forbidden_case` | B06 |
-| T02 | `validate_synthetic_intraday_reprice_forbidden_case` | B05 |
-| T03 | `validate_synthetic_no_intraday_switch_after_failed_fill_case` | B07 |
-| T04 | `validate_synthetic_exit_orders_only_for_held_positions_case` | B08 |
-| T05 | `validate_synthetic_fee_tax_net_equity_case` | B03 |
-| T06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 |
-| T07 | `validate_synthetic_missed_sell_accounting_case` | B11 |
-| T08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 |
-| T09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 |
-| T10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 |
-| T11 | `validate_price_utils_unit_case` | B13 |
-| T12 | `validate_history_filters_unit_case` | B13 |
-| T13 | `validate_portfolio_stats_unit_case` | B13 |
-| T14 | `validate_model_io_schema_case` | B47 |
-| T15 | `tools/local_regression/run_ml_smoke.py` | B12 |
-| T16 | `validate_ranking_scoring_sanity_case` | B49 |
-| T17 | `tools/validate/synthetic_reporting_cases.py` | B21 |
-| T18 | `validate_output_contract_case` | B11 |
-| T19 | `tools/local_regression/run_chain_checks.py` | B18 |
-| T20 | `tools/local_regression/run_meta_quality.py` | B22 |
-| T21 | `core/runtime_utils.py` | B19 |
-| T22 | `validate_registry_checklist_entry_consistency_case` | B23 |
-| T23 | `validate_known_bad_fault_injection_case` | B24 |
-| T24 | `validate_independent_oracle_golden_case` | B25 |
-| T25 | `tools/validate/meta_contracts.py` | B26 |
-| T26 | `validate_cmd_document_contract_case` | B20 |
-| T27 | `validate_display_reporting_sanity_case` | B21 |
-| T28 | `validate_artifact_lifecycle_contract_case` | B17 |
-| T29 | `tools/local_regression/formal_pipeline.py` | B23 |
-| T30 | `validate_params_io_error_path_case` | B15 |
-| T31 | `validate_module_loader_error_path_case` | B15 |
-| T32 | `validate_preflight_error_path_case` | B15 |
-| T33 | `validate_sanitize_ohlcv_expected_behavior_case` | B14 |
-| T34 | `validate_sanitize_ohlcv_failfast_case` | B14 |
-| T35 | `validate_load_clean_df_data_quality_case` | B14 |
-| T36 | `validate_dataset_cli_contract_case` | B16 |
-| T37 | `validate_local_regression_cli_contract_case` | B16 |
-| T38 | `tools/scanner/scan_runner.py` | B12 |
-| T39 | `validate_issue_excel_report_schema_case` | B21 |
-| T40 | `validate_portfolio_export_report_artifacts_case` | B21 |
-| T41 | `validate_extended_tool_cli_contract_case` | B16 |
-| T42 | `validate_downloader_market_date_fallback_case` | B15 |
-| T43 | `validate_downloader_sync_error_path_case` | B15 |
-| T44 | `validate_downloader_main_error_path_case` | B15 |
-| T45 | `validate_local_regression_summary_contract_case` | B11 |
-| T46 | `validate_test_suite_summary_failure_reporting_case` | B21 |
-| T47 | `validate_test_suite_summary_manifest_failure_reporting_case` | B21 |
-| T48 | `validate_test_suite_summary_optional_dataset_skip_case` | B21 |
-| T49 | `validate_test_suite_summary_preflight_failure_reporting_case` | B21 |
-| T50 | `validate_test_suite_summary_dataset_prepare_failure_reporting_case` | B21 |
-| T51 | `validate_test_suite_summary_unreadable_payload_reporting_case` | B21 |
-| T52 | `validate_run_all_preflight_early_failure_dataset_contract_case` | B11 |
-| T53 | `validate_test_suite_summary_checklist_status_sync_case` | B21 |
-| T54 | `validate_test_suite_summary_meta_quality_guardrail_reporting_case` | B21 |
-| T55 | `validate_single_formal_test_entry_contract_case` | B26 |
-| T56 | `validate_synthetic_setup_index_prev_day_only_case` | B01 |
-| T57 | `validate_downloader_universe_fetch_error_path_case` | B15 |
-| T58 | `validate_downloader_universe_screening_init_error_path_case` | B15 |
-| T59 | `validate_meta_quality_performance_memory_contract_case` | B19 |
-| T60 | `validate_test_suite_summary_meta_quality_memory_reporting_case` | B19 |
-| T61 | `validate_portfolio_sim_prepared_tool_contract_case` | B11 |
-| T62 | `validate_scanner_prepared_tool_contract_case` | B19 |
-| T63 | `validate_debug_trade_log_prepared_tool_contract_case` | B19 |
-| T64 | `validate_scanner_reference_clean_df_contract_case` | B19 |
-| T65 | `validate_meta_quality_reuses_existing_coverage_artifacts_case` | B19 |
-| T66 | `tools/validate/synthetic_cases.py` | B23 |
-| T67 | `tools/validate/synthetic_meta_cases.py` | B26 |
-| T68 | `apps/test_suite.py` | B26 |
-| T69 | `validate_no_reverse_app_layer_dependencies_case` | B23 |
-| T70 | `validate_run_all_manifest_failure_master_summary_contract_case` | B17 |
-| T71 | `validate_synthetic_same_bar_stop_priority_case` | B02 |
-| T72 | `validate_synthetic_half_tp_full_year_case` | B04 |
-| T73 | `validate_synthetic_extended_miss_buy_case` | B09 |
-| T74 | `validate_synthetic_competing_candidates_case` | B09 |
-| T75 | `validate_synthetic_same_day_sell_block_case` | B06 |
-| T76 | `validate_synthetic_rotation_t_plus_one_case` | B05 |
-| T77 | `validate_synthetic_missed_buy_no_replacement_case` | B07 |
-| T78 | `validate_synthetic_unexecutable_half_tp_case` | B04 |
-| T79 | `validate_synthetic_history_ev_threshold_case` | B10 |
-| T80 | `validate_synthetic_single_backtest_not_gated_by_own_history_case` | B10 |
-| T81 | `validate_synthetic_pit_same_day_exit_excluded_case` | B01 |
-| T82 | `validate_synthetic_pit_multiple_same_day_exits_case` | B01 |
-| T83 | `validate_synthetic_proj_cost_cash_capped_case` | B09 |
-| T84 | `validate_synthetic_param_guardrail_case` | B15 |
-| T85 | `validate_validate_console_summary_reporting_case` | B21 |
-| T86 | `validate_portfolio_yearly_report_schema_case` | B21 |
-| T87 | `validate_test_suite_summary_reporting_case` | B21 |
-| T88 | `validate_scanner_worker_repeatability_case` | B12 |
-| T89 | `validate_scan_runner_repeatability_case` | B12 |
-| T90 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 |
-| T91 | `validate_run_all_repeatability_case` | B18 |
-| T92 | `validate_no_top_level_import_cycles_case` | B27 |
-| T93 | `validate_core_trading_modules_in_coverage_targets_case` | B28 |
-| T94 | `validate_critical_file_coverage_minimum_gate_case` | B29 |
-| T95 | `validate_coverage_threshold_floor_case` | B30 |
-| T96 | `validate_entry_path_critical_coverage_gate_case` | B31 |
-| T97 | `validate_critical_coverage_threshold_floor_case` | B32 |
-| T98 | `validate_dataset_fingerprint_contract_case` | B33 |
-| T99 | `validate_atomic_write_contract_case` | B34 |
-| T100 | `tools/local_regression/common.py` | B36 |
-| T101 | `validate_test_suite_orchestrator_coverage_targets_case` | B35 |
-| T102 | `validate_atomic_write_retry_contract_case` | B34 |
-| T103 | `validate_run_all_dataset_prepare_pass_main_contract_case` | B33 |
-| T104 | `validate_synthetic_registry_metadata_contract_case` | B37 |
-| T105 | `validate_optimizer_objective_export_contract_case` | B52 |
-| T106 | `validate_formal_step_entry_coverage_targets_case` | B38 |
-| T107 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 |
-| T108 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
-| T109 | `validate_checklist_g_transition_format_case` | B26 |
-| T110 | `validate_checklist_no_legacy_d_section_case` | B26 |
-| T111 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
-| T112 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
-| T113 | `validate_run_all_cli_error_usage_contract_case` | B16 |
-| T114 | `validate_no_legacy_app_entry_doc_references_case` | B41 |
-| T115 | `validate_app_thin_wrapper_export_contract_case` | B42 |
-| T116 | `validate_package_zip_runtime_contract_case` | B43 |
-| T117 | `validate_synthetic_non_candidate_setup_does_not_seed_extended_signal_case` | B09 |
-| T118 | `validate_atomic_write_cleanup_error_preserves_root_exception_case` | B34 |
-| T119 | `validate_validate_summary_atomic_write_contract_case` | B34 |
-| T120 | `validate_quick_gate_bare_except_guard_contract_case` | B44 |
-| T121 | `validate_quick_gate_output_path_guard_contract_case` | B45 |
-| T122 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
-| T123 | `validate_console_tail_read_error_traceability_case` | B46 |
-| T124 | `validate_checklist_g_ordering_case` | B26 |
-| T125 | `validate_checklist_no_legacy_f1_section_case` | B26 |
-| T126 | `validate_strategy_repeatability_case` | B48 |
-| T127 | `validate_strategy_minimum_viability_case` | B50 |
-| T128 | `validate_strategy_reporting_schema_compatibility_case` | B51 |
-| T129 | `validate_reduced_dataset_dynamic_contract_case` | B53 |
-| T130 | `validate_synthetic_single_backtest_uses_compounding_capital_case` | B54 |
-| T131 | `validate_single_ticker_compounding_parity_contract_case` | B55 |
-| T132 | `validate_scanner_live_capital_contract_case` | B56 |
-| T133 | `validate_optimizer_interrupt_export_contract_case` | B52 |
-| T134 | `validate_score_numerator_option_case` | B57 |
-| T135 | `validate_use_compounding_failfast_guardrail_case` | B58 |
-| T136 | `validate_critical_helper_single_source_contract_case` | B59 |
-| T137 | `validate_project_settings_dynamic_test_boundary_case` | B60 |
-| T138 | `validate_policy_contract_modules_in_coverage_targets_case` | B61 |
-| T139 | `validate_checklist_g_new_transition_first_occurrence_case` | B26 |
-| T140 | `validate_checklist_g_note_validate_reference_exists_case` | B26 |
-| T141 | `validate_checklist_first_nonempty_line_case` | B62 |
-| T142 | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` | B63 |
-| T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
-| T144 | `validate_package_zip_commit_test_suite_orchestration_case` | B65 |
-| T145 | `validate_gui_workbench_contract_case` | B66 |
-| T146 | `validate_debug_trade_log_chart_context_optional_case` | B67 |
-| T147 | `validate_tool_module_path_normalization_case` | B68 |
-| T148 | `validate_module_path_normalizer_accepts_path_objects_case` | B69 |
-| T149 | `validate_module_loader_project_root_string_patch_case` | B70 |
-| T150 | `validate_gui_embedded_chart_contract_case` | B71 |
-| T151 | `validate_synthetic_case_numpy_alias_import_contract_case` | B72 |
-| T152 | `validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case` | B73 |
-| T153 | `validate_gui_chart_workspace_contract_case` | B74 |
-| T154 | `validate_gui_mouse_navigation_contract_case` | B75 |
-| T155 | `validate_synthetic_case_chart_navigation_binder_import_contract_case` | B76 |
-| T156 | `validate_debug_entry_plan_marker_optional_contract_case` | B77 |
-| T157 | `validate_debug_chart_payload_without_html_export_contract_case` | B78 |
-| T158 | `tools/local_regression/run_quick_gate.py` | B79 |
-| T159 | `validate_gui_chart_recent_view_signal_overlay_contract_case` | B80 |
-| T160 | `validate_chart_payload_optional_overlay_keys_contract_case` | B81 |
-| T161 | `validate_gui_dark_theme_and_keyboard_pan_contract_case` | B82 |
-| T162 | `validate_gui_navigation_canvas_stub_cleanup_contract_case` | B83 |
-| T163 | `validate_gui_navigation_canvas_stub_toolbar_contract_case` | B84 |
-| T164 | `validate_record_signal_annotation_meta_contract_case` | B85 |
-| T165 | `validate_gui_chart_overlay_layout_and_pan_contract_case` | B86 |
-| T166 | `validate_workbench_theme_accent_symbol_contract_case` | B87 |
-| T167 | `validate_gui_scanner_console_and_latest_contract_case` | B88 |
-| T168 | `validate_gui_sidebar_latest_preview_contract_case` | B89 |
-| T173 | `validate_gui_single_stock_refined_visual_contract_case` | B94 |
-| T174 | `validate_gui_extended_preview_continuity_contract_case` | B95 |
-| T175 | `validate_gui_chart_margin_and_latest_extended_preview_contract_case` | B96 |
-| T176 | `validate_gui_latest_raw_signal_preview_helper_contract_case` | B97 |
-| T177 | `validate_synthetic_extended_signal_a2_frozen_plan_case` | B98 |
-| T178 | `validate_synthetic_case_non_error_initial_capital_contract_case` | B99 |
-| T179 | `validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case` | B100 |
-| T180 | `validate_gui_signal_annotation_and_forced_close_visual_contract_case` | B101 |
-| T181 | `validate_gui_trade_marker_and_tp_visual_contract_case` | B102 |
-| T182 | `validate_gui_trade_count_and_sidebar_sync_contract_case` | B103 |
-| T183 | `validate_project_settings_init_sl_frozen_plan_principle_case` | B104 |
-| T184 | `validate_synthetic_init_sl_single_source_runtime_case` | B105 |
-| T185 | `validate_debug_empty_price_df_chart_payload_contract_case` | B106 |
-| T186 | `validate_synthetic_case_normalize_chart_payload_literal_x_contract_case` | B107 |
-| T187 | `validate_synthetic_empty_backtest_df_contract_case` | B108 |
-| T188 | `validate_synthetic_cases_import_target_resolution_contract_case` | B109 |
-| T189 | `validate_broad_exception_traceability_contract_case` | B110 |
-| T190 | `validate_optional_dependency_fallback_traceability_contract_case` | B111 |
-| T191 | `validate_gui_tcl_fallback_traceability_contract_case` | B112 |
-| T192 | `validate_specific_pass_only_exception_traceability_contract_case` | B113 |
-| T193 | `validate_gui_trade_box_capital_and_round_trip_contract_case` | B114 |
-| T194 | `validate_debug_backtest_history_snapshot_patch_seam_contract_case` | B115 |
-| T195 | `validate_gui_buy_signal_annotation_anchor_price_contract_case` | B116 |
-| T196 | `validate_synthetic_contract_cases_no_legacy_price_df_case_key_contract_case` | B117 |
-| T197 | `validate_gui_buy_signal_annotation_helper_import_contract_case` | B118 |
-| T198 | `validate_gui_trade_count_contract_no_legacy_exit_snippet_case` | B119 |
-| T199 | `validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_case` | B120 |
-| T200 | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` | B121 |
-| T201 | `validate_quick_gate_synthetic_registry_import_targets_contract_case` | B122 |
-| T202 | `tools/validate/cli.py --dataset reduced` | B23 |
-| T203 | `validate_checklist_f2_formal_command_single_entry_case` | B26 |
-| T204 | `validate_exact_accounting_ledger_conservation_case` | B123 |
-| T205 | `validate_exact_accounting_cost_basis_allocation_case` | B123 |
-| T206 | `validate_exact_accounting_tick_limit_integer_case` | B123 |
-| T207 | `validate_exact_accounting_cash_risk_boundary_case` | B123 |
-| T208 | `validate_exact_accounting_single_vs_portfolio_parity_case` | B123 |
-| T209 | `validate_exact_accounting_display_derived_case` | B123 |
-| T210 | `validate_single_backtest_stats_legacy_schema_contract_case` | B124 |
-| T211 | `validate_single_backtest_exact_cash_path_contract_case` | B125 |
-| T212 | `validate_debug_backtest_entry_cash_path_contract_case` | B126 |
-| T213 | `validate_exact_accounting_display_leg_reconciliation_case` | B127 |
-| T214 | `validate_display_money_rounding_helper_contract_case` | B128 |
-| T215 | `validate_real_case_completed_trade_rounding_oracle_contract_case` | B129 |
-| T216 | `validate_trade_rebuild_rounding_helper_contract_case` | B130 |
-| T217 | `validate_debug_forced_closeout_exact_total_pnl_contract_case` | B131 |
-| T218 | `validate_synthetic_meta_source_path_binding_contract_case` | B132 |
-| T219 | `validate_unit_display_rounding_helper_contract_case` | B133 |
-| T220 | `validate_debug_exit_display_capital_uses_ledger_totals_contract_case` | B134 |
-| T221 | `validate_debug_exit_entry_capital_fallback_contract_case` | B135 |
-| T222 | `validate_debug_entry_display_capital_uses_exact_total_contract_case` | B136 |
-| T223 | `validate_debug_half_exit_leg_return_pct_uses_allocated_cost_contract_case` | B137 |
-| T224 | `validate_debug_sell_signal_profit_pct_uses_exact_mark_to_market_contract_case` | B138 |
-| T225 | `validate_debug_exact_fallback_helpers_contract_case` | B139 |
-| T226 | `validate_average_price_total_helper_contract_case` | B140 |
-| T227 | `validate_portfolio_rotation_mark_to_market_return_contract_case` | B141 |
-| T228 | `validate_validator_oracles_use_exact_ledger_totals_contract_case` | B142 |
-| T229 | `validate_checklist_done_test_summary_markdown_structure_case` | B143 |
-| T230 | `validate_same_bar_stop_priority_oracle_snapshots_pre_exit_cost_basis_contract_case` | B144 |
-| T231 | `validate_price_utils_average_price_total_import_contract_case` | B145 |
-| T232 | `validate_price_utils_array_tick_normalization_contract_case` | B146 |
-| T233 | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` | B147 |
-| T234 | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` | B148 |
-| T235 | `validate_debug_exit_total_return_milli_binding_contract_case` | B149 |
-| T236 | `validate_core_r_multiple_exact_ledger_contract_case` | B150 |
-| T237 | `validate_gui_workbench_documentation_sync_case` | B151 |
-| T238 | `validate_trade_analysis_legacy_naming_documentation_contract_case` | B152 |
-| T239 | `validate_trade_analysis_canonical_alias_export_contract_case` | B153 |
-| T240 | `validate_synthetic_contract_cases_project_root_path_helper_contract_case` | B154 |
-| T241 | `validate_checklist_g_transition_sequence_case` | B155 |
-| T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
-| T243 | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` | B157 |
-| T244 | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` | B158 |
-| T245 | `validate_project_settings_checklist_guard_and_exhaustive_inspection_case` | B159 |
-| T246 | `validate_gpt_delivery_checklist_governance_contract_case` | B160 |
 ## G. 逐項收斂紀錄
 
 使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
@@ -1295,6 +1025,8 @@
 | 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |
 | 2026-04-12 | B26 | 依 bundle 再次檢出 `G` 同日追蹤列回寫後未整段重排，排序 guard 再被真實失敗擊中，主表改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-12 | B26 | 重排 2026-04-12 全部同日區塊並將交付前同日 `G` 區塊抽出重排要求下沉至 GPT checklist 後重新收斂為 DONE | PARTIAL -> DONE | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-12 | B26 | 檢出 checklist 重複貼入第二組 E/T 摘要區與子標題、現有 formal guard 未攔截，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_summary_section_headings_unique_case` |
+| 2026-04-12 | B26 | 補上 E/T 摘要區與子標題唯一性 guard、移除重複區塊並重新驗證 | PARTIAL -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | B47 | 檢出 repo 內 `models/*best_params*.json` shipped 工件仍允許 float-schema 欄位寫成 `int`，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-12 | B47 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別一致性並同步修正 `models/all_best_params_2.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | B52 | 檢出 best_params export contract 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
@@ -1438,3 +1170,4 @@
 | 2026-04-12 | T246 | 補上雙 checklist 分工文件的裸 `checklist` 用詞掃描與負向 guard 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 依 bundle 再次檢出 GPT checklist 尚未明確要求 `G` 區同日跨 prefix 追蹤列依 formal tracking ID sort key 排序，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 補上 `G` 區同日跨 prefix 追蹤列 formal tracking ID sort key 排序條款，並擴充 governance contract 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
