@@ -652,6 +652,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     project_settings_test_suite_role_text = "`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單"
     project_settings_gpt_role_text = "`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表"
     project_settings_governance_split_text = "文件治理與同步原則"
+    project_settings_governance_index_summary_text = "治理型主表項與 `DONE` 摘要只保留索引式摘要與正式 contract 入口，不得回貼操作條款全文"
     not_formal_text = "不作本地端 formal test 主表"
     self_audit_text = "逐項自檢 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard"
     bundle_close_text = "逐條確認 bundle 原始失敗項已消失"
@@ -682,6 +683,10 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     summary_file_division_text = "PROJECT_SETTINGS-TEST_SUITE_CHECKLIST-GPT_DELIVERY_CHECKLIST file-division sync"
     theme_text = "gpt-delivery-checklist governance contract"
     entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
+    governance_index_summary_text = "若更新治理型 Bxx / Txx 契約對應的主表項或 `DONE` 摘要，僅保留索引式摘要：說明 contract 邊界、正式 validator 名稱與涵蓋範圍即可；不得把 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款整段複製回 `doc/TEST_SUITE_CHECKLIST.md`"
+    governance_row_forbidden_detail_text = "不得只以「已檢查」或「已同步」概括帶過"
+    governance_row_forbidden_coverage_text = "至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules"
+    governance_row_required_scope_text = "索引式摘要"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
     help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
@@ -728,6 +733,14 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_gpt_delivery_checklist_theme", True, theme_text in help_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_checklist_file_division_sync_theme", True, summary_file_division_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_checklist_file_division_sync_theme", True, file_division_text in help_line)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_governance_index_summary_rule", True, project_settings_governance_index_summary_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_governance_index_summary_rule", True, governance_index_summary_text in checklist_text)
+
+    b160_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B160"), None)
+    b160_item_text = b160_row[3] if b160_row else ""
+    b160_gap_text = b160_row[5] if b160_row else ""
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b160_item_uses_index_summary", True, bool(b160_row) and governance_row_required_scope_text in b160_item_text and "validate_gpt_delivery_checklist_governance_contract_case" in b160_item_text and "same-chain sweep" in b160_item_text and governance_row_forbidden_detail_text not in b160_item_text and governance_row_forbidden_coverage_text not in b160_item_text and len(b160_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b160_done_summary_uses_index_summary", True, bool(b160_row) and governance_row_required_scope_text in b160_gap_text and "正式 validator 入口" in b160_gap_text and "逐條操作條款全文" in b160_gap_text and governance_row_forbidden_detail_text not in b160_gap_text and governance_row_forbidden_coverage_text not in b160_gap_text and len(b160_gap_text) <= 120)
 
     summary["source_path"] = checklist_path.relative_to(PROJECT_ROOT).as_posix() if checklist_path.exists() else "doc/GPT_DELIVERY_CHECKLIST.md"
     return results, summary

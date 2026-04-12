@@ -22,6 +22,7 @@
 8. 若本輪修改任何會被 formal contract / parser / meta guard 逐字比對的 literal，或其對應的 canonical 名稱、追蹤 ID、正式入口摘要 / help 關鍵字，交付前必須從對應 validator、meta guard、parser 的 expected literal、禁止字串與比對條件反查，逐項核對所有正向與反向 literal；不得只憑語意相近、單一例句或局部全文搜尋視為完成。
 9. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單，至少涵蓋主表項、對應 Txx、validator 內所有子檢查、registry impacted_modules、正式入口摘要註解 / `--help` 長說明、相關文件、負向 guard、唯一性 guard、排序 guard 與 bundle 原始失敗項；並至少列出鏈根、掃描範圍、逐項結果與未清阻塞；不得只以「已檢查」或「已同步」概括帶過；未逐項核對並清空前，不得交付。
 10. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得以先修第一個命中項、單一 assertion 或單一字串命中就停止交付前檢查。
+11. 若更新治理型 Bxx / Txx 契約對應的主表項或 `DONE` 摘要，僅保留索引式摘要：說明 contract 邊界、正式 validator 名稱與涵蓋範圍即可；不得把 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款整段複製回 `doc/TEST_SUITE_CHECKLIST.md`。
 
 ## C. Bundle 修復時
 
