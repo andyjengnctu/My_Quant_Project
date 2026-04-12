@@ -1,14 +1,13 @@
 # 專案設定
+# 專案設定
 
-1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋、或自行推定例外。
-2. 文件治理與同步原則：`PROJECT_SETTINGS.md` 只保留原則性條款，須易讀、易維護、可泛化，且避免以程式內名稱作為定義；`TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊；兩者都必須遵守單一真理來源，且文件內外不得重覆描述。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則，會隨實作演進而調整的細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md`。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
-
+1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為 test suite 收斂與維護清單；兩者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
+2. 文件治理與同步原則：`PROJECT_SETTINGS.md` 只保留原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留可機械比對的必要資訊。兩者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串、細部契約與驗證細節，一律下沉至 checklist 與 formal contract。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
 
 ## A. 工作基準與執行紀律
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
-3. PROJECT_SETTINGS.md 與架構文件應描述模組責任、邊界與資料流，不以暫時函式名、舊名稱或局部實作細節作為定義；會隨實作演進變動的名稱、字串與精細契約，應下沉至 checklist 與 formal contract。
 
 ## B. 標準測試流程
 
