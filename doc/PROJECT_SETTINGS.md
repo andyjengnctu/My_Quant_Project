@@ -18,6 +18,7 @@
 4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
 5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
 6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、checklist、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。
+7. 凡修改 checklist 的主表、`T`、`G`、`E` 等機械排序區塊，必須整段重排並對照既有排序 guard；不得僅局部插入、追加或搬移單列。
 
 ## C. 回覆、交付與輸出
 

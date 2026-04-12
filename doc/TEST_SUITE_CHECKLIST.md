@@ -1017,6 +1017,8 @@
 | 2026-04-11 | T235 | 補齊 forced-closeout 舊 float total-pnl 負向守衛後重新驗證 | PARTIAL -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T236 | 新增 core R-multiple exact-ledger static contract 並驗證 | NEW -> DONE | `validate_core_r_multiple_exact_ledger_contract_case` |
 | 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |
+| 2026-04-12 | B52 | 檢出 best_params export contract 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
+| 2026-04-12 | B52 | 補齊 best_params export canonicalization contract 與匯出鏈後重新收斂為 DONE | PARTIAL -> DONE | `tools/optimizer/study_utils.py` |
 | 2026-04-12 | B66 | 檢出 workbench panel registry / inspector 仍綁定 legacy debug aliases，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B66 | 將 workbench panel registry / inspector 改為優先使用 canonical trade_analysis aliases 並補齊 formal guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B71 | 檢出 GUI embedded chart contract 仍比對舊 debug chart alias，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
@@ -1033,8 +1035,6 @@
 | 2026-04-12 | B126 | 補齊 debug backtest entry flow 與全部 preview 路徑的 `security_profile` 傳遞 contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B146 | 檢出單股 backtest normal signal / entry 與 portfolio candidate builder 尚未一路傳遞 `security_profile`，改回 PARTIAL | DONE -> PARTIAL | `core/backtest_core.py` |
 | 2026-04-12 | B146 | 補齊 backtest / packed fast-data / portfolio candidate 的 `security_profile` 傳遞與 static contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-12 | B52 | 檢出 best_params export contract 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
-| 2026-04-12 | B52 | 補齊 best_params export canonicalization contract 與匯出鏈後重新收斂為 DONE | PARTIAL -> DONE | `tools/optimizer/study_utils.py` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T238，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 擴充 summary comment coverage contract 納入 T238 後重新驗證 | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B147 | 檢出 summary comment coverage contract 尚未同步新增的 T239，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
@@ -1056,6 +1056,8 @@
 | 2026-04-12 | B156 | 新增單股 backtest public stats 盈虧口徑一致性契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B157 | 新增正式入口 help 摘要同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B158 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 canonicalization 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T145 | 檢出 GUI workbench contract 尚未禁止 panel registry / inspector 使用 legacy debug aliases，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_workbench_contract_case` |
 | 2026-04-12 | T145 | 擴充 GUI workbench contract 納入 canonical trade_analysis alias 偏好後重新驗證 | PARTIAL -> DONE | `validate_gui_workbench_contract_case` |
 | 2026-04-12 | T150 | 檢出 GUI embedded chart contract 仍比對舊 debug chart alias，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_embedded_chart_contract_case` |
@@ -1072,8 +1074,6 @@
 | 2026-04-12 | T212 | 擴充 debug backtest entry cash-path static contract 納入 buy-signal / latest raw / latest extended preview 的 `security_profile` threading 後重新驗證 | PARTIAL -> DONE | `validate_debug_backtest_entry_cash_path_contract_case` |
 | 2026-04-12 | T232 | 檢出 array tick-normalization static contract 尚未覆蓋 backtest / packed fast-data / portfolio candidate 的 `security_profile` 傳遞，改回 PARTIAL | DONE -> PARTIAL | `validate_price_utils_array_tick_normalization_contract_case` |
 | 2026-04-12 | T232 | 擴充 array tick-normalization static contract 納入 backtest / packed fast-data / portfolio candidate 的 `security_profile` threading 後重新驗證 | PARTIAL -> DONE | `validate_price_utils_array_tick_normalization_contract_case` |
-| 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
-| 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 canonicalization 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T238，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 擴充 summary comment coverage contract 納入 T238 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
 | 2026-04-12 | T233 | 檢出 summary comment coverage contract 尚未同步新增的 T239，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case` |
@@ -1095,4 +1095,3 @@
 | 2026-04-12 | T242 | 新增單股 backtest public stats 盈虧口徑一致性契約並驗證 | NEW -> DONE | `validate_single_backtest_public_profit_equity_consistency_contract_case` |
 | 2026-04-12 | T243 | 新增正式入口 help 摘要同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
 | 2026-04-12 | T244 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` |
-
