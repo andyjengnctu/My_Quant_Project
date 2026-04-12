@@ -592,6 +592,8 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
 
     project_settings_path = build_project_absolute_path("doc", "PROJECT_SETTINGS.md")
     project_settings_text = project_settings_path.read_text(encoding="utf-8")
+    test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
+    test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
     test_suite_path = build_project_absolute_path("apps", "test_suite.py")
     test_suite_text = test_suite_path.read_text(encoding="utf-8")
 
@@ -614,6 +616,12 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_strict_delivery_action", True, moved_strict_delivery_text not in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
+
+    b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
+    b159_item_text = b159_row[3] if b159_row else ""
+    b159_gap_text = b159_row[5] if b159_row else ""
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "摘要/`--help`" in b159_item_text and moved_basis_detail_text not in b159_item_text and moved_no_gap_report_text not in b159_item_text and moved_strict_delivery_text not in b159_item_text and len(b159_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "不重複展開下沉至 `doc/GPT_DELIVERY_CHECKLIST.md` 的操作條款" in b159_gap_text and moved_basis_detail_text not in b159_gap_text and moved_no_gap_report_text not in b159_gap_text and moved_strict_delivery_text not in b159_gap_text and len(b159_gap_text) <= 120)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
