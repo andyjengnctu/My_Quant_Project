@@ -33,6 +33,7 @@
 19. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得只修第一個命中項就交付。
 20. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
 21. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
+22. 若 bundle 或最嚴格檢查命中 `*_done_summary_matches_convergence_status`、`checklist_done_test_summary_*` 或 `checklist_unfinished_test_summary_*`，交付前必須同步核對 `doc/TEST_SUITE_CHECKLIST.md` 的 `T` DONE 摘要、未完成摘要與 `G` 最新狀態；不得只修單一 summary 行或單一 `G` 列後交付。
 
 ## C. Bundle 修復時
 

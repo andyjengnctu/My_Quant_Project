@@ -1188,3 +1188,4 @@
 | 2026-04-12 | T251 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_helper_module_file_tree_sync_case` |
 | 2026-04-12 | T252 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_support_module_file_tree_sync_case` |
 | 2026-04-12 | T253 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
+| 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
