@@ -594,20 +594,13 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     project_settings_text = project_settings_path.read_text(encoding="utf-8")
     test_suite_checklist_path = build_project_absolute_path("doc", "TEST_SUITE_CHECKLIST.md")
     test_suite_checklist_text = test_suite_checklist_path.read_text(encoding="utf-8")
-    checklist_path = build_project_absolute_path("doc", "GPT_DELIVERY_CHECKLIST.md")
-    checklist_text = checklist_path.read_text(encoding="utf-8")
     test_suite_path = build_project_absolute_path("apps", "test_suite.py")
     test_suite_text = test_suite_path.read_text(encoding="utf-8")
 
     mechanical_sort_text = "維持既有排序 guard 可通過"
     exhaustive_text = "一次找出並修正所有目前可發現的問題"
     no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
-    moved_basis_detail_text = "ZIP 檔名、SHA256 與全新解壓目錄"
-    moved_no_gap_report_text = "若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。"
-    moved_strict_delivery_text = "提供 patch 前必須先做 GPT 端最嚴格檢查，確認無已知問題後再交付。"
-    checklist_basis_report_text = "當前工作基準、ZIP 檔名、SHA256、全新解壓目錄與已讀文件"
-    checklist_no_gap_report_text = "若確認沒有新增 formal coverage gap，交付時明確回報正式入口已涵蓋目前需求。"
-    checklist_strict_delivery_text = "完成 GPT 端最嚴格檢查後，僅在確認無已知問題時交付 patch / ZIP"
+    gpt_not_test_target_text = "不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
@@ -616,25 +609,18 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_basis_report_detail_fields", True, moved_basis_detail_text not in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_no_gap_report_action", True, moved_no_gap_report_text not in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "project_settings_no_longer_embeds_strict_delivery_action", True, moved_strict_delivery_text not in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_basis_report_detail_fields_for_b159_sink", True, checklist_basis_report_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_no_gap_report_action_for_b159_sink", True, checklist_no_gap_report_text in checklist_text)
-    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_receives_strict_delivery_action_for_b159_sink", True, checklist_strict_delivery_text in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_gpt_delivery_checklist_not_local_formal_target", True, gpt_not_test_target_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
     b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
     b159_item_text = b159_row[3] if b159_row else ""
     b159_gap_text = b159_row[5] if b159_row else ""
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "摘要/`--help`" in b159_item_text and moved_basis_detail_text not in b159_item_text and moved_no_gap_report_text not in b159_item_text and moved_strict_delivery_text not in b159_item_text and len(b159_item_text) <= 220)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "不重複展開下沉至 `doc/GPT_DELIVERY_CHECKLIST.md` 的操作條款" in b159_gap_text and moved_basis_detail_text not in b159_gap_text and moved_no_gap_report_text not in b159_gap_text and moved_strict_delivery_text not in b159_gap_text and len(b159_gap_text) <= 120)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_item_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_item_text and "validate_project_settings_checklist_guard_and_exhaustive_inspection_case" in b159_item_text and "同輪一次找齊" in b159_item_text and "GPT checklist 不列入本地 formal 驗證" in b159_item_text and len(b159_item_text) <= 220)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_checklist_b159_done_summary_uses_index_summary", True, bool(b159_row) and "索引式摘要" in b159_gap_text and "正式 validator 入口" in b159_gap_text and "不驗 GPT checklist 內容" in b159_gap_text and len(b159_gap_text) <= 120)
 
     summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
-
-
 
 
 def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
@@ -3179,7 +3165,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246/T247"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247"
     summary_comment_line = next(
         (
             line.strip()
@@ -3203,7 +3189,6 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t243", True, "T243" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t244", True, "T244" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t246", True, "T246" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t247", True, "T247" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
