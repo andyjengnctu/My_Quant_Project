@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import math
+from decimal import Decimal
 from pathlib import Path
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from tempfile import TemporaryDirectory
@@ -29,8 +30,27 @@ from tools.optimizer.study_utils import (
 from tools.scanner.reporting import print_scanner_summary
 from tools.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
+from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 from .checks import add_check
+
+
+def _optimizer_export_canonical_decimal_places():
+    decimal_places = {}
+    for field_name, spec in BREAKOUT_OPTIMIZER_SEARCH_SPACE.items():
+        if spec.get("kind") != "float" or spec.get("step") is None:
+            continue
+        decimal_places[field_name] = max(0, -Decimal(str(spec["step"])).normalize().as_tuple().exponent)
+    decimal_places["tp_percent"] = max(0, -Decimal(str(OPTIMIZER_TP_PERCENT_SEARCH_SPEC["step"])).normalize().as_tuple().exponent)
+    return decimal_places
+
+
+def _canonicalize_optimizer_export_repr(field_name, raw_value):
+    decimal_places = _optimizer_export_canonical_decimal_places().get(field_name)
+    if decimal_places is None:
+        return repr(raw_value)
+    quantizer = Decimal("1").scaleb(-decimal_places)
+    return repr(float(Decimal(str(float(raw_value))).quantize(quantizer)))
 
 
 class _FakeTrial:
@@ -957,6 +977,35 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_keeps_default_sell_fee_canonical_decimal", "0.000399", repr(exported_payload["sell_fee"]))
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_status_for_unqualified_best_trial", 1, failure_status)
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
+
+    canonical_model_files = [
+        Path("models/all_best_params_1.json"),
+        Path("models/all_best_params_2.json"),
+        Path("models/all_best_params_3.json"),
+    ]
+    canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
+    shipped_repr_map = {}
+    expected_shipped_repr_map = {}
+    for artifact_path in canonical_model_files:
+        artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        for field_name in canonical_field_names:
+            if field_name not in artifact_payload:
+                continue
+            map_key = f"{artifact_path.name}::{field_name}"
+            shipped_repr_map[map_key] = repr(artifact_payload[field_name])
+            if field_name in {"buy_fee", "sell_fee"}:
+                expected_shipped_repr_map[map_key] = "0.000399"
+            else:
+                expected_shipped_repr_map[map_key] = _canonicalize_optimizer_export_repr(field_name, artifact_payload[field_name])
+
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "repo_shipped_all_best_params_use_canonical_optimizer_decimal_repr",
+        expected_shipped_repr_map,
+        shipped_repr_map,
+    )
 
     summary["success_export_key_count"] = len(exported_payload)
     summary["registry_contract_checks"] = len(results)

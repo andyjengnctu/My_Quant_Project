@@ -19,8 +19,8 @@
     "min_history_win_rate": 0.42,
     "initial_capital": 1000000.0,
     "fixed_risk": 0.01,
-    "buy_fee": 0.00039900000000000005,
-    "sell_fee": 0.00039900000000000005,
+    "buy_fee": 0.000399,
+    "sell_fee": 0.000399,
     "tax_rate": 0.003,
     "min_fee": 20.0,
     "use_compounding": true
