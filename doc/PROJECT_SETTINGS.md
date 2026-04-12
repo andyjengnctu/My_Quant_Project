@@ -10,14 +10,14 @@
 2. 每次開始前，必須先回報當前工作基準，並明確回報已讀 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；若當前工作基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
 3. PROJECT_SETTINGS.md 與架構文件應描述模組責任、邊界與資料流，不以暫時函式名、舊名稱或局部實作細節作為定義；會隨實作演進變動的名稱、字串與精細契約，應下沉至 checklist 與 formal contract。
 
-## B. 標準測試流程 
+## B. 標準測試流程
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
 3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 checklist 與正式入口，再處理其他問題。
-4. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
-5. 追蹤 ID 必須穩定；若更名，須同輪同步更新 checklist 與相關 parser、guard、正式入口摘要。
-6. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須依 bundle 修正錯誤。
+4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
+5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束；若確認沒有新增缺口，也須明確回報正式入口已涵蓋目前需求。
+6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、checklist、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。
 
 
 ## C. 回覆、交付與輸出
