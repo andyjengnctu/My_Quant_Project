@@ -51,8 +51,8 @@ def _load_main_table_statuses():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     statuses = {}
     headings = [
-        ("B1. 專案設定對應清單（不含暫時特例）", 3),
-        ("B2. 未明列於專案設定，但正式 test suite 應納入", 4),
+        ("B1. 長期固定核心規則（不含暫時特例）", 3),
+        ("B2. 長期固定補充契約", 4),
         ("B3. 可隨策略升級調整的測試", 4),
     ]
     for heading, status_idx in headings:
@@ -66,7 +66,7 @@ def _load_main_table_statuses():
 def _load_main_table_catalog():
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     catalog = {}
-    for cols in extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"):
+    for cols in extract_markdown_table_rows(text, "B1. 長期固定核心規則（不含暫時特例）"):
         if len(cols) > 5:
             catalog[cols[0]] = {
                 "kind": "規則",
@@ -74,7 +74,7 @@ def _load_main_table_catalog():
                 "entry": cols[5],
                 "status": cols[3],
             }
-    for cols in extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"):
+    for cols in extract_markdown_table_rows(text, "B2. 長期固定補充契約"):
         if len(cols) > 6:
             catalog[cols[0]] = {
                 "kind": cols[2],

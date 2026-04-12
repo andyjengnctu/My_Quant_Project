@@ -67,8 +67,8 @@ PERFORMANCE_MEMORY_MANIFEST_KEY = "performance_peak_traced_memory_mb"
 def _load_checklist_tables() -> Dict[str, List[List[str]]]:
     text = CHECKLIST_PATH.read_text(encoding="utf-8")
     return {
-        "B1": extract_markdown_table_rows(text, "B1. 專案設定對應清單（不含暫時特例）"),
-        "B2": extract_markdown_table_rows(text, "B2. 未明列於專案設定，但正式 test suite 應納入"),
+        "B1": extract_markdown_table_rows(text, "B1. 長期固定核心規則（不含暫時特例）"),
+        "B2": extract_markdown_table_rows(text, "B2. 長期固定補充契約"),
         "B3": extract_markdown_table_rows(text, "B3. 可隨策略升級調整的測試"),
         "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
         "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
