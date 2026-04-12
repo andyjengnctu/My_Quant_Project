@@ -116,6 +116,19 @@ project/
    │  ├─ log_rows.py                  # 單股分析明細列建構與半倉停利價 helper
    │  ├─ reporting.py                 # 單股分析報表輸出與虧損摘要
    │  └─ trade_log.py                 # 單股分析入口、資料集解析與對外包裝
+   ├─ local_regression/
+   │  ├─ __init__.py                  # local_regression 子套件；本地 reduced 一鍵測試 orchestrator
+   │  ├─ common.py                    # local regression manifest / bundle / reduced dataset 共用 helper
+   │  ├─ formal_pipeline.py           # local regression 正式步驟單一真理來源
+   │  ├─ manifest.json                # reduced performance baseline 與正式步驟設定
+   │  ├─ run_all.py                   # local regression 一鍵 orchestrator 與 --only 入口
+   │  ├─ run_all.bat                  # Windows local regression 一鍵入口
+   │  ├─ run_chain_checks.py          # reduced chain checks 與 scanner snapshot repeatability
+   │  ├─ run_ml_smoke.py              # reduced optimizer smoke 與 fixed-seed repeatability
+   │  ├─ run_meta_quality.py          # meta quality / coverage / TEST_SUITE_CHECKLIST consistency / performance gating
+   │  ├─ meta_quality_coverage.py     # coverage summary / reuse / formal helper probe
+   │  ├─ meta_quality_targets.py      # coverage target / floor 常數
+   │  └─ run_quick_gate.py            # preflight 前靜態檢查與 quick gate fail-fast
    ├─ workbench_ui/
    │  ├─ __init__.py                  # workbench_ui 子套件 façade；統一匯出工作台入口
    │  ├─ main.py                      # 工作台啟動 façade
@@ -160,7 +173,7 @@ project/
       ├─ synthetic_unit_cases.py        # synthetic unit-like 邊界案例：price_utils / history_filters / portfolio_stats / exact-accounting ledger-cost-basis-tick-limit parity
       ├─ synthetic_meta_cases.py        # synthetic meta 案例：TEST_SUITE_CHECKLIST / registry / synthetic 主入口一致性（`doc/GPT_DELIVERY_CHECKLIST.md` 不納入本地 formal 驗證）
       ├─ synthetic_error_cases.py       # synthetic 錯誤路徑案例：params_io / module_loader / preflight / downloader fail-fast
-      ├─ synthetic_data_quality_cases.py# synthetic 資料品質案例：髒資料清洗 expected behavior / fail-fast / load_clean_df 整合
+      ├─ synthetic_data_quality_cases.py # synthetic 資料品質案例：髒資料清洗 expected behavior / fail-fast / load_clean_df 整合
       ├─ synthetic_display_cases.py     # synthetic 顯示契約案例：scanner header / dashboard / display re-export output sanity
       ├─ synthetic_cli_cases.py         # synthetic CLI 契約案例：dataset wrapper / local regression / no-arg CLI
       ├─ synthetic_reporting_cases.py   # synthetic 報表契約案例：validate / portfolio / test suite summary schema
