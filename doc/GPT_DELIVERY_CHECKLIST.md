@@ -25,7 +25,7 @@
 
 1. 逐條對照 bundle 原始失敗項完成閉環；不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
 2. 交付前必須逐條確認 bundle 原始失敗項已消失。
-3. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔，補上可直接防止同類錯誤再犯的檢查條款；若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal，不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫。
+3. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔，將防再犯要求上提為可泛化、可操作的交付前檢查；不得只補單一案例、單一字串或局部實作特例。若失敗來自 exact-string contract，新增或修改條款時還必須逐字核對 formal expected literal，不得只做 markdown 格式化、反引號包裝、全半形替換、標點微調或語意接近改寫。
 
 ## D. 交付前
 

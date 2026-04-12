@@ -1110,6 +1110,8 @@
 | 2026-04-12 | B160 | 將 GPT checklist 條款改回精確 literal，並補上 exact-string contract 逐字核對防再犯條款後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B160 | 使用者指出 GPT checklist 對 formal literal 的防呆仍偏特例化、缺少反查 expected literal / 禁止字串 / 比對條件的一般化條款，改回 PARTIAL | DONE -> PARTIAL | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-12 | B160 | 補上 formal literal / canonical 名稱 / 追蹤 ID / 摘要-help 關鍵字的一般化反查條款，並擴充 governance contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B160 | 最嚴格檢查檢出 B160 主表已要求 recurrence 條款必須泛化，但 governance contract 仍只驗較弱的「同類錯誤再犯」字面，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | B160 | 將 GPT checklist recurrence 條款與 governance contract 同步收斂為「可泛化、可操作」要求後重新驗證 | PARTIAL -> DONE | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
 | 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
@@ -1190,4 +1192,6 @@
 | 2026-04-12 | T246 | 將 GPT checklist 條款改回精確 literal，並擴充 governance contract 納入 exact-string 逐字核對條款後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 使用者指出 GPT checklist 對 formal literal 的防呆仍偏特例化、缺少反查 expected literal / 禁止字串 / 比對條件的一般化條款，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T246 | 補上 formal literal / canonical 名稱 / 追蹤 ID / 摘要-help 關鍵字的一般化反查條款，並擴充 governance contract 後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 最嚴格檢查檢出 governance contract 對 recurrence 條款仍只驗較弱的「同類錯誤再犯」字面，未真正覆蓋 B160 所要求的泛化交付前檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_gpt_delivery_checklist_governance_contract_case` |
+| 2026-04-12 | T246 | 將 GPT checklist recurrence 條款與 governance contract 同步收斂為「可泛化、可操作」要求後重新驗證 | PARTIAL -> DONE | `validate_gpt_delivery_checklist_governance_contract_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
