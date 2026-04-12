@@ -1167,5 +1167,9 @@
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約仍以 `exact-contract` 直掛 active sub-check 與主表摘要，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 active sub-check 與主表摘要改為中性「舊契約 wording」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-13 | B158 | 最嚴格檢查檢出 stale-wording 排除檢查仍殘留較長完整舊短語，未收斂到較短已足夠覆蓋的最小必要片段，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-13 | B158 | 將 stale-wording 排除檢查收斂為較短已足夠覆蓋的最小必要片段後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約的 active sub-check 名稱仍殘留 `exact-contract` 舊語意，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 active sub-check 名稱改為中性「舊契約 wording 列舉」語意後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
+| 2026-04-13 | T244 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約的負向檢查仍硬掛較長完整舊短語，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
+| 2026-04-13 | T244 | 將負向檢查收斂為較短已足夠覆蓋的最小必要片段後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
