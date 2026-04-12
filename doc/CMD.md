@@ -13,6 +13,7 @@ python tools/validate/preflight_env.py
 ```
 
 - 日常 reduced 一鍵入口：`python apps/test_suite.py`
+- 正式對外入口為 `apps/test_suite.py`。
 - 只有完整入口已指出失敗步驟時，才用 `python tools/local_regression/run_all.py --only ...` 重跑指定步驟。
 - `tools/local_regression/formal_pipeline.py` 為正式步驟單一真理來源。
 - `python tools/validate/preflight_env.py` 只檢查環境，不自動安裝依賴。

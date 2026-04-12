@@ -21,12 +21,13 @@
 7. 若本輪修改任何受 `tools/validate/synthetic_meta_cases.py` 驗證的文字面，交付前必須反查對應 expected literal；不得只改正文後遺漏 meta contract。
 8. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事或完整 validator 枚舉重新灌回這三個面。
 9. 若本輪修改上述三個面，交付前必須確認逐字比對只剩 canonical 名稱、正式入口、section heading 與最小必要 fragment；不得把高波動描述做成 exact-string contract。
-10. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
-11. 若本輪將既有 `validate_*` 契約改列 `N/A` 或改成 compatibility stub，交付前必須反查 meta-registry completeness guard、defined/imported validator set、`done/unfinished` 摘要與 `doc/TEST_SUITE_CHECKLIST.md` parser。
-12. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單；至少列出鏈根、掃描範圍、逐項結果與未清阻塞。
-13. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得只修第一個命中項就交付。
-14. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
-15. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
+10. 若本輪進行文件瘦身，不得移除既有 formal contract 仍明確要求的最小必要 fragment；至少必須反查 `tools/validate/meta_contracts.py` 與 `tools/validate/synthetic_meta_cases.py` 中既有 single-entry 與 shipped module fragment contract 是否仍被文件保留。
+11. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
+12. 若本輪將既有 `validate_*` 契約改列 `N/A` 或改成 compatibility stub，交付前必須反查 meta-registry completeness guard、defined/imported validator set、`done/unfinished` 摘要與 `doc/TEST_SUITE_CHECKLIST.md` parser。
+13. 若本輪問題屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單；至少列出鏈根、掃描範圍、逐項結果與未清阻塞。
+14. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得只修第一個命中項就交付。
+15. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 是否仍沿用舊邊界。
+16. 若本輪修改 `doc/ARCHITECTURE.md` 的 shipped 模組索引，交付前必須逐一對照實際檔案與文件索引一致，並確認檔名與註解分隔符未黏連成錯誤 path token。
 
 ## C. Bundle 修復時
 

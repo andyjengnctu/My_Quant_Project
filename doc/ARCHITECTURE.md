@@ -52,6 +52,15 @@ project/
 
 ## 關鍵 shipped 模組索引
 
+### `tools/optimizer/`
+
+```text
+   │  ├─ runtime.py                   # optimizer 執行期狀態、匯出控制與歷史最佳還原
+   │  ├─ session.py                   # optimizer session 狀態 façade
+```
+
+- `tools/optimizer/`：參數最佳化子系統；由 `apps/ml_optimizer.py` 進入。
+
 ### `tools/trade_analysis/`
 
 ```text
@@ -91,6 +100,8 @@ project/
 - `run_meta_quality.py`：meta quality 工具；負責 coverage / summary / baseline 與 formal step 對照。
 
 ## 子系統責任
+
+- `apps/test_suite.py` 是日常唯一建議使用的一鍵測試入口。
 
 - `apps/`：正式入口層，只從對應子系統 façade 匯入公開介面。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
