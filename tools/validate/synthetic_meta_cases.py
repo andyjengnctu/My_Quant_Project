@@ -585,6 +585,34 @@ def validate_project_settings_init_sl_frozen_plan_principle_case(_base_params):
     return results, summary
 
 
+def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_base_params):
+    case_id = "META_PROJECT_SETTINGS_CHECKLIST_GUARD_AND_EXHAUSTIVE_INSPECTION"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_settings_path = build_project_absolute_path("doc", "PROJECT_SETTINGS.md")
+    project_settings_text = project_settings_path.read_text(encoding="utf-8")
+    test_suite_path = build_project_absolute_path("apps", "test_suite.py")
+    test_suite_text = test_suite_path.read_text(encoding="utf-8")
+
+    mechanical_sort_text = "整段重排並對照既有排序 guard"
+    exhaustive_text = "一次找出並修正所有目前可發現的問題"
+    no_dribble_text = "不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出"
+    theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
+
+    summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
+    help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
+
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_reorder_guard", True, mechanical_sort_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
+    add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
+
+    summary["source_path"] = project_settings_path.relative_to(PROJECT_ROOT).as_posix()
+    return results, summary
+
+
 def validate_gui_tcl_fallback_traceability_contract_case(_base_params):
     case_id = "META_GUI_TCL_FALLBACK_TRACEABILITY_CONTRACT"
     results = []
@@ -2940,7 +2968,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245"
     summary_comment_line = next(
         (
             line.strip()
@@ -2951,7 +2979,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t244", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t245", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
@@ -2963,7 +2991,8 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t242", True, "T242" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t243", True, "T243" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t244", True, "T244" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

@@ -124,6 +124,7 @@ from .synthetic_meta_cases import (
     validate_peak_traced_memory_tracker_context_management_case,
     validate_project_settings_dynamic_test_boundary_case,
     validate_project_settings_init_sl_frozen_plan_principle_case,
+    validate_project_settings_checklist_guard_and_exhaustive_inspection_case,
     validate_specific_pass_only_exception_traceability_contract_case,
     validate_broad_exception_traceability_contract_case,
     validate_gui_tcl_fallback_traceability_contract_case,
