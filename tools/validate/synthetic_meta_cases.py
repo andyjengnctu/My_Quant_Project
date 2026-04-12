@@ -3247,13 +3247,9 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_single_backtest_public_profit_equity_consistency_contract", True, "single-backtest public profit/equity consistency contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_checklist_summary_section_heading_uniqueness_guard", True, "summary-section-heading-uniqueness" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_contract", True, "conservative-executable-exit interpretation contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_workbench_file_tree_sync_contract", True, "architecture-workbench file-tree sync contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_models_best_params_file_tree_sync_contract", True, "architecture-models best-params file-tree sync contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_helper_module_file_tree_sync_contract", True, "architecture-helper-module file-tree sync contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_support_module_file_tree_sync_contract", True, "architecture-support-module file-tree sync contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_local_regression_meta_quality_file_tree_sync_contract", True, "architecture-local-regression meta-quality file-tree sync contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_file_tree_sync_contracts", True, "architecture file-tree sync contracts" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_contract", True, "project-settings exhaustive-check / checklist-sort-guard contract" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
