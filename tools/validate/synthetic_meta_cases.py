@@ -766,14 +766,12 @@ def validate_project_settings_checklist_guard_and_exhaustive_inspection_case(_ba
     gpt_not_test_target_text = "不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容"
     theme_text = "project-settings exhaustive-check / checklist-sort-guard contract"
 
-    summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
     help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
 
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_checklist_mechanical_sort_guard", True, mechanical_sort_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_exhaustive_same_round_fix_principle", True, exhaustive_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_forbids_dribbling_same_contract_adjacent_issues", True, no_dribble_text in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_declares_gpt_delivery_checklist_not_local_formal_target", True, gpt_not_test_target_text in project_settings_text)
-    add_check(results, "meta_entry_contract", case_id, "test_suite_summary_comment_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in summary_comment_line)
     add_check(results, "meta_entry_contract", case_id, "test_suite_help_text_mentions_project_settings_exhaustive_sort_guard_theme", True, theme_text in help_line)
 
     b159_row = next((cols for cols in extract_markdown_table_rows(test_suite_checklist_text, "B2. 未明列於專案設定，但正式 test suite 應納入") if len(cols) > 6 and cols[0] == "B159"), None)
@@ -3218,59 +3216,22 @@ def validate_single_backtest_public_profit_equity_consistency_contract_case(_bas
 
 
 def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_base_params):
+    """Legacy compatibility stub for historical G-note validator references.
+
+    註解已排除在本地 formal test suite 範圍外；保留此符號僅為了讓歷史 `G` 記錄中的
+    validator 名稱仍可被 checklist/meta guards 機械解析。
+    """
+
     case_id = "META_TEST_SUITE_SUMMARY_COMMENT_COVERS_LATEST_EXACT_CONTRACT_IDS"
     results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("apps", "test_suite.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T227/T228/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T247/T248/T249/T250/T251/T252/T253"
-    summary_comment_line = next(
-        (
-            line.strip()
-            for line in source_text.splitlines()
-            if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋") and expected_id_list in line
-        ),
-        "",
-    )
-
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t253_without_skipping_existing_same_theme_ids", True, expected_id_list in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t227", True, "T227" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t228", True, "T228" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t237", True, "T237" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t238", True, "T238" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t239", True, "T239" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t240", True, "T240" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t241", True, "T241" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t242", True, "T242" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t243", True, "T243" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t244", True, "T244" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t247", True, "T247" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t248", True, "T248" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t249", True, "T249" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t250", True, "T250" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t251", True, "T251" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t252", True, "T252" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t253", True, "T253" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_portfolio_rotation_return_theme", True, "portfolio-rotation-return" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_validator_oracle_exact_ledger_theme", True, "validator-oracle exact-ledger" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_conservative_executable_exit_interpretation_theme", True, "conservative-executable-exit interpretation" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_workbench_file_tree_sync_theme", True, "architecture-workbench-file-tree sync" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_models_best_params_file_tree_sync_theme", True, "architecture-models-best-params file-tree sync" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_helper_module_file_tree_sync_theme", True, "architecture-helper-module file-tree sync" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_support_module_file_tree_sync_theme", True, "architecture-support-module file-tree sync" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_architecture_local_regression_meta_quality_file_tree_sync_theme", True, "architecture-local-regression-meta-quality file-tree sync" in summary_comment_line)
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
+    summary = {
+        "ticker": case_id,
+        "synthetic": True,
+        "legacy_compatibility_only": True,
+        "excluded_from_local_formal_registry": True,
+        "source_path": "apps/test_suite.py",
+    }
     return results, summary
-
 
 def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_base_params):
     case_id = "META_TEST_SUITE_HELP_TEXT_MENTIONS_LATEST_EXACT_CONTRACT_THEME"

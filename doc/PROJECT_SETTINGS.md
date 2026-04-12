@@ -16,9 +16,10 @@
 4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
 5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束。
 6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-7. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-8. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若存在本輪無法清除的阻塞，不得將局部修補視為完成。
-9. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，將防再犯要求上提為可泛化、可操作的交付前檢查；不得只補單一案例、單一字串或局部實作特例。若屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單並逐項清空；收斂清單至少必須列出鏈根、掃描範圍、逐項結果與未清阻塞，不得只以「已檢查」或「已同步」概括帶過。
+7. 註解（含程式內摘要註解）不屬本地 formal test suite、bundle 與 `apps/test_suite.py` 驗證範圍；需機械比對的正式契約必須放在程式行為、`--help`、文件、registry 或 checklist，不得以註解作為正式同步邊界。
+8. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
+9. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若存在本輪無法清除的阻塞，不得將局部修補視為完成。
+10. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，將防再犯要求上提為可泛化、可操作的交付前檢查；不得只補單一案例、單一字串或局部實作特例。若屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單並逐項清空；收斂清單至少必須列出鏈根、掃描範圍、逐項結果與未清阻塞，不得只以「已檢查」或「已同步」概括帶過。
 
 ## C. 回覆、交付與輸出
 
