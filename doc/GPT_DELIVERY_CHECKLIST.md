@@ -25,6 +25,7 @@
 11. 對同一 validator function 或同一 impacted_modules 集合內的相鄰缺口，必須一次掃完；不得以先修第一個命中項、單一 assertion 或單一字串命中就停止交付前檢查。
 12. 若更新治理型 Bxx / Txx 契約對應的主表項或 `DONE` 摘要，僅保留索引式摘要：說明 contract 邊界、正式 validator 名稱與涵蓋範圍即可；不得把 `doc/GPT_DELIVERY_CHECKLIST.md` 的逐條操作條款整段複製回 `doc/TEST_SUITE_CHECKLIST.md`。
 13. 若本輪為符合索引式摘要或長度上限而改寫主表項或 `DONE` 摘要，交付前必須同時反查對應 validator 要求的必要 literal 片段與長度上限；不得為了縮句而刪改必需 literal。
+14. 若本輪調整文件分工、角色邊界，或某文件是否納入本地 formal 驗證的規則，交付前必須同步檢查 `doc/ARCHITECTURE.md` 與 `doc/CMD.md` 的角色/流程說明是否仍沿用舊邊界；不得只改 `PROJECT_SETTINGS.md`、`doc/TEST_SUITE_CHECKLIST.md` 或單一文件後即交付。
 
 ## C. Bundle 修復時
 
