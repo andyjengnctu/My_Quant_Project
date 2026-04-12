@@ -20,7 +20,7 @@
 4. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。
 5. 若本輪修改任何受 formal validator 驗證的文字面，交付前必須反查對應 required fragment、required token、長度上限與排除詞；validator 若宣稱只驗穩定 token / 結構，內部也不得再依賴高波動全文、長前綴或完整文案作定位錨點。
 6. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
-7. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；不得只改正式輸出實作，卻讓 contract case sample payload 或 nested schema 仍停在舊欄位。
+7. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；不得只改正式輸出實作，卻讓 contract case sample payload 或 nested schema 仍停在舊欄位。若 validator 已改為驗「排除退役舊鍵」這類中性語意，active sub-check 名稱與 checklist 摘要也不得再直掛退役欄位名。
 8. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面。
 9. 若本輪進行文件瘦身或重組，交付前必須逐一反查對應 validator 要求的全部最小必要 fragment / entry；不得因縮句、合併或改寫，只保留部分同主題片段。
 10. 涉及多份治理文件或角色邊界的敘述時，必須使用顯式檔名；不得回退成模糊代稱或未指名的 bare `checklist` 用詞。
