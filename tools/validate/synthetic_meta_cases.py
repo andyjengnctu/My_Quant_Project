@@ -3156,8 +3156,8 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     }
     return results, summary
 
-def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_base_params):
-    case_id = "META_TEST_SUITE_HELP_TEXT_MENTIONS_LATEST_EXACT_CONTRACT_THEME"
+def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params):
+    case_id = "META_TEST_SUITE_HELP_TEXT_MENTIONS_STABLE_THEME_TOKENS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 

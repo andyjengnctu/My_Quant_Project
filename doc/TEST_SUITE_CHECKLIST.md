@@ -466,7 +466,7 @@
 | T240 | `validate_synthetic_contract_cases_project_root_path_helper_contract_case` | B154 |
 | T241 | `validate_checklist_g_transition_sequence_case` | B155 |
 | T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
-| T243 | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` | B157 |
+| T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
 | T244 | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` | B158 |
 | T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
@@ -1145,11 +1145,11 @@
 | 2026-04-12 | T240 | 新增 synthetic_contract_cases shared path helper 契約並驗證 | NEW -> DONE | `validate_synthetic_contract_cases_project_root_path_helper_contract_case` |
 | 2026-04-12 | T241 | 新增 checklist G transition-chain contract 並驗證 | NEW -> DONE | `validate_checklist_g_transition_sequence_case` |
 | 2026-04-12 | T242 | 新增單股 backtest public stats 盈虧口徑一致性契約並驗證 | NEW -> DONE | `validate_single_backtest_public_profit_equity_consistency_contract_case` |
-| 2026-04-12 | T243 | 新增正式入口 help 摘要同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
-| 2026-04-12 | T243 | 最嚴格檢查檢出正式入口 help 摘要同步契約尚未覆蓋 checklist 摘要標題唯一性主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
-| 2026-04-12 | T243 | 擴充正式入口 help 摘要同步契約納入 `summary-section-heading-uniqueness` 後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
-| 2026-04-12 | T243 | 最嚴格檢查檢出 help theme contract 尚未同步新增 `conservative-executable-exit interpretation contract` 主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
-| 2026-04-12 | T243 | 擴充 help theme contract 納入新主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_latest_exact_contract_theme_case` |
+| 2026-04-12 | T243 | 新增正式入口 help 摘要同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
+| 2026-04-12 | T243 | 最嚴格檢查檢出正式入口 help 穩定主題 token 契約尚未覆蓋摘要標題唯一性主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
+| 2026-04-12 | T243 | 擴充正式入口 help 穩定主題 token 契約納入摘要標題唯一性主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
+| 2026-04-12 | T243 | 最嚴格檢查檢出 help 穩定主題 token 契約尚未同步新增「保守可執行出場解讀」主題，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
+| 2026-04-12 | T243 | 擴充 help 穩定主題 token 契約納入新主題後重新驗證 | PARTIAL -> DONE | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
 | 2026-04-12 | T244 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `validate_test_suite_help_text_has_no_stale_renamed_exact_contract_theme_case` |
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
