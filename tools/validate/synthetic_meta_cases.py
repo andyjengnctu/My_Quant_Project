@@ -655,6 +655,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     project_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯"
     checklist_recurrence_text = "若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新本檔"
     theme_text = "gpt-delivery-checklist governance contract"
+    entry_sync_text = "若本輪新增或調整 validator / Txx / Bxx，而 `apps/test_suite.py` 仍保留人工維護的 coverage 摘要註解或 `--help` 長說明，交付前必須全文搜尋並同步更新相關 Txx / contract 主題"
 
     summary_comment_line = next((line.strip() for line in test_suite_text.splitlines() if line.strip().startswith("# consistency step 透過 synthetic registry 覆蓋")), "")
     help_line = next((line.strip() for line in test_suite_text.splitlines() if 'print("說明: reduced 一鍵測試正式入口；會串接所有已實作測試' in line), '')
@@ -674,6 +675,7 @@ def validate_gpt_delivery_checklist_governance_contract_case(_base_params):
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_strict_preflight_before_delivery", True, strict_preflight_text in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "project_settings_requires_gpt_delivery_checklist_recurrence_update", True, project_recurrence_text in project_settings_text and "補上避免再犯的操作檢查條款" in project_settings_text)
     add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_recurrence_update_clause", True, checklist_recurrence_text in checklist_text and "補上可直接防止同類錯誤再犯的檢查條款" in checklist_text)
+    add_check(results, "meta_entry_contract", case_id, "gpt_delivery_checklist_declares_apps_test_suite_summary_help_sync_scan", True, entry_sync_text in checklist_text and "不得只更新 registry、checklist 或 meta guard" in checklist_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in architecture_text and role_text in architecture_text)
     add_check(results, "meta_entry_contract", case_id, "cmd_mentions_gpt_delivery_checklist_role", True, "GPT_DELIVERY_CHECKLIST.md" in cmd_text and role_text in cmd_text)
     add_check(results, "meta_entry_contract", case_id, "architecture_disambiguates_test_and_gpt_checklists", True, "TEST_SUITE_CHECKLIST / GPT_DELIVERY_CHECKLIST / registry / synthetic 主入口一致性" in architecture_text and "正式檢查 `doc/TEST_SUITE_CHECKLIST.md` 主表" in architecture_text)
@@ -3102,7 +3104,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
     source_text = source_path.read_text(encoding="utf-8")
-    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246"
+    expected_id_list = "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245/T246/T247"
     summary_comment_line = next(
         (
             line.strip()
@@ -3113,7 +3115,7 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     )
 
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_block_present", True, bool(summary_comment_line))
-    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t246", True, expected_id_list in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_lists_t225_through_t247", True, expected_id_list in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t234", True, "T234" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t235", True, "T235" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t236", True, "T236" in summary_comment_line)
@@ -3127,6 +3129,8 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t244", True, "T244" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t245", True, "T245" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t246", True, "T246" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_explicitly_mentions_t247", True, "T247" in summary_comment_line)
+    add_check(results, "meta_contract", case_id, "test_suite_summary_comment_mentions_checklist_summary_heading_uniqueness_theme", True, "checklist-summary-heading-uniqueness" in summary_comment_line)
     add_check(results, "meta_contract", case_id, "test_suite_summary_comment_has_no_stale_missing_latest_exact_contract_id_list", False, "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243/T244/T245）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242/T243）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241/T242）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240/T241）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239/T240）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238/T239）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237/T238）。" in summary_comment_line or "T225/T226/T229/T230/T231/T232/T233/T234/T235/T236/T237）。" in summary_comment_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
@@ -3144,6 +3148,7 @@ def validate_test_suite_help_text_mentions_latest_exact_contract_theme_case(_bas
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_single_backtest_public_profit_equity_consistency_contract", True, "single-backtest public profit/equity consistency contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_checklist_summary_section_heading_uniqueness_guard", True, "summary-section-heading-uniqueness" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
