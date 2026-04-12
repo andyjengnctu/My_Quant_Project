@@ -188,7 +188,7 @@
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
-| B47 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | DONE | 已新增 model I/O schema case，直接驗輸入欄位、輸出欄位、型別與缺值處理 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/`, `tools/scanner/` |
+| B47 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | DONE | 已新增 model I/O schema case，直接驗輸入欄位、輸出欄位、型別與缺值處理，並釘死 repo 內 `models/*best_params*.json` shipped 工件不得對 float-schema 欄位輸出 `int` 型別 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/`, `tools/scanner/`, `models/best_params.json`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
 | B48 | P1 | 重現性 | 同 seed 下 optimizer / model inference 可重現 | DONE | 已新增 strategy repeatability case，直接雙跑 scanner inference 與 optimizer objective，驗證輸出 payload、trial params 與 profile_row 在固定 seed / 固定輸入下可重現 | `tools/validate/synthetic_strategy_cases.py`, `tools/local_regression/`, `tools/optimizer/` |
 | B49 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | DONE | 已新增 ranking / scoring sanity case，直接驗 EV / PROJ_COST / HIST_WIN_X_TRADES / ASSET_GROWTH 排序值可用、方向一致與型別正確 | `tools/validate/synthetic_strategy_cases.py`, `core/buy_sort.py`, `tools/scanner/` |
 | B50 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | DONE | 已新增 strategy minimum viability case，直接驗 scanner、optimizer、strategy dashboard、scanner summary 與 yearly return report 在策略輸入下可正常執行 | `tools/validate/synthetic_strategy_cases.py`, `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
@@ -1017,6 +1017,8 @@
 | 2026-04-11 | T235 | 補齊 forced-closeout 舊 float total-pnl 負向守衛後重新驗證 | PARTIAL -> DONE | `validate_debug_exit_total_return_milli_binding_contract_case` |
 | 2026-04-11 | T236 | 新增 core R-multiple exact-ledger static contract 並驗證 | NEW -> DONE | `validate_core_r_multiple_exact_ledger_contract_case` |
 | 2026-04-11 | T237 | 新增 GUI workbench 文件同步 static contract 並驗證 | NEW -> DONE | `validate_gui_workbench_documentation_sync_case` |
+| 2026-04-12 | B47 | 檢出 repo 內 `models/*best_params*.json` shipped 工件仍允許 float-schema 欄位寫成 `int`，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
+| 2026-04-12 | B47 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別一致性並同步修正 `models/all_best_params_2.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | B52 | 檢出 best_params export contract 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-12 | B52 | 補齊 best_params export canonicalization contract 與匯出鏈後重新收斂為 DONE | PARTIAL -> DONE | `tools/optimizer/study_utils.py` |
 | 2026-04-12 | B52 | 檢出 repo 內 `models/all_best_params*.json` 既有最佳參數工件仍殘留浮點尾差，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
@@ -1058,6 +1060,8 @@
 | 2026-04-12 | B156 | 新增單股 backtest public stats 盈虧口徑一致性契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B157 | 新增正式入口 help 摘要同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B158 | 新增正式入口 help 更名主題同步契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
+| 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未釘死 search-step float canonicalization 與預設費率 decimal canonical 輸出，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 canonicalization 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未覆蓋 repo 內 `models/all_best_params*.json` 既有最佳參數工件 canonical decimal，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |

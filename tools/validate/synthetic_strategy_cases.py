@@ -221,7 +221,7 @@ def validate_model_io_schema_case(base_params):
             actual = isinstance(actual_value, int) and not isinstance(actual_value, bool)
         elif isinstance(default_value, float):
             expected = True
-            actual = isinstance(actual_value, (int, float)) and not isinstance(actual_value, bool)
+            actual = isinstance(actual_value, float)
         elif default_value is None:
             expected = True
             actual = actual_value is None or isinstance(actual_value, int)
@@ -229,6 +229,46 @@ def validate_model_io_schema_case(base_params):
             expected = True
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
+
+    shipped_best_params_paths = [Path("models/best_params.json"), *sorted(Path("models").glob("all_best_params_*.json"))]
+    shipped_payload_keys = {}
+    shipped_payload_type_mismatches = {}
+    for shipped_path in shipped_best_params_paths:
+        shipped_payload = json.loads(shipped_path.read_text(encoding="utf-8"))
+        shipped_payload_keys[shipped_path.name] = sorted(shipped_payload.keys())
+        mismatch_fields = []
+        for field_name, default_value in default_payload.items():
+            actual_value = shipped_payload[field_name]
+            if isinstance(default_value, bool):
+                field_ok = isinstance(actual_value, bool)
+            elif isinstance(default_value, int) and not isinstance(default_value, bool):
+                field_ok = isinstance(actual_value, int) and not isinstance(actual_value, bool)
+            elif isinstance(default_value, float):
+                field_ok = isinstance(actual_value, float)
+            elif default_value is None:
+                field_ok = actual_value is None or isinstance(actual_value, int)
+            else:
+                field_ok = isinstance(actual_value, type(default_value))
+            if not field_ok:
+                mismatch_fields.append(f"{field_name}:{type(actual_value).__name__}")
+        shipped_payload_type_mismatches[shipped_path.name] = mismatch_fields
+
+    add_check(
+        results,
+        "strategy_schema",
+        case_id,
+        "repo_shipped_best_params_payload_keys_match_strategy_schema",
+        {path.name: sorted(default_payload.keys()) for path in shipped_best_params_paths},
+        shipped_payload_keys,
+    )
+    add_check(
+        results,
+        "strategy_schema",
+        case_id,
+        "repo_shipped_best_params_payload_types_match_strategy_schema",
+        {path.name: [] for path in shipped_best_params_paths},
+        shipped_payload_type_mismatches,
+    )
 
     restored_trial_params = build_optimizer_trial_params(fake_trial.params, fake_trial.user_attrs, fixed_tp_percent=None)
     add_check(
