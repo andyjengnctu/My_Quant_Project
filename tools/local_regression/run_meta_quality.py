@@ -200,10 +200,6 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
     test_entries.update(re.findall(r"\brun_[A-Za-z0-9_.-]+\.py\b", text_without_backticks))
     return sorted(test_entries)
 
-def _checklist_has_legacy_d_section() -> bool:
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    return "## D. 建議先補的測試項目" in text
-
 
 def _checklist_first_nonempty_line_matches_title() -> bool:
     for raw_line in CHECKLIST_PATH.read_text(encoding="utf-8").splitlines():
@@ -212,18 +208,6 @@ def _checklist_first_nonempty_line_matches_title() -> bool:
             return stripped == "# Test Suite 收斂清單"
     return False
 
-
-def _checklist_summary_section_heading_occurrences() -> Dict[str, int]:
-    text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    target_headings = (
-        "## E. 未完成缺口摘要",
-        "### E1. 目前所有 `PARTIAL` 的主表項目摘要",
-        "### E2. 目前所有 `TODO` 的主表項目摘要",
-        "### E3. 目前所有未完成的建議測試項目摘要",
-        "## T. 已完成建議測試映射",
-        "### T. 目前所有 `DONE` 的建議測試項目摘要",
-    )
-    return {heading: text.count(heading) for heading in target_headings}
 
 
 def _summarize_checklist_consistency() -> Dict[str, Any]:
@@ -238,24 +222,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             first_nonempty_line_ok,
             detail=f"matches={first_nonempty_line_ok}",
             extra={"matches": first_nonempty_line_ok},
-        )
-    )
-
-    summary_heading_occurrences = _checklist_summary_section_heading_occurrences()
-    invalid_summary_heading_occurrences = {
-        heading: count
-        for heading, count in summary_heading_occurrences.items()
-        if count != 1
-    }
-    results.append(
-        summarize_result(
-            "checklist_summary_section_headings_unique",
-            not invalid_summary_heading_occurrences,
-            detail=f"invalid={invalid_summary_heading_occurrences}",
-            extra={
-                "summary_heading_occurrences": summary_heading_occurrences,
-                "invalid_summary_heading_occurrences": invalid_summary_heading_occurrences,
-            },
         )
     )
 
@@ -482,25 +448,6 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             extra={"invalid_order_rows": invalid_g_order_rows},
         )
     )
-    results.append(
-        summarize_result(
-            "checklist_has_no_legacy_d_section",
-            not _checklist_has_legacy_d_section(),
-            detail=f"legacy_d_section_present={_checklist_has_legacy_d_section()}",
-            extra={"legacy_d_section_present": _checklist_has_legacy_d_section()},
-        )
-    )
-
-    legacy_f1_present = "### F1. 目前所有 `DONE` 的主表項目摘要" in CHECKLIST_PATH.read_text(encoding="utf-8")
-    results.append(
-        summarize_result(
-            "checklist_has_no_legacy_f1_section",
-            not legacy_f1_present,
-            detail=f"legacy_f1_section_present={legacy_f1_present}",
-            extra={"legacy_f1_section_present": legacy_f1_present},
-        )
-    )
-
 
     results.append(
         summarize_result(

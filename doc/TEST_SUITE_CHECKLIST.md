@@ -51,20 +51,20 @@
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
 | B15 | P1 | 錯誤處理 | 壞 JSON、缺參數、缺檔、匯入失敗、API 失敗時訊息可定位 | DONE | 已補 `params_io` / `module_loader` / `preflight_env` 的 module 級錯誤路徑，並補 downloader universe fetch 全失敗與 screening 初始化失敗的 fatal error path，錯誤訊息與 issue log 已可定位 | `core/params_io.py`, `tools/validate/preflight_env.py`, `tools/validate/module_loader.py`, `tools/validate/synthetic_error_cases.py` |
-| B16 | P2 | CLI | 互斥參數、預設值、help 與實作一致 | DONE | 已補 dataset wrapper、local regression / no-arg CLI 與剩餘直接入口 CLI 契約，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數、缺值、空值、位置參數拒絕，以及 `run_all.py` 參數錯誤 stderr usage 必須同步列出 `meta_quality` | `tools/validate/synthetic_cli_cases.py`, `apps/*.py`, `core/runtime_utils.py` |
+| B16 | P2 | CLI | 互斥參數、預設值、help 與 shipped 指令文件一致 | DONE | 已補 dataset wrapper、local regression / no-arg CLI 與剩餘直接入口 CLI 契約，覆蓋 help、預設 passthrough、`--only` / `--steps` 正規化、未知參數、缺值、空值、位置參數拒絕，以及 `run_all.py` 參數錯誤 stderr usage 必須同步列出 `meta_quality`；`doc/CMD.md` 的 shipped Python 指令與主要參數也併入同一 formal 邊界 | `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_meta_cases.py`, `apps/*.py`, `core/runtime_utils.py`, `doc/CMD.md` |
 | B17 | P2 | I/O | 輸出工件、bundle、retention、rerun 覆寫行為 | DONE | 已補 validate summary / optimizer profile / issue report 的 output contract，以及 bundle/archive/root-copy/retention lifecycle、PASS/FAIL bundle selection、artifacts manifest、rerun 覆寫內容契約；另補 quick gate 發生 runtime error 時仍必須落出正式 FAIL summary / console artifact 契約 | `core/output_paths.py`, `core/output_retention.py`, `tools/validate/synthetic_contract_cases.py`, `tools/local_regression/run_quick_gate.py` |
 | B18 | P1 | 回歸 | 重跑一致性、狀態汙染、cache 汙染 | DONE | 已補 `run_chain_checks.py` 雙跑 digest、`run_ml_smoke.py` fixed-seed 雙跑、`validate_optimizer_raw_cache_rerun_consistency_case` 與 `validate_run_all_repeatability_case`，正式入口與 cache 汙染隔離已收斂 | `tools/local_regression/`, `tools/optimizer/raw_cache.py`, `tools/validate/synthetic_regression_cases.py` |
 | B19 | P2 | 效能 | reduced dataset 時間基線、optimizer 每 trial 上限、記憶體回歸 | DONE | 已將 quick gate / consistency / chain checks / ml smoke / meta quality / total suite duration、optimizer 平均 trial wall time 與各步驟 / meta quality traced peak memory 全數納入 `run_meta_quality.py` 正式 gating，並同步回寫 step summaries / `meta_quality_summary.json` / `apps/test_suite.py` 摘要；step summary 的 duration 欄位已補齊，consistency / chain / total budget 依實測 reduced baseline 校正；另已把 chain checks 改為同輪共用 prepared market context、prepared scanner snapshot、cached single-backtest stats，並將 replay counts 直接併入第一次 timeline 主流程；`portfolio_sim` 驗證也改直接共用 `validate_one_ticker()` 已產生的 prepared df / standalone logs，不再重讀 CSV、重新 sanitize / prepare，且單檔 portfolio context 的 `fast_data / sorted_dates / start_year` 改為共用，不再在 real-case 與 tool check 各自重建；`validate_consistency` 執行 synthetic suite 時已同步寫出 coverage artifacts，`run_meta_quality.py` 可直接重用同輪 artifacts，不再重跑一次 synthetic coverage suite | `tools/local_regression/`, `core/runtime_utils.py`, `apps/test_suite.py` |
-| B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致 | DONE | 已新增 CMD Python 指令契約案例，校驗腳本存在、`--dataset` / `--only` / `--steps` 參數值合法，並確認文件中的專案腳本已納入 quick gate help 檢查 | `tools/validate/synthetic_meta_cases.py` |
+| B20 | P2 | 文件 | `doc/CMD.md` 指令與實作一致（已併入 B16） | N/A | 已併入 B16 的 CLI / help / `doc/CMD.md` shipped 指令契約；保留 ID 只作歷史索引，不再作獨立 formal blocker | `validate_cmd_document_contract_case`, `doc/CMD.md` |
 | B21 | P2 | 顯示 | 報表欄位、排序、百分比格式與來源一致 | DONE | 已補 scanner header / start banner / summary、strategy dashboard、validate console summary、issue Excel report schema、portfolio yearly/export report，以及 `apps/test_suite.py` 在 PASS / FAIL / manifest-blocked / partial-selected-steps / preflight-failed / dataset-prepare-failed / summary-unreadable 下的人類可讀摘要契約；另補 score header 顯示契約，釘死 `評分模型` 與 `評分分子` 必須分欄顯示、不得再以 `/ 分子` 混入同一括號；並補 checklist status vocabulary sync 與 meta quality coverage line/branch/min-threshold/missing-zero-target guard 摘要顯示，且以 `run_all.py` contract 釘死 preflight 早退時 dataset_prepare 仍需標記為 `NOT_RUN`，避免 real path 誤落成 `missing_summary_file`；另補 portfolio export 的 Plotly optional dependency fallback 契約，要求主要 Excel artifact 仍須成功匯出、HTML 可略過但必須輸出可追蹤錯誤摘要，且 `except (...)` tuple 不得引用未匯入模組 | `tools/validate/synthetic_display_cases.py`, `tools/validate/synthetic_reporting_cases.py`, `tools/validate/synthetic_contract_cases.py`, `core/display.py`, `tools/scanner/reporting.py`, `tools/portfolio_sim/reporting.py`, `apps/test_suite.py`, `tools/local_regression/run_all.py` |
-| B22 | P2 | 覆蓋率 | line / branch coverage 報表 | DONE | 已將 `run_meta_quality.py` 的 synthetic coverage suite、formal helper probe、key target presence/hit 與 manifest 化 line / branch minimum threshold gate 收斂為正式路徑，並同步回寫 `meta_quality_summary.json` / `apps/test_suite.py` 摘要顯示 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |
+| B22 | P2 | 覆蓋率 | line / branch coverage 報表與核心覆蓋門檻 | DONE | 已將 `run_meta_quality.py` 的 synthetic coverage suite、formal helper probe、manifest 化 line / branch minimum threshold gate、key coverage targets completeness，以及 critical files per-file line / branch minimum gate 收斂為同一正式 coverage 路徑，並同步回寫 `meta_quality_summary.json` / `apps/test_suite.py` 摘要顯示 | `tools/local_regression/run_meta_quality.py`, `tools/local_regression/common.py`, `apps/test_suite.py` |
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要只要求每列維持單一 shipped formal entry，formal step 單一真理來源維持在 `tools/local_regression/formal_pipeline.py`，不再把 command string 的逐字記錄形式上升為獨立 release blocker；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，正式 blocker 只保留 checklist 結構完整性：主表 / `E` / `T` 摘要同步、`T` 每列單一正式入口、`G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / 日期與 tracking ID 排序、檔案開頭第一個非空行固定、`E` / `T` 摘要區與子標題不得重複，以及 legacy `D` / `F1` 區不得回流；`G` 備註欄只作治理索引與人工說明，不再承擔 release-blocking formal contract | `tools/local_regression/run_meta_quality.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard；正式 blocker 只保留 checklist 結構可解析、主表 / `E` / `T` 摘要同步、`T` 每列單一 shipped formal entry，以及 `G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / 日期與 tracking ID 排序；`G` 備註欄只作治理索引與人工說明，不再承擔 release-blocking formal contract | `tools/local_regression/run_meta_quality.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
-| B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
-| B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
+| B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組（已併入 B22） | N/A | 已併入 B22 的正式 coverage 邊界；保留 ID 只作歷史索引，不再作獨立 formal blocker | `validate_core_trading_modules_in_coverage_targets_case`, `tools/local_regression/run_meta_quality.py` |
+| B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate（已併入 B22） | N/A | 已併入 B22 的正式 coverage 邊界；保留 ID 只作歷史索引，不再作獨立 formal blocker | `validate_critical_file_coverage_minimum_gate_case`, `tools/local_regression/run_meta_quality.py` |
 | B30 | P1 | 覆蓋率 | overall coverage minimum threshold 應逐步提高，branch 優先 | DONE | 已將正式 coverage 基線提高為 `line 55% / branch 50%`，並新增 threshold floor guard，阻擋門檻回退到舊的 `50 / 45`；branch 與 line 的 gap 也已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B31 | P1 | 覆蓋率 | entry path 關鍵模組應納入 critical file per-file coverage gate | DONE | 已將 `core/portfolio_entries.py` 與 `core/entry_plans.py` 納入 `CRITICAL_COVERAGE_TARGETS`，並新增 entry-path completeness / importability guard，避免 only-exit / engine critical gate 漏掉實際高風險進場邏輯 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cases.py` |
 | B32 | P1 | 覆蓋率 | critical file per-file minimum threshold 應具備 stage-2 floor guard，branch 優先 | DONE | 已將 `coverage_critical_line_min_percent` / `coverage_critical_branch_min_percent` 正式基線提高為 `30% / 25%`，並新增 critical threshold floor guard，阻擋 critical per-file 門檻回退到舊的 `25 / 20`；critical branch 與 line 的 gap 亦已納入 formal policy 檢查 | `tools/local_regression/common.py`, `tools/local_regression/manifest.json`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -255,7 +255,7 @@
 | T23 | `validate_known_bad_fault_injection_case` | B24 |
 | T24 | `validate_independent_oracle_golden_case` | B25 |
 | T25 | `tools/validate/meta_contracts.py` | B26 |
-| T26 | `validate_cmd_document_contract_case` | B20 |
+| T26 | `validate_cmd_document_contract_case` | B16 |
 | T27 | `validate_display_reporting_sanity_case` | B21 |
 | T28 | `validate_artifact_lifecycle_contract_case` | B17 |
 | T29 | `tools/local_regression/formal_pipeline.py` | B23 |
@@ -322,8 +322,8 @@
 | T90 | `validate_optimizer_raw_cache_rerun_consistency_case` | B18 |
 | T91 | `validate_run_all_repeatability_case` | B18 |
 | T92 | `validate_no_top_level_import_cycles_case` | B27 |
-| T93 | `validate_core_trading_modules_in_coverage_targets_case` | B28 |
-| T94 | `validate_critical_file_coverage_minimum_gate_case` | B29 |
+| T93 | `validate_core_trading_modules_in_coverage_targets_case` | B22 |
+| T94 | `validate_critical_file_coverage_minimum_gate_case` | B22 |
 | T95 | `validate_coverage_threshold_floor_case` | B30 |
 | T96 | `validate_entry_path_critical_coverage_gate_case` | B31 |
 | T97 | `validate_critical_coverage_threshold_floor_case` | B32 |
@@ -338,7 +338,6 @@
 | T106 | `validate_formal_step_entry_coverage_targets_case` | B38 |
 | T108 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
 | T109 | `validate_checklist_g_transition_format_case` | B26 |
-| T110 | `validate_checklist_no_legacy_d_section_case` | B26 |
 | T111 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
 | T112 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
 | T113 | `validate_run_all_cli_error_usage_contract_case` | B16 |
@@ -353,7 +352,6 @@
 | T122 | `validate_dataset_prepare_fallback_write_traceability_case` | B46 |
 | T123 | `validate_console_tail_read_error_traceability_case` | B46 |
 | T124 | `validate_checklist_g_ordering_case` | B26 |
-| T125 | `validate_checklist_no_legacy_f1_section_case` | B26 |
 | T126 | `validate_strategy_repeatability_case` | B48 |
 | T127 | `validate_strategy_minimum_viability_case` | B50 |
 | T128 | `validate_strategy_reporting_schema_compatibility_case` | B51 |
@@ -466,7 +464,6 @@
 | T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
 | T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
 | T244 | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` | B158 |
-| T247 | `validate_checklist_summary_section_headings_unique_case` | B26 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
 | T250 | `validate_architecture_models_best_params_file_tree_sync_case` | B163 |
@@ -1160,10 +1157,13 @@
 | 2026-04-13 | B11 | 將 active sub-check 與 checklist 摘要改為中性「退役舊鍵排除」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 最嚴格檢查檢出 `formal_entry` stale-key 排除檢查實際誤檢 `project_settings_steps`、未直接禁止 legacy `steps` 舊鍵，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 將 `formal_entry` stale-key 排除檢查改為直接禁止 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-13 | B20 | 將 `doc/CMD.md` shipped 指令契約併入 B16，B20 改列歷史索引 | DONE -> N/A | `validate_cmd_document_contract_case` |
 | 2026-04-13 | B26 | 最嚴格檢查檢出 `G` 同日區塊未重排導致 `B158` 落在 `T124` 後方，主表改回 PARTIAL | DONE -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B26 | 依日期與 tracking ID 重新排序 `G` 同日區塊並補強交付前整段重排 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B26 | 依 bundle 實際失敗再次檢出 `G` 同日區塊新增較小 tracking ID 後未整段重排，排序 guard 再被真實失敗擊中，主表改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-13 | B26 | 將 2026-04-13 同日區塊抽出後依日期與 tracking ID 穩定重排並重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-13 | B28 | 將 key coverage targets completeness 併入 B22，B28 改列歷史索引 | DONE -> N/A | `validate_core_trading_modules_in_coverage_targets_case` |
+| 2026-04-13 | B29 | 將 critical files per-file coverage minimum gate 併入 B22，B29 改列歷史索引 | DONE -> N/A | `validate_critical_file_coverage_minimum_gate_case` |
 | 2026-04-13 | B50 | 最嚴格檢查檢出 strategy minimum viability smoke 尚未釘死 scanner summary canonical issue-log path，仍可回流退役 `outputs/scanner/` 類別，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-13 | B50 | 將 scanner summary smoke contract 收斂為 canonical `outputs/vip_scanner/` issue-log path 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-13 | B152 | 最嚴格檢查檢出 trade_analysis legacy output dir 文件契約在 `doc/CMD.md` 與 `doc/ARCHITECTURE.md` 的 retention / output 區仍殘留裸 `debug_trade_log` 目錄名，與 canonical `outputs/debug_trade_log/` 路徑分叉，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
@@ -1199,11 +1199,13 @@
 | 2026-04-13 | T18 | 最嚴格檢查檢出 stale-key 排除檢查實際誤檢 `project_settings_steps`、未直接覆蓋 legacy `steps` 舊鍵，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
 | 2026-04-13 | T18 | 將 stale-key 排除檢查改為直接覆蓋 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
 | 2026-04-13 | T107 | 依 formal 瘦身將 `G` 備註欄 single-entry delimiter hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-13 | T110 | 將 legacy `D` 區回流 guard 自 formal blocker 退役 | DONE -> N/A | `validate_checklist_no_legacy_d_section_case` |
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 最嚴格檢查檢出 `G` 同日區塊排序斷裂並命中 `checklist_g_rows_sorted_by_date_then_id`，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊依日期與 tracking ID 重排後重新收斂為 DONE | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 依 bundle 實際失敗再次檢出 `G` 同日區塊新增較小 tracking ID 後未整段重排，排序 guard 再被真實失敗擊中 | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊抽出後依日期與 tracking ID 穩定重排並重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | T125 | 將 legacy `F1` 區回流 guard 自 formal blocker 退役 | DONE -> N/A | `validate_checklist_no_legacy_f1_section_case` |
 | 2026-04-13 | T127 | 最嚴格檢查檢出 strategy minimum viability case 尚未直接覆蓋 scanner summary canonical issue-log path，改回 PARTIAL | DONE -> PARTIAL | `validate_strategy_minimum_viability_case` |
 | 2026-04-13 | T127 | 擴充 scanner summary smoke contract，釘死 canonical `outputs/vip_scanner/` issue-log path 後重新收斂為 DONE | PARTIAL -> DONE | `validate_strategy_minimum_viability_case` |
 | 2026-04-13 | T140 | 依 formal 瘦身將 `G` 備註欄 validator reference existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
@@ -1233,6 +1235,7 @@
 | 2026-04-13 | T244 | 將 help 舊 wording / 裸用詞排除 validator 改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 裸用詞排除 validator 仍以 `TEST_SUITE_CHECKLIST` 白名單承接已不應出現在正式 help 的 canonical token，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 help 裸用詞排除 validator 收斂為直接禁止 bare `checklist` 與 `contract` 長列舉後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
+| 2026-04-13 | T247 | 將 checklist 摘要區 heading 唯一性 guard 自 formal blocker 退役 | DONE -> N/A | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-13 | T251 | 最嚴格檢查檢出 internal helper exact file-tree validator 將高波動 helper 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-13 | T252 | 最嚴格檢查檢出 internal support exact file-tree validator 將高波動 support 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-13 | T254 | 依 formal 瘦身將 `G` 備註欄單一可解析代表 entry hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |

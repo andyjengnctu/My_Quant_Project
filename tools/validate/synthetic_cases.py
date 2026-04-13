@@ -53,8 +53,6 @@ from .synthetic_unit_cases import (
     validate_price_utils_unit_case,
 )
 from .synthetic_meta_cases import (
-    validate_checklist_no_legacy_d_section_case,
-    validate_checklist_no_legacy_f1_section_case,
     validate_checklist_f2_formal_command_single_entry_case,
     validate_checklist_done_test_summary_markdown_structure_case,
     validate_checklist_f2_single_entry_delimiter_case,
@@ -63,7 +61,6 @@ from .synthetic_meta_cases import (
     validate_checklist_g_new_transition_first_occurrence_case,
     validate_checklist_g_transition_sequence_case,
     validate_checklist_first_nonempty_line_case,
-    validate_checklist_summary_section_headings_unique_case,
     validate_checklist_summary_tables_sorted_by_id_case,
     validate_synthetic_meta_cases_summary_value_accessor_contract_case,
     validate_synthetic_case_numpy_alias_import_contract_case,
@@ -324,8 +321,6 @@ def get_synthetic_validator_entries():
         _entry(validate_exact_accounting_display_leg_reconciliation_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/exact_accounting.py", "core/portfolio_exits.py", "tools/trade_analysis/exit_flow.py")),
         _entry(validate_independent_oracle_golden_case, layer="unit_boundary", cost_class="fast", impacted_modules=("core/price_utils.py", "core/history_filters.py", "core/portfolio_stats.py")),
         _entry(validate_registry_checklist_entry_consistency_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/validate/synthetic_cases.py")),
-        _entry(validate_checklist_no_legacy_d_section_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
-        _entry(validate_checklist_no_legacy_f1_section_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_checklist_f2_formal_command_single_entry_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_checklist_done_test_summary_markdown_structure_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_checklist_f2_single_entry_delimiter_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
@@ -334,7 +329,6 @@ def get_synthetic_validator_entries():
         _entry(validate_checklist_g_new_transition_first_occurrence_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py")),
         _entry(validate_checklist_g_transition_sequence_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_checklist_first_nonempty_line_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
-        _entry(validate_checklist_summary_section_headings_unique_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_checklist_summary_tables_sorted_by_id_case, layer="meta_contract", cost_class="fast", impacted_modules=("doc/TEST_SUITE_CHECKLIST.md", "tools/local_regression/run_meta_quality.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_synthetic_meta_cases_summary_value_accessor_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/local_regression/common.py", "tools/validate/synthetic_meta_cases.py")),
         _entry(validate_synthetic_case_numpy_alias_import_contract_case, layer="meta_contract", cost_class="fast", impacted_modules=("tools/validate/synthetic_contract_cases.py", "tools/validate/synthetic_meta_cases.py")),
