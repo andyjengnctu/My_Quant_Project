@@ -34,7 +34,7 @@
 15b. 若 formal-facing 文件、`doc/CMD.md`、`doc/ARCHITECTURE.md`、report 或 retention 說明提到輸出目錄，必須使用完整 canonical `outputs/<category>/` 路徑；不得把 bare 類別名、legacy 目錄尾名或省略 `outputs/` 的片段當成正式路徑。
 16. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
 17. 若本輪將既有 formal contract 改列 `N/A`、compatibility stub 或其他非正式長期路徑，交付前必須同步檢查 registry completeness、defined/imported validator set、`doc/TEST_SUITE_CHECKLIST.md` parser 與 `done/unfinished` 摘要。
-18. 若本輪調整 checklist 治理規則，交付前只需確認 `G` 收斂紀錄仍可供人工閱讀，且不會破壞機械排序、狀態轉移或摘要同步；不要再把 `G` 備註欄的單一 entry、path existence 或 retired validator 名稱上升為新的 formal blocker。
+18. 若本輪調整 checklist 治理規則，交付前只需確認 `G` 收斂紀錄仍可供人工閱讀，且不會破壞機械排序、狀態轉移或摘要同步；不要再把僅屬收斂備註欄 hygiene 的文字細節上升為新的 formal blocker。
 
 ## C. Bundle 與收斂
 

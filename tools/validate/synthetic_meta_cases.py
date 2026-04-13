@@ -1033,124 +1033,8 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     return results, summary
 
 
-def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
-
-    case_id = "META_CHECKLIST_G_SINGLE_NOTE_ENTRY_DELIMITER"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="B38",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:4] + ["`run_meta_quality.py` / `meta_contracts.py`"],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_note_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    removed_names = {
-        "checklist_g_rows_use_single_note_entry",
-        "checklist_g_note_path_entries_exist",
-        "checklist_g_note_validate_entries_exist",
-    }
-    removed_present = sorted(name for name in removed_names if name in result_by_name)
-    governance_result = result_by_name.get("checklist_g_notes_are_non_blocking_governance_context", {})
-
-    add_check(results, "meta_checklist", case_id, "g_note_hygiene_guards_are_not_formal_blockers", [], removed_present)
-    add_check(results, "meta_checklist", case_id, "g_note_governance_context_summary_present", "PASS", governance_result.get("status"))
-
-    summary["removed_present"] = removed_present
-    summary["governance_status"] = governance_result.get("status")
-    return results, summary
 
 
-def validate_checklist_g_single_parseable_note_entry_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
-
-    case_id = "META_CHECKLIST_G_SINGLE_PARSEABLE_NOTE_ENTRY"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="T67",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:4] + ["需補 checklist 自身同步性檢查。"],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_parseable_note_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    removed_names = {
-        "checklist_g_rows_use_single_note_entry",
-        "checklist_g_note_path_entries_exist",
-        "checklist_g_note_validate_entries_exist",
-    }
-    removed_present = sorted(name for name in removed_names if name in result_by_name)
-
-    add_check(results, "meta_checklist", case_id, "freeform_g_note_does_not_reintroduce_removed_formal_guards", [], removed_present)
-
-    summary["removed_present"] = removed_present
-    return results, summary
-
-
-def validate_checklist_g_note_path_reference_exists_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
-
-    case_id = "META_CHECKLIST_G_NOTE_PATH_REFERENCE_EXISTS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="T20",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:4] + ["`run_meta_quality.py`"],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_note_path_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    removed_present = sorted(
-        name for name in ("checklist_g_note_path_entries_exist",) if name in result_by_name
-    )
-
-    add_check(results, "meta_checklist", case_id, "g_note_path_hygiene_is_not_a_formal_blocker", [], removed_present)
-
-    summary["removed_present"] = removed_present
-    return results, summary
 
 def validate_checklist_f2_formal_command_single_entry_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
@@ -1168,7 +1052,7 @@ def validate_checklist_f2_formal_command_single_entry_case(_base_params):
         mutated_text = _replace_markdown_table_row(
             original_text,
             heading="T. 目前所有 `DONE` 的建議測試項目摘要",
-            row_id="T107",
+            row_id="T108",
             id_col_idx=0,
             update_cols=lambda cols: [cols[0], f"`{command_entry}`", cols[2]],
         )
@@ -1189,7 +1073,7 @@ def validate_checklist_f2_formal_command_single_entry_case(_base_params):
         invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_single_entry_guard_passes", "PASS", f2_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_not_reported_invalid", False, any(row.get("id") == "T107" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_not_reported_invalid", False, any(row.get("id") == "T108" for row in invalid_rows))
 
     summary["guard_status"] = f2_result.get("status")
     summary["parsed_entries"] = parsed_entries
@@ -1249,9 +1133,9 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
         mutated_text = _replace_markdown_table_row(
             original_text,
             heading="T. 目前所有 `DONE` 的建議測試項目摘要",
-            row_id="T107",
+            row_id="T108",
             id_col_idx=0,
-            update_cols=lambda cols: [cols[0], "`validate_checklist_g_single_note_entry_delimiter_case` / `tools/local_regression/run_meta_quality.py`", cols[2]],
+            update_cols=lambda cols: [cols[0], "`tools/local_regression/run_meta_quality.py` / `tools/validate/meta_contracts.py`", cols[2]],
         )
     except ValueError:
         add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
@@ -1270,7 +1154,7 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
         invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
 
     add_check(results, "meta_checklist", case_id, "mutated_f2_single_entry_guard_fails", "FAIL", f2_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "T107" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "T108" for row in invalid_rows))
 
     summary["guard_status"] = f2_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
@@ -1533,42 +1417,6 @@ def validate_checklist_first_nonempty_line_case(_base_params):
     summary["match_flag"] = match_flag
     return results, summary
 
-
-def validate_checklist_g_note_validate_reference_exists_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
-
-    case_id = "META_CHECKLIST_G_NOTE_VALIDATE_REFERENCE_EXISTS"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
-    try:
-        mutated_text = _replace_markdown_table_row(
-            original_text,
-            heading="G. 逐項收斂紀錄",
-            row_id="T138",
-            id_col_idx=1,
-            update_cols=lambda cols: cols[:4] + ["`validate_nonexistent_retired_case`"],
-        )
-    except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
-        return results, summary
-
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_validate_note_") as temp_dir:
-        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
-        mutated_path.write_text(mutated_text, encoding="utf-8")
-        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
-            consistency = meta_quality_module._summarize_checklist_consistency()
-
-    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    removed_present = sorted(
-        name for name in ("checklist_g_note_validate_entries_exist",) if name in result_by_name
-    )
-
-    add_check(results, "meta_checklist", case_id, "g_note_validator_reference_hygiene_is_not_a_formal_blocker", [], removed_present)
-
-    summary["removed_present"] = removed_present
-    return results, summary
 
 
 def validate_checklist_g_ordering_case(_base_params):

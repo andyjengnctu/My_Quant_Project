@@ -61,7 +61,7 @@
 | B23 | P1 | Meta | checklist / 測試註冊 / 正式入口一致性 | DONE | 已補 synthetic 主入口遺漏註冊案例，並新增 imported / defined `validate_*` case、formal pipeline registry / formal-entry / run_all / preflight / test_suite 一致性 formal guard；`T` 摘要只要求每列維持單一 shipped formal entry，formal step 單一真理來源維持在 `tools/local_regression/formal_pipeline.py`，不再把 command string 的逐字記錄形式上升為獨立 release blocker；另補 `core/` / `tools/` 不得反向 import `apps/` 的分層 guard | `tools/validate/synthetic_meta_cases.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_cases.py`, `tools/local_regression/formal_pipeline.py` |
 | B24 | P1 | Meta | known-bad fault injection：關鍵規則故意破壞後測試必須 fail | DONE | 已新增 meta fault-injection case，直接對 same-day sell、same-bar stop priority、fee/tax、history filter misuse 注入 known-bad 行為，並驗證既有測試會產生 FAIL | `tools/validate/synthetic_meta_cases.py` |
 | B25 | P1 | Meta | independent oracle / golden cases：高風險數值規則不可只與 production 共用同邏輯 | DONE | 已新增獨立 oracle golden case，對 net sell、position size、history EV、annual return / sim years 以手算或獨立公式對照 production | `tools/validate/synthetic_unit_cases.py` |
-| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，正式 blocker 只保留 checklist 結構完整性：主表 / `E` / `T` 摘要同步、`T` 每列單一正式入口、`G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / 日期與 tracking ID 排序、檔案開頭第一個非空行固定、`E` / `T` 摘要區與子標題不得重複，以及 legacy `D` / `F1` 區不得回流；`G` 備註欄文字 hygiene、path existence 與 retired validator 名稱改降級為治理資訊，不再作 release blocker | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
+| B26 | P1 | Meta | checklist 是否已足夠覆蓋完整性（包含 test suite 本身） | DONE | 已補主表 / `T` / `G` 收斂紀錄完整同步 formal guard，正式 blocker 只保留 checklist 結構完整性：主表 / `E` / `T` 摘要同步、`T` 每列單一正式入口、`G` 合法狀態轉移 / 首次 `NEW` / 狀態鏈連續 / 非 no-op / 日期與 tracking ID 排序、檔案開頭第一個非空行固定、`E` / `T` 摘要區與子標題不得重複，以及 legacy `D` / `F1` 區不得回流；`G` 備註欄只作治理索引與人工說明，不再承擔 release-blocking formal contract | `tools/local_regression/run_meta_quality.py`, `tools/validate/meta_contracts.py`, `doc/TEST_SUITE_CHECKLIST.md` |
 | B27 | P1 | Meta | 禁止循環依賴（模組層級 import cycle） | DONE | 已補 project import graph cycle guard，直接阻擋 `apps/` / `core/` / `tools/` 間的模組層級循環依賴（含函式內 import） | `tools/validate/synthetic_meta_cases.py`, `tools/validate/meta_contracts.py` |
 | B28 | P1 | 覆蓋率 | key coverage targets 應包含核心交易模組 | DONE | 已將 `core/backtest_core.py`、`core/backtest_finalize.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_entries.py`、`core/portfolio_exits.py`、`core/portfolio_ops.py`、`core/trade_plans.py`、`core/entry_plans.py`，以及直接承接候選分層 / PIT 歷史績效 / 延續訊號規則的 `core/portfolio_candidates.py`、`core/portfolio_fast_data.py`、`core/extended_signals.py`、`core/signal_utils.py` 納入 `COVERAGE_TARGETS`，並新增 completeness guard，直接阻擋核心交易模組未入列 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
 | B29 | P1 | 覆蓋率 | critical files 應具備 per-file line / branch minimum gate | DONE | 已對 `core/backtest_core.py`、`core/portfolio_engine.py`、`core/position_step.py`、`core/portfolio_exits.py` 建立 per-file line / branch minimum coverage guard，直接阻擋 overall coverage 過關但核心檔仍偏薄 | `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py` |
@@ -336,7 +336,6 @@
 | T104 | `validate_synthetic_registry_metadata_contract_case` | B37 |
 | T105 | `validate_optimizer_objective_export_contract_case` | B52 |
 | T106 | `validate_formal_step_entry_coverage_targets_case` | B38 |
-| T107 | `validate_checklist_g_single_note_entry_delimiter_case` | B26 |
 | T108 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
 | T109 | `validate_checklist_g_transition_format_case` | B26 |
 | T110 | `validate_checklist_no_legacy_d_section_case` | B26 |
@@ -368,7 +367,6 @@
 | T136 | `validate_critical_helper_single_source_contract_case` | B59 |
 | T138 | `validate_policy_contract_modules_in_coverage_targets_case` | B61 |
 | T139 | `validate_checklist_g_new_transition_first_occurrence_case` | B26 |
-| T140 | `validate_checklist_g_note_validate_reference_exists_case` | B26 |
 | T141 | `validate_checklist_first_nonempty_line_case` | B62 |
 | T142 | `validate_synthetic_meta_cases_summary_value_accessor_contract_case` | B63 |
 | T143 | `validate_checklist_summary_tables_sorted_by_id_case` | B64 |
@@ -473,12 +471,10 @@
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
 | T250 | `validate_architecture_models_best_params_file_tree_sync_case` | B163 |
 | T253 | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` | B166 |
-| T254 | `validate_checklist_g_single_parseable_note_entry_case` | B26 |
-| T255 | `validate_checklist_g_note_path_reference_exists_case` | B26 |
 
 ## G. 逐項收斂紀錄
 
-使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄若需要引用檔案或測試名稱，只能保留一個代表 entry。
+使用方式：每次只挑少數高優先項目處理，完成後更新本節，不要重開一份新清單。編輯本節時，先依日期定位到對應區塊，再抽出整個同日區塊依排序鍵重排後整段覆寫回原位；禁止把新列直接追加到該日期區塊尾端，也禁止只改局部單列後跳過同日區塊總排序檢查；若新增列排序鍵小於當前尾列，必須回插到正確位置，不得留在尾端。G 只記錄實際狀態變更；不得寫 `DONE -> DONE`、`PARTIAL -> PARTIAL`、`TODO -> TODO` 等 no-op transition。同日同 ID 若有多筆狀態變更，必須依實際演進排序；`NEW -> *` 只能出現在該 ID 首筆，且 `NEW -> PARTIAL` / `NEW -> DONE` 必須排在後續 `PARTIAL -> DONE` 或 `DONE -> PARTIAL` 之前。交付前至少再做一次同日區塊機械核對：由上到下檢查 namespace、數字段、尾碼三層排序鍵皆未逆序，且新增列同時滿足前一列 ≤ 當前列 ≤ 後一列；備註欄僅作最小必要的治理索引與人工說明。
 
 | 日期 | 項目 ID | 動作 | 狀態變更 | 備註 |
 |---|---|---|---|---|
@@ -1235,7 +1231,9 @@
 | 2026-04-13 | T244 | 將 help 舊 wording / 裸用詞排除 validator 改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 裸用詞排除 validator 仍以 `TEST_SUITE_CHECKLIST` 白名單承接已不應出現在正式 help 的 canonical token，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 help 裸用詞排除 validator 收斂為直接禁止 bare `checklist` 與 `contract` 長列舉後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
+| 2026-04-13 | T107 | 依 formal 瘦身將 `G` 備註欄 single-entry delimiter hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-13 | T140 | 依 formal 瘦身將 `G` 備註欄 validator reference existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-13 | T251 | 最嚴格檢查檢出 internal helper exact file-tree validator 將高波動 helper 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-13 | T252 | 最嚴格檢查檢出 internal support exact file-tree validator 將高波動 support 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
-| 2026-04-13 | T254 | 新增 `G` 備註欄必須可解析為單一代表 entry 的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_parseable_note_entry_case` |
-| 2026-04-13 | T255 | 新增 `G` 備註欄檔案 reference 必須指向既有 canonical 路徑的 guard 並驗證 | NEW -> DONE | `validate_checklist_g_note_path_reference_exists_case` |
+| 2026-04-13 | T254 | 依 formal 瘦身將 `G` 備註欄單一可解析代表 entry hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
+| 2026-04-13 | T255 | 依 formal 瘦身將 `G` 備註欄 canonical path existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
