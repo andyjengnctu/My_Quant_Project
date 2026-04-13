@@ -15,6 +15,8 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+from core.output_paths import output_dir_path
+
 from tools.optimizer.raw_cache import load_all_raw_data
 from tools.scanner.stock_processor import process_single_stock
 from tools.validate.scanner_expectations import normalize_scanner_result
@@ -121,7 +123,7 @@ def validate_optimizer_raw_cache_rerun_consistency_case(_base_params):
         {"Date": "2026-01-04", "Open": 22, "High": 23, "Low": 21, "Close": 22.5, "Volume": 220},
     ]
 
-    project_tmp_root = PROJECT_ROOT / "outputs" / "validate" / "_tmp_raw_cache"
+    project_tmp_root = output_dir_path(PROJECT_ROOT, "local_regression") / "_staging" / "validate_runtime" / "_tmp_raw_cache"
     project_tmp_root.mkdir(parents=True, exist_ok=True)
 
     with TemporaryDirectory(prefix="v16_raw_cache_", dir=str(project_tmp_root)) as tmp_dir:
@@ -297,7 +299,7 @@ def validate_run_all_repeatability_case(_base_params):
 
     from tools.local_regression import run_all as run_all_module
 
-    project_tmp_root = PROJECT_ROOT / 'outputs' / 'validate' / '_tmp_raw_cache'
+    project_tmp_root = output_dir_path(PROJECT_ROOT, 'local_regression') / '_staging' / 'validate_runtime' / '_tmp_raw_cache'
     project_tmp_root.mkdir(parents=True, exist_ok=True)
 
     with TemporaryDirectory(prefix='v16_run_all_', dir=str(project_tmp_root)) as tmp_dir:

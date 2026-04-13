@@ -276,7 +276,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/trade_analysis/trade_log.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
+        print("說明: 開發輔助 CLI；正式使用者入口為 apps/workbench.py。非互動模式可用 pipe 輸入股票代號；資料集預設為完整。")
         return 0
 
     try:
@@ -296,7 +296,7 @@ def main(argv=None, environ=None):
 
         csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(DATA_DIR)
 
-    ticker = safe_prompt("\n👉 請輸入要除錯的股票代號 (例如: 00972): ", "").strip()
+    ticker = safe_prompt("\n👉 請輸入要分析的股票代號 (例如: 00972): ", "").strip()
     if not ticker:
         if not dataset_dir_exists:
             raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, DATA_DIR))
@@ -305,7 +305,7 @@ def main(argv=None, environ=None):
         raise ValueError("未輸入股票代號，工具已取消。")
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"🛠️ {C_YELLOW}V16 放大鏡：單檔股票交易明細除錯工具{C_RESET}")
+    print(f"🛠️ {C_YELLOW}V16 放大鏡：單股 trade-analysis 交易明細工具{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(
         f"📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "

@@ -452,25 +452,66 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
 
     cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
     architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
 
     cmd_has_legacy_debug_labels = all(fragment in cmd_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_has_legacy_debug_labels = all(fragment in architecture_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_marks_legacy_as_compatibility = ("為維持相容性" in architecture_text) or ("以維持相容性" in architecture_text)
 
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_described_as_formal_entry", True, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_is_single_user_entry_for_trade_analysis", True, "`apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_helper_described_as_backend_not_formal_entry", True, "`tools/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_mentions_legacy_debug_api_labels", True, cmd_has_legacy_debug_labels)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_output_dir_explicitly_marked_legacy", True, "`outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_retention_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in cmd_text)
+    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_trade_log_formal_entry_label", False, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_stale_debug_formal_entry_label", False, "為 debug 正式入口" in cmd_text)
 
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `tools/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_bound_to_workbench_entry", True, "由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發" in architecture_text and "提供共用 backend / 開發輔助 CLI" in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_mentions_legacy_debug_api_labels", True, architecture_has_legacy_debug_labels and architecture_marks_legacy_as_compatibility)
     add_check(results, "meta_architecture_contract", case_id, "architecture_output_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_trade_log_formal_entry_label", False, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_stale_debug_subsystem_label", False, "交易除錯子系統" in architecture_text)
 
-    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md"]
+    add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_prompt_uses_analysis_wording", True, "請輸入要分析的股票代號" in trade_log_text)
+    add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_banner_uses_trade_analysis_wording", True, "單股 trade-analysis 交易明細工具" in trade_log_text)
+    add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_help_marks_workbench_as_formal_user_entry", True, "正式使用者入口為 apps/workbench.py" in trade_log_text)
+    add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_has_no_stale_debug_prompt_or_banner", False, ("請輸入要除錯的股票代號" in trade_log_text) or ("交易明細除錯工具" in trade_log_text))
+
+    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md", "tools/trade_analysis/trade_log.py"]
     summary["architecture_has_legacy_debug_labels"] = architecture_has_legacy_debug_labels
     summary["architecture_marks_legacy_as_compatibility"] = architecture_marks_legacy_as_compatibility
+    return results, summary
+
+
+def validate_validate_runtime_tmp_output_staging_contract_case(_base_params):
+    case_id = "META_VALIDATE_RUNTIME_TMP_OUTPUT_STAGING_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    error_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_error_cases.py").read_text(encoding="utf-8")
+    regression_cases_text = (PROJECT_ROOT / "tools" / "validate" / "synthetic_regression_cases.py").read_text(encoding="utf-8")
+    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
+    run_all_text = (PROJECT_ROOT / "tools" / "local_regression" / "run_all.py").read_text(encoding="utf-8")
+
+    required_staging_fragment = 'output_dir_path(PROJECT_ROOT, "local_regression") / "_staging" / "validate_runtime"'
+    stale_root_fragment = 'PROJECT_ROOT / "outputs" / "validate"'
+
+    add_check(results, "meta_output_contract", case_id, "synthetic_error_cases_use_local_regression_staging_runtime_root", True, required_staging_fragment in error_cases_text)
+    add_check(results, "meta_output_contract", case_id, "synthetic_regression_cases_use_local_regression_staging_runtime_root", True, required_staging_fragment in regression_cases_text)
+    add_check(results, "meta_output_contract", case_id, "validate_runtime_paths_have_no_outputs_validate_root", False, (stale_root_fragment in error_cases_text) or (stale_root_fragment in regression_cases_text) or ("outputs' / 'validate'" in regression_cases_text))
+    add_check(results, "meta_output_contract", case_id, "run_all_retention_keeps_local_regression_staging_cleanup_rule", True, 'name="local_regression_staging"' in run_all_text and 'output_dir_path(PROJECT_ROOT, "local_regression") / "_staging"' in run_all_text)
+    add_check(results, "meta_output_contract", case_id, "cmd_documents_local_regression_staging_runtime_area", True, '`outputs/local_regression/_staging/`：formal / validate 暫存 staging；屬 `local_regression` 內部子目錄，會由 retention 自動清理。' in cmd_text)
+    add_check(results, "meta_output_contract", case_id, "architecture_documents_no_outputs_validate_root_category", True, '`outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。' in architecture_text)
+
+    summary["source_paths"] = [
+        "tools/validate/synthetic_error_cases.py",
+        "tools/validate/synthetic_regression_cases.py",
+        "tools/local_regression/run_all.py",
+        "doc/CMD.md",
+        "doc/ARCHITECTURE.md",
+    ]
     return results, summary
 
 

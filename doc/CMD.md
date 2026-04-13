@@ -42,19 +42,20 @@ python apps/workbench.py
 
 # Workbench
 
-- `apps/workbench.py` 為 GUI 正式入口。
+- `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
 - 日常 GUI 問題先檢查 `tools/workbench_ui/single_stock_inspector.py`，再看 `tools/workbench_ui/workbench.py`。
 
 # Trade analysis
 
-- `tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口。
+- `tools/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`。
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱。
 - 對外建議使用 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
 
 # 輸出分類
 
 - `outputs/local_regression/`：test suite 歷史 bundle。
+- `outputs/local_regression/_staging/`：formal / validate 暫存 staging；屬 `local_regression` 內部子目錄，會由 retention 自動清理。
 - `outputs/validate_consistency/`：standalone consistency 報表。
 - `outputs/ml_optimizer/`：optimizer profiling / 載入摘要。
 - `outputs/portfolio_sim/`：投組報表與載入摘要。

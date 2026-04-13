@@ -11,8 +11,11 @@ import pandas as pd
 import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_RUNTIME_CASE_DIR = PROJECT_ROOT / "outputs" / "validate" / "_synthetic_runtime"
 from unittest.mock import patch
+
+from core.output_paths import output_dir_path
+
+_RUNTIME_CASE_DIR = output_dir_path(PROJECT_ROOT, "local_regression") / "_staging" / "validate_runtime" / "_synthetic_runtime"
 
 from core.params_io import load_params_from_json, params_to_json_dict
 from tools.validate import module_loader

@@ -65,7 +65,7 @@ project/
    │  ├─ history_snapshot.py          # 單股分析歷史績效 snapshot / payoff / asset-growth helper
 ```
 
-- `tools/trade_analysis/`：單股 trade-analysis 子系統；`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口。
+- `tools/trade_analysis/`：單股 trade-analysis 子系統；由 `apps/workbench.py` 經 `tools/workbench_ui/` 觸發，`tools/trade_analysis/trade_log.py` 提供共用 backend / 開發輔助 CLI。
 - 為維持相容性，保留 legacy `run_debug_*` API 名稱，同時提供 canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases。
 
 ### `tools/validate/`
@@ -112,6 +112,7 @@ project/
 ## 輸出與相容邊界
 
 - 所有工具輸出皆落在 `outputs/<category>/`；輸出位置與 retention 規則以 `core/output_paths.py`、`core/output_retention.py` 與 `doc/CMD.md` 為準。
+- `outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。
 - `outputs/debug_trade_log/` 為 `trade_analysis` 相容輸出目錄；為維持相容性，暫沿用 `debug_trade_log` 這個 legacy 名稱。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界，不代表子系統角色仍是 debug-only。
 
