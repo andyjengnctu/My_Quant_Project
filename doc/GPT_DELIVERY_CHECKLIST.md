@@ -19,8 +19,9 @@
 3. 若新舊 formal 規則只是同一 shipped 契約下的子面向擴充，優先併入既有 `Bxx` / `Txx`；不要把已確認可合併的同族 CLI、文件、coverage completeness、per-file minimum，或 checklist 結構子契約（如首行標題、摘要表排序）再拆成平行主表 ID。若 repo 內既有獨立主表尚未實際退役，不得先在 GPT checklist 宣稱已一律合併。
 4. 負向檢查與 contract 同步只針對 shipped 正式輸出、`--help`、schema、檔案樹與正式 payload 本體；不要再為 validator / synthetic / oracle 的內部 import、helper 選擇、AST 掃描策略、樣本 payload 字面值、sub-check 名稱、source literal 或 help wording / bare-term hygiene 追加新的 formal 規則。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；若插回既有日期區塊或補寫 `DONE -> N/A` / `DONE -> PARTIAL`，必須重排整個受影響同日區塊，不得只修新插入列附近幾行。
-6. formal-facing 文件、`doc/CMD.md`、`doc/ARCHITECTURE.md`、`apps/test_suite.py --help`、report 與 retention 說明只保留穩定、對使用者有意義的正式資訊；不得回指 `PROJECT_SETTINGS.md` / `GPT_DELIVERY_CHECKLIST.md`，也不得把 helper 長清單、暫時事故修補、內部 meta guard 名稱或非 canonical 路徑升格為正式契約。
-7. 若本輪將既有 formal contract / case / `Bxx` / `Txx` 改列 `N/A`、compatibility stub 或其他非正式長期路徑，交付前必須同步清理 registry、parser、`doc/TEST_SUITE_CHECKLIST.md` 摘要與歷史狀態；不要再把已降級的治理 hygiene 升回 formal blocker。
+6. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的 markdown table 列內容，交付前必須逐列核對欄數仍符合該表 header；退役 / 併入既有主表時，不得把 `B2/B3` 的「類別 / 項目」欄位擠成一格，也不得在表格 cell 內保留未轉寫的裸 `|` 字元。
+7. formal-facing 文件、`doc/CMD.md`、`doc/ARCHITECTURE.md`、`apps/test_suite.py --help`、report 與 retention 說明只保留穩定、對使用者有意義的正式資訊；不得回指 `PROJECT_SETTINGS.md` / `GPT_DELIVERY_CHECKLIST.md`，也不得把 helper 長清單、暫時事故修補、內部 meta guard 名稱或非 canonical 路徑升格為正式契約。
+8. 若本輪將既有 formal contract / case / `Bxx` / `Txx` 改列 `N/A`、compatibility stub 或其他非正式長期路徑，交付前必須同步清理 registry、parser、`doc/TEST_SUITE_CHECKLIST.md` 摘要與歷史狀態；不要再把已降級的治理 hygiene 升回 formal blocker。
 
 ## C. Bundle 與收斂
 
