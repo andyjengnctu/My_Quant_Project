@@ -1507,10 +1507,7 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
 
     missing_imported_names = sorted(imported_validate_names - validator_name_set)
     extra_registry_names = sorted(validator_name_set - imported_validate_names)
-    compatibility_only_validate_names = {
-        "validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case",
-    }
-    missing_defined_names = sorted((defined_validate_names - validator_name_set) - compatibility_only_validate_names)
+    missing_defined_names = sorted(defined_validate_names - validator_name_set)
     orphan_registry_names = sorted(validator_name_set - defined_validate_names)
 
     add_check(results, "meta_registry", case_id, "imported_validate_cases_all_registered", [], missing_imported_names)
@@ -2521,24 +2518,6 @@ def validate_single_backtest_public_profit_equity_consistency_contract_case(_bas
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
-
-def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_base_params):
-    """Legacy compatibility stub for historical G-note validator references.
-
-    註解已排除在本地 formal test suite 範圍外；保留此符號僅為了讓歷史 `G` 記錄中的
-    validator 名稱仍可被 checklist/meta guards 機械解析。
-    """
-
-    case_id = "META_TEST_SUITE_SUMMARY_COMMENT_COVERS_LATEST_EXACT_CONTRACT_IDS"
-    results = []
-    summary = {
-        "ticker": case_id,
-        "synthetic": True,
-        "legacy_compatibility_only": True,
-        "excluded_from_local_formal_registry": True,
-        "source_path": "apps/test_suite.py",
-    }
-    return results, summary
 
 def _capture_test_suite_help_output():
     test_suite_module = importlib.import_module("apps.test_suite")
