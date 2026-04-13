@@ -1198,6 +1198,7 @@
 | 2026-04-13 | T18 | 擴充 output contract case，補齊 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
 | 2026-04-13 | T18 | 最嚴格檢查檢出 stale-key 排除檢查實際誤檢 `project_settings_steps`、未直接覆蓋 legacy `steps` 舊鍵，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
 | 2026-04-13 | T18 | 將 stale-key 排除檢查改為直接覆蓋 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
+| 2026-04-13 | T107 | 依 formal 瘦身將 `G` 備註欄 single-entry delimiter hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 最嚴格檢查檢出 `G` 同日區塊排序斷裂並命中 `checklist_g_rows_sorted_by_date_then_id`，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊依日期與 tracking ID 重排後重新收斂為 DONE | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
@@ -1205,6 +1206,7 @@
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊抽出後依日期與 tracking ID 穩定重排並重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T127 | 最嚴格檢查檢出 strategy minimum viability case 尚未直接覆蓋 scanner summary canonical issue-log path，改回 PARTIAL | DONE -> PARTIAL | `validate_strategy_minimum_viability_case` |
 | 2026-04-13 | T127 | 擴充 scanner summary smoke contract，釘死 canonical `outputs/vip_scanner/` issue-log path 後重新收斂為 DONE | PARTIAL -> DONE | `validate_strategy_minimum_viability_case` |
+| 2026-04-13 | T140 | 依 formal 瘦身將 `G` 備註欄 validator reference existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-13 | T238 | 最嚴格檢查檢出 trade_analysis legacy naming 文件契約在 retention / output 區仍以裸 `debug_trade_log` 目錄名承接相容輸出，與 canonical `outputs/debug_trade_log/` 路徑分叉，改回 PARTIAL | DONE -> PARTIAL | `validate_trade_analysis_legacy_naming_documentation_contract_case` |
 | 2026-04-13 | T238 | 將 trade_analysis legacy naming 文件契約與 `doc/CMD.md` / `doc/ARCHITECTURE.md` 一起收斂為完整 `outputs/debug_trade_log/` canonical 路徑後重新收斂為 DONE | PARTIAL -> DONE | `validate_trade_analysis_legacy_naming_documentation_contract_case` |
 | 2026-04-13 | T243 | 最嚴格檢查檢出正式入口 help 穩定主題 token 契約雖宣稱已納入 `summary-section-heading-uniqueness`，但 active validator 與 help 皆未實際覆蓋，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
@@ -1231,8 +1233,6 @@
 | 2026-04-13 | T244 | 將 help 舊 wording / 裸用詞排除 validator 改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 裸用詞排除 validator 仍以 `TEST_SUITE_CHECKLIST` 白名單承接已不應出現在正式 help 的 canonical token，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 help 裸用詞排除 validator 收斂為直接禁止 bare `checklist` 與 `contract` 長列舉後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
-| 2026-04-13 | T107 | 依 formal 瘦身將 `G` 備註欄 single-entry delimiter hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
-| 2026-04-13 | T140 | 依 formal 瘦身將 `G` 備註欄 validator reference existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
 | 2026-04-13 | T251 | 最嚴格檢查檢出 internal helper exact file-tree validator 將高波動 helper 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-13 | T252 | 最嚴格檢查檢出 internal support exact file-tree validator 將高波動 support 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
 | 2026-04-13 | T254 | 依 formal 瘦身將 `G` 備註欄單一可解析代表 entry hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/GPT_DELIVERY_CHECKLIST.md` |
