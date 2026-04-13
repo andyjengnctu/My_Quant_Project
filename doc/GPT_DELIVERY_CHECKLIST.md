@@ -18,7 +18,7 @@
 2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將 validator / contract 的實際被測來源改指向另一份文件或模組，必須同步檢查所有引用層並改正殘留舊來源名稱；不得只改函式本體，卻保留舊 case_id、T 項摘要、help theme 或 registry 描述。
 3. 若本輪將 formal-facing 文字從舊列舉改為穩定主題、結構契約或新 canonical 邊界，必須同步更新正式入口、validator、registry 與 `doc/TEST_SUITE_CHECKLIST.md` 的正式語意；但同步範圍只限 shipped 正式介面與其摘要，不再把 validator 內部命名、sub-check 文字或排除片段長短上升為新的 formal 規則。
 4. 負向檢查只針對 shipped 正式輸出、`--help`、schema、檔案樹與正式 payload 本體；不要再為 validator 函式名、sub-check 名稱、literal 寫法或相鄰檢查器的字串 hygiene 追加新的 formal 要求。
-5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。若新增列插入既有日期區塊，且 tracking ID 排序鍵小於當前尾列，必須抽出整個同日區塊重排後整段覆寫回原位，不得把較小 ID 直接追加在較大 ID 後。若是回補同日歷史收斂列或把較小 ID 插回較晚位置，仍須從該日期首列到末列做一次機械 monotonicity 掃描；不得只目視新插入點附近幾列後就交付。若是回補同日歷史收斂列或把較小 ID 插回較晚位置，仍須從該日期首列到末列做一次機械 monotonicity 掃描；不得只目視新插入點附近幾列後就交付。
+5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。若新增列插入既有日期區塊，且 tracking ID 排序鍵小於當前尾列，必須抽出整個同日區塊重排後整段覆寫回原位，不得把較小 ID 直接追加在較大 ID 後。若是回補同日歷史收斂列或把較小 ID 插回較晚位置，仍須從該日期首列到末列做一次機械 monotonicity 掃描；不得只目視新插入點附近幾列後就交付。
 6. 若本輪修改任何受 formal validator 驗證的文字面，交付前只需反查對應最小必要 fragment / token 與直接被測輸出；不要再對排除詞的最短片段、exemplar 完整性、sibling 去重或 validator 內部措辭建立第二層檢查規則。
 6a. 若 formal contract 名義上驗 CLI / `--help` / report / export / payload 輸出，交付前必須確認 validator 直接讀取該 shipped 輸出本體或其最接近的正式產物；不得改成掃 source 內 `print(...)` 字面、局部 string literal 或其他實作內文來冒充輸出驗證。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
