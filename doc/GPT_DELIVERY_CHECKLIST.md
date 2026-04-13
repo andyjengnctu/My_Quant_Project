@@ -23,7 +23,7 @@
 6a. 若 formal contract 名義上驗 CLI / `--help` / report / export / payload 輸出，交付前必須確認 validator 直接讀取該 shipped 輸出本體或其最接近的正式產物；不得改成掃 source 內 `print(...)` 字面、局部 string literal 或其他實作內文來冒充輸出驗證。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
 8. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；只核對正式輸出與 contract 本體，不再為 active sub-check 命名或相鄰 validator 的文字 hygiene 追加第二層規則。
-9. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面。
+9. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper / support 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面，也不要把 internal helper / support exact file-tree 列舉升格為長期 formal 契約。
 10. 若本輪進行文件瘦身或重組，交付前必須逐一反查對應 validator 要求的全部最小必要 fragment / entry；不得因縮句、合併或改寫，只保留部分同主題片段。
 11. 涉及多份治理文件或角色邊界的敘述時，必須使用顯式檔名；不得回退成模糊代稱或未指名的 bare `checklist` 用詞。
 12. 若 validator 要排除 bare term，但正式文字允許 canonical qualified 版本，交付前應先白名單 qualified canonical token，再檢查剩餘 bare term；此要求只約束正式輸出本體，不延伸到 validator 命名或補丁式文字 hygiene。

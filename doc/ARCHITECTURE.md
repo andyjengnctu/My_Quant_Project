@@ -70,19 +70,6 @@ project/
 
 ### `tools/validate/`
 
-```text
-      ├─ meta_contracts.py            # TEST_SUITE_CHECKLIST / 文件 / registry 的 markdown 與 AST contract helper
-      ├─ synthetic_contract_cases.py    # synthetic 工件 lifecycle / GUI / shared helper 契約案例
-      ├─ synthetic_history_cases.py     # synthetic PIT / history filter / compounding-capital 案例
-      ├─ synthetic_guardrail_cases.py   # synthetic 治理原則 / config / exception / fallback guardrail 案例
-      ├─ synthetic_regression_cases.py  # synthetic rerun-repeatability / cache-isolation / bundle-repeatability 案例
-      ├─ synthetic_portfolio_common.py  # synthetic 投組案例共用 builder / helper
-      ├─ synthetic_frame_utils.py       # synthetic DataFrame / row / assertion helper
-      ├─ synthetic_case_builders.py     # synthetic chart / GUI / payload case builder helper
-      ├─ synthetic_display_cases.py     # synthetic 顯示契約案例：scanner header / dashboard / display re-export output sanity
-      ├─ synthetic_reporting_cases.py   # synthetic 報表契約案例：validate / portfolio / test suite summary schema
-```
-
 - `tools/validate/`：正式 invariant、contract、schema 與 real-case 驗證子系統；正式細目與狀態以 `doc/TEST_SUITE_CHECKLIST.md` 為準。
 
 ### `tools/local_regression/`
