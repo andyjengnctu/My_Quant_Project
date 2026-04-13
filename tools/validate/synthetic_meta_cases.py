@@ -522,8 +522,6 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
 
     package_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
     trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
 
     canonical_aliases = [
         "run_trade_analysis",
@@ -545,10 +543,6 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     for alias_name in legacy_aliases:
         add_check(results, "meta_contract", case_id, f"package_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in package_text and f'"{alias_name}"' in package_text)
         add_check(results, "meta_contract", case_id, f"trade_log_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in trade_log_text and f'"{alias_name}"' in trade_log_text)
-
-    canonical_doc_fragment = "canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases"
-    add_check(results, "meta_cmd_contract", case_id, "cmd_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in cmd_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in architecture_text)
 
     summary["canonical_aliases"] = canonical_aliases
     summary["legacy_aliases"] = legacy_aliases

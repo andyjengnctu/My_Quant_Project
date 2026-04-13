@@ -1,6 +1,6 @@
-# 專案架構說明
+# 架構概覽
 
-本文件只記錄穩定子系統、正式入口、依賴方向與必要 shipped 模組索引；操作步驟看 `doc/CMD.md`，formal contract 與狀態看 `doc/TEST_SUITE_CHECKLIST.md`。
+本文件只保留穩定分層、正式入口、依賴方向與共享邊界。操作步驟看 `doc/CMD.md`；formal contract 與狀態看 `doc/TEST_SUITE_CHECKLIST.md`。
 
 ## 穩定檔案樹
 
@@ -93,23 +93,36 @@ project/
 - `tools/`：下載、最佳化、單股分析、validate、local regression 與 GUI 子系統。
 - `config/`：共用政策與執行預設。
 - `models/`：最佳參數檔與模型相關輸入。
-- `doc/`：formal 世界僅以 `TEST_SUITE_CHECKLIST.md`、`ARCHITECTURE.md` 與 `CMD.md` 承接主表、架構與操作資訊。
+- `doc/`：架構、常用指令與 formal checklist 文件。
 
-## GUI / workbench
+## 正式入口
 
-- `apps/workbench.py` 為單一 GUI 啟用入口。
-- `tools/workbench_ui/workbench.py` 負責主視窗與 panel registry；`single_stock_inspector.py` 負責單股回測檢視頁籤。
-- `tools/workbench_ui/single_stock_inspector.py` 的 K 線檢視中，交易明細與 Console 改以獨立分頁承接。
-- GUI / workbench 文件同步面中，K 線圖主檢視下的交易明細與 Console 以獨立分頁承接。
+- `apps/test_suite.py`：日常一鍵測試正式入口。
+- `tools/local_regression/formal_pipeline.py`：formal 步驟單一真理來源。
+- `apps/ml_optimizer.py`：optimizer 正式入口。
+- `apps/portfolio_sim.py`：投組模擬正式入口。
+- `apps/smart_downloader.py`：下載器正式入口。
+- `apps/vip_scanner.py`：scanner 正式入口。
+- `apps/workbench.py`：GUI / workbench 正式入口。
+- `tools/trade_analysis/trade_log.py`：單股 trade-analysis 正式入口。
+
+## 子系統責任
+
+- `optimizer`：參數搜尋、最佳化輸出與結果整理。
+- `portfolio_sim`：投組模擬、統計與報表。
+- `scanner`：候選掃描、排序與 issue log。
+- `trade_analysis`：單股分析、圖表與交易明細輸出。
+- `validate`：formal contract、schema、synthetic 與 real-case 驗證。
+- `local_regression`：reduced formal orchestrator 與 bundle 產出。
+- `workbench_ui`：GUI 主視窗與單股檢視頁面。
 
 ## 依賴方向
 
-- 上層呼叫下層：`apps/ -> tools/ -> core/`。
+- 分層呼叫固定為 `apps -> tools -> core`。
 - `core/` 不反向依賴 `tools/` 或 `apps/`。
-- `tools/*/__init__.py` 與 façade 檔維持穩定公開介面；子模組可再細拆，但外部匯入路徑應盡量不變。
-- formal test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂。
+- 正式 test chain 只由 `apps/test_suite.py` 與 `tools/local_regression/formal_pipeline.py` 收斂。
 
-## 輸出與相容邊界
+## 共享邊界
 
 - 所有工具輸出皆落在 `outputs/<category>/`；輸出位置與 retention 規則以 `core/output_paths.py`、`core/output_retention.py` 與 `doc/CMD.md` 為準。
 - `outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。
@@ -118,6 +131,6 @@ project/
 
 ## 維護原則
 
-- 架構文件只保留穩定子系統、正式入口、依賴方向與必要 shipped 模組索引；高波動操作細節移至 `doc/CMD.md`，formal 細部契約移至 `doc/TEST_SUITE_CHECKLIST.md`。
-- 需逐字比對的文字只保留 canonical 名稱、正式入口、section heading 與最小必要 fragment；避免把高波動敘述做成 exact-string contract。
-- 若模組責任、正式入口、共享資料流或 shipped 關鍵模組有變動，必須同步更新本檔、`doc/CMD.md` 與相關 formal contract。
+- 本檔只承接穩定子系統、正式入口、依賴方向與共享邊界。
+- 高波動操作細節移至 `doc/CMD.md`；formal 細部契約移至 `doc/TEST_SUITE_CHECKLIST.md`。
+- 不以 exact file-tree、helper 長清單、局部 alias 說明或暫時演進敘事作為本檔主要承載面。
