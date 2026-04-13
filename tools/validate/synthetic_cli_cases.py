@@ -356,7 +356,7 @@ def validate_extended_tool_cli_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     app_test_suite = importlib.import_module("apps.test_suite")
-    debug_trade_log = importlib.import_module("tools.trade_analysis.trade_log")
+    app_workbench = importlib.import_module("apps.workbench")
     optimizer_main = importlib.import_module("tools.optimizer.main")
     portfolio_sim_main = importlib.import_module("tools.portfolio_sim.main")
     scan_runner = importlib.import_module("tools.scanner.scan_runner")
@@ -367,7 +367,6 @@ def validate_extended_tool_cli_contract_case(_base_params):
         ("tools/portfolio_sim/main.py", portfolio_sim_main.main, "env", {"V16_AUTO_OPEN_BROWSER": "0"}),
         ("tools/scanner/scan_runner.py", scan_runner.main, "env", {"TEST": "1"}),
         ("tools/validate/main.py", validate_main.main, "environ", {}),
-        ("tools/trade_analysis/trade_log.py", debug_trade_log.main, "environ", {}),
     ]
 
     for program, main_func, env_kw, env_value in dataset_cases:
@@ -384,6 +383,7 @@ def validate_extended_tool_cli_contract_case(_base_params):
 
     no_dataset_cases = [
         ("apps/test_suite.py", app_test_suite.main, {}),
+        ("apps/workbench.py", app_workbench.main, {}),
     ]
 
     for program, main_func, kwargs in no_dataset_cases:

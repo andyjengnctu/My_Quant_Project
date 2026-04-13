@@ -33,7 +33,6 @@ HELP_TARGETS = [
     ([sys.executable, "apps/test_suite.py", "--help"], "python apps/test_suite.py"),
     ([sys.executable, "apps/vip_scanner.py", "--help"], "python apps/vip_scanner.py"),
     ([sys.executable, "requirements/export_requirements_lock.py", "--help"], "python requirements/export_requirements_lock.py"),
-    ([sys.executable, "tools/trade_analysis/trade_log.py", "--help"], "python tools/trade_analysis/trade_log.py"),
     ([sys.executable, "tools/downloader/main.py", "--help"], "python tools/downloader/main.py"),
     ([sys.executable, "tools/local_regression/run_all.py", "--help"], "python tools/local_regression/run_all.py"),
     ([sys.executable, "tools/local_regression/run_chain_checks.py", "--help"], "python tools/local_regression/run_chain_checks.py"),
@@ -49,6 +48,7 @@ HELP_TARGETS = [
 ]
 NO_ARG_CLI_TARGETS = [
     "apps/package_zip.py",
+    "apps/workbench.py",
     "requirements/export_requirements_lock.py",
     "tools/local_regression/run_chain_checks.py",
     "tools/local_regression/run_ml_smoke.py",
@@ -491,7 +491,6 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
         "apps/portfolio_sim.py",
         "apps/vip_scanner.py",
         "apps/ml_optimizer.py",
-        "tools/trade_analysis/trade_log.py",
     ]
     cases = [
         (["--dataset", "bad"], "不支援的資料集模式"),

@@ -8,11 +8,11 @@
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT交付之程式碼、patched ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；若當前基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
-3. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
-4. GPT必須透過完善 `TEST_SUITE_CHECKLIST.md` 來確保動態測試的完整性; 檢查是否存在應列入但尚未列入 `doc/TEST_SUITE_CHECKLIST.md`的測項。
-5. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
-6. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且全數通過；若提供 bundle，GPT必須逐條對照 bundle 原始失敗項完成閉環修正。
-7. 執行最嚴格檢查時，GPT必須一次性找出全專案的所有問題，不得透過多輪檢查一次修一點。
+3. `apps/test_suite.py` 為已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得執行`apps/test_suite.py`，也不得繞過正式入口直接執行其涵蓋的step。
+4. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
+5. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且全數通過；若提供 bundle，GPT必須逐條對照 bundle 原始失敗項完成閉環修正。
+6. 執行最嚴格檢查時，GPT必須一次性找出全專案的所有問題，不得透過多輪檢查一次修一點。
+7. 每輪找到問題就直接修正。
 8. `/doc/PROJECT_SETTINGS.md` 不得被本地端的 `apps/test_suite.py` 反向檢查。
 
 
