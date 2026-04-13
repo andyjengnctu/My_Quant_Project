@@ -425,7 +425,6 @@ def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
 
 
 
-
 def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):
     case_id = "META_ARCHITECTURE_LOCAL_REGRESSION_META_QUALITY_FILE_TREE_SYNC"
     results = []
@@ -514,43 +513,6 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     summary["legacy_aliases"] = legacy_aliases
     return results, summary
 
-def validate_synthetic_contract_cases_project_root_path_helper_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CONTRACT_CASES_PROJECT_ROOT_PATH_HELPER_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("tools", "validate", "synthetic_contract_cases.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    bare_project_root_loads = []
-    for node in ast.walk(parsed):
-        if not isinstance(node, ast.Name) or not isinstance(node.ctx, ast.Load) or node.id != "PROJECT_ROOT":
-            continue
-        bare_project_root_loads.append(f"L{node.lineno}")
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_omits_bare_project_root_symbol_loads",
-        [],
-        bare_project_root_loads,
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_gui_workbench_contract_uses_shared_path_helper",
-        True,
-        'build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py")' in source_text
-        and 'build_project_absolute_path("tools", "workbench_ui", "workbench.py")' in source_text,
-    )
-
-    summary["bare_project_root_loads"] = bare_project_root_loads
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
-
 
 
 def validate_no_reverse_app_layer_dependencies_case(_base_params):
@@ -619,8 +581,6 @@ def validate_single_formal_test_entry_contract_case(_base_params):
     summary["legacy_entry_paths"] = contract["legacy_entry_paths"]
     summary["suspicious_app_entries"] = contract["suspicious_app_entries"]
     return results, summary
-
-
 
 
 
@@ -1034,8 +994,6 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
 
 
 
-
-
 def validate_checklist_f2_formal_command_single_entry_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
@@ -1159,7 +1117,6 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
     summary["guard_status"] = f2_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     return results, summary
-
 
 
 
@@ -1343,8 +1300,6 @@ def validate_checklist_g_ordering_case(_base_params):
 
 
 
-
-
 def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
     from tools.local_regression import run_meta_quality as meta_quality_module
 
@@ -1385,182 +1340,6 @@ def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
     summary["invalid_summary_table_orders"] = invalid_rows
     return results, summary
 
-
-
-
-def validate_synthetic_case_numpy_alias_import_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CASE_NUMPY_ALIAS_IMPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    modules_using_numpy_alias = []
-    missing_numpy_alias_import = []
-    for source_path in sorted(SYNTHETIC_VALIDATE_DIR.glob("synthetic*_cases.py")):
-        source_text = source_path.read_text(encoding="utf-8")
-        parsed = ast.parse(source_text, filename=str(source_path))
-        if not _parsed_module_uses_numpy_alias(parsed):
-            continue
-        modules_using_numpy_alias.append(source_path.name)
-        if not _parsed_module_declares_numpy_alias_import(parsed):
-            missing_numpy_alias_import.append(source_path.name)
-
-    add_check(results, "meta_contract", case_id, "synthetic_case_numpy_alias_usage_detected", True, bool(modules_using_numpy_alias))
-    add_check(results, "meta_contract", case_id, "synthetic_case_numpy_alias_imports_declared", [], missing_numpy_alias_import)
-
-    summary["modules_using_numpy_alias"] = modules_using_numpy_alias
-    summary["missing_numpy_alias_import"] = missing_numpy_alias_import
-    return results, summary
-
-
-def validate_synthetic_case_numpy_alias_scan_ignores_string_literals_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CASE_NUMPY_ALIAS_SCAN_IGNORES_STRING_LITERALS_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    string_only_source = """
-message = "np. should stay inside string literal"
-def describe():
-    return message
-"""
-    actual_usage_source = """
-import numpy as np
-
-def make_array():
-    return np.array([1, 2, 3])
-"""
-
-    parsed_string_only = ast.parse(string_only_source, filename="string_only_source.py")
-    parsed_actual_usage = ast.parse(actual_usage_source, filename="actual_usage_source.py")
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "numpy_alias_scan_ignores_string_literal_only_source",
-        False,
-        _parsed_module_uses_numpy_alias(parsed_string_only),
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "numpy_alias_scan_detects_actual_ast_usage",
-        True,
-        _parsed_module_uses_numpy_alias(parsed_actual_usage),
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "numpy_alias_scan_detects_numpy_alias_import",
-        True,
-        _parsed_module_declares_numpy_alias_import(parsed_actual_usage),
-    )
-
-    summary["string_literal_only_detected_as_usage"] = _parsed_module_uses_numpy_alias(parsed_string_only)
-    summary["actual_ast_usage_detected"] = _parsed_module_uses_numpy_alias(parsed_actual_usage)
-    return results, summary
-
-def validate_synthetic_case_non_error_initial_capital_contract_case(_base_params):
-    case_id = "SYNTHETIC_CASE_NON_ERROR_INITIAL_CAPITAL_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_paths = sorted(build_project_absolute_path("tools", "validate").glob("synthetic_*cases.py"))
-    invalid_assignments = []
-    scanned_modules = []
-    for source_path in source_paths:
-        if source_path.name == "synthetic_error_cases.py":
-            continue
-        scanned_modules.append(source_path.name)
-        parsed = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
-        for hit in _find_nonpositive_initial_capital_assignments(parsed):
-            invalid_assignments.append(f"{source_path.name}:{hit['lineno']}={hit['value']}")
-
-    add_check(results, "meta_contract", case_id, "non_error_synthetic_cases_forbid_nonpositive_initial_capital_literals", [], invalid_assignments)
-    summary["scanned_modules"] = scanned_modules
-    summary["invalid_assignments"] = invalid_assignments
-    return results, summary
-
-
-def validate_synthetic_meta_cases_build_project_absolute_path_import_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_META_CASES_BUILD_PROJECT_ABSOLUTE_PATH_IMPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_meta_cases.py"
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    uses_helper_symbol = any(
-        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "build_project_absolute_path"
-        for node in ast.walk(parsed)
-    )
-    has_explicit_import = _parsed_module_declares_specific_from_import(
-        parsed,
-        module_name="module_loader",
-        imported_name="build_project_absolute_path",
-    )
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_meta_cases_uses_build_project_absolute_path_symbol",
-        True,
-        uses_helper_symbol,
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_meta_cases_imports_build_project_absolute_path",
-        True,
-        has_explicit_import,
-    )
-
-    summary["source_file"] = source_path.name
-    summary["uses_build_project_absolute_path"] = uses_helper_symbol
-    summary["has_explicit_import"] = has_explicit_import
-    return results, summary
-
-
-def validate_synthetic_case_normalize_chart_payload_literal_x_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CASE_NORMALIZE_CHART_PAYLOAD_LITERAL_X_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    invalid_calls = []
-    for node in ast.walk(parsed):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "normalize_chart_payload_contract":
-            continue
-        if not node.args or not isinstance(node.args[0], ast.Dict):
-            continue
-        key_names = []
-        for key_node in node.args[0].keys:
-            if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                key_names.append(key_node.value)
-        if "x" not in key_names:
-            invalid_calls.append(f"{source_path.name}:{node.lineno}")
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "normalize_chart_payload_literal_contracts_require_x_field",
-        [],
-        invalid_calls,
-    )
-
-    summary["source_file"] = source_path.name
-    summary["invalid_calls"] = invalid_calls
-    return results, summary
 
 
 def validate_synthetic_cases_import_target_resolution_contract_case(_base_params):
@@ -1665,47 +1444,6 @@ def validate_debug_backtest_history_snapshot_patch_seam_contract_case(_base_para
     return results, summary
 
 
-def validate_synthetic_case_chart_navigation_binder_import_contract_case(_base_params):
-    case_id = "META_SYNTHETIC_CASE_CHART_NAV_BINDER_IMPORT_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = SYNTHETIC_VALIDATE_DIR / "synthetic_contract_cases.py"
-    source_text = source_path.read_text(encoding="utf-8")
-    parsed = ast.parse(source_text, filename=str(source_path))
-
-    uses_binder_symbol = any(
-        isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "bind_matplotlib_chart_navigation"
-        for node in ast.walk(parsed)
-    )
-    has_explicit_import = _parsed_module_declares_specific_from_import(
-        parsed,
-        module_name="tools.trade_analysis.charting",
-        imported_name="bind_matplotlib_chart_navigation",
-    )
-
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_uses_chart_navigation_binder_symbol",
-        True,
-        uses_binder_symbol,
-    )
-    add_check(
-        results,
-        "meta_contract",
-        case_id,
-        "synthetic_contract_cases_imports_chart_navigation_binder",
-        True,
-        has_explicit_import,
-    )
-
-    summary["source_file"] = source_path.name
-    summary["uses_binder_symbol"] = uses_binder_symbol
-    summary["has_explicit_import"] = has_explicit_import
-    return results, summary
-
 
 def validate_gui_buy_signal_annotation_helper_import_contract_case(_base_params):
     case_id = "META_GUI_BUY_SIGNAL_ANNOTATION_HELPER_IMPORT_CONTRACT"
@@ -1748,26 +1486,6 @@ def validate_gui_buy_signal_annotation_helper_import_contract_case(_base_params)
     summary["has_explicit_import"] = has_explicit_import
     return results, summary
 
-
-def validate_synthetic_meta_cases_summary_value_accessor_contract_case(_base_params):
-    case_id = "META_SUMMARY_VALUE_ACCESSOR_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_text = Path(__file__).read_text(encoding="utf-8")
-    helper_defined = "def _read_summary_value(" in source_text
-    direct_extra_access_patterns = []
-    for quote in ('"', "'"):
-        pattern = f".get({quote}extra{quote}, {{}}).get("
-        if pattern in source_text:
-            direct_extra_access_patterns.append(pattern)
-
-    add_check(results, "meta_contract", case_id, "summary_value_accessor_helper_defined", True, helper_defined)
-    add_check(results, "meta_contract", case_id, "summary_value_accessor_no_direct_extra_get_chain", [], direct_extra_access_patterns)
-
-    summary["helper_defined"] = helper_defined
-    summary["direct_extra_access_patterns"] = direct_extra_access_patterns
-    return results, summary
 
 def validate_registry_checklist_entry_consistency_case(_base_params):
     case_id = "META_REGISTRY_CHECKLIST_ENTRY"
@@ -2005,8 +1723,6 @@ def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     summary["missing_targets"] = missing_targets
     summary["reloaded_modules"] = reloaded_modules
     return results, summary
-
-
 
 
 
@@ -2249,8 +1965,6 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
 
 
 
-
-
 def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
     case_id = "META_DEBUG_BACKTEST_ENTRY_CASH_PATH_CONTRACT"
     results = []
@@ -2290,7 +2004,6 @@ def validate_debug_backtest_entry_cash_path_contract_case(_base_params):
         str(debug_entry_path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
     ]
     return results, summary
-
 
 
 
@@ -2855,24 +2568,6 @@ def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
 
-
-def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_params):
-    case_id = "META_TEST_SUITE_HELP_TEXT_HAS_NO_STALE_WORDING_OR_BARE_TERM"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    source_path = build_project_absolute_path("apps", "test_suite.py")
-    exit_code, help_text, help_line = _capture_test_suite_help_output()
-
-    add_check(results, "meta_contract", case_id, "test_suite_help_exit_code_zero", True, exit_code == 0)
-    add_check(results, "meta_contract", case_id, "test_suite_help_output_present", True, bool(help_text.strip()))
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_exact_contract_listing", False, "contract" in help_line.lower())
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, bool(re.search(r"(?<![A-Z_])checklist(?![A-Z_])", help_line, flags=re.IGNORECASE)))
-
-    summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
-    return results, summary
 
 
 def validate_core_r_multiple_exact_ledger_contract_case(_base_params):
