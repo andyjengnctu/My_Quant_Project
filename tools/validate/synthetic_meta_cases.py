@@ -3179,11 +3179,9 @@ def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params
     add_check(results, "meta_contract", case_id, "test_suite_help_exit_code_zero", True, exit_code == 0)
     add_check(results, "meta_contract", case_id, "test_suite_help_output_present", True, bool(help_text.strip()))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_public_profit_equity_consistency_theme", True, "單股公開盈虧/權益一致性" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_theme", True, "保守可執行出場解讀" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_architecture_file_tree_sync_theme", True, "架構文件檔案樹同步" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_summary_section_heading_uniqueness_theme", True, "summary-section-heading-uniqueness" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_governance_and_test_suite_checklist_guard_theme", True, "治理原則 / TEST_SUITE_CHECKLIST guard" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_trading_consistency_theme", True, "交易口徑一致性" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_exit_interpretation_theme", True, "保守出場解讀" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary
@@ -3202,8 +3200,7 @@ def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_p
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_exact_contract_listing", False, "contract" in help_line.lower())
-    canonical_whitelisted_help = help_line.replace("TEST_SUITE_CHECKLIST", "")
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, bool(re.search(r"(?<![A-Z_])checklist(?![A-Z_])", canonical_whitelisted_help, flags=re.IGNORECASE)))
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, bool(re.search(r"(?<![A-Z_])checklist(?![A-Z_])", help_line, flags=re.IGNORECASE)))
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()
     return results, summary

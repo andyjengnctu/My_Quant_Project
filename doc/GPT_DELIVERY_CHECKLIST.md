@@ -30,6 +30,7 @@
 13. `PROJECT_SETTINGS.md` 與 `GPT_DELIVERY_CHECKLIST.md` 只供 GPT 讀取與執行；formal test suite、validator、synthetic registry、bundle 檢查、`doc/TEST_SUITE_CHECKLIST.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 不得引用、映射、驗證或假設這兩份文件的存在；三者之間的關連只可由 GPT 透過實作、formal checklist 與交付輸出落實。
 14. 若本輪修改 formal-facing 文件或正式入口摘要，交付前必須確認其中不再直接提及 `PROJECT_SETTINGS.md` 或 `GPT_DELIVERY_CHECKLIST.md`；formal 世界只承接自身主表、架構、操作與輸出，不顯式回指 GPT 控制面。
 15. 若 formal-facing 文件或正式入口需要表達治理 / guardrail 語意，使用中性主題名稱即可；不要再為避免單一句型或單一來源名稱而層層追加新的 formal 檢查。
+15a. 正式入口 `--help` 若需摘要 formal 覆蓋範圍，只保留對使用者仍有意義的穩定主題；不要把 checklist heading、唯一性檢查、治理 guard 名稱或其他內部 meta 細節升格為 help 必備 token。
 16. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
 17. 若本輪將既有 formal contract 改列 `N/A`、compatibility stub 或其他非正式長期路徑，交付前必須同步檢查 registry completeness、defined/imported validator set、`doc/TEST_SUITE_CHECKLIST.md` parser 與 `done/unfinished` 摘要。
 
