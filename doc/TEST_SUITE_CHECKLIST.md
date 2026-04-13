@@ -46,7 +46,7 @@
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
-| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract；另已釘死 early-failure `master_summary.json` 的 `payload_failures` 必須維持與正常路徑一致的語意，且不得把合法 FAIL payload 誤標成 `summary_unreadable`；並補 `meta_quality_summary.json` 的 `formal_entry` nested schema contract，要求 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 完整存在且不得回流已退役的 legacy `steps` 舊鍵 | `tools/validate/synthetic_contract_cases.py` |
+| B11 | P1 | 契約 | 跨工具 schema / 欄位語意一致 | DONE | 已補 missed sell / trade log / stats 一致性，以及 validate / issue report / optimizer profile / local regression summaries（preflight / dataset prepare / chain / ml smoke / meta quality / master summary）的 CSV / XLSX / JSON contract；另已釘死 early-failure `master_summary.json` 的 `payload_failures` 必須維持與正常路徑一致的語意，且不得把合法 FAIL payload 誤標成 `summary_unreadable`；並補 `meta_quality_summary.json` 的 `formal_entry` nested schema contract，要求 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 完整存在，且 stale-key 排除檢查必須直接禁止已退役的 legacy `steps` 舊鍵 | `tools/validate/synthetic_contract_cases.py` |
 | B12 | P1 | 決定性 | 同資料、同參數、同 seed 結果可重現 | DONE | 已補 `run_ml_smoke.py` fixed-seed 雙跑、`run_chain_checks.py` scanner reduced snapshot 雙跑 digest、`validate_scanner_worker_repeatability_case` 與 `validate_scan_runner_repeatability_case`，正式入口與 scanner 入口重跑一致性已收斂 | `tools/local_regression/`, `tools/validate/synthetic_regression_cases.py` |
 | B13 | P1 | 邊界值 | 數值穩定性、rounding、tick、odd lot | DONE | 已新增 `price_utils` / `history_filters` / `portfolio_stats` unit-like 邊界案例，覆蓋 tick、稅費、sizing、全贏/全輸與空序列 | `tools/validate/synthetic_unit_cases.py` |
 | B14 | P1 | 韌性 | 髒資料、缺欄位、NaN、日期亂序、OHLC 異常 | DONE | 已新增資料清洗 expected behavior / fail-fast / `load_clean_df` 整合案例，直接釘死髒資料修正、欄位缺失、NaN、日期亂序、OHLC 異常與清洗後列數行為 | `tools/validate/synthetic_data_quality_cases.py`, `core/data_utils.py`, `tools/validate/real_case_io.py` |
@@ -1162,6 +1162,8 @@
 | 2026-04-13 | B11 | 補齊 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 並排除已退役的 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 最嚴格檢查檢出 output contract 仍以退役欄位名直掛 active sub-check 與 checklist 摘要，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 將 active sub-check 與 checklist 摘要改為中性「退役舊鍵排除」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-13 | B11 | 最嚴格檢查檢出 `formal_entry` stale-key 排除檢查實際誤檢 `project_settings_steps`、未直接禁止 legacy `steps` 舊鍵，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-04-13 | B11 | 將 `formal_entry` stale-key 排除檢查改為直接禁止 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B26 | 最嚴格檢查檢出 `G` 同日區塊未重排導致 `B158` 落在 `T124` 後方，主表改回 PARTIAL | DONE -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B26 | 依日期與 tracking ID 重新排序 `G` 同日區塊並補強交付前整段重排 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B50 | 最嚴格檢查檢出 strategy minimum viability smoke 尚未釘死 scanner summary canonical issue-log path，仍可回流退役 `outputs/scanner/` 類別，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
@@ -1172,6 +1174,8 @@
 | 2026-04-13 | B158 | 將 stale-wording 排除檢查收斂為較短已足夠覆蓋的最小必要片段後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | T18 | 最嚴格檢查檢出 output contract case 尚未覆蓋 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
 | 2026-04-13 | T18 | 擴充 output contract case，補齊 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
+| 2026-04-13 | T18 | 最嚴格檢查檢出 stale-key 排除檢查實際誤檢 `project_settings_steps`、未直接覆蓋 legacy `steps` 舊鍵，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
+| 2026-04-13 | T18 | 將 stale-key 排除檢查改為直接覆蓋 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `validate_output_contract_case` |
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 最嚴格檢查檢出 `G` 同日區塊排序斷裂並命中 `checklist_g_rows_sorted_by_date_then_id`，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊依日期與 tracking ID 重排後重新收斂為 DONE | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
