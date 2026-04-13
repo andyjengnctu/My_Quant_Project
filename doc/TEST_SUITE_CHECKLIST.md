@@ -1087,8 +1087,8 @@
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
 | 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
-| 2026-04-12 | B164 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_helper_module_file_tree_sync_case` |
-| 2026-04-12 | B165 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_support_module_file_tree_sync_case` |
+| 2026-04-12 | B164 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
+| 2026-04-12 | B165 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | B166 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
 | 2026-04-12 | T14 | 檢出 model I/O schema contract 尚未覆蓋 repo shipped `best_params*.json` 的 float-schema 型別一致性，改回 PARTIAL | DONE -> PARTIAL | `validate_model_io_schema_case` |
 | 2026-04-12 | T14 | 擴充 model I/O schema contract 納入 shipped `best_params*.json` 型別檢查並重新驗證 | PARTIAL -> DONE | `validate_model_io_schema_case` |
@@ -1153,8 +1153,8 @@
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | T249 | 新增 ARCHITECTURE apps 檔案樹 workbench 入口同步契約並驗證 | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
 | 2026-04-12 | T250 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
-| 2026-04-12 | T251 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_helper_module_file_tree_sync_case` |
-| 2026-04-12 | T252 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_support_module_file_tree_sync_case` |
+| 2026-04-12 | T251 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
+| 2026-04-12 | T252 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | T253 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
 | 2026-04-13 | B11 | 最嚴格檢查檢出 `meta_quality_summary.json` 的 `formal_entry` nested schema contract 尚未同步目前 `run_meta_quality.py` 輸出鍵，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B11 | 補齊 `registry_steps / registry_commands / run_all_steps / preflight_steps / test_suite_steps` 並排除已退役的 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
@@ -1233,5 +1233,5 @@
 | 2026-04-13 | T244 | 將 help 舊 wording / 裸用詞排除 validator 改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 最嚴格檢查檢出 help 裸用詞排除 validator 仍以 `TEST_SUITE_CHECKLIST` 白名單承接已不應出現在正式 help 的 canonical token，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
 | 2026-04-13 | T244 | 將 help 裸用詞排除 validator 收斂為直接禁止 bare `checklist` 與 `contract` 長列舉後重新收斂為 DONE | PARTIAL -> DONE | `validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case` |
-| 2026-04-13 | T251 | 最嚴格檢查檢出 internal helper exact file-tree validator 將高波動 helper 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `validate_architecture_helper_module_file_tree_sync_case` |
-| 2026-04-13 | T252 | 最嚴格檢查檢出 internal support exact file-tree validator 將高波動 support 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `validate_architecture_support_module_file_tree_sync_case` |
+| 2026-04-13 | T251 | 最嚴格檢查檢出 internal helper exact file-tree validator 將高波動 helper 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
+| 2026-04-13 | T252 | 最嚴格檢查檢出 internal support exact file-tree validator 將高波動 support 清單升格為長期 formal contract，與 `doc/ARCHITECTURE.md` 穩定邊界不一致，改列 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
