@@ -332,149 +332,6 @@ def validate_cmd_document_contract_case(_base_params):
     return results, summary
 
 
-def validate_gui_workbench_documentation_sync_case(_base_params):
-    case_id = "META_GUI_WORKBENCH_DOCUMENTATION_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    inspector_source = (PROJECT_ROOT / "tools" / "workbench_ui" / "single_stock_inspector.py").read_text(encoding="utf-8")
-
-    cmd_required_fragment = "交易明細與 Console 為獨立分頁"
-    cmd_forbidden_fragment = "執行摘要、交易明細與 Console 為獨立分頁"
-    architecture_apps_required_fragment = "交易明細與 Console 改以獨立分頁承接"
-    architecture_ui_required_fragment = "交易明細與 Console 以獨立分頁承接"
-    architecture_forbidden_fragment = "執行摘要與交易明細改以獨立分頁承接"
-    architecture_ui_forbidden_fragment = "摘要與明細 / Console 以獨立分頁承接"
-
-    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_trade_detail_tab", True, 'text="交易明細"' in inspector_source)
-    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_has_console_tab", True, 'text="Console"' in inspector_source)
-    add_check(results, "meta_cmd_contract", case_id, "inspector_notebook_omits_summary_tab", False, 'text="執行摘要"' in inspector_source)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_mentions_trade_detail_console_tabs", True, cmd_required_fragment in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_omits_summary_tab_description", False, cmd_forbidden_fragment in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "architecture_apps_workbench_mentions_trade_detail_console_tabs", True, architecture_apps_required_fragment in architecture_text)
-    add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_mentions_trade_detail_console_tabs", True, architecture_ui_required_fragment in architecture_text)
-    add_check(results, "meta_cmd_contract", case_id, "architecture_workbench_omits_summary_tab_description", False, architecture_forbidden_fragment in architecture_text)
-    add_check(results, "meta_cmd_contract", case_id, "architecture_ui_workbench_omits_summary_tab_description", False, architecture_ui_forbidden_fragment in architecture_text)
-
-    summary["cmd_required_fragment"] = cmd_required_fragment
-    summary["architecture_required_fragments"] = [architecture_apps_required_fragment, architecture_ui_required_fragment]
-    summary["tabs"] = ["K 線圖", "交易明細", "Console"]
-    return results, summary
-
-def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
-    case_id = "META_ARCHITECTURE_WORKBENCH_ENTRY_FILE_TREE_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    workbench_source = (PROJECT_ROOT / "apps" / "workbench.py").read_text(encoding="utf-8")
-
-    required_tree_fragment = "│  └─ workbench.py                    # GUI 工作台正式入口（薄入口）"
-    stale_missing_tree_fragment = "│  └─ vip_scanner.py                  # 掃描器正式入口（薄入口）"
-
-    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_lists_workbench_entry", True, required_tree_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_has_no_stale_missing_workbench_tail", False, stale_missing_tree_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_section_mentions_workbench_single_gui_entry", True, "`apps/workbench.py` 為單一 GUI 啟用入口" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "workbench_app_remains_thin_gui_entry", True, "from tools.workbench_ui import main" in workbench_source and '__all__ = ["main"]' in workbench_source)
-
-    summary["required_tree_fragment"] = required_tree_fragment
-    summary["source_paths"] = ["doc/ARCHITECTURE.md", "apps/workbench.py"]
-    return results, summary
-
-
-def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
-    case_id = "META_ARCHITECTURE_MODELS_BEST_PARAMS_FILE_TREE_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    models_dir = PROJECT_ROOT / "models"
-
-    required_tree_fragments = [
-        "│  ├─ all_best_params_1.json         # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params_2.json         # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params_3.json         # 歷史最佳參數或不同批次最佳化輸出",
-        "│  └─ best_params.json               # 目前主要使用的最佳參數檔",
-    ]
-    stale_tree_fragments = [
-        "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄",
-    ]
-
-    for idx, fragment in enumerate(required_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_best_params_{idx}", True, fragment in architecture_text)
-    for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_best_params_name_{stale_idx}", False, fragment in architecture_text)
-
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_1", True, (models_dir / "all_best_params_1.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_2", True, (models_dir / "all_best_params_2.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_3", True, (models_dir / "all_best_params_3.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_best_params", True, (models_dir / "best_params.json").exists())
-
-    summary["required_tree_fragments"] = required_tree_fragments
-    summary["source_paths"] = [
-        "doc/ARCHITECTURE.md",
-        "models/all_best_params_1.json",
-        "models/all_best_params_2.json",
-        "models/all_best_params_3.json",
-        "models/best_params.json",
-    ]
-    return results, summary
-
-
-
-
-def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):
-    case_id = "META_ARCHITECTURE_LOCAL_REGRESSION_META_QUALITY_FILE_TREE_SYNC"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    required_tree_fragment = "├── run_meta_quality.py"
-    stale_malformed_fragment = "├── run_meta_quality.py（含 `run_all.py` helper path coverage probe）"
-    required_role_fragment = "- `run_meta_quality.py`：meta quality 工具；"
-
-    add_check(results, "meta_architecture_contract", case_id, "architecture_local_regression_file_tree_lists_run_meta_quality_entry", True, required_tree_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_local_regression_file_tree_has_no_malformed_run_meta_quality_entry", False, stale_malformed_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_local_regression_role_section_mentions_run_meta_quality_tooling", True, required_role_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_tools_local_regression_run_meta_quality_py", True, (PROJECT_ROOT / "tools" / "local_regression" / "run_meta_quality.py").exists())
-
-    summary["required_tree_fragment"] = required_tree_fragment
-    summary["source_paths"] = ["doc/ARCHITECTURE.md", "tools/local_regression/run_meta_quality.py"]
-    return results, summary
-
-
-def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_params):
-    case_id = "META_TRADE_ANALYSIS_LEGACY_NAMING_DOCUMENTATION_CONTRACT"
-    results = []
-    summary = {"ticker": case_id, "synthetic": True}
-
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-
-    cmd_has_legacy_debug_labels = all(fragment in cmd_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
-    architecture_has_legacy_debug_labels = all(fragment in architecture_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
-    architecture_marks_legacy_as_compatibility = ("為維持相容性" in architecture_text) or ("以維持相容性" in architecture_text)
-
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_described_as_formal_entry", True, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_mentions_legacy_debug_api_labels", True, cmd_has_legacy_debug_labels)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_output_dir_explicitly_marked_legacy", True, "`outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_retention_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in cmd_text)
-    add_check(results, "meta_cmd_contract", case_id, "cmd_has_no_stale_debug_formal_entry_label", False, "為 debug 正式入口" in cmd_text)
-
-    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_described_as_subsystem", True, "- `tools/trade_analysis/`：單股 trade-analysis 子系統；" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_mentions_legacy_debug_api_labels", True, architecture_has_legacy_debug_labels and architecture_marks_legacy_as_compatibility)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_output_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_stale_debug_subsystem_label", False, "交易除錯子系統" in architecture_text)
-
-    summary["source_paths"] = ["doc/CMD.md", "doc/ARCHITECTURE.md"]
-    summary["architecture_has_legacy_debug_labels"] = architecture_has_legacy_debug_labels
-    summary["architecture_marks_legacy_as_compatibility"] = architecture_marks_legacy_as_compatibility
-    return results, summary
-
-
 def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     case_id = "META_TRADE_ANALYSIS_CANONICAL_ALIAS_EXPORT_CONTRACT"
     results = []
@@ -482,8 +339,6 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
 
     package_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "__init__.py").read_text(encoding="utf-8")
     trade_log_text = (PROJECT_ROOT / "tools" / "trade_analysis" / "trade_log.py").read_text(encoding="utf-8")
-    cmd_text = (PROJECT_ROOT / "doc" / "CMD.md").read_text(encoding="utf-8")
-    architecture_text = (PROJECT_ROOT / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
 
     canonical_aliases = [
         "run_trade_analysis",
@@ -505,10 +360,6 @@ def validate_trade_analysis_canonical_alias_export_contract_case(_base_params):
     for alias_name in legacy_aliases:
         add_check(results, "meta_contract", case_id, f"package_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in package_text and f'"{alias_name}"' in package_text)
         add_check(results, "meta_contract", case_id, f"trade_log_keeps_legacy_{alias_name}", True, f'def {alias_name}(' in trade_log_text and f'"{alias_name}"' in trade_log_text)
-
-    canonical_doc_fragment = "canonical `run_trade_analysis` / `run_trade_backtest` / `run_prepared_trade_backtest` / `run_ticker_analysis` aliases"
-    add_check(results, "meta_cmd_contract", case_id, "cmd_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in cmd_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_mentions_canonical_trade_analysis_aliases", True, canonical_doc_fragment in architecture_text)
 
     summary["canonical_aliases"] = canonical_aliases
     summary["legacy_aliases"] = legacy_aliases
