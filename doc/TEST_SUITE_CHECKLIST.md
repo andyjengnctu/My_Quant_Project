@@ -1166,12 +1166,16 @@
 | 2026-04-13 | B11 | 將 `formal_entry` stale-key 排除檢查改為直接禁止 legacy `steps` 舊鍵後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-13 | B26 | 最嚴格檢查檢出 `G` 同日區塊未重排導致 `B158` 落在 `T124` 後方，主表改回 PARTIAL | DONE -> PARTIAL | `tools/local_regression/run_meta_quality.py` |
 | 2026-04-13 | B26 | 依日期與 tracking ID 重新排序 `G` 同日區塊並補強交付前整段重排 guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/local_regression/run_meta_quality.py` |
+| 2026-04-13 | B26 | 依 bundle 實際失敗再次檢出 `G` 同日區塊新增較小 tracking ID 後未整段重排，排序 guard 再被真實失敗擊中，主表改回 PARTIAL | DONE -> PARTIAL | `doc/TEST_SUITE_CHECKLIST.md` |
+| 2026-04-13 | B26 | 將 2026-04-13 同日區塊抽出後依日期與 tracking ID 穩定重排並重新收斂為 DONE | PARTIAL -> DONE | `doc/TEST_SUITE_CHECKLIST.md` |
 | 2026-04-13 | B50 | 最嚴格檢查檢出 strategy minimum viability smoke 尚未釘死 scanner summary canonical issue-log path，仍可回流退役 `outputs/scanner/` 類別，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-13 | B50 | 將 scanner summary smoke contract 收斂為 canonical `outputs/vip_scanner/` issue-log path 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-13 | B157 | 最嚴格檢查檢出正式入口 `--help` 穩定主題摘要鏈雖宣稱已納入 `summary-section-heading-uniqueness`，但 help 與對應 meta contract 皆未實際覆蓋，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B157 | 將正式入口 help 摘要與對應 meta contract 同步補上 `summary-section-heading-uniqueness` theme token 後重新收斂為 DONE | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-13 | B157 | 最嚴格檢查檢出正式入口 help 穩定主題契約名義上驗 `--help`、實際卻掃 source 內單行 `print` 字串，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B157 | 將正式入口 help 穩定主題契約改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-13 | B157 | 最嚴格檢查檢出正式入口 `--help` 穩定主題摘要仍將 checklist heading / 治理 guard 等內部 meta 細節列為必備 token，超出對使用者仍有意義的正式入口邊界，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-13 | B157 | 將正式入口 help 穩定主題摘要收斂為交易口徑一致性、保守出場解讀與 `debug-backtest` 現金路徑等使用者可理解的穩定主題後重新收斂為 DONE | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約仍以 `exact-contract` 直掛 active sub-check 與主表摘要，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 active sub-check 與主表摘要改為中性「舊契約 wording」語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 stale-wording 排除檢查仍殘留較長完整舊短語，未收斂到較短已足夠覆蓋的最小必要片段，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
@@ -1188,8 +1192,6 @@
 | 2026-04-13 | B158 | 將正式範圍收斂為僅驗 `apps/test_suite.py --help` 的穩定主題與 bare `checklist` 排除後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 help 舊 wording / 裸用詞排除契約名義上驗 `--help`、實際卻掃 source 內單行 `print` 字串，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 help 舊 wording / 裸用詞排除契約改為直接擷取 `apps/test_suite.py --help` 輸出後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-13 | B157 | 最嚴格檢查檢出正式入口 `--help` 穩定主題摘要仍將 checklist heading / 治理 guard 等內部 meta 細節列為必備 token，超出對使用者仍有意義的正式入口邊界，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
-| 2026-04-13 | B157 | 將正式入口 help 穩定主題摘要收斂為交易口徑一致性、保守出場解讀與 `debug-backtest` 現金路徑等使用者可理解的穩定主題後重新收斂為 DONE | PARTIAL -> DONE | `apps/test_suite.py` |
 | 2026-04-13 | B158 | 最嚴格檢查檢出 help 裸用詞排除契約雖已移除 `TEST_SUITE_CHECKLIST` token，卻仍保留 canonical 白名單特例說明，與正式入口成品層需求不再一致，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | B158 | 將 help 裸用詞排除契約收斂為直接禁止 bare `checklist` 與 `contract` 長列舉後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-13 | T18 | 最嚴格檢查檢出 output contract case 尚未覆蓋 `meta_quality_summary.json` `formal_entry` nested schema required keys 與 stale-key 排除檢查，改回 PARTIAL | DONE -> PARTIAL | `validate_output_contract_case` |
@@ -1199,6 +1201,8 @@
 | 2026-04-13 | T124 | 補齊 checklist `G` 最新狀態與 `T` DONE 摘要的重新收斂紀錄，避免 done/unfinished 摘要與 convergence 狀態分叉 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 最嚴格檢查檢出 `G` 同日區塊排序斷裂並命中 `checklist_g_rows_sorted_by_date_then_id`，改回 PARTIAL | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T124 | 將 2026-04-13 同日區塊依日期與 tracking ID 重排後重新收斂為 DONE | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | T124 | 依 bundle 實際失敗再次檢出 `G` 同日區塊新增較小 tracking ID 後未整段重排，排序 guard 再被真實失敗擊中 | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
+| 2026-04-13 | T124 | 將 2026-04-13 同日區塊抽出後依日期與 tracking ID 穩定重排並重新收斂 | PARTIAL -> DONE | `validate_checklist_g_ordering_case` |
 | 2026-04-13 | T127 | 最嚴格檢查檢出 strategy minimum viability case 尚未直接覆蓋 scanner summary canonical issue-log path，改回 PARTIAL | DONE -> PARTIAL | `validate_strategy_minimum_viability_case` |
 | 2026-04-13 | T127 | 擴充 scanner summary smoke contract，釘死 canonical `outputs/vip_scanner/` issue-log path 後重新收斂為 DONE | PARTIAL -> DONE | `validate_strategy_minimum_viability_case` |
 | 2026-04-13 | T243 | 最嚴格檢查檢出正式入口 help 穩定主題 token 契約雖宣稱已納入 `summary-section-heading-uniqueness`，但 active validator 與 help 皆未實際覆蓋，改回 PARTIAL | DONE -> PARTIAL | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` |
