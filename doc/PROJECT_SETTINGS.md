@@ -1,7 +1,7 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單，`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表；三者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
-2. 文件治理與同步原則依 A3–A4 執行。
+2. 文件治理與承載邊界依 A3–A4 執行；formal 流程與同步要求依 B 節執行。
 
 ## A. 工作基準與文件分工
 
