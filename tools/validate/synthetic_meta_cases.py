@@ -1060,19 +1060,20 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
-    invalid_rows = g_note_result.get("invalid_note_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_note_result, "invalid_note_rows", [])
+    removed_names = {
+        "checklist_g_rows_use_single_note_entry",
+        "checklist_g_note_path_entries_exist",
+        "checklist_g_note_validate_entries_exist",
+    }
+    removed_present = sorted(name for name in removed_names if name in result_by_name)
+    governance_result = result_by_name.get("checklist_g_notes_are_non_blocking_governance_context", {})
 
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_single_entry_guard_fails", "FAIL", g_note_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_multiple_entries", True, any(row.get("id") == "B38" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "g_note_hygiene_guards_are_not_formal_blockers", [], removed_present)
+    add_check(results, "meta_checklist", case_id, "g_note_governance_context_summary_present", "PASS", governance_result.get("status"))
 
-    summary["guard_status"] = g_note_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    summary["removed_present"] = removed_present
+    summary["governance_status"] = governance_result.get("status")
     return results, summary
-
-
 
 
 def validate_checklist_g_single_parseable_note_entry_case(_base_params):
@@ -1102,16 +1103,16 @@ def validate_checklist_g_single_parseable_note_entry_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
-    invalid_rows = g_note_result.get("invalid_note_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_note_result, "invalid_note_rows", [])
+    removed_names = {
+        "checklist_g_rows_use_single_note_entry",
+        "checklist_g_note_path_entries_exist",
+        "checklist_g_note_validate_entries_exist",
+    }
+    removed_present = sorted(name for name in removed_names if name in result_by_name)
 
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_parseable_guard_fails", "FAIL", g_note_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_target_row", True, any(row.get("id") == "T67" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "freeform_g_note_does_not_reintroduce_removed_formal_guards", [], removed_present)
 
-    summary["guard_status"] = g_note_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    summary["removed_present"] = removed_present
     return results, summary
 
 
@@ -1142,16 +1143,13 @@ def validate_checklist_g_note_path_reference_exists_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_note_path_result = result_by_name.get("checklist_g_note_path_entries_exist", {})
-    invalid_rows = g_note_path_result.get("invalid_note_path_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_note_path_result, "invalid_note_path_rows", [])
+    removed_present = sorted(
+        name for name in ("checklist_g_note_path_entries_exist",) if name in result_by_name
+    )
 
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_path_ref_guard_fails", "FAIL", g_note_path_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_path_ref_reports_target_row", True, any(row.get("id") == "T20" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "g_note_path_hygiene_is_not_a_formal_blocker", [], removed_present)
 
-    summary["guard_status"] = g_note_path_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    summary["removed_present"] = removed_present
     return results, summary
 
 def validate_checklist_f2_formal_command_single_entry_case(_base_params):
@@ -1563,16 +1561,13 @@ def validate_checklist_g_note_validate_reference_exists_case(_base_params):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    g_note_validate_result = result_by_name.get("checklist_g_note_validate_entries_exist", {})
-    invalid_rows = g_note_validate_result.get("invalid_note_validate_rows")
-    if invalid_rows is None:
-        invalid_rows = _read_summary_value(g_note_validate_result, "invalid_note_validate_rows", [])
+    removed_present = sorted(
+        name for name in ("checklist_g_note_validate_entries_exist",) if name in result_by_name
+    )
 
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_guard_fails", "FAIL", g_note_validate_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_g_note_validate_ref_reports_target_row", True, any(row.get("id") == "T138" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "g_note_validator_reference_hygiene_is_not_a_formal_blocker", [], removed_present)
 
-    summary["guard_status"] = g_note_validate_result.get("status")
-    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    summary["removed_present"] = removed_present
     return results, summary
 
 
