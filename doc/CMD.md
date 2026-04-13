@@ -66,7 +66,7 @@ python apps/workbench.py
 
 - `outputs/local_regression/`：保留最近 20 份，刪除超過 30 天。
 - `outputs/validate_consistency/`、`outputs/portfolio_sim/`：保留最近 10 份，刪除超過 30 天。
-- `outputs/ml_optimizer/`、`outputs/vip_scanner/`、`outputs/smart_downloader/`、`debug_trade_log`（trade_analysis legacy output dir）：保留最近 5 份，刪除超過 14 天。
+- `outputs/ml_optimizer/`、`outputs/vip_scanner/`、`outputs/smart_downloader/`、`outputs/debug_trade_log/`（trade_analysis legacy output dir）：保留最近 5 份，刪除超過 14 天。
 
 # 文件分工
 
