@@ -378,6 +378,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     invalid_g_transition_sequence_rows = []
     no_op_convergence_rows = []
     invalid_g_note_rows = []
+    invalid_g_note_path_rows = []
     invalid_g_note_validate_rows = []
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
     seen_g_ids: Set[str] = set()
@@ -411,12 +412,25 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             no_op_convergence_rows.append({"id": row_id, "transition": transition})
         note = row[4].strip() if len(row) > 4 else ""
         note_entries = _extract_checklist_note_entries(note)
-        if len(note_entries) >= 2:
+        if len(note_entries) != 1:
             invalid_g_note_rows.append(
                 {
                     "id": row_id,
                     "note": note,
                     "entries": note_entries,
+                }
+            )
+        invalid_path_entries = [
+            entry
+            for entry in note_entries
+            if (not entry.startswith("validate_")) and (not (PROJECT_ROOT / entry).exists())
+        ]
+        if invalid_path_entries:
+            invalid_g_note_path_rows.append(
+                {
+                    "id": row_id,
+                    "note": note,
+                    "invalid_entries": invalid_path_entries,
                 }
             )
         invalid_validate_entries = [entry for entry in note_entries if entry.startswith("validate_") and entry not in defined_validate_names]
@@ -468,6 +482,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             not invalid_g_note_rows,
             detail=f"invalid={invalid_g_note_rows}",
             extra={"invalid_note_rows": invalid_g_note_rows},
+        )
+    )
+    results.append(
+        summarize_result(
+            "checklist_g_note_path_entries_exist",
+            not invalid_g_note_path_rows,
+            detail=f"invalid={invalid_g_note_path_rows}",
+            extra={"invalid_note_path_rows": invalid_g_note_path_rows},
         )
     )
     results.append(

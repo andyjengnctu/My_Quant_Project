@@ -1073,6 +1073,87 @@ def validate_checklist_g_single_note_entry_delimiter_case(_base_params):
     return results, summary
 
 
+
+
+def validate_checklist_g_single_parseable_note_entry_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_SINGLE_PARSEABLE_NOTE_ENTRY"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="T67",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:4] + ["需補 checklist 自身同步性檢查。"],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_parseable_note_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_note_result = result_by_name.get("checklist_g_rows_use_single_note_entry", {})
+    invalid_rows = g_note_result.get("invalid_note_rows")
+    if invalid_rows is None:
+        invalid_rows = _read_summary_value(g_note_result, "invalid_note_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_parseable_guard_fails", "FAIL", g_note_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_reports_target_row", True, any(row.get("id") == "T67" for row in invalid_rows))
+
+    summary["guard_status"] = g_note_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
+
+def validate_checklist_g_note_path_reference_exists_case(_base_params):
+    import tools.local_regression.run_meta_quality as meta_quality_module
+
+    case_id = "META_CHECKLIST_G_NOTE_PATH_REFERENCE_EXISTS"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    original_text = CHECKLIST_PATH.read_text(encoding="utf-8")
+    try:
+        mutated_text = _replace_markdown_table_row(
+            original_text,
+            heading="G. 逐項收斂紀錄",
+            row_id="T20",
+            id_col_idx=1,
+            update_cols=lambda cols: cols[:4] + ["`run_meta_quality.py`"],
+        )
+    except ValueError:
+        add_check(results, "meta_checklist", case_id, "target_g_row_exists_for_mutation", True, False)
+        return results, summary
+
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_g_note_path_") as temp_dir:
+        mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
+        mutated_path.write_text(mutated_text, encoding="utf-8")
+        with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
+            consistency = meta_quality_module._summarize_checklist_consistency()
+
+    result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
+    g_note_path_result = result_by_name.get("checklist_g_note_path_entries_exist", {})
+    invalid_rows = g_note_path_result.get("invalid_note_path_rows")
+    if invalid_rows is None:
+        invalid_rows = _read_summary_value(g_note_path_result, "invalid_note_path_rows", [])
+
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_path_ref_guard_fails", "FAIL", g_note_path_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_g_note_path_ref_reports_target_row", True, any(row.get("id") == "T20" for row in invalid_rows))
+
+    summary["guard_status"] = g_note_path_result.get("status")
+    summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
+    return results, summary
+
 def validate_checklist_f2_formal_command_single_entry_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
