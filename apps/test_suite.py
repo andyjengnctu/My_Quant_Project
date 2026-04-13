@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/test_suite.py")
         print(f"用法: python {program_name}")
-        print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline、meta quality、artifact integrity，以及單股公開盈虧/權益一致性、保守可執行出場解讀、架構文件檔案樹同步、debug-backtest 現金路徑、治理原則 / TEST_SUITE_CHECKLIST guard 等穩定契約主題；若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
+        print("說明: reduced 一鍵測試正式入口；會串接 formal pipeline、meta quality、artifact integrity，以及單股公開盈虧/權益一致性、保守可執行出場解讀、架構文件檔案樹同步、summary-section-heading-uniqueness、debug-backtest 現金路徑、治理原則 / TEST_SUITE_CHECKLIST guard 等穩定契約主題；若失敗再依主控台建議用 run_all.py --only 重跑失敗步驟。")
         return 0
 
     from tools.local_regression.run_all import execute_all

@@ -16,10 +16,10 @@
 
 1. 若本輪修改 formal test chain，同一 target 必須整鏈核對 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard；任一層未同步，不得交付。
 2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將 validator / contract 的實際被測來源改指向另一份文件或模組，必須同步檢查所有引用層並改正殘留舊來源名稱；不得只改函式本體，卻保留舊 case_id、T 項摘要、help theme 或 registry 描述。
-3. 若本輪將 validator / contract 的語意從 exact-contract、逐項列舉或舊規則轉為穩定主題 token、結構契約或新 canonical 邊界，必須同步更新函式名、case_id、registry、`doc/TEST_SUITE_CHECKLIST.md` 摘要與收斂描述；不得讓 active 名稱持續誤標實際語意。
+3. 若本輪將 validator / contract 的語意從 exact-contract、逐項列舉或舊規則轉為穩定主題 token、結構契約或新 canonical 邊界，必須同步更新函式名、case_id、registry、`doc/TEST_SUITE_CHECKLIST.md` 摘要與收斂描述；不得讓 active 名稱持續誤標實際語意。若 checklist 主表或 `G` 收斂紀錄明確宣稱已納入某個 stable theme token，active validator 與正式入口文字也必須實際出現並檢查該 token；不得以較寬泛主題籠統替代。
 4. 若 validator 的實際語意已改成排除舊 wording、裸用詞、退役鍵或其他中性排除契約，active 函式名、case_id、sub-check 名稱與 checklist 映射不得再掛舊來源名稱、`exact_contract` 或 `renamed_theme` 等過時語意。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。若新增列插入既有日期區塊，且 tracking ID 排序鍵小於當前尾列，必須抽出整個同日區塊重排後整段覆寫回原位，不得把較小 ID 直接追加在較大 ID 後。
-6. 若本輪修改任何受 formal validator 驗證的文字面，交付前必須反查對應 required fragment、required token、長度上限與排除詞；validator 若宣稱只驗穩定 token / 結構，內部也不得再依賴高波動全文、長前綴或完整文案作定位錨點。stale-wording / 排除詞檢查也必須優先使用最短且已足以覆蓋舊字串的必要片段；若較短片段已完整涵蓋較長舊短語，不得再把較長完整舊短語掛回 active validator。
+6. 若本輪修改任何受 formal validator 驗證的文字面，交付前必須反查對應 required fragment、required token、長度上限與排除詞；validator 若宣稱只驗穩定 token / 結構，內部也不得再依賴高波動全文、長前綴或完整文案作定位錨點。stale-wording / 排除詞檢查也必須優先使用最短且已足以覆蓋舊字串的必要片段；若較短片段已完整涵蓋較長舊短語，不得再把較長完整舊短語掛回 active validator，也不得在同一 validator 的 sibling check 內同時保留已被較短片段覆蓋的較長排除短語。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
 8. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；不得只改正式輸出實作，卻讓 contract case sample payload 或 nested schema 仍停在舊欄位。若 validator 已改為驗「排除退役舊鍵」這類中性語意，active sub-check 名稱與 checklist 摘要也不得再直掛退役欄位名；實際 stale-key 負向檢查所比對的 key 也必須與 checklist / contract 明示的退役鍵完全一致，不得誤檢其他名稱。
 9. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面。
