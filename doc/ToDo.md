@@ -6,6 +6,8 @@
 - 訓練/測試樣本分離
 - overfitting量化驗證工具
 
+4. GPT必須透過完善 `TEST_SUITE_CHECKLIST.md` 來確保動態測試的完整性; 檢查是否存在應列入但尚未列入 `doc/TEST_SUITE_CHECKLIST.md`的測項。
+
 ## To do
 - 如何精準公式算出停利%，讓先停利後停損絕對不會是負的?
 
