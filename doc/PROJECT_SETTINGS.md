@@ -1,36 +1,34 @@
 # 專案設定
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`、`/doc/TEST_SUITE_CHECKLIST.md` 與 `/doc/GPT_DELIVERY_CHECKLIST.md`；其中 `PROJECT_SETTINGS.md` 為最高優先規則，`TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單，`GPT_DELIVERY_CHECKLIST.md` 為 GPT 交付前操作檢查表；三者均不得忽略、弱化、選擇性遵守、以慣例覆蓋或自行推定例外。
-2. 文件治理與同步原則依 A3–A5 執行。
+2. 文件治理與同步原則依 A3–A4 執行。
 
-## A. 工作基準與執行紀律
+## A. 工作基準與文件分工
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 assistant 交付之程式碼、patch、修補 ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；具體回報欄位依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-3. 文件分工：`PROJECT_SETTINGS.md` 只保留 GPT 產生程式與文件時的上位原則、模組責任、邊界與資料流，須易讀、易維護、可泛化，且不得以暫時函式名、舊名稱或局部實作細節作為定義；`TEST_SUITE_CHECKLIST.md` 只保留本地端 formal test suite 所需、可機械比對的必要資訊；`GPT_DELIVERY_CHECKLIST.md` 只保留 GPT 交付前操作檢查，不作 formal test 主表或狀態真理來源，也不得作為 `apps/test_suite.py`、本地端 formal validator、synthetic registry 或 bundle 檢查的被測內容。`TEST_SUITE_CHECKLIST.md`、formal validator、synthetic registry 與 bundle 檢查不得引用、映射、驗證或假設 `PROJECT_SETTINGS.md` / `GPT_DELIVERY_CHECKLIST.md` 的存在；三者之間的關連只由 GPT 讀取後，透過程式、文件、formal checklist 與交付輸出自行落實。
-4. 文件承載邊界：三者皆須遵守單一真理來源，文件內外不得重覆描述；會隨實作演進而調整的名稱、字串與細部契約，不得留在 `PROJECT_SETTINGS.md`。治理文件與 `apps/test_suite.py --help` 只保留穩定、跨模組、正式入口級資訊；高波動敘事、暫時演進說明、可由程式或檔案樹直接推出的重複細節與完整 helper 長清單，不得作為主要承載面。需要逐字比對的文字，只能限於 canonical 名稱、正式入口、section heading 與最小必要 fragment；不得把高波動描述做成 exact-string contract。formal test suite 與 `doc/TEST_SUITE_CHECKLIST.md` 只驗 shipped 正式介面、schema、檔案樹、正式入口與行為；不得再對 validator 內部命名、sub-check 文字、排除片段長短、單一 exemplar 選擇或 GPT 交付自檢條款建立遞迴驗證。細部契約與驗證細節一律下沉到 `doc/TEST_SUITE_CHECKLIST.md` 與 formal contract。治理型主表項與 `DONE` 摘要只保留索引式摘要與正式 contract 入口，不得回貼操作條款全文。
-5. 文件同步原則：`GPT_DELIVERY_CHECKLIST.md` 必須優先使用可泛化、可舉一反三的交付前規則；不得長期累積只對單次事故、單一句子、單一 wording 或局部實作特例有效的補丁型條款。若問題只屬 GPT 交付判斷或檢查器寫法 hygiene，應留在 `GPT_DELIVERY_CHECKLIST.md`，不得再上升為 formal 主表或 validator 的自我檢查。修改 `PROJECT_SETTINGS.md` 時，必須保持文字精簡、便於 assistant 明確遵守與使用者維護；`D`、`E` 節只保留跨模組、長期穩定、可泛化的原則。凡新增、刪除、調整 test suite 項目、優先級、狀態，或變更測試分層與維護原則時，必須同輪同步更新 `doc/TEST_SUITE_CHECKLIST.md`；若影響模組責任或測試入口，再同步更新 `doc/ARCHITECTURE.md` 與 `doc/CMD.md`。
+3. 文件分工固定：`PROJECT_SETTINGS.md` 只保留上位原則、模組責任、邊界與資料流；`TEST_SUITE_CHECKLIST.md` 只保留 formal 主表、狀態、測試入口與收斂索引；`GPT_DELIVERY_CHECKLIST.md` 只保留 GPT 交付前操作檢查，不作 formal 主表、狀態真理來源或 validator 被測內容。
+4. 文件承載邊界固定：`PROJECT_SETTINGS.md` 只保留長期穩定、可泛化原則；高波動 wording、暫時事故補丁、validator 內部命名、單次案例 hygiene 與細部驗證技巧，不得上升到 `PROJECT_SETTINGS.md` 或 formal 主表。formal test suite 只驗 shipped 正式介面、schema、檔案樹、正式入口與行為；GPT 操作習慣只留在 `GPT_DELIVERY_CHECKLIST.md`。
 
 ## B. 標準測試流程
 
 1. `apps/test_suite.py` 為所有已實作測試的單一正式入口，僅限在本地端執行；GPT 端不得重覆執行其已涵蓋項目、不得執行任何動態測試，也不得繞過正式入口直接執行其涵蓋的 formal step、validator、腳本或函式。
 2. `tools/local_regression/formal_pipeline.py` 為單一真理來源。
 3. 每輪開始前，必須先檢查目前是否存在尚未列入 `doc/TEST_SUITE_CHECKLIST.md`、但應由正式入口涵蓋的缺口；若有缺口，先更新 `doc/TEST_SUITE_CHECKLIST.md` 與正式入口，再處理其他問題。
-4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 實際失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 `doc/TEST_SUITE_CHECKLIST.md` 已同步視為修復完成。
-5. 檢查到問題就直接在本輪提供修改，並同步補上避免再次發生的強制約束。
-6. 凡新增、刪除或調整 formal test chain 的 validator、Txx / Bxx、registry、正式入口摘要、help 文案，或更名追蹤 ID，必須同輪完成定義、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口與對應 meta guard 的全鏈同步；任一層未同步，不得宣稱已完成修復。GPT 交付前逐項核對與交付步驟，一律依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-7. 一般註解（含 AI 註解、程式內摘要註解與未被正式介面直接讀取的 docstring）預設不納入 GPT 最嚴格檢查、本地 formal test suite、bundle 與 `apps/test_suite.py` 驗證範圍，也不得單獨作為交付阻塞；但若該文字會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出，則視為正式介面，仍須納入同步與檢查。需機械比對的正式契約必須放在程式行為、`--help`、文件、registry 或 `doc/TEST_SUITE_CHECKLIST.md`，不得以註解作為正式同步邊界。
+4. 若使用者未提供 bundle，視為已在本地完成 `apps/test_suite.py` 且結果全過；若提供 bundle，必須逐條對照 bundle 原始失敗項完成閉環修正；未消除原始失敗項前，不得以相鄰文件、註解、help 或 checklist 已同步視為修復完成。
+5. 檢查到問題就直接在本輪提供修改；若變更 formal chain，必須同輪完成 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口、help 與對應 meta guard 的全鏈同步。
+6. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，把防再犯要求提升為可泛化、可操作的交付前檢查；不得只補單一案例、單一字串或局部實作特例。
+7. 一般註解（含 AI 註解、程式內摘要註解與未被正式介面直接讀取的 docstring）預設不納入 GPT 最嚴格檢查、本地 formal test suite、bundle 與 `apps/test_suite.py` 驗證範圍；但若該文字會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出，則視為正式介面。
 8. 凡修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械排序區塊，必須維持既有排序 guard 可通過；具體交付前重排與核對步驟依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
-9. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得只修局部已見問題後即交付，也不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若存在本輪無法清除的阻塞，不得將局部修補視為完成。
-10. 若前一輪修改在本輪仍被 bundle 或再檢查證明有錯，除修正原始失敗外，必須同步更新 `doc/GPT_DELIVERY_CHECKLIST.md`，將防再犯要求上提為可泛化、可操作的交付前檢查；不得只補單一案例、單一字串或局部實作特例。若屬既有 Bxx / Txx / validator contract 鏈，交付前必須先建立同源 / 同鏈 / 同契約收斂清單並逐項清空；收斂清單至少必須列出鏈根、掃描範圍、逐項結果與未清阻塞，不得只以「已檢查」或「已同步」概括帶過。
+9. 執行最嚴格檢查或再檢查時，必須以同輪一次找出並修正所有目前可發現的問題為原則；不得將同源、同鏈或同契約的已知相鄰問題拆成多輪逐步釋出。若存在本輪無法清除的阻塞，不得將局部修補視為完成。
 
 ## C. 回覆、交付與輸出
 
 1. 只提供客觀分析與建議，不奉承；回答必須明確、精簡、避免重複。
 2. AI 註解與使用者註解必須明確區分；只能刪 AI 註解，不可刪使用者註解，不可擅改或刪除原本正確的程式碼。
 3. 提供程式碼片段時，必須先給可直接搜尋定位的完整舊片段，再給可直接貼上的新片段。
-4. 提供修補 ZIP 時，只能包含有修改的檔案，並維持目錄架構，讓使用者可以直接在root貼上取代舊檔，並列出修改了哪些檔案。
-5. 預設以提供 ZIP為主，除非使用者要求提供程式碼片段，或只需要改一小段。
+4. 提供修補 ZIP 時，只能包含有修改的檔案，並維持目錄架構，讓使用者可以直接在 root 貼上取代舊檔，並列出修改了哪些檔案。
+5. 預設以提供 ZIP 為主，除非使用者要求提供程式碼片段，或只需要改一小段。
 6. 如架構調整需刪檔，須提供可執行的 command，避免使用者手動刪錯。
 7. `outputs/` 根目錄只放工具分類資料夾；各工具輸出必須落到各自資料夾，禁止再把檔案散落到 `outputs/` 根目錄。
 8. 交付前必須完成 GPT 端自檢；具體檢查與交付條件依 `doc/GPT_DELIVERY_CHECKLIST.md` 執行。
@@ -44,16 +42,13 @@
 5. 架構調整不得明顯犧牲效率；若提高未來策略修改或 ML / DRL / LLM 升級複雜度，必須先明確說明。
 6. 正式入口集中於 `apps/`；`core/` 只放核心規則與共用計算；`tools/` 只放驗證、除錯與開發輔助工具。
 7. 拆分、合併、移動或重新命名檔案時，必須遵守單一職責、分層呼叫、禁止反向依賴、禁止循環依賴、禁止規則分叉與禁止重複實作。
-8. 架構、模組責任、正式入口或共享資料流有變動時，必須同輪同步更新相關實作、文件與索引。
-9. 跨模組所需上下文、path、資料根目錄、輸出位置、共享欄位與公開名稱，必須由明確介面或正式 helper 傳遞；不得依賴隱式狀態、自由變數、隱式全域或模組私有特例。
-10. 共享契約、公開 schema 或 canonical 名稱有變動時，producer、consumer、轉接層、快取／packed data、顯示／預覽／摘要、驗證與文件必須同輪同步；不得局部更新、保留半套舊路徑，或讓輔助路徑偏離正式共享上下文。
-11. 非核心路徑仍須服從正式規則；顯示、除錯、fallback、preview、reporting 等輔助路徑不得自行重建、猜測、省略、改名或覆寫正式共享上下文。
-12. validator、oracle 與 meta guard 只驗 invariant、契約、角色分離與同步完整性，不重寫分叉實作；rename 後一律以 canonical 名稱為準，legacy alias 僅作相容邊界。
+8. 架構、模組責任、正式入口、共享 schema、canonical 名稱或共享資料流有變動時，實作、文件、registry、validator 與正式輸出必須同輪同步；顯示、除錯、fallback、preview、reporting 等輔助路徑不得重建、猜測、省略、改名或覆寫正式共享上下文。
+9. validator、oracle 與 meta guard 只驗 invariant、契約、角色分離與同步完整性，不重寫分叉實作；rename 後一律以 canonical 名稱為準，legacy alias 僅作相容邊界。
 
 ## E. 交易與策略原則
 
 1. 杜絕未來函數：任何候選、掛單、成交、停損、停利、延續判斷與統計，都不得偷看當下尚未知的未來資料。
-2. 同一事件的判斷與執行口徑必須一致，且在不確定時一律採最保守、最不利於績效的可執行解讀。
+2. 同一事件的判斷、觸發、執行與統計口徑必須一致；不確定時一律採最保守、最不利於績效的可執行解讀。
 3. 資金、權益、PnL、報酬率、勝率、EV 與 Round-Trip 定義，必須以扣除手續費、稅金後的淨值為準，且不得因半倉、顯示或報表需求分叉。
 4. 交易限制只保留真實可執行、具物理意義且口徑一致的最小必要約束；不得任意疊加與實盤不相稱的額外限制。
 5. 掛單、成交、觸發、執行、失效、達標與結算必須分層定義；價格、日期、股數、現金回收與完整交易結果不得混用或提前認列。
@@ -65,5 +60,4 @@
 
 1. `apps/portfolio_sim.py` 自動開瀏覽器暫時允許。
 2. 暫時只使用還原價，不考慮 raw。
-3. `doc/ToDo.md` 是使用者自已看的備忘錄，檢查時不要用考慮。
-4. 使用者註解不需要檢查。
+3. `doc/ToDo.md` 與一般使用者註解屬使用者自有備忘／說明，不納入 formal / GPT 最嚴格檢查；但若其文字被正式介面直接讀取，仍視為正式輸出。
