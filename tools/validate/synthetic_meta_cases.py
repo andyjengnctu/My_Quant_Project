@@ -3187,8 +3187,8 @@ def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_p
 
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_debug_backtest_entry_cash_deduction_contract", False, "debug-backtest entry cash deduction static contract" in help_line)
-    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_contract_wording_enumeration", False, "public profit/equity consistency contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_debug_backtest_wording", False, "debug-backtest entry cash deduction static contract" in help_line)
+    add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_stale_contract_listing_wording", False, "public profit/equity consistency contract" in help_line)
     canonical_whitelisted_help = help_line.replace("TEST_SUITE_CHECKLIST", "")
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_bare_checklist_term", False, bool(re.search(r"(?<![A-Z_])checklist(?![A-Z_])", canonical_whitelisted_help, flags=re.IGNORECASE)))
 
