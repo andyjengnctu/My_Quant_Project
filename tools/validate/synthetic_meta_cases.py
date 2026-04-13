@@ -994,10 +994,10 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
 
 
 
-def validate_checklist_f2_formal_command_single_entry_case(_base_params):
+def validate_checklist_t_formal_command_single_entry_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
-    case_id = "META_CHECKLIST_F2_FORMAL_COMMAND_SINGLE_ENTRY"
+    case_id = "META_CHECKLIST_T_FORMAL_COMMAND_SINGLE_ENTRY"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -1015,25 +1015,25 @@ def validate_checklist_f2_formal_command_single_entry_case(_base_params):
             update_cols=lambda cols: [cols[0], f"`{command_entry}`", cols[2]],
         )
     except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
+        add_check(results, "meta_checklist", case_id, "target_t_row_exists_for_mutation", True, False)
         return results, summary
 
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_f2_formal_command_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_t_formal_command_") as temp_dir:
         mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
         mutated_path.write_text(mutated_text, encoding="utf-8")
         with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    f2_result = result_by_name.get("checklist_f_rows_use_single_test_entry", {})
-    invalid_rows = f2_result.get("invalid_entries")
+    t_result = result_by_name.get("checklist_t_rows_use_single_test_entry", {})
+    invalid_rows = t_result.get("invalid_entries")
     if invalid_rows is None:
-        invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
+        invalid_rows = _read_summary_value(t_result, "invalid_entries", [])
 
-    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_single_entry_guard_passes", "PASS", f2_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_f2_formal_command_not_reported_invalid", False, any(row.get("id") == "T108" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_t_formal_command_single_entry_guard_passes", "PASS", t_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_t_formal_command_not_reported_invalid", False, any(row.get("id") == "T108" for row in invalid_rows))
 
-    summary["guard_status"] = f2_result.get("status")
+    summary["guard_status"] = t_result.get("status")
     summary["parsed_entries"] = parsed_entries
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     return results, summary
@@ -1079,10 +1079,10 @@ def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
     return results, summary
 
 
-def validate_checklist_f2_single_entry_delimiter_case(_base_params):
+def validate_checklist_t_single_entry_delimiter_case(_base_params):
     import tools.local_regression.run_meta_quality as meta_quality_module
 
-    case_id = "META_CHECKLIST_F2_SINGLE_ENTRY_DELIMITER"
+    case_id = "META_CHECKLIST_T_SINGLE_ENTRY_DELIMITER"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -1096,25 +1096,25 @@ def validate_checklist_f2_single_entry_delimiter_case(_base_params):
             update_cols=lambda cols: [cols[0], "`tools/local_regression/run_meta_quality.py` / `tools/validate/meta_contracts.py`", cols[2]],
         )
     except ValueError:
-        add_check(results, "meta_checklist", case_id, "target_f2_row_exists_for_mutation", True, False)
+        add_check(results, "meta_checklist", case_id, "target_t_row_exists_for_mutation", True, False)
         return results, summary
 
-    with tempfile.TemporaryDirectory(prefix="meta_checklist_f2_entry_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="meta_checklist_t_entry_") as temp_dir:
         mutated_path = Path(temp_dir) / "TEST_SUITE_CHECKLIST.md"
         mutated_path.write_text(mutated_text, encoding="utf-8")
         with patch.object(meta_quality_module, "CHECKLIST_PATH", mutated_path):
             consistency = meta_quality_module._summarize_checklist_consistency()
 
     result_by_name = {item.get("name"): item for item in consistency.get("results", [])}
-    f2_result = result_by_name.get("checklist_f_rows_use_single_test_entry", {})
-    invalid_rows = f2_result.get("invalid_entries")
+    t_result = result_by_name.get("checklist_t_rows_use_single_test_entry", {})
+    invalid_rows = t_result.get("invalid_entries")
     if invalid_rows is None:
-        invalid_rows = _read_summary_value(f2_result, "invalid_entries", [])
+        invalid_rows = _read_summary_value(t_result, "invalid_entries", [])
 
-    add_check(results, "meta_checklist", case_id, "mutated_f2_single_entry_guard_fails", "FAIL", f2_result.get("status"))
-    add_check(results, "meta_checklist", case_id, "mutated_f2_reports_multiple_entries", True, any(row.get("id") == "T108" for row in invalid_rows))
+    add_check(results, "meta_checklist", case_id, "mutated_t_single_entry_guard_fails", "FAIL", t_result.get("status"))
+    add_check(results, "meta_checklist", case_id, "mutated_t_reports_multiple_entries", True, any(row.get("id") == "T108" for row in invalid_rows))
 
-    summary["guard_status"] = f2_result.get("status")
+    summary["guard_status"] = t_result.get("status")
     summary["invalid_row_ids"] = [row.get("id") for row in invalid_rows]
     return results, summary
 

@@ -336,7 +336,7 @@
 | T104 | `validate_synthetic_registry_metadata_contract_case` | B37 |
 | T105 | `validate_optimizer_objective_export_contract_case` | B52 |
 | T106 | `validate_formal_step_entry_coverage_targets_case` | B38 |
-| T108 | `validate_checklist_f2_single_entry_delimiter_case` | B26 |
+| T108 | `validate_checklist_t_single_entry_delimiter_case` | B26 |
 | T109 | `validate_checklist_g_transition_format_case` | B26 |
 | T111 | `validate_formal_step_implementation_coverage_targets_case` | B39 |
 | T112 | `validate_peak_traced_memory_tracker_context_management_case` | B40 |
@@ -415,7 +415,7 @@
 | T200 | `validate_synthetic_fill_below_limit_based_sizing_stop_still_enters_case` | B121 |
 | T201 | `validate_quick_gate_synthetic_registry_import_targets_contract_case` | B122 |
 | T202 | `tools/validate/cli.py --dataset reduced` | B23 |
-| T203 | `validate_checklist_f2_formal_command_single_entry_case` | B26 |
+| T203 | `validate_checklist_t_formal_command_single_entry_case` | B26 |
 | T204 | `validate_exact_accounting_ledger_conservation_case` | B123 |
 | T205 | `validate_exact_accounting_cost_basis_allocation_case` | B123 |
 | T206 | `validate_exact_accounting_tick_limit_integer_case` | B123 |
@@ -613,7 +613,7 @@
 | 2026-04-03 | T105 | 新增 optimizer objective / export contract case 並驗證 | NEW -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-03 | T106 | 新增 formal step entry wrappers coverage target completeness 建議測試並驗證 | NEW -> DONE | `validate_formal_step_entry_coverage_targets_case` |
 | 2026-04-03 | T107 | 新增 `G` 備註欄 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_g_single_note_entry_delimiter_case` |
-| 2026-04-03 | T108 | 新增 `T` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_f2_single_entry_delimiter_case` |
+| 2026-04-03 | T108 | 新增 `T` 測試入口 delimiter-agnostic single-entry guard 並驗證 | NEW -> DONE | `validate_checklist_t_single_entry_delimiter_case` |
 | 2026-04-03 | T109 | 新增 `G` transition format guard 並驗證 | NEW -> DONE | `validate_checklist_g_transition_format_case` |
 | 2026-04-03 | T110 | 新增 checklist legacy `D` 區移除 guard 並驗證 | NEW -> DONE | `validate_checklist_no_legacy_d_section_case` |
 | 2026-04-03 | T111 | 新增 split formal-step implementation coverage target completeness guard 並驗證 | NEW -> DONE | `validate_formal_step_implementation_coverage_targets_case` |
@@ -827,7 +827,7 @@
 | 2026-04-09 | T167 | 檢出 GUI scanner / history dropdown contract 未覆蓋資產成長 sort probe 顯示 | DONE -> PARTIAL | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T167 | 補上 GUI scanner / history dropdown 資產成長 sort probe contract 並驗證 | PARTIAL -> DONE | `validate_gui_scanner_console_and_latest_contract_case` |
 | 2026-04-09 | T202 | 新增 formal consistency step 完整 command string 必須列入 checklist `T` 摘要的 meta contract 並同步補齊映射 | NEW -> DONE | `tools/validate/cli.py` |
-| 2026-04-09 | T203 | 新增 checklist `T` formal command string 單列單入口 contract 並驗證 | NEW -> DONE | `validate_checklist_f2_formal_command_single_entry_case` |
+| 2026-04-09 | T203 | 新增 checklist `T` formal command string 單列單入口 contract 並驗證 | NEW -> DONE | `validate_checklist_t_formal_command_single_entry_case` |
 | 2026-04-09 | T204 | 新增 exact-accounting ledger conservation contract 並驗證 | NEW -> DONE | `validate_exact_accounting_ledger_conservation_case` |
 | 2026-04-09 | T205 | 新增 exact-accounting partial-exit cost-basis allocation contract 並驗證 | NEW -> DONE | `validate_exact_accounting_cost_basis_allocation_case` |
 | 2026-04-09 | T206 | 新增 exact-accounting integer tick / limit hit contract 並驗證 | NEW -> DONE | `validate_exact_accounting_tick_limit_integer_case` |

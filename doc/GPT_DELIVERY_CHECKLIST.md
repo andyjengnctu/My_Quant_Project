@@ -15,7 +15,7 @@
 ## B. 正式鏈、文件與契約
 
 1. 若本輪修改 formal test chain，同一 target 必須整鏈核對 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要與 help；任一層未同步，不得交付。
-2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將既有 contract / case 改指向另一份文件或模組，必須同步反查所有引用層；不得只改函式本體，卻保留舊 case_id、T 項摘要、registry 描述或 help 主題。
+2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將既有 contract / case 改指向另一份文件或模組，必須同步反查所有引用層；不得只改函式本體，卻保留舊 case_id、T 項摘要、registry 描述或 help 主題。若 checklist section token 或摘要表 canonical 名稱已更名，也不得在 result name、case_id、validator 名稱或 registry 描述殘留舊 token。
 3. 若新舊 formal 規則只是同一 shipped 契約下的子面向擴充，優先併入既有 `Bxx` / `Txx`；不要把已確認可合併的同族 CLI、文件、coverage completeness、per-file minimum，或 checklist 結構子契約（如首行標題、摘要表排序）再拆成平行主表 ID。若 repo 內既有獨立主表尚未實際退役，不得先在 GPT checklist 宣稱已一律合併。
 4. 負向檢查與 contract 同步只針對 shipped 正式輸出、`--help`、schema、檔案樹與正式 payload 本體；不要再為 validator / synthetic / oracle 的內部 import、helper 選擇、AST 掃描策略、樣本 payload 字面值、sub-check 名稱、source literal 或 help wording / bare-term hygiene 追加新的 formal 規則。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；若插回既有日期區塊或補寫 `DONE -> N/A` / `DONE -> PARTIAL`，必須重排整個受影響同日區塊，不得只修新插入列附近幾行。

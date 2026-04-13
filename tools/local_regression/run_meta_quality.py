@@ -73,7 +73,7 @@ def _load_checklist_tables() -> Dict[str, List[List[str]]]:
         "E1": extract_markdown_table_rows(text, "E1. 目前所有 `PARTIAL` 的主表項目摘要"),
         "E2": extract_markdown_table_rows(text, "E2. 目前所有 `TODO` 的主表項目摘要"),
         "E3": extract_markdown_table_rows(text, "E3. 目前所有未完成的建議測試項目摘要"),
-        "F": extract_markdown_table_rows(text, "T. 目前所有 `DONE` 的建議測試項目摘要"),
+        "T": extract_markdown_table_rows(text, "T. 目前所有 `DONE` 的建議測試項目摘要"),
         "G": extract_markdown_table_rows(text, "G. 逐項收斂紀錄"),
     }
 
@@ -223,14 +223,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     e1_ids = sorted(_ids_from_table(tables["E1"]))
     e2_ids = sorted(_ids_from_table(tables["E2"]))
     e3_ids = sorted(_ids_from_table(tables["E3"], idx=0))
-    f_rows = tables["F"]
+    t_rows = tables["T"]
     invalid_summary_table_orders: List[Dict[str, str]] = []
     invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E1"], id_col_idx=1, table_name="E1"))
     invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E2"], id_col_idx=1, table_name="E2"))
     invalid_summary_table_orders.extend(_find_invalid_summary_table_order(tables["E3"], id_col_idx=0, table_name="E3"))
-    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(f_rows, id_col_idx=0, table_name="T"))
-    f_ids_raw = _ids_from_table(f_rows, idx=0)
-    f_ids = _sorted_unique(f_ids_raw)
+    invalid_summary_table_orders.extend(_find_invalid_summary_table_order(t_rows, id_col_idx=0, table_name="T"))
+    t_ids_raw = _ids_from_table(t_rows, idx=0)
+    t_ids = _sorted_unique(t_ids_raw)
     convergence_statuses = _latest_statuses_from_convergence_rows(tables["G"])
     g_done_test_ids = _sorted_unique([item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status == "DONE"])
     g_unfinished_test_ids = sorted(item_id for item_id, status in convergence_statuses.items() if item_id.startswith("T") and status in {"PARTIAL", "TODO"})
@@ -287,34 +287,34 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
             extra={"overlap": sorted(set(done_ids) & set(e1_ids))},
         )
     )
-    f_duplicate_ids = sorted({item_id for item_id in f_ids_raw if f_ids_raw.count(item_id) > 1})
+    t_duplicate_ids = sorted({item_id for item_id in t_ids_raw if t_ids_raw.count(item_id) > 1})
     results.append(
         summarize_result(
-            "checklist_f_done_test_ids_unique",
-            not f_duplicate_ids,
-            detail=f"duplicates={f_duplicate_ids}",
-            extra={"duplicate_ids": f_duplicate_ids},
+            "checklist_t_done_test_ids_unique",
+            not t_duplicate_ids,
+            detail=f"duplicates={t_duplicate_ids}",
+            extra={"duplicate_ids": t_duplicate_ids},
         )
     )
 
-    invalid_f2_entries = []
-    for row in f_rows:
+    invalid_t_entries = []
+    for row in t_rows:
         if len(row) < 2:
             continue
         raw_entry = row[1].strip()
         parsed_entries = _extract_checklist_test_entries(raw_entry)
         if len(parsed_entries) != 1:
-            invalid_f2_entries.append({
+            invalid_t_entries.append({
                 "id": row[0] if row else "",
                 "entry": raw_entry.replace("`", "").strip(),
                 "entries": parsed_entries,
             })
     results.append(
         summarize_result(
-            "checklist_f_rows_use_single_test_entry",
-            not invalid_f2_entries,
-            detail=f"invalid={invalid_f2_entries}",
-            extra={"invalid_entries": invalid_f2_entries},
+            "checklist_t_rows_use_single_test_entry",
+            not invalid_t_entries,
+            detail=f"invalid={invalid_t_entries}",
+            extra={"invalid_entries": invalid_t_entries},
         )
     )
 
@@ -433,9 +433,9 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
     results.append(
         summarize_result(
             "checklist_done_test_summary_matches_convergence_done_records",
-            f_ids == g_done_test_ids,
-            detail=f"f_unique={f_ids} | f_raw={sorted(f_ids_raw)} | g_done={g_done_test_ids}",
-            extra={"f_ids": f_ids, "f_ids_raw": sorted(f_ids_raw), "g_done_test_ids": g_done_test_ids},
+            t_ids == g_done_test_ids,
+            detail=f"t_unique={t_ids} | t_raw={sorted(t_ids_raw)} | g_done={g_done_test_ids}",
+            extra={"t_ids": t_ids, "t_ids_raw": sorted(t_ids_raw), "g_done_test_ids": g_done_test_ids},
         )
     )
     results.append(
@@ -447,14 +447,14 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         )
     )
 
-    done_test_missing_from_f = sorted(set(g_done_test_ids) - set(f_ids))
-    done_test_missing_from_g = sorted(set(f_ids) - set(g_done_test_ids))
+    done_test_missing_from_t = sorted(set(g_done_test_ids) - set(t_ids))
+    done_test_missing_from_g = sorted(set(t_ids) - set(g_done_test_ids))
     results.append(
         summarize_result(
             "checklist_done_test_summary_has_no_missing_done_records",
-            not done_test_missing_from_f,
-            detail=f"missing_from_f={done_test_missing_from_f}",
-            extra={"missing_from_f": done_test_missing_from_f},
+            not done_test_missing_from_t,
+            detail=f"missing_from_t={done_test_missing_from_t}",
+            extra={"missing_from_t": done_test_missing_from_t},
         )
     )
     results.append(
@@ -498,7 +498,7 @@ def _summarize_checklist_consistency() -> Dict[str, Any]:
         "todo_ids": todo_ids,
         "done_ids": done_ids,
         "unfinished_test_ids": unfinished_test_ids,
-        "done_test_ids": f_ids,
+        "done_test_ids": t_ids,
         "g_done_test_ids": g_done_test_ids,
         "g_unfinished_test_ids": g_unfinished_test_ids,
     }
