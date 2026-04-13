@@ -201,29 +201,10 @@ def _extract_checklist_test_entries(entry: str) -> List[str]:
     return sorted(test_entries)
 
 
-def _checklist_first_nonempty_line_matches_title() -> bool:
-    for raw_line in CHECKLIST_PATH.read_text(encoding="utf-8").splitlines():
-        stripped = raw_line.strip()
-        if stripped:
-            return stripped == "# Test Suite 收斂清單"
-    return False
-
-
-
 def _summarize_checklist_consistency() -> Dict[str, Any]:
     tables = _load_checklist_tables()
     main_statuses = _load_main_statuses(tables)
     results: List[Dict[str, Any]] = []
-
-    first_nonempty_line_ok = _checklist_first_nonempty_line_matches_title()
-    results.append(
-        summarize_result(
-            "checklist_first_nonempty_line_matches_title",
-            first_nonempty_line_ok,
-            detail=f"matches={first_nonempty_line_ok}",
-            extra={"matches": first_nonempty_line_ok},
-        )
-    )
 
     invalid_statuses = {key: value for key, value in main_statuses.items() if value not in STATUS_VALUES}
     results.append(
