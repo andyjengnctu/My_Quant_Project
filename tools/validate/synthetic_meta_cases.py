@@ -1,4 +1,6 @@
 import ast
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import importlib
 import json
@@ -3156,15 +3158,26 @@ def validate_test_suite_summary_comment_covers_latest_exact_contract_ids_case(_b
     }
     return results, summary
 
+def _capture_test_suite_help_output():
+    test_suite_module = importlib.import_module("apps.test_suite")
+    stdout_buffer = io.StringIO()
+    with redirect_stdout(stdout_buffer):
+        exit_code = test_suite_module.main(["apps/test_suite.py", "--help"])
+    help_text = stdout_buffer.getvalue()
+    help_line = next((line.strip() for line in help_text.splitlines() if line.strip().startswith("說明:")), "")
+    return exit_code, help_text, help_line
+
+
 def validate_test_suite_help_text_mentions_stable_theme_tokens_case(_base_params):
     case_id = "META_TEST_SUITE_HELP_TEXT_MENTIONS_STABLE_THEME_TOKENS"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明:' in line), '')
+    exit_code, help_text, help_line = _capture_test_suite_help_output()
 
+    add_check(results, "meta_contract", case_id, "test_suite_help_exit_code_zero", True, exit_code == 0)
+    add_check(results, "meta_contract", case_id, "test_suite_help_output_present", True, bool(help_text.strip()))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_public_profit_equity_consistency_theme", True, "單股公開盈虧/權益一致性" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_conservative_executable_exit_interpretation_theme", True, "保守可執行出場解讀" in help_line)
@@ -3182,9 +3195,10 @@ def validate_test_suite_help_text_has_no_stale_wording_or_bare_term_case(_base_p
     summary = {"ticker": case_id, "synthetic": True}
 
     source_path = build_project_absolute_path("apps", "test_suite.py")
-    source_text = source_path.read_text(encoding="utf-8")
-    help_line = next((line.strip() for line in source_text.splitlines() if 'print("說明:' in line), '')
+    exit_code, help_text, help_line = _capture_test_suite_help_output()
 
+    add_check(results, "meta_contract", case_id, "test_suite_help_exit_code_zero", True, exit_code == 0)
+    add_check(results, "meta_contract", case_id, "test_suite_help_output_present", True, bool(help_text.strip()))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_line_present", True, bool(help_line))
     add_check(results, "meta_contract", case_id, "test_suite_help_text_mentions_debug_backtest_entry_cash_path_theme", True, "debug-backtest 現金路徑" in help_line)
     add_check(results, "meta_contract", case_id, "test_suite_help_text_has_no_exact_contract_listing", False, "contract" in help_line.lower())

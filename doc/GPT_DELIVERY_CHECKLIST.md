@@ -20,6 +20,7 @@
 4. 負向檢查只針對 shipped 正式輸出、`--help`、schema、檔案樹與正式 payload 本體；不要再為 validator 函式名、sub-check 名稱、literal 寫法或相鄰檢查器的字串 hygiene 追加新的 formal 要求。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。若新增列插入既有日期區塊，且 tracking ID 排序鍵小於當前尾列，必須抽出整個同日區塊重排後整段覆寫回原位，不得把較小 ID 直接追加在較大 ID 後。
 6. 若本輪修改任何受 formal validator 驗證的文字面，交付前只需反查對應最小必要 fragment / token 與直接被測輸出；不要再對排除詞的最短片段、exemplar 完整性、sibling 去重或 validator 內部措辭建立第二層檢查規則。
+6a. 若 formal contract 名義上驗 CLI / `--help` / report / export / payload 輸出，交付前必須確認 validator 直接讀取該 shipped 輸出本體或其最接近的正式產物；不得改成掃 source 內 `print(...)` 字面、局部 string literal 或其他實作內文來冒充輸出驗證。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
 8. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；只核對正式輸出與 contract 本體，不再為 active sub-check 命名或相鄰 validator 的文字 hygiene 追加第二層規則。
 9. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面。
