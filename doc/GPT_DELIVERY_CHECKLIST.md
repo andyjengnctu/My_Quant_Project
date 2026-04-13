@@ -16,19 +16,19 @@
 
 1. 若本輪修改 formal test chain，同一 target 必須整鏈核對 definition、import、registry、`doc/TEST_SUITE_CHECKLIST.md`、parser、guard、正式入口摘要、help 與對應 meta guard；任一層未同步，不得交付。
 2. 若本輪修改 canonical 名稱、追蹤 ID、validator 名稱、正式入口名稱、共享 schema，或將 validator / contract 的實際被測來源改指向另一份文件或模組，必須同步檢查所有引用層並改正殘留舊來源名稱；不得只改函式本體，卻保留舊 case_id、T 項摘要、help theme 或 registry 描述。
-3. 若本輪將 validator / contract 的語意從 exact-contract、逐項列舉或舊規則轉為穩定主題 token、結構契約或新 canonical 邊界，必須同步更新函式名、case_id、registry、`doc/TEST_SUITE_CHECKLIST.md` 摘要與收斂描述；不得讓 active 名稱持續誤標實際語意。若 checklist 主表或 `G` 收斂紀錄明確宣稱已納入某個 stable theme token，active validator 與正式入口文字也必須實際出現並檢查該 token；不得以較寬泛主題籠統替代。
-4. 若 validator 的實際語意已改成排除舊 wording、裸用詞、退役鍵或其他中性排除契約，active 函式名、case_id、sub-check 名稱與 checklist 映射不得再掛舊來源名稱、`exact_contract` 或 `renamed_theme` 等過時語意。若負向檢查只是拿某個 legacy fragment 當 literal，比對用的舊字串只可留在被測內容；active sub-check 名稱應描述中性的 stale-wording 類型，不得直接把被排除的完整 legacy fragment 當成名稱本體。
+3. 若本輪將 formal-facing 文字從舊列舉改為穩定主題、結構契約或新 canonical 邊界，必須同步更新正式入口、validator、registry 與 `doc/TEST_SUITE_CHECKLIST.md` 的正式語意；但同步範圍只限 shipped 正式介面與其摘要，不再把 validator 內部命名、sub-check 文字或排除片段長短上升為新的 formal 規則。
+4. 負向檢查只針對 shipped 正式輸出、`--help`、schema、檔案樹與正式 payload 本體；不要再為 validator 函式名、sub-check 名稱、literal 寫法或相鄰檢查器的字串 hygiene 追加新的 formal 要求。
 5. 若本輪修改 `doc/TEST_SUITE_CHECKLIST.md` 的主表、`T`、`G`、`E` 等機械真理區，交付前必須整表核對排序、摘要、最新狀態與 transition 連續性；不得只補單一列、單一 summary 或單一日期區塊。若新增列插入既有日期區塊，且 tracking ID 排序鍵小於當前尾列，必須抽出整個同日區塊重排後整段覆寫回原位，不得把較小 ID 直接追加在較大 ID 後。
-6. 若本輪修改任何受 formal validator 驗證的文字面，交付前必須反查對應 required fragment、required token、長度上限與排除詞；validator 若宣稱只驗穩定 token / 結構，內部也不得再依賴高波動全文、長前綴或完整文案作定位錨點。stale-wording / 排除詞檢查也必須優先使用最短且已足以覆蓋舊字串的必要片段；若較短片段已完整涵蓋較長舊短語，不得再把較長完整舊短語掛回 active validator，也不得在同一 validator 的 sibling check 內同時保留已被較短片段覆蓋的較長排除短語。若同一 help / summary 鏈是由多個已退役 exact-contract wording 收斂為穩定 theme token，負向檢查必須逐一覆蓋該鏈已明示退役的各個 exact-contract fragment；不得只拿單一 exemplar 冒充整體舊 contract-listing 排除。
+6. 若本輪修改任何受 formal validator 驗證的文字面，交付前只需反查對應最小必要 fragment / token 與直接被測輸出；不要再對排除詞的最短片段、exemplar 完整性、sibling 去重或 validator 內部措辭建立第二層檢查規則。
 7. 若 bundle 或再檢查出現 shared helper / utility / path helper 類 `NameError`、`AttributeError` 或匯入失敗，交付前必須回到失敗模組逐一核對實際使用的共享符號、from-import / module import 與 alias；不得只修 summary、registry 或相鄰文件而不補回缺失依賴。
-8. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；不得只改正式輸出實作，卻讓 contract case sample payload 或 nested schema 仍停在舊欄位。若 validator 已改為驗「排除退役舊鍵」這類中性語意，active sub-check 名稱與 checklist 摘要也不得再直掛退役欄位名；實際 stale-key 負向檢查所比對的 key 也必須與 checklist / contract 明示的退役鍵完全一致，不得誤檢其他名稱。
+8. 若本輪修改正式 summary / manifest / artifact schema，交付前必須同步更新 synthetic contract fixture、required keys / tokens 與 stale-key 排除檢查；只核對正式輸出與 contract 本體，不再為 active sub-check 命名或相鄰 validator 的文字 hygiene 追加第二層規則。
 9. `doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 只保留穩定主題摘要；不得把高波動 helper 長清單、暫時演進敘事、完整 validator 枚舉或局部事故修補語句重新灌回這三個面。
 10. 若本輪進行文件瘦身或重組，交付前必須逐一反查對應 validator 要求的全部最小必要 fragment / entry；不得因縮句、合併或改寫，只保留部分同主題片段。
 11. 涉及多份治理文件或角色邊界的敘述時，必須使用顯式檔名；不得回退成模糊代稱或未指名的 bare `checklist` 用詞。
-12. 若 validator 要排除 bare term，但正式文字允許 canonical qualified 版本，交付前必須先白名單 qualified canonical token，再檢查剩餘 bare term；不得拿單一歷史舊短語冒充整體 bare-term 契約。
+12. 若 validator 要排除 bare term，但正式文字允許 canonical qualified 版本，交付前應先白名單 qualified canonical token，再檢查剩餘 bare term；此要求只約束正式輸出本體，不延伸到 validator 命名或補丁式文字 hygiene。
 13. `PROJECT_SETTINGS.md` 與 `GPT_DELIVERY_CHECKLIST.md` 只供 GPT 讀取與執行；formal test suite、validator、synthetic registry、bundle 檢查、`doc/TEST_SUITE_CHECKLIST.md`、`doc/ARCHITECTURE.md`、`doc/CMD.md` 與 `apps/test_suite.py --help` 不得引用、映射、驗證或假設這兩份文件的存在；三者之間的關連只可由 GPT 透過實作、formal checklist 與交付輸出落實。
 14. 若本輪修改 formal-facing 文件或正式入口摘要，交付前必須確認其中不再直接提及 `PROJECT_SETTINGS.md` 或 `GPT_DELIVERY_CHECKLIST.md`；formal 世界只承接自身主表、架構、操作與輸出，不顯式回指 GPT 控制面。
-15. 若本輪修改 formal-facing 文件、formal validator、required fragment、排除詞或 stale-wording 檢查，交付前必須確認其中不再直掛 `project-settings`、`PROJECT_SETTINGS.md`、`GPT_DELIVERY_CHECKLIST.md` 或其他 GPT 控制面來源名稱；若僅需表達 guardrail / governance 語意，一律改用中性主題名稱。
+15. 若 formal-facing 文件或正式入口需要表達治理 / guardrail 語意，使用中性主題名稱即可；不要再為避免單一句型或單一來源名稱而層層追加新的 formal 檢查。
 16. 除使用者明確要求註解清理，或該註解／docstring 會被 parser、`--help`、UI、report、export、bundle 或 formal contract 直接讀取／輸出外，一般註解不納入 GPT 交付前最嚴格檢查與交付阻塞。
 17. 若本輪將既有 formal contract 改列 `N/A`、compatibility stub 或其他非正式長期路徑，交付前必須同步檢查 registry completeness、defined/imported validator set、`doc/TEST_SUITE_CHECKLIST.md` parser 與 `done/unfinished` 摘要。
 
