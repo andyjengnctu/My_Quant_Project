@@ -24,7 +24,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整，路徑為 /data/tw_stock_data_vip。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；實際路徑會優先使用 /data/tw_stock_data_vip，否則回退 <repo>/data/tw_stock_data_vip。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
