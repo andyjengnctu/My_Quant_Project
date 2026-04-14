@@ -6,5 +6,6 @@ SQLAlchemy
 requests
 yfinance
 FinMind
+matplotlib
 plotly
 coverage
