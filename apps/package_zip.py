@@ -13,10 +13,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_program_name, run_cli_entrypoint, validate_cli_args
 
-HELP_DESCRIPTION = "清除 Python 快取、歸檔舊 package ZIP，並將目前 working tree 的 tracked/untracked 非忽略檔打成乾淨 ZIP；可選擇先 commit，再於打包後執行 test suite。"
+HELP_DESCRIPTION = "清除 Python 快取、歸檔舊 package ZIP，並將目前 working tree 的 tracked/untracked 非忽略檔打成乾淨 ZIP；新 package 會包含 reduced dataset，舊 package 移入 arch/ 時會自動移除 reduced dataset 以節省空間；可選擇先 commit，再於打包後執行 test suite。"
 EXCLUDED_DIR_NAMES = {"__pycache__", "arch"}
 EXCLUDED_SUFFIXES = {".pyc"}
-EXCLUDED_CSV_DIR_PREFIXES = {
+ARCHIVE_STRIP_DIR_PREFIXES = {
     PurePosixPath("data/tw_stock_data_vip_reduced"),
 }
 ROOT_BUNDLE_PREFIX = "to_chatgpt_bundle_"
@@ -89,18 +89,53 @@ def _is_root_bundle_zip(zip_path: Path) -> bool:
     return zip_path.name.startswith(ROOT_BUNDLE_PREFIX)
 
 
-def _archive_existing_root_package_zips() -> int:
+def _should_strip_from_archived_zip(zip_member_name: str) -> bool:
+    member_path = PurePosixPath(zip_member_name)
+    for stripped_prefix in ARCHIVE_STRIP_DIR_PREFIXES:
+        try:
+            member_path.relative_to(stripped_prefix)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _strip_reduced_data_from_archived_zip(zip_path: Path) -> int:
+    temp_zip_path = zip_path.with_suffix(f"{zip_path.suffix}.tmp")
+    removed_members = 0
+
+    with zipfile.ZipFile(zip_path, mode="r") as source_zip:
+        members = source_zip.infolist()
+        kept_members = [member for member in members if not _should_strip_from_archived_zip(member.filename)]
+        removed_members = len(members) - len(kept_members)
+        if removed_members == 0:
+            return 0
+
+        with zipfile.ZipFile(temp_zip_path, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as target_zip:
+            for member in kept_members:
+                with source_zip.open(member, mode="r") as source_file:
+                    data = source_file.read()
+                target_zip.writestr(member, data)
+
+    temp_zip_path.replace(zip_path)
+    return removed_members
+
+
+def _archive_existing_root_package_zips() -> tuple[int, int]:
     archive_dir = PROJECT_ROOT / "arch"
     archive_dir.mkdir(exist_ok=True)
     moved_count = 0
+    stripped_member_count = 0
 
     for zip_path in sorted(PROJECT_ROOT.glob("*.zip")):
         if not zip_path.is_file() or _is_root_bundle_zip(zip_path):
             continue
-        shutil.move(str(zip_path), archive_dir / zip_path.name)
+        archived_zip_path = archive_dir / zip_path.name
+        shutil.move(str(zip_path), archived_zip_path)
+        stripped_member_count += _strip_reduced_data_from_archived_zip(archived_zip_path)
         moved_count += 1
 
-    return moved_count
+    return moved_count, stripped_member_count
 
 
 def _should_skip(relative_path: Path) -> bool:
@@ -110,17 +145,6 @@ def _should_skip(relative_path: Path) -> bool:
     suffix = relative_path.suffix.lower()
     if suffix in EXCLUDED_SUFFIXES:
         return True
-
-    if suffix != ".csv":
-        return False
-
-    relative_posix = PurePosixPath(*relative_path.parts)
-    for excluded_prefix in EXCLUDED_CSV_DIR_PREFIXES:
-        try:
-            relative_posix.relative_to(excluded_prefix)
-            return True
-        except ValueError:
-            continue
 
     return False
 
@@ -237,13 +261,13 @@ def main(argv=None) -> int:
     branch_label = _sanitize_filename_component(branch_name)
     head_sha = _get_head_short_sha()
     removed_cache_dirs, removed_pyc_files = _remove_python_caches()
-    moved_count = _archive_existing_root_package_zips()
+    moved_count, stripped_member_count = _archive_existing_root_package_zips()
     package_paths = _collect_package_paths()
     zip_path = _build_zip(branch_label, head_sha, package_paths)
 
     print(f"[package_zip] branch={branch_name} sha={head_sha}")
     print(f"[package_zip] removed __pycache__={removed_cache_dirs} *.pyc={removed_pyc_files}")
-    print(f"[package_zip] archived old root zips={moved_count}")
+    print(f"[package_zip] archived old root zips={moved_count} stripped_reduced_members={stripped_member_count}")
     print(f"[package_zip] packaged files={len(package_paths)}")
     print(f"[package_zip] output={zip_path}")
 
