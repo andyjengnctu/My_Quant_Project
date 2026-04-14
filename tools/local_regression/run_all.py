@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -43,6 +45,7 @@ from tools.local_regression.common import (
 SCRIPT_ORDER = list(FORMAL_COMMAND_ORDER)
 SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = list(FORMAL_STEP_ORDER)
+PARALLEL_STEP_NAMES = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -120,6 +123,21 @@ def _resolve_step_timeout(name: str, manifest: Dict[str, Any]) -> int:
         base_timeout = max(int(manifest["ml_smoke_timeout_sec"]), int(manifest["subprocess_timeout_sec"]))
         return base_timeout + SCRIPT_TIMEOUT_GRACE_SEC
     return int(manifest["subprocess_timeout_sec"])
+
+
+def _determine_parallel_worker_count(selected_script_order: List[tuple[str, str, str]]) -> int:
+    parallelizable_count = sum(1 for name, _script, _summary in selected_script_order if name in PARALLEL_STEP_NAMES)
+    if parallelizable_count <= 1:
+        return 1
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 1:
+        return 1
+    if cpu_count <= 3:
+        return min(parallelizable_count, 2)
+    if cpu_count <= 7:
+        return min(parallelizable_count, 3)
+    return min(parallelizable_count, 4)
 
 
 def _suggest_rerun_command(failed_steps: List[str]) -> str:
@@ -706,6 +724,65 @@ def _safe_write_dataset_prepare_summary(run_dir: Path, payload: Dict[str, Any]) 
         return fallback_summary
 
 
+def _build_script_summary(*, run_dir: Path, name: str, summary_name: str, run_result: Dict[str, Any]) -> Dict[str, Any]:
+    summary_path = run_dir / summary_name
+    summary_exists = summary_path.exists()
+    summary_read_error = ""
+    try:
+        summary_payload = read_json_if_exists(summary_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        summary_payload = {}
+        summary_read_error = f"{type(exc).__name__}: {exc}"
+    reported_status = summary_payload.get("status", "") if summary_payload else ""
+    effective_status = "PASS"
+    failure_reasons: List[str] = []
+    if not summary_exists:
+        effective_status = "FAIL"
+        failure_reasons.append("missing_summary_file")
+    if summary_read_error:
+        effective_status = "FAIL"
+        failure_reasons.append("summary_unreadable")
+    if run_result["timed_out"]:
+        effective_status = "FAIL"
+        failure_reasons.append("timed_out")
+    if run_result["returncode"] != 0:
+        effective_status = "FAIL"
+        failure_reasons.append(f"returncode={run_result['returncode']}")
+    if reported_status != "PASS":
+        effective_status = "FAIL"
+        failure_reasons.append(f"reported_status={reported_status or 'missing'}")
+        failed_steps = [str(item).strip() for item in summary_payload.get("failed_steps", []) if str(item).strip()]
+        if failed_steps:
+            failure_reasons.append("failed_steps=" + ",".join(failed_steps))
+        failures = [str(item).strip() for item in summary_payload.get("failures", []) if str(item).strip()]
+        if failures:
+            failure_reasons.append("summary_failures=" + ",".join(failures))
+        runtime_error = str(summary_payload.get("runtime_error", "") or summary_payload.get("error_message", "") or "").strip()
+        if runtime_error:
+            failure_reasons.append(f"summary_error={runtime_error}")
+        if "fail_count" in summary_payload:
+            failure_reasons.append(_format_optional_int_detail("fail_count", summary_payload.get("fail_count", 0)))
+        if "failed_count" in summary_payload:
+            failure_reasons.append(_format_optional_int_detail("failed_count", summary_payload.get("failed_count", 0)))
+    if run_result.get("error_type"):
+        effective_status = "FAIL"
+        failure_reasons.append(f"launch_error={run_result['error_type']}")
+    return {
+        "name": name,
+        "status": effective_status,
+        "reported_status": reported_status or "missing",
+        "returncode": run_result["returncode"],
+        "duration_sec": run_result["duration_sec"],
+        "summary_file": summary_path.name,
+        "summary_exists": summary_exists,
+        "summary_read_error": summary_read_error,
+        "timed_out": run_result["timed_out"],
+        "error_type": run_result.get("error_type", ""),
+        "error_message": run_result.get("error_message", ""),
+        "failure_reasons": failure_reasons,
+    }
+
+
 def _run_script(
     *,
     name: str,
@@ -969,10 +1046,78 @@ def execute_all(
             next_major_index += 1
 
         selected_script_order = [item for item in SCRIPT_ORDER if item[0] in selected_step_names]
-        script_summaries: List[Dict[str, Any]] = []
+        parallel_workers = _determine_parallel_worker_count(selected_script_order)
+        script_summaries_by_name: Dict[str, Dict[str, Any]] = {}
         overall_ok = True
+
+        parallel_specs: List[tuple[int, str, str, str, int]] = []
+        serial_specs: List[tuple[int, str, str, str, int]] = []
         for script_offset, (name, relative_script, summary_name) in enumerate(selected_script_order, start=next_major_index):
             timeout_sec = _resolve_step_timeout(name, manifest)
+            spec = (script_offset, name, relative_script, summary_name, timeout_sec)
+            if parallel_workers > 1 and name in PARALLEL_STEP_NAMES:
+                parallel_specs.append(spec)
+            else:
+                serial_specs.append(spec)
+
+        if parallel_specs:
+            for script_offset, name, _relative_script, _summary_name, timeout_sec in parallel_specs:
+                _emit_progress(progress_callback, "step_start", {
+                    "name": name,
+                    "major_index": script_offset,
+                    "major_total": major_total,
+                    "timeout_sec": timeout_sec,
+                })
+
+            with ThreadPoolExecutor(max_workers=parallel_workers, thread_name_prefix="test_suite") as executor:
+                future_map: Dict[Future[Dict[str, Any]], tuple[int, str, str]] = {}
+                for script_offset, name, relative_script, summary_name, timeout_sec in parallel_specs:
+                    log_path = run_dir / f"{name}.log"
+                    future = executor.submit(
+                        _run_script,
+                        name=name,
+                        relative_script=relative_script,
+                        timeout_sec=timeout_sec,
+                        env=shared_env,
+                        log_path=log_path,
+                        progress_callback=None,
+                        major_index=script_offset,
+                        major_total=major_total,
+                    )
+                    future_map[future] = (script_offset, name, summary_name)
+
+                pending = set(future_map)
+                while pending:
+                    done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        script_offset, name, summary_name = future_map[future]
+                        try:
+                            run_result = future.result()
+                        except Exception as exc:
+                            run_result = {
+                                "returncode": 127,
+                                "duration_sec": 0.0,
+                                "timed_out": False,
+                                "log_path": str(run_dir / f"{name}.log"),
+                                "error_type": type(exc).__name__,
+                                "error_message": str(exc),
+                            }
+                        script_summary = _build_script_summary(
+                            run_dir=run_dir,
+                            name=name,
+                            summary_name=summary_name,
+                            run_result=run_result,
+                        )
+                        script_summaries_by_name[name] = script_summary
+                        if script_summary["status"] != "PASS":
+                            overall_ok = False
+                        _emit_progress(progress_callback, "step_finish", {
+                            **script_summary,
+                            "major_index": script_offset,
+                            "major_total": major_total,
+                        })
+
+        for script_offset, name, relative_script, summary_name, timeout_sec in serial_specs:
             _emit_progress(progress_callback, "step_start", {
                 "name": name,
                 "major_index": script_offset,
@@ -990,65 +1135,14 @@ def execute_all(
                 major_index=script_offset,
                 major_total=major_total,
             )
-
-            summary_path = run_dir / summary_name
-            summary_exists = summary_path.exists()
-            summary_read_error = ""
-            try:
-                summary_payload = read_json_if_exists(summary_path)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-                summary_payload = {}
-                summary_read_error = f"{type(exc).__name__}: {exc}"
-            reported_status = summary_payload.get("status", "") if summary_payload else ""
-            effective_status = "PASS"
-            failure_reasons: List[str] = []
-            if not summary_exists:
-                effective_status = "FAIL"
-                failure_reasons.append("missing_summary_file")
-            if summary_read_error:
-                effective_status = "FAIL"
-                failure_reasons.append("summary_unreadable")
-            if run_result["timed_out"]:
-                effective_status = "FAIL"
-                failure_reasons.append("timed_out")
-            if run_result["returncode"] != 0:
-                effective_status = "FAIL"
-                failure_reasons.append(f"returncode={run_result['returncode']}")
-            if reported_status != "PASS":
-                effective_status = "FAIL"
-                failure_reasons.append(f"reported_status={reported_status or 'missing'}")
-                failed_steps = [str(item).strip() for item in summary_payload.get("failed_steps", []) if str(item).strip()]
-                if failed_steps:
-                    failure_reasons.append("failed_steps=" + ",".join(failed_steps))
-                failures = [str(item).strip() for item in summary_payload.get("failures", []) if str(item).strip()]
-                if failures:
-                    failure_reasons.append("summary_failures=" + ",".join(failures))
-                runtime_error = str(summary_payload.get("runtime_error", "") or summary_payload.get("error_message", "") or "").strip()
-                if runtime_error:
-                    failure_reasons.append(f"summary_error={runtime_error}")
-                if "fail_count" in summary_payload:
-                    failure_reasons.append(_format_optional_int_detail("fail_count", summary_payload.get("fail_count", 0)))
-                if "failed_count" in summary_payload:
-                    failure_reasons.append(_format_optional_int_detail("failed_count", summary_payload.get("failed_count", 0)))
-            if run_result.get("error_type"):
-                effective_status = "FAIL"
-                failure_reasons.append(f"launch_error={run_result['error_type']}")
-            script_summary = {
-                "name": name,
-                "status": effective_status,
-                "reported_status": reported_status or "missing",
-                "returncode": run_result["returncode"],
-                "duration_sec": run_result["duration_sec"],
-                "summary_file": summary_path.name,
-                "summary_exists": summary_exists,
-                "summary_read_error": summary_read_error,
-                "timed_out": run_result["timed_out"],
-                "error_type": run_result.get("error_type", ""),
-                "error_message": run_result.get("error_message", ""),
-                "failure_reasons": failure_reasons,
-            }
-            script_summaries.append(script_summary)
-            if effective_status != "PASS":
+            script_summary = _build_script_summary(
+                run_dir=run_dir,
+                name=name,
+                summary_name=summary_name,
+                run_result=run_result,
+            )
+            script_summaries_by_name[name] = script_summary
+            if script_summary["status"] != "PASS":
                 overall_ok = False
 
             _emit_progress(progress_callback, "step_finish", {
@@ -1056,6 +1150,8 @@ def execute_all(
                 "major_index": script_offset,
                 "major_total": major_total,
             })
+
+        script_summaries = [script_summaries_by_name[name] for name, _relative_script, _summary_name in selected_script_order]
 
         _emit_progress(progress_callback, "finalizing", {
             "major_index": major_total,
