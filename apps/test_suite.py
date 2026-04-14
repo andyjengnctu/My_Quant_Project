@@ -201,7 +201,7 @@ class ConsoleProgress:
             return
 
         if event == "finalizing":
-            state = self._ensure_step_state(payload)
+            state = self._ensure_step_state({"name": "done", **payload})
             state["status"] = "RUNNING"
             state["display_status"] = FINALIZING_STATUS
             state["elapsed_sec"] = float(payload.get("elapsed_sec", state.get("elapsed_sec", 0.0)) or 0.0)
