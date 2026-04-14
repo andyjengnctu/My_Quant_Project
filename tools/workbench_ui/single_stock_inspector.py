@@ -4,6 +4,7 @@ import io
 import os
 import subprocess
 import sys
+import traceback
 import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
 from tkinter import messagebox, ttk
@@ -197,6 +198,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _clear_console(self):
         self._console_text.delete("1.0", "end")
 
+    def _report_runtime_exception(self, context, exc, *, status_prefix, show_dialog=True, switch_to_console=False):
+        error_text = f"{status_prefix}：{type(exc).__name__}: {exc}"
+        trace_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        self._append_console_text(f"[{context}]\n{trace_text}\n")
+        self._status_var.set(error_text)
+        if switch_to_console:
+            self._notebook.select(2)
+        if show_dialog:
+            messagebox.showerror("股票工具工作台", error_text)
+        return error_text
+
     def _on_candidate_selected(self, _event=None):
         selected = self._candidate_display_var.get().strip()
         ticker = self._candidate_map.get(selected)
@@ -253,8 +265,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 scan_result = run_daily_scanner(data_dir, params)
         except Exception as exc:
-            self._status_var.set(f"掃描失敗：{type(exc).__name__}: {exc}")
-            messagebox.showerror("股票工具工作台", str(exc))
+            self._report_runtime_exception("run_scanner", exc, status_prefix="掃描失敗", switch_to_console=True)
             return
 
         candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
@@ -282,8 +293,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 scan_result = run_history_qualified_scanner(data_dir, params)
         except Exception as exc:
-            self._status_var.set(f"掃描失敗：{type(exc).__name__}: {exc}")
-            messagebox.showerror("股票工具工作台", str(exc))
+            self._report_runtime_exception("run_history_scanner", exc, status_prefix="掃描失敗", switch_to_console=True)
             return
 
         history_rows = list((scan_result or {}).get("history_qualified_rows") or [])
@@ -316,8 +326,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 verbose=False,
             )
         except Exception as exc:
-            self._status_var.set(f"執行失敗：{type(exc).__name__}: {exc}")
-            messagebox.showerror("股票工具工作台", str(exc))
+            self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
             return
 
         self._result = result
@@ -461,9 +470,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             figure = create_matplotlib_trade_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
         except Exception as exc:
             self._clear_embedded_chart()
-            error_text = f"圖表渲染失敗：{type(exc).__name__}: {exc}"
-            self._status_var.set(error_text)
-            messagebox.showerror("股票工具工作台", error_text)
+            self._report_runtime_exception("render_embedded_chart", exc, status_prefix="圖表渲染失敗")
             return
 
         self._clear_embedded_chart()
@@ -537,4 +544,4 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 return
             subprocess.Popen(["xdg-open", normalized_path])
         except Exception as exc:
-            messagebox.showerror("股票工具工作台", f"開啟失敗：{type(exc).__name__}: {exc}")
+            self._report_runtime_exception("open_path", exc, status_prefix="開啟失敗", show_dialog=True)

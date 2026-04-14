@@ -155,7 +155,10 @@ def main(argv=None, environ=None):
 
     if session.n_trials == 0:
         if not os.path.exists(db_file):
-            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}{C_RESET}", file=sys.stderr)
+            print(
+                f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；非互動模式預設 trial 數為 0，若要在乾淨 repo 建立新記憶庫，請先設定 V16_OPTIMIZER_TRIALS>0 或先完成一次訓練。{C_RESET}",
+                file=sys.stderr,
+            )
             return 1
         try:
             ensure_optimizer_db_usable(db_file)
