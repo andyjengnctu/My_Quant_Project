@@ -2,16 +2,17 @@
 
 1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`； 為全專案的最上層原則，視為憲法; 條款以長期穩定、可泛化為主; 
 
+
 ## A. 標準測試流程
 
-1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT交付之程式碼、patched ZIP；後出現者即為當前基準。
+1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT 交付之程式碼、patched ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；若當前基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
-3. 需做全專案最完整測試，且必須一輪就找出所有問題，不得透過多輪一點一點修補。
-4. `apps/test_suite.py` 為`已實作`測試的單一正式入口，僅限在本地端執行; 
-5. GPT 不得執行`apps/test_suite.py`，也不得繞過正式入口直接執行其涵蓋的step; 但必須檢`apps/test_suite.py`本身是否可信，以及`doc/TEST_SUITE_CHECKLIST.md`是否涵蓋必要測項。
-6. 若使用者提供 `apps/test_suite.py` 的 bundle 測試結果，GPT必須完成閉環修正; 若未提供 boundle，代表本地端已測試，且全數通過。
-6. `/doc/PROJECT_SETTINGS.md` 不得被`apps/test_suite.py`反向檢查。
-7. 每輪找到問題就直接提供修正。
+3. GPT 每輪都必須對當前基準做全專案完整檢查，並於同一輪內盡可能找出所有問題、直接提供修正，不得以多輪零碎修補取代完整檢查。
+4. `apps/test_suite.py` 為 `已實作` 測試的單一正式入口，僅限在本地端執行；其角色為 formal double check，不取代 GPT 的全專案完整檢查。
+5. GPT 不得執行 `apps/test_suite.py`，也不得以重建 formal suite 或直接執行其涵蓋 step 的方式替代本地正式執行；但仍必須以非 formal-suite 的方式獨立檢查整個專案，並檢查 `apps/test_suite.py` 本身是否可信，以及 `doc/TEST_SUITE_CHECKLIST.md` 是否涵蓋必要測項。
+6. 若使用者提供 `apps/test_suite.py` 的 bundle 測試結果，GPT 必須完成閉環修正；若未提供 bundle，僅代表本地端聲稱已完成 formal double check，不得取代 GPT 的獨立完整檢查，也不得直接作為 correctness 項目已確認的依據。
+7. `/doc/PROJECT_SETTINGS.md` 不得被 `apps/test_suite.py` 反向檢查。
+8. GPT 回報檢查結果時，必須明確區分：本輪 GPT 已獨立確認、僅有本地 formal suite / checklist 覆蓋宣稱、以及本輪仍未能確認；不得混寫或誤標。
 
 
 ## B. 回覆、交付與輸出
