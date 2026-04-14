@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -23,247 +21,100 @@ STEP_LABELS = TEST_SUITE_STEP_LABELS
 # consistency step 的正式 coverage 以 synthetic registry、`--help`、文件與 `doc/TEST_SUITE_CHECKLIST.md` 為準；註解僅供閱讀，不作可機械比對的 formal contract。
 
 class ConsoleProgress:
-    _STEP_INDEX_TO_NAME = {
-        1: "preflight",
-        2: "dataset_prepare",
-        3: "quick_gate",
-        4: "consistency",
-        5: "chain_checks",
-        6: "ml_smoke",
-        7: "meta_quality",
-        8: "done",
-    }
-    _BAR_WIDTH = 28
-    _RUN_SEGMENT_WIDTH = 6
-
     def __init__(self) -> None:
+        self.spinner_index = 0
+        self.last_render_ts = 0.0
+        self.last_line_width = 0
         self.suite_started = time.time()
-        self._lock = threading.RLock()
-        self._render_event = threading.Event()
-        self._stop_event = threading.Event()
-        self._render_thread: threading.Thread | None = None
-        self._last_screen_line_count = 0
-        self._supports_live_redraw = self._detect_live_redraw_support()
-        self._step_states: Dict[str, Dict[str, Any]] = {}
-        for index in range(1, 9):
-            name = self._STEP_INDEX_TO_NAME[index]
-            self._step_states[name] = {
-                "major_index": index,
-                "name": name,
-                "label": "完成" if name == "done" else STEP_LABELS.get(name, name),
-                "execution_mode": "serial",
-                "state": "pending",
-                "started_at": None,
-                "duration_sec": None,
-                "status": None,
-                "timeout_sec": None,
-            }
 
-    def _detect_live_redraw_support(self) -> bool:
-        if sys.stdout.isatty():
-            self._try_enable_windows_vt_mode()
-            return True
-        env = os.environ
-        indicators = (
-            env.get("WT_SESSION"),
-            env.get("ANSICON"),
-            env.get("TERM"),
-            env.get("ConEmuANSI") == "ON",
-            env.get("PYCHARM_HOSTED"),
-            env.get("VSCODE_PID"),
-        )
-        if any(indicators):
-            self._try_enable_windows_vt_mode()
-            return True
-        return False
+    def _build_bar(self, major_index: int, major_total: int, *, done: bool) -> str:
+        width = 28
+        completed_units = major_index if done else max(major_index - 1, 0)
+        filled = int(width * completed_units / max(major_total, 1))
+        return "█" * filled + "░" * (width - filled)
 
-    @staticmethod
-    def _try_enable_windows_vt_mode() -> None:
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
+    def _render_inline(self, text: str) -> None:
+        padded = text
+        if self.last_line_width > len(text):
+            padded = text + (" " * (self.last_line_width - len(text)))
+        print(f"\r{padded}", end="", flush=True)
+        self.last_line_width = max(self.last_line_width, len(text))
 
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.GetStdHandle(-11)
-            if handle in (0, -1):
-                return
-            mode = ctypes.c_uint()
-            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
-                return
-            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
-        except Exception:
-            return
-
-    def _ensure_render_thread(self) -> None:
-        if self._render_thread is not None:
-            return
-        self._render_thread = threading.Thread(target=self._render_loop, name="test-suite-progress", daemon=True)
-        self._render_thread.start()
+    def _finish_line(self, text: str) -> None:
+        self._render_inline(text)
+        print()
+        self.last_line_width = 0
 
     def _format_label(self, payload: Dict[str, Any]) -> str:
-        raw_name = str(payload.get("name", "") or "").strip()
-        label = STEP_LABELS.get(raw_name, raw_name)
-        if raw_name == "done":
-            label = str(payload.get("label", "") or "").strip() or "完成"
-        if str(payload.get("execution_mode", "") or "").strip() == "parallel":
+        label = STEP_LABELS.get(payload["name"], payload["name"])
+        if str(payload.get("execution_mode", "")).strip() == "parallel":
             return f"{label}（並行）"
         return label
 
-    @staticmethod
-    def _status_symbol(state: str, status: str | None) -> str:
-        if state == "done":
-            return "✓" if status == "PASS" else "✗"
-        if state == "running":
-            return "→"
-        return "·"
-
-    def _build_bar(self, step: Dict[str, Any], now: float) -> str:
-        state = str(step.get("state", "pending"))
-        if state == "done":
-            return "█" * self._BAR_WIDTH
-        if state != "running":
-            return "░" * self._BAR_WIDTH
-        started_at = float(step.get("started_at") or now)
-        elapsed = max(0.0, now - started_at)
-        head = int(elapsed * 8.0) % self._BAR_WIDTH
-        chars = ["░"] * self._BAR_WIDTH
-        for offset in range(self._RUN_SEGMENT_WIDTH):
-            idx = (head + offset) % self._BAR_WIDTH
-            chars[idx] = "█" if offset >= self._RUN_SEGMENT_WIDTH - 2 else "▓"
-        return "".join(chars)
-
-    def _step_detail_text(self, step: Dict[str, Any], now: float) -> str:
-        state = str(step.get("state", "pending"))
-        status = str(step.get("status") or "") or None
-        duration_sec = step.get("duration_sec")
-        started_at = step.get("started_at")
-        if state == "done":
-            if duration_sec is None and started_at is not None:
-                duration_sec = max(0.0, now - float(started_at))
-            precision = ".1f" if step.get("name") == "done" else ".2f"
-            return f"{status or 'PASS'} | {format(float(duration_sec or 0.0), precision)}s"
-        if state == "running":
-            elapsed_sec = max(0.0, now - float(started_at or now))
-            return f"執行中 | {elapsed_sec:.1f}s"
-        return "等待"
-
-    def _build_lines(self) -> list[str]:
-        now = time.time()
-        lines: list[str] = []
-        for index in range(1, 9):
-            step = self._step_states[self._STEP_INDEX_TO_NAME[index]]
-            symbol = self._status_symbol(str(step.get("state", "pending")), step.get("status"))
-            bar = self._build_bar(step, now)
-            label = str(step.get("label", step.get("name", "")))
-            detail = self._step_detail_text(step, now)
-            lines.append(f"[{index}/8] {bar} {symbol} {label:<20} {detail}")
-        return lines
-
-    def _render_lines(self, lines: list[str]) -> None:
-        if self._last_screen_line_count > 0:
-            sys.stdout.write(f"\x1b[{self._last_screen_line_count}F")
-        total_lines = max(self._last_screen_line_count, len(lines))
-        for idx in range(total_lines):
-            sys.stdout.write("\x1b[2K")
-            if idx < len(lines):
-                sys.stdout.write(lines[idx])
-            if idx < total_lines - 1:
-                sys.stdout.write("\n")
-        sys.stdout.flush()
-        self._last_screen_line_count = len(lines)
-
-    def _render_once(self) -> None:
-        with self._lock:
-            if not self._supports_live_redraw:
-                return
-            self._render_lines(self._build_lines())
-
-    def _render_loop(self) -> None:
-        while not self._stop_event.is_set():
-            self._render_event.wait(timeout=0.12)
-            self._render_event.clear()
-            self._render_once()
-
-    def _signal_render(self) -> None:
-        if not self._supports_live_redraw:
-            return
-        self._ensure_render_thread()
-        self._render_event.set()
+    def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool, progress_index: int | None = None) -> str:
+        major_index = int(payload.get("major_index", 0) or 0)
+        major_total = int(payload.get("major_total", 1) or 1)
+        display_index = major_index if progress_index is None else int(progress_index)
+        elapsed_total = time.time() - self.suite_started
+        return (
+            f"[{display_index}/{major_total}] "
+            f"{self._build_bar(display_index, major_total, done=done)} "
+            f"{body} | 經過 {elapsed_total:.1f}s"
+        )
 
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
-        with self._lock:
-            now = time.time()
-            if event == "step_start":
-                name = str(payload.get("name", "") or "").strip()
-                step = self._step_states.get(name)
-                if step is not None:
-                    step["label"] = self._format_label(payload)
-                    step["execution_mode"] = str(payload.get("execution_mode", "serial") or "serial")
-                    step["state"] = "running"
-                    step["started_at"] = now
-                    step["duration_sec"] = None
-                    step["status"] = None
-                    step["timeout_sec"] = payload.get("timeout_sec")
-                self._signal_render()
-                return
+        now = time.time()
+        if event == "step_start":
+            label = self._format_label(payload)
+            self._render_inline(self._step_text(payload, f"準備執行 {label}", done=False))
+            self.last_render_ts = 0.0
+            return
 
-            if event == "step_progress":
-                name = str(payload.get("name", "") or "").strip()
-                step = self._step_states.get(name)
-                if step is not None and step.get("state") == "running":
-                    elapsed_hint = payload.get("elapsed_sec")
-                    if isinstance(elapsed_hint, (int, float)) and step.get("started_at") is not None:
-                        step["duration_sec"] = float(elapsed_hint)
-                self._signal_render()
+        if event == "step_progress":
+            if now - self.last_render_ts < 0.15:
                 return
+            self.last_render_ts = now
+            spinner = SPINNER_FRAMES[self.spinner_index % len(SPINNER_FRAMES)]
+            self.spinner_index += 1
+            label = self._format_label(payload)
+            self._render_inline(
+                self._step_text(
+                    payload,
+                    f"{spinner} 執行中 {label} | {payload['elapsed_sec']:.1f}s",
+                    done=False,
+                )
+            )
+            return
 
-            if event == "step_finish":
-                name = str(payload.get("name", "") or "").strip()
-                step = self._step_states.get(name)
-                if step is not None:
-                    step["label"] = self._format_label(payload)
-                    step["state"] = "done"
-                    step["status"] = str(payload.get("status", "FAIL") or "FAIL")
-                    step["duration_sec"] = float(payload.get("duration_sec", 0.0) or 0.0)
-                    if step.get("started_at") is None:
-                        step["started_at"] = now - float(step["duration_sec"])
-                self._signal_render()
-                return
+        if event == "step_finish":
+            symbol = "✓" if payload["status"] == "PASS" else "✗"
+            label = self._format_label(payload)
+            self._finish_line(
+                self._step_text(
+                    payload,
+                    f"{symbol} {label} | {payload['status']} | {payload['duration_sec']:.2f}s",
+                    done=True,
+                )
+            )
+            return
 
-            if event == "finalizing":
-                step = self._step_states["done"]
-                step["label"] = str(payload.get("label", "") or "整理輸出與打包 bundle")
-                step["state"] = "running"
-                step["started_at"] = now
-                step["duration_sec"] = None
-                step["status"] = None
-                self._signal_render()
-                return
+        if event == "finalizing":
+            self._render_inline(self._step_text(payload, "整理輸出與打包 bundle", done=False))
+            return
 
-            if event == "done":
-                step = self._step_states["done"]
-                step["label"] = "完成"
-                step["state"] = "done"
-                step["status"] = str(payload.get("overall_status", "FAIL") or "FAIL")
-                step["duration_sec"] = max(0.0, now - self.suite_started)
-                if step.get("started_at") is None:
-                    step["started_at"] = self.suite_started
-                self._signal_render()
-                return
-
-    def close(self) -> None:
-        if self._supports_live_redraw:
-            self._render_once()
-        self._stop_event.set()
-        self._render_event.set()
-        if self._render_thread is not None:
-            self._render_thread.join(timeout=1.0)
-        with self._lock:
-            if self._supports_live_redraw and self._last_screen_line_count > 0:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                self._last_screen_line_count = 0
+        if event == "done":
+            if payload["overall_status"] == "PASS":
+                self._finish_line(self._step_text(payload, f"✓ 完成 | {payload['overall_status']}", done=True))
+            else:
+                failed_at = int(payload.get("failed_at_major_index", payload.get("major_index", 0)) or 0)
+                self._finish_line(
+                    self._step_text(
+                        payload,
+                        f"✗ 結束 | {payload['overall_status']}",
+                        done=False,
+                        progress_index=failed_at,
+                    )
+                )
 
 
 def _print_human_summary(result: Dict[str, Any]) -> None:
@@ -290,10 +141,7 @@ def main(argv=None) -> int:
     print("=== Test Suite (reduced) ===")
     print("[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。")
     progress = ConsoleProgress()
-    try:
-        result = execute_all(progress_callback=progress)
-    finally:
-        progress.close()
+    result = execute_all(progress_callback=progress)
     _print_human_summary(result)
     return 0 if result["overall_status"] == "PASS" else 1
 
