@@ -226,7 +226,11 @@ def _determine_real_scan_worker_count(total_tickers):
         return 1
     if cpu_count <= 4:
         return min(total_tickers, 2)
-    return min(total_tickers, 3)
+    if cpu_count <= 8:
+        return min(total_tickers, 4)
+    if cpu_count <= 12:
+        return min(total_tickers, 6)
+    return min(total_tickers, 8)
 
 
 def _validate_one_ticker_worker(task):

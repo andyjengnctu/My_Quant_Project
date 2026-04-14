@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -22,6 +24,53 @@ from tools.trade_analysis.trade_log import run_debug_backtest
 from tools.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
+
+
+def _determine_chain_worker_count(total_items: int) -> int:
+    if total_items <= 1:
+        return 1
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 2:
+        return 1
+    if cpu_count <= 4:
+        return min(total_items, 2)
+    if cpu_count <= 8:
+        return min(total_items, 4)
+    return min(total_items, 6)
+
+
+def _prepare_market_context_entry(task):
+    ticker, file_path, min_rows, params = task
+    raw_df = pd.read_csv(file_path)
+    if len(raw_df) < min_rows:
+        return {
+            "ticker": ticker,
+            "skipped": {"ticker": ticker, "reason": f"原始資料列數不足 {len(raw_df)}"},
+        }
+
+    df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows)
+    prep_df, logs, single_stats = prep_stock_data_and_trades(df, params, return_stats=True)
+    return {
+        "ticker": ticker,
+        "fast_data": pack_prepared_stock_data(prep_df),
+        "logs": logs,
+        "prepared_frame": prep_df,
+        "sanitize_stats": sanitize_stats,
+        "single_stats": single_stats,
+        "dates": tuple(prep_df.index),
+    }
+
+
+def _build_scanner_snapshot_entry(task):
+    idx, ticker, prep_df, params, sanitize_stats = task
+    result = process_prepared_stock(prep_df, ticker, params, sanitize_stats=sanitize_stats)
+    return idx, ticker, result
+
+
+def _summarize_ticker_entry(task):
+    idx, kwargs = task
+    return idx, summarize_ticker(**kwargs)
 
 
 def _normalize_scanner_candidate_row(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,10 +93,31 @@ def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dic
     count_skipped_insufficient = 0
     count_sanitized_candidates = 0
 
-    for ticker in context["discovered_tickers"]:
-        prep_df = context["prepared_frames"][ticker]
-        sanitize_stats = context["sanitize_stats_map"][ticker]
-        result = process_prepared_stock(prep_df, ticker, params, sanitize_stats=sanitize_stats)
+    discovered_tickers = context["discovered_tickers"]
+    worker_count = _determine_chain_worker_count(len(discovered_tickers))
+    ordered_results = [None] * len(discovered_tickers)
+
+    if worker_count <= 1:
+        for idx, ticker in enumerate(discovered_tickers):
+            prep_df = context["prepared_frames"][ticker]
+            sanitize_stats = context["sanitize_stats_map"][ticker]
+            ordered_results[idx] = (idx, ticker, process_prepared_stock(prep_df, ticker, params, sanitize_stats=sanitize_stats))
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="chain_scanner") as executor:
+            future_to_idx = {}
+            for idx, ticker in enumerate(discovered_tickers):
+                future = executor.submit(
+                    _build_scanner_snapshot_entry,
+                    (idx, ticker, context["prepared_frames"][ticker], params, context["sanitize_stats_map"][ticker]),
+                )
+                future_to_idx[future] = idx
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                ordered_results[idx] = future.result()
+
+    for idx in range(len(discovered_tickers)):
+        _idx, ticker, result = ordered_results[idx]
         if result is None:
             status_rows.append({"ticker": str(ticker), "status": "not_candidate", "has_sanitize_issue": False})
             continue
@@ -81,7 +151,7 @@ def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dic
     candidate_rows.sort(key=lambda item: (item["sort_value"], item["ticker"]), reverse=True)
     return {
         "entry_script": "apps/vip_scanner.py",
-        "count_scanned": len(context["discovered_tickers"]),
+        "count_scanned": len(discovered_tickers),
         "history_qualified_count": count_history_qualified,
         "skipped_insufficient_count": count_skipped_insufficient,
         "sanitized_candidate_count": count_sanitized_candidates,
@@ -106,19 +176,38 @@ def load_market_context(params) -> Dict[str, Any]:
     master_dates = set()
     skipped = []
 
-    for ticker, file_path in csv_inputs:
-        raw_df = pd.read_csv(file_path)
-        if len(raw_df) < min_rows:
-            skipped.append({"ticker": ticker, "reason": f"原始資料列數不足 {len(raw_df)}"})
+    worker_count = _determine_chain_worker_count(len(csv_inputs))
+    ordered_entries = [None] * len(csv_inputs)
+
+    if worker_count <= 1:
+        for idx, (ticker, file_path) in enumerate(csv_inputs):
+            ordered_entries[idx] = _prepare_market_context_entry((ticker, file_path, min_rows, params))
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="chain_prep") as executor:
+            future_to_idx = {}
+            for idx, (ticker, file_path) in enumerate(csv_inputs):
+                future = executor.submit(_prepare_market_context_entry, (ticker, file_path, min_rows, params))
+                future_to_idx[future] = idx
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                ordered_entries[idx] = future.result()
+
+    for entry in ordered_entries:
+        if entry is None:
             continue
-        df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows)
-        prep_df, logs, single_stats = prep_stock_data_and_trades(df, params, return_stats=True)
-        all_dfs_fast[ticker] = pack_prepared_stock_data(prep_df)
-        all_trade_logs[ticker] = logs
-        prepared_frames[ticker] = prep_df
-        sanitize_stats_map[ticker] = sanitize_stats
-        standalone_stats_map[ticker] = single_stats
-        master_dates.update(prep_df.index)
+        ticker = entry["ticker"]
+        skipped_row = entry.get("skipped")
+        if skipped_row is not None:
+            skipped.append(skipped_row)
+            continue
+
+        all_dfs_fast[ticker] = entry["fast_data"]
+        all_trade_logs[ticker] = entry["logs"]
+        prepared_frames[ticker] = entry["prepared_frame"]
+        sanitize_stats_map[ticker] = entry["sanitize_stats"]
+        standalone_stats_map[ticker] = entry["single_stats"]
+        master_dates.update(entry["dates"])
 
     discovered_tickers = sorted(prepared_frames.keys())
     return {
@@ -270,22 +359,33 @@ def _compute_chain_summary(*, manifest, dataset_info, context, params, start_yea
     df_equity, df_trades = portfolio_result[0], portfolio_result[1]
     scanner_snapshot = _build_scanner_snapshot_from_context(context, params)
 
-    detail_rows = []
-    for ticker in all_tickers:
-        row = summarize_ticker(
-            ticker=ticker,
-            params=params,
-            start_year=start_year,
-            df=context["prepared_frames"][ticker],
-            single_stats=context["standalone_stats_map"][ticker],
-            standalone_logs=context["all_trade_logs"][ticker],
-            sanitize_stats=context["sanitize_stats_map"][ticker],
-            replay_counts=replay_counts[ticker],
-            debug_row_count=None if debug_row_count_cache is None else debug_row_count_cache.get(ticker),
-        )
-        detail_rows.append(row)
+    summary_tasks = []
+    for idx, ticker in enumerate(all_tickers):
+        summary_tasks.append((idx, {
+            "ticker": ticker,
+            "params": params,
+            "start_year": start_year,
+            "df": context["prepared_frames"][ticker],
+            "single_stats": context["standalone_stats_map"][ticker],
+            "standalone_logs": context["all_trade_logs"][ticker],
+            "sanitize_stats": context["sanitize_stats_map"][ticker],
+            "replay_counts": replay_counts[ticker],
+            "debug_row_count": None if debug_row_count_cache is None else debug_row_count_cache.get(ticker),
+        }))
 
-    summary_rows = sorted(detail_rows, key=lambda item: item["ticker"])
+    detail_rows = [None] * len(summary_tasks)
+    summary_worker_count = _determine_chain_worker_count(len(summary_tasks))
+    if summary_worker_count <= 1:
+        for idx, kwargs in summary_tasks:
+            detail_rows[idx] = summarize_ticker(**kwargs)
+    else:
+        with ThreadPoolExecutor(max_workers=summary_worker_count, thread_name_prefix="chain_detail") as executor:
+            future_to_idx = {executor.submit(_summarize_ticker_entry, task): task[0] for task in summary_tasks}
+            for future in as_completed(future_to_idx):
+                idx, row = future.result()
+                detail_rows[idx] = row
+
+    summary_rows = sorted((row for row in detail_rows if row is not None), key=lambda item: item["ticker"])
     if write_outputs:
         if run_dir is None:
             raise ValueError("write_outputs=True 時必須提供 run_dir")
