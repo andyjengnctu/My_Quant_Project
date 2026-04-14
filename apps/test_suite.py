@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -21,100 +22,239 @@ STEP_LABELS = TEST_SUITE_STEP_LABELS
 # consistency step 的正式 coverage 以 synthetic registry、`--help`、文件與 `doc/TEST_SUITE_CHECKLIST.md` 為準；註解僅供閱讀，不作可機械比對的 formal contract。
 
 class ConsoleProgress:
+    _STEP_INDEX_TO_NAME = {
+        1: "preflight",
+        2: "dataset_prepare",
+        3: "quick_gate",
+        4: "consistency",
+        5: "chain_checks",
+        6: "ml_smoke",
+        7: "meta_quality",
+        8: "done",
+    }
+
     def __init__(self) -> None:
-        self.spinner_index = 0
-        self.last_render_ts = 0.0
-        self.last_line_width = 0
         self.suite_started = time.time()
+        self._lock = threading.RLock()
+        self._render_event = threading.Event()
+        self._stop_event = threading.Event()
+        self._render_thread: threading.Thread | None = None
+        self._last_screen_line_count = 0
+        self._snapshot_counter = 0
+        self._supports_live_redraw = bool(sys.stdout.isatty())
+        self._step_states: Dict[str, Dict[str, Any]] = {}
+        for index in range(1, 9):
+            name = self._STEP_INDEX_TO_NAME[index]
+            self._step_states[name] = {
+                "major_index": index,
+                "name": name,
+                "label": "完成" if name == "done" else STEP_LABELS.get(name, name),
+                "execution_mode": "serial",
+                "state": "pending",
+                "started_at": None,
+                "duration_sec": None,
+                "status": None,
+                "timeout_sec": None,
+            }
 
-    def _build_bar(self, major_index: int, major_total: int, *, done: bool) -> str:
-        width = 28
-        completed_units = major_index if done else max(major_index - 1, 0)
-        filled = int(width * completed_units / max(major_total, 1))
-        return "█" * filled + "░" * (width - filled)
-
-    def _render_inline(self, text: str) -> None:
-        padded = text
-        if self.last_line_width > len(text):
-            padded = text + (" " * (self.last_line_width - len(text)))
-        print(f"\r{padded}", end="", flush=True)
-        self.last_line_width = max(self.last_line_width, len(text))
-
-    def _finish_line(self, text: str) -> None:
-        self._render_inline(text)
-        print()
-        self.last_line_width = 0
+    def _ensure_render_thread(self) -> None:
+        if self._render_thread is not None:
+            return
+        self._render_thread = threading.Thread(target=self._render_loop, name="test-suite-progress", daemon=True)
+        self._render_thread.start()
 
     def _format_label(self, payload: Dict[str, Any]) -> str:
-        label = STEP_LABELS.get(payload["name"], payload["name"])
-        if str(payload.get("execution_mode", "")).strip() == "parallel":
+        raw_name = str(payload.get("name", "") or "").strip()
+        label = STEP_LABELS.get(raw_name, raw_name)
+        if raw_name == "done":
+            label = str(payload.get("label", "") or "").strip() or "完成"
+        if str(payload.get("execution_mode", "") or "").strip() == "parallel":
             return f"{label}（並行）"
         return label
 
-    def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool, progress_index: int | None = None) -> str:
-        major_index = int(payload.get("major_index", 0) or 0)
-        major_total = int(payload.get("major_total", 1) or 1)
-        display_index = major_index if progress_index is None else int(progress_index)
-        elapsed_total = time.time() - self.suite_started
-        return (
-            f"[{display_index}/{major_total}] "
-            f"{self._build_bar(display_index, major_total, done=done)} "
-            f"{body} | 經過 {elapsed_total:.1f}s"
+    def _build_overall_bar(self, completed_count: int, total_count: int, running_count: int) -> str:
+        width = 28
+        fraction = 0.0 if total_count <= 0 else min((completed_count + (0.35 * running_count)) / total_count, 0.99 if completed_count < total_count else 1.0)
+        filled = int(round(width * fraction))
+        filled = max(0, min(width, filled))
+        return "█" * filled + "░" * (width - filled)
+
+    def _status_symbol(self, state: str, status: str | None) -> str:
+        if state == "done":
+            return "✓" if status == "PASS" else "✗"
+        if state == "running":
+            return "→"
+        return "·"
+
+    def _step_detail_text(self, step: Dict[str, Any], now: float) -> str:
+        state = str(step.get("state", "pending"))
+        status = str(step.get("status") or "") or None
+        duration_sec = step.get("duration_sec")
+        started_at = step.get("started_at")
+        if state == "done":
+            if duration_sec is None and started_at is not None:
+                duration_sec = max(0.0, now - float(started_at))
+            if step.get("name") == "done":
+                return f"{status or 'PASS'} | {float(duration_sec or 0.0):.1f}s"
+            return f"{status or 'PASS'} | {float(duration_sec or 0.0):.2f}s"
+        if state == "running":
+            elapsed_sec = max(0.0, now - float(started_at or now))
+            timeout_sec = step.get("timeout_sec")
+            if isinstance(timeout_sec, (int, float)) and float(timeout_sec) > 0:
+                return f"執行中 {elapsed_sec:.1f}s / timeout {float(timeout_sec):.0f}s"
+            return f"執行中 {elapsed_sec:.1f}s"
+        return "等待"
+
+    def _build_lines(self) -> list[str]:
+        now = time.time()
+        completed_steps = 0
+        running_steps = 0
+        pending_steps = 0
+        step_lines: list[str] = []
+        for index in range(1, 9):
+            step = self._step_states[self._STEP_INDEX_TO_NAME[index]]
+            state = str(step.get("state", "pending"))
+            if state == "done":
+                completed_steps += 1
+            elif state == "running":
+                running_steps += 1
+            else:
+                pending_steps += 1
+            symbol = self._status_symbol(state, step.get("status"))
+            label = str(step.get("label", step.get("name", "")))
+            detail = self._step_detail_text(step, now)
+            step_lines.append(f"[{index}/8] {symbol} {label:<20} {detail}")
+
+        elapsed_total = now - self.suite_started
+        header = (
+            f"[總進度] {self._build_overall_bar(completed_steps, 8, running_steps)} "
+            f"完成 {completed_steps}/8 | 執行中 {running_steps} | 等待 {pending_steps} | 經過 {elapsed_total:.1f}s"
         )
+        running_labels = [
+            f"{step['label']} {max(0.0, now - float(step['started_at'] or now)):.1f}s"
+            for index in range(1, 9)
+            for step in [self._step_states[self._STEP_INDEX_TO_NAME[index]]]
+            if str(step.get('state', 'pending')) == 'running'
+        ]
+        footer = "[目前] " + (" | ".join(running_labels) if running_labels else "無")
+        return [header, *step_lines, footer]
+
+    def _render_lines(self, lines: list[str], *, force_snapshot: bool = False) -> None:
+        if self._supports_live_redraw:
+            if self._last_screen_line_count > 0:
+                sys.stdout.write(f"\x1b[{self._last_screen_line_count}F")
+            total_lines = max(self._last_screen_line_count, len(lines))
+            for idx in range(total_lines):
+                sys.stdout.write("\x1b[2K")
+                if idx < len(lines):
+                    sys.stdout.write(lines[idx])
+                if idx < total_lines - 1:
+                    sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._last_screen_line_count = len(lines)
+            return
+
+        if not force_snapshot:
+            return
+        self._snapshot_counter += 1
+        print(f"[進度快照 #{self._snapshot_counter}]")
+        for line in lines:
+            print(line)
+
+    def _render_once(self, *, force_snapshot: bool = False) -> None:
+        with self._lock:
+            lines = self._build_lines()
+            self._render_lines(lines, force_snapshot=force_snapshot)
+
+    def _render_loop(self) -> None:
+        fallback_interval = 1.0
+        next_snapshot = time.time()
+        while not self._stop_event.is_set():
+            self._render_event.wait(timeout=0.2)
+            self._render_event.clear()
+            if self._supports_live_redraw:
+                self._render_once()
+                continue
+            now = time.time()
+            if now >= next_snapshot:
+                self._render_once(force_snapshot=True)
+                next_snapshot = now + fallback_interval
+
+    def _signal_render(self) -> None:
+        self._ensure_render_thread()
+        self._render_event.set()
 
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
-        now = time.time()
-        if event == "step_start":
-            label = self._format_label(payload)
-            self._render_inline(self._step_text(payload, f"準備執行 {label}", done=False))
-            self.last_render_ts = 0.0
-            return
-
-        if event == "step_progress":
-            if now - self.last_render_ts < 0.15:
+        with self._lock:
+            now = time.time()
+            if event == "step_start":
+                name = str(payload.get("name", "") or "").strip()
+                step = self._step_states.get(name)
+                if step is not None:
+                    step["label"] = self._format_label(payload)
+                    step["execution_mode"] = str(payload.get("execution_mode", "serial") or "serial")
+                    step["state"] = "running"
+                    step["started_at"] = now
+                    step["duration_sec"] = None
+                    step["status"] = None
+                    step["timeout_sec"] = payload.get("timeout_sec")
+                self._signal_render()
                 return
-            self.last_render_ts = now
-            spinner = SPINNER_FRAMES[self.spinner_index % len(SPINNER_FRAMES)]
-            self.spinner_index += 1
-            label = self._format_label(payload)
-            self._render_inline(
-                self._step_text(
-                    payload,
-                    f"{spinner} 執行中 {label} | {payload['elapsed_sec']:.1f}s",
-                    done=False,
-                )
-            )
-            return
 
-        if event == "step_finish":
-            symbol = "✓" if payload["status"] == "PASS" else "✗"
-            label = self._format_label(payload)
-            self._finish_line(
-                self._step_text(
-                    payload,
-                    f"{symbol} {label} | {payload['status']} | {payload['duration_sec']:.2f}s",
-                    done=True,
-                )
-            )
-            return
+            if event == "step_progress":
+                name = str(payload.get("name", "") or "").strip()
+                step = self._step_states.get(name)
+                if step is not None and step.get("state") == "running":
+                    elapsed_hint = payload.get("elapsed_sec")
+                    if isinstance(elapsed_hint, (int, float)) and step.get("started_at") is not None:
+                        step["duration_sec"] = float(elapsed_hint)
+                self._signal_render()
+                return
 
-        if event == "finalizing":
-            self._render_inline(self._step_text(payload, "整理輸出與打包 bundle", done=False))
-            return
+            if event == "step_finish":
+                name = str(payload.get("name", "") or "").strip()
+                step = self._step_states.get(name)
+                if step is not None:
+                    step["label"] = self._format_label(payload)
+                    step["state"] = "done"
+                    step["status"] = str(payload.get("status", "FAIL") or "FAIL")
+                    step["duration_sec"] = float(payload.get("duration_sec", 0.0) or 0.0)
+                    if step.get("started_at") is None:
+                        step["started_at"] = now - float(step["duration_sec"])
+                self._signal_render()
+                return
 
-        if event == "done":
-            if payload["overall_status"] == "PASS":
-                self._finish_line(self._step_text(payload, f"✓ 完成 | {payload['overall_status']}", done=True))
-            else:
-                failed_at = int(payload.get("failed_at_major_index", payload.get("major_index", 0)) or 0)
-                self._finish_line(
-                    self._step_text(
-                        payload,
-                        f"✗ 結束 | {payload['overall_status']}",
-                        done=False,
-                        progress_index=failed_at,
-                    )
-                )
+            if event == "finalizing":
+                step = self._step_states["done"]
+                step["label"] = str(payload.get("label", "") or "整理輸出與打包 bundle")
+                step["state"] = "running"
+                step["started_at"] = now
+                step["duration_sec"] = None
+                step["status"] = None
+                self._signal_render()
+                return
+
+            if event == "done":
+                step = self._step_states["done"]
+                step["label"] = "完成"
+                step["state"] = "done"
+                step["status"] = str(payload.get("overall_status", "FAIL") or "FAIL")
+                step["duration_sec"] = max(0.0, now - self.suite_started)
+                if step.get("started_at") is None:
+                    step["started_at"] = self.suite_started
+                self._signal_render()
+                return
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._render_event.set()
+        if self._render_thread is not None:
+            self._render_thread.join(timeout=1.0)
+        with self._lock:
+            if self._supports_live_redraw and self._last_screen_line_count > 0:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                self._last_screen_line_count = 0
 
 
 def _print_human_summary(result: Dict[str, Any]) -> None:
@@ -141,7 +281,10 @@ def main(argv=None) -> int:
     print("=== Test Suite (reduced) ===")
     print("[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。")
     progress = ConsoleProgress()
-    result = execute_all(progress_callback=progress)
+    try:
+        result = execute_all(progress_callback=progress)
+    finally:
+        progress.close()
     _print_human_summary(result)
     return 0 if result["overall_status"] == "PASS" else 1
 
