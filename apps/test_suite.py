@@ -18,6 +18,16 @@ from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMA
 REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
 STEP_LABELS = TEST_SUITE_STEP_LABELS
 EXTRA_STEP_LABELS = {"done": "完成"}
+DISPLAY_STEP_ORDER = [
+    "preflight",
+    "dataset_prepare",
+    "meta_quality",
+    "ml_smoke",
+    "quick_gate",
+    "chain_checks",
+    "consistency",
+    "done",
+]
 BAR_WIDTH = 28
 STEP_EXPECTED_SECONDS = {
     "preflight": 1.0,
@@ -42,16 +52,8 @@ class ConsoleProgress:
         self.rendered_once = False
         self.finalized = False
         self.last_render_ts = 0.0
-        self.step_order = [
-            "preflight",
-            "dataset_prepare",
-            "quick_gate",
-            "consistency",
-            "chain_checks",
-            "ml_smoke",
-            "meta_quality",
-            "done",
-        ]
+        self.step_order = list(DISPLAY_STEP_ORDER)
+        self.display_index_map = {name: index for index, name in enumerate(self.step_order, start=1)}
         self.major_total = len(self.step_order)
         self.use_ansi_redraw = self._supports_ansi_redraw()
         self.step_states: Dict[str, Dict[str, Any]] = {
@@ -179,8 +181,8 @@ class ConsoleProgress:
                 "execution_mode": str(payload.get("execution_mode", "serial") or "serial"),
             },
         )
-        state["major_index"] = int(payload.get("major_index", state.get("major_index", 0)) or 0)
-        state["major_total"] = int(payload.get("major_total", state.get("major_total", self.major_total)) or self.major_total)
+        state["major_index"] = int(self.display_index_map.get(name, state.get("major_index", 0)) or 0)
+        state["major_total"] = self.major_total
         if "execution_mode" in payload:
             state["execution_mode"] = str(payload.get("execution_mode") or "serial")
         return state
