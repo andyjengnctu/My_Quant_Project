@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -32,6 +33,8 @@ class ConsoleProgress:
         7: "meta_quality",
         8: "done",
     }
+    _BAR_WIDTH = 28
+    _RUN_SEGMENT_WIDTH = 6
 
     def __init__(self) -> None:
         self.suite_started = time.time()
@@ -40,8 +43,7 @@ class ConsoleProgress:
         self._stop_event = threading.Event()
         self._render_thread: threading.Thread | None = None
         self._last_screen_line_count = 0
-        self._snapshot_counter = 0
-        self._supports_live_redraw = bool(sys.stdout.isatty())
+        self._supports_live_redraw = self._detect_live_redraw_support()
         self._step_states: Dict[str, Dict[str, Any]] = {}
         for index in range(1, 9):
             name = self._STEP_INDEX_TO_NAME[index]
@@ -56,6 +58,42 @@ class ConsoleProgress:
                 "status": None,
                 "timeout_sec": None,
             }
+
+    def _detect_live_redraw_support(self) -> bool:
+        if sys.stdout.isatty():
+            self._try_enable_windows_vt_mode()
+            return True
+        env = os.environ
+        indicators = (
+            env.get("WT_SESSION"),
+            env.get("ANSICON"),
+            env.get("TERM"),
+            env.get("ConEmuANSI") == "ON",
+            env.get("PYCHARM_HOSTED"),
+            env.get("VSCODE_PID"),
+        )
+        if any(indicators):
+            self._try_enable_windows_vt_mode()
+            return True
+        return False
+
+    @staticmethod
+    def _try_enable_windows_vt_mode() -> None:
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(-11)
+            if handle in (0, -1):
+                return
+            mode = ctypes.c_uint()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+                return
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            return
 
     def _ensure_render_thread(self) -> None:
         if self._render_thread is not None:
@@ -72,19 +110,28 @@ class ConsoleProgress:
             return f"{label}（並行）"
         return label
 
-    def _build_overall_bar(self, completed_count: int, total_count: int, running_count: int) -> str:
-        width = 28
-        fraction = 0.0 if total_count <= 0 else min((completed_count + (0.35 * running_count)) / total_count, 0.99 if completed_count < total_count else 1.0)
-        filled = int(round(width * fraction))
-        filled = max(0, min(width, filled))
-        return "█" * filled + "░" * (width - filled)
-
-    def _status_symbol(self, state: str, status: str | None) -> str:
+    @staticmethod
+    def _status_symbol(state: str, status: str | None) -> str:
         if state == "done":
             return "✓" if status == "PASS" else "✗"
         if state == "running":
             return "→"
         return "·"
+
+    def _build_bar(self, step: Dict[str, Any], now: float) -> str:
+        state = str(step.get("state", "pending"))
+        if state == "done":
+            return "█" * self._BAR_WIDTH
+        if state != "running":
+            return "░" * self._BAR_WIDTH
+        started_at = float(step.get("started_at") or now)
+        elapsed = max(0.0, now - started_at)
+        head = int(elapsed * 8.0) % self._BAR_WIDTH
+        chars = ["░"] * self._BAR_WIDTH
+        for offset in range(self._RUN_SEGMENT_WIDTH):
+            idx = (head + offset) % self._BAR_WIDTH
+            chars[idx] = "█" if offset >= self._RUN_SEGMENT_WIDTH - 2 else "▓"
+        return "".join(chars)
 
     def _step_detail_text(self, step: Dict[str, Any], now: float) -> str:
         state = str(step.get("state", "pending"))
@@ -94,93 +141,53 @@ class ConsoleProgress:
         if state == "done":
             if duration_sec is None and started_at is not None:
                 duration_sec = max(0.0, now - float(started_at))
-            if step.get("name") == "done":
-                return f"{status or 'PASS'} | {float(duration_sec or 0.0):.1f}s"
-            return f"{status or 'PASS'} | {float(duration_sec or 0.0):.2f}s"
+            precision = ".1f" if step.get("name") == "done" else ".2f"
+            return f"{status or 'PASS'} | {format(float(duration_sec or 0.0), precision)}s"
         if state == "running":
             elapsed_sec = max(0.0, now - float(started_at or now))
-            timeout_sec = step.get("timeout_sec")
-            if isinstance(timeout_sec, (int, float)) and float(timeout_sec) > 0:
-                return f"執行中 {elapsed_sec:.1f}s / timeout {float(timeout_sec):.0f}s"
-            return f"執行中 {elapsed_sec:.1f}s"
+            return f"執行中 | {elapsed_sec:.1f}s"
         return "等待"
 
     def _build_lines(self) -> list[str]:
         now = time.time()
-        completed_steps = 0
-        running_steps = 0
-        pending_steps = 0
-        step_lines: list[str] = []
+        lines: list[str] = []
         for index in range(1, 9):
             step = self._step_states[self._STEP_INDEX_TO_NAME[index]]
-            state = str(step.get("state", "pending"))
-            if state == "done":
-                completed_steps += 1
-            elif state == "running":
-                running_steps += 1
-            else:
-                pending_steps += 1
-            symbol = self._status_symbol(state, step.get("status"))
+            symbol = self._status_symbol(str(step.get("state", "pending")), step.get("status"))
+            bar = self._build_bar(step, now)
             label = str(step.get("label", step.get("name", "")))
             detail = self._step_detail_text(step, now)
-            step_lines.append(f"[{index}/8] {symbol} {label:<20} {detail}")
+            lines.append(f"[{index}/8] {bar} {symbol} {label:<20} {detail}")
+        return lines
 
-        elapsed_total = now - self.suite_started
-        header = (
-            f"[總進度] {self._build_overall_bar(completed_steps, 8, running_steps)} "
-            f"完成 {completed_steps}/8 | 執行中 {running_steps} | 等待 {pending_steps} | 經過 {elapsed_total:.1f}s"
-        )
-        running_labels = [
-            f"{step['label']} {max(0.0, now - float(step['started_at'] or now)):.1f}s"
-            for index in range(1, 9)
-            for step in [self._step_states[self._STEP_INDEX_TO_NAME[index]]]
-            if str(step.get('state', 'pending')) == 'running'
-        ]
-        footer = "[目前] " + (" | ".join(running_labels) if running_labels else "無")
-        return [header, *step_lines, footer]
+    def _render_lines(self, lines: list[str]) -> None:
+        if self._last_screen_line_count > 0:
+            sys.stdout.write(f"\x1b[{self._last_screen_line_count}F")
+        total_lines = max(self._last_screen_line_count, len(lines))
+        for idx in range(total_lines):
+            sys.stdout.write("\x1b[2K")
+            if idx < len(lines):
+                sys.stdout.write(lines[idx])
+            if idx < total_lines - 1:
+                sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._last_screen_line_count = len(lines)
 
-    def _render_lines(self, lines: list[str], *, force_snapshot: bool = False) -> None:
-        if self._supports_live_redraw:
-            if self._last_screen_line_count > 0:
-                sys.stdout.write(f"\x1b[{self._last_screen_line_count}F")
-            total_lines = max(self._last_screen_line_count, len(lines))
-            for idx in range(total_lines):
-                sys.stdout.write("\x1b[2K")
-                if idx < len(lines):
-                    sys.stdout.write(lines[idx])
-                if idx < total_lines - 1:
-                    sys.stdout.write("\n")
-            sys.stdout.flush()
-            self._last_screen_line_count = len(lines)
-            return
-
-        if not force_snapshot:
-            return
-        self._snapshot_counter += 1
-        print(f"[進度快照 #{self._snapshot_counter}]")
-        for line in lines:
-            print(line)
-
-    def _render_once(self, *, force_snapshot: bool = False) -> None:
+    def _render_once(self) -> None:
         with self._lock:
-            lines = self._build_lines()
-            self._render_lines(lines, force_snapshot=force_snapshot)
+            if not self._supports_live_redraw:
+                return
+            self._render_lines(self._build_lines())
 
     def _render_loop(self) -> None:
-        fallback_interval = 1.0
-        next_snapshot = time.time()
         while not self._stop_event.is_set():
-            self._render_event.wait(timeout=0.2)
+            self._render_event.wait(timeout=0.12)
             self._render_event.clear()
-            if self._supports_live_redraw:
-                self._render_once()
-                continue
-            now = time.time()
-            if now >= next_snapshot:
-                self._render_once(force_snapshot=True)
-                next_snapshot = now + fallback_interval
+            self._render_once()
 
     def _signal_render(self) -> None:
+        if not self._supports_live_redraw:
+            return
         self._ensure_render_thread()
         self._render_event.set()
 
@@ -246,6 +253,8 @@ class ConsoleProgress:
                 return
 
     def close(self) -> None:
+        if self._supports_live_redraw:
+            self._render_once()
         self._stop_event.set()
         self._render_event.set()
         if self._render_thread is not None:
