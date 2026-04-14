@@ -1102,7 +1102,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
 
         summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
 
-        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total):
+        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total, execution_mode="serial"):
             payload = {
                 "status": "PASS",
                 "failures": [],

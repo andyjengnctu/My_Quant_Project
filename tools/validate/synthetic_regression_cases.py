@@ -326,7 +326,7 @@ def validate_run_all_repeatability_case(_base_params):
         def _fake_dataset_info():
             return {'dataset_dir': str(PROJECT_ROOT / 'data' / 'tw_stock_data_vip_reduced'), 'source': 'repo_data_dir', 'csv_count': 24, 'reused_existing': True}
 
-        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total):
+        def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total, execution_mode="serial"):
             payload = {'status': 'PASS', 'failures': [], 'failed_steps': [], 'failed_count': 0, 'fail_count': 0}
             summary_name = summary_name_by_script[relative_script]
             (run_dir / summary_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
