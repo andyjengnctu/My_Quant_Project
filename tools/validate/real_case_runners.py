@@ -1,4 +1,4 @@
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 import os
 
 import pandas as pd
@@ -27,6 +27,53 @@ from tools.validate.tool_adapters import (
 from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
 
 
+
+
+_REAL_SCAN_MODULES_PREWARMED = False
+
+
+def _prewarm_real_scan_modules():
+    global _REAL_SCAN_MODULES_PREWARMED
+    if _REAL_SCAN_MODULES_PREWARMED:
+        return
+
+    from tools.validate.module_loader import load_module_from_candidates
+
+    load_module_from_candidates(
+        "portfolio_sim_module",
+        ["apps/portfolio_sim.py"],
+        required_attrs=["run_portfolio_simulation_prepared"],
+    )
+    load_module_from_candidates(
+        "vip_scanner_module",
+        ["apps/vip_scanner.py"],
+        required_attrs=["process_single_stock"],
+    )
+    load_module_from_candidates(
+        "vip_downloader_module",
+        ["tools/downloader/main.py"],
+        required_attrs=["smart_download_vip_data"],
+    )
+    load_module_from_candidates(
+        "debug_trade_log_module",
+        ["tools/trade_analysis/trade_log.py"],
+        required_attrs=["run_debug_backtest"],
+    )
+    _REAL_SCAN_MODULES_PREWARMED = True
+
+
+def _build_worker_failure_payload(ticker, exc):
+    return {
+        "ticker": ticker,
+        "ok": False,
+        "insufficient": bool(isinstance(exc, ValueError) and ("有效資料不足" in str(exc))),
+        "exc_type": type(exc).__name__,
+        "exc_message": str(exc),
+    }
+
+
+def _initialize_real_scan_worker():
+    _prewarm_real_scan_modules()
 def run_single_backtest_check(df, params):
     prep_df, standalone_logs, stats = prep_stock_data_and_trades(df.copy(), params, return_stats=True)
     return stats, standalone_logs, prep_df
@@ -255,14 +302,25 @@ def _determine_real_scan_worker_count(total_tickers):
 
 
 def _validate_one_ticker_worker(task):
-    return validate_one_ticker(
-        task["project_root"],
-        task["data_dir"],
-        None,
-        task["ticker"],
-        task["base_params"],
-        resolved_file_path=task["resolved_file_path"],
-    )
+    try:
+        results, summary = validate_one_ticker(
+            task["project_root"],
+            task["data_dir"],
+            None,
+            task["ticker"],
+            task["base_params"],
+            resolved_file_path=task["resolved_file_path"],
+        )
+        return {
+            "ticker": task["ticker"],
+            "ok": True,
+            "results": results,
+            "summary": summary,
+        }
+    except VALIDATION_RECOVERABLE_EXCEPTIONS as exc:
+        return _build_worker_failure_payload(task["ticker"], exc)
+    except Exception as exc:  # pragma: no cover - defensive worker boundary
+        return _build_worker_failure_payload(task["ticker"], exc)
 
 
 
@@ -290,14 +348,46 @@ def run_real_ticker_scan(
     ordered_results = [None] * total_tickers
     ordered_summaries = [None] * total_tickers
 
-    def _record_outcome(idx, ticker, *, results=None, summary=None, exc=None):
+    def _record_outcome(idx, ticker, *, results=None, summary=None, exc=None, exc_info=None):
         nonlocal completed_count, ticker_pass_count, ticker_skip_count, ticker_fail_count
 
         ticker_results = []
         ticker_summary = None
-        if exc is None:
+        if exc is None and exc_info is None:
             ticker_results = list(results or [])
             ticker_summary = dict(summary or {"ticker": ticker})
+        elif exc_info is not None:
+            exc_type = str(exc_info.get("exc_type", "Exception"))
+            exc_message = str(exc_info.get("exc_message", ""))
+            formatted_exc = f"{exc_type}: {exc_message}" if exc_message else exc_type
+            if bool(exc_info.get("insufficient", False)):
+                ticker_results = []
+                add_skip_result(
+                    ticker_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    f"資料不足，跳過驗證。({formatted_exc})",
+                )
+                ticker_summary = {
+                    "ticker": ticker,
+                    "validation_runtime": f"SKIP: {formatted_exc}",
+                }
+            else:
+                ticker_results = []
+                add_fail_result(
+                    ticker_results,
+                    "system",
+                    ticker,
+                    "validation_runtime",
+                    "no exception",
+                    formatted_exc,
+                    "單一 ticker 的 runtime / import side effect / 路徑權限問題，不可讓整體 validate 中斷。",
+                )
+                ticker_summary = {
+                    "ticker": ticker,
+                    "validation_runtime": f"FAIL: {formatted_exc}",
+                }
         elif is_insufficient_data_error(exc):
             ticker_results = []
             add_skip_result(
@@ -356,26 +446,33 @@ def run_real_ticker_scan(
             except VALIDATION_RECOVERABLE_EXCEPTIONS as exc:
                 _record_outcome(idx, ticker, exc=exc)
     else:
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            future_to_task = {}
-            for idx, ticker in enumerate(selected_tickers):
-                task = {
-                    "project_root": project_root,
-                    "data_dir": data_dir,
-                    "ticker": ticker,
-                    "base_params": base_params,
-                    "resolved_file_path": csv_map.get(ticker),
-                }
-                future = executor.submit(_validate_one_ticker_worker, task)
-                future_to_task[future] = (idx, ticker)
-
-            for future in as_completed(future_to_task):
-                idx, ticker = future_to_task[future]
-                try:
-                    results, summary = future.result()
-                    _record_outcome(idx, ticker, results=results, summary=summary)
-                except Exception as exc:
-                    _record_outcome(idx, ticker, exc=exc)
+        _prewarm_real_scan_modules()
+        chunk_size = max(1, min(4, total_tickers // max(1, worker_count * 2) or 1))
+        task_list = [
+            {
+                "project_root": project_root,
+                "data_dir": data_dir,
+                "ticker": ticker,
+                "base_params": base_params,
+                "resolved_file_path": csv_map.get(ticker),
+            }
+            for ticker in selected_tickers
+        ]
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            initializer=_initialize_real_scan_worker,
+        ) as executor:
+            for idx, worker_result in enumerate(executor.map(_validate_one_ticker_worker, task_list, chunksize=chunk_size)):
+                ticker = selected_tickers[idx]
+                if bool(worker_result.get("ok", False)):
+                    _record_outcome(
+                        idx,
+                        ticker,
+                        results=worker_result.get("results"),
+                        summary=worker_result.get("summary"),
+                    )
+                else:
+                    _record_outcome(idx, ticker, exc_info=worker_result)
 
     all_results = []
     summaries = []
