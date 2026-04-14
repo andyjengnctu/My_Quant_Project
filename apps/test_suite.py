@@ -99,7 +99,8 @@ class ConsoleProgress:
             if kernel32.SetConsoleMode(handle, desired_mode) == 0:
                 return False
             return True
-        except Exception:
+        except Exception as exc:
+            _ = exc
             return False
 
     def _format_label(self, state: Dict[str, Any]) -> str:
@@ -113,7 +114,7 @@ class ConsoleProgress:
         if status == "PASS":
             return "█" * BAR_WIDTH
         if status == "FAIL":
-            return "■" * BAR_WIDTH
+            return "█" * BAR_WIDTH
         if status in {"RUNNING", "FINALIZING"}:
             expected = max(float(STEP_EXPECTED_SECONDS.get(state["name"], 10.0)), 0.5)
             elapsed = max(float(state.get("elapsed_sec") or 0.0), 0.0)
@@ -151,8 +152,15 @@ class ConsoleProgress:
         lines = [self._format_line(self.step_states[name]) for name in self.step_order]
         if self.use_ansi_redraw and self.rendered_once:
             sys.stdout.write(f"\x1b[{len(lines)}F")
-        block = "\n".join(lines)
-        sys.stdout.write(block + "\n")
+            for index, line in enumerate(lines):
+                sys.stdout.write("\x1b[2K")
+                sys.stdout.write(line)
+                if index < len(lines) - 1:
+                    sys.stdout.write("\n")
+            sys.stdout.write("\n")
+        else:
+            block = "\n".join(lines)
+            sys.stdout.write(block + "\n")
         sys.stdout.flush()
         self.rendered_once = True
 
