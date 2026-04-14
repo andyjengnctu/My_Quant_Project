@@ -101,6 +101,9 @@ def _should_strip_from_archived_zip(zip_member_name: str) -> bool:
 
 
 def _strip_reduced_data_from_archived_zip(zip_path: Path) -> int:
+    if not zipfile.is_zipfile(zip_path):
+        return 0
+
     temp_zip_path = zip_path.with_suffix(f"{zip_path.suffix}.tmp")
     removed_members = 0
 
