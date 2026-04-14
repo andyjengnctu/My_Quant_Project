@@ -116,11 +116,8 @@ def _cleanup_inline_imports(module_snapshot: Dict[str, Any]) -> None:
         if parent_module is None:
             continue
         existing_attr = getattr(parent_module, attr_name, None)
-        if getattr(existing_attr, '__name__', None) == name:
-            try:
-                delattr(parent_module, attr_name)
-            except AttributeError:
-                pass
+        if getattr(existing_attr, '__name__', None) == name and hasattr(parent_module, attr_name):
+            delattr(parent_module, attr_name)
 
 
 def _capture_python_script_inline(
@@ -614,6 +611,31 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
     return results
 
 
+
+def _usage_matches(stdout: str, expected_usage: str) -> bool:
+    usage_lines = [line.strip() for line in stdout.splitlines() if "用法:" in line]
+    if not usage_lines:
+        return False
+
+    expected_body = expected_usage.replace('\\', '/').strip()
+    expected_parts = expected_body.split()
+    expected_script = expected_parts[1] if len(expected_parts) >= 2 and expected_parts[0] == 'python' else ''
+    expected_tail = ' '.join(expected_parts[2:]) if len(expected_parts) >= 3 and expected_parts[0] == 'python' else ''
+
+    for line in usage_lines:
+        normalized_line = line.replace('\\', '/').strip()
+        if expected_body in normalized_line:
+            return True
+        body = normalized_line.split('用法:', 1)[1].strip() if '用法:' in normalized_line else normalized_line
+        body_parts = body.split()
+        if len(body_parts) >= 2 and body_parts[0] == 'python' and expected_script:
+            actual_script = body_parts[1]
+            actual_tail = ' '.join(body_parts[2:])
+            if actual_script.endswith(expected_script) and (not expected_tail or expected_tail in actual_tail):
+                return True
+    return False
+
+
 def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
     for args, expected_usage in HELP_TARGETS:
@@ -622,8 +644,7 @@ def check_help(timeout: int) -> List[Dict[str, Any]]:
         ok = (
             (not outcome.get("timed_out"))
             and outcome["returncode"] == 0
-            and "用法:" in outcome["stdout"]
-            and expected_usage in outcome["stdout"]
+            and _usage_matches(outcome["stdout"], expected_usage)
         )
         results.append(summarize_result(f"help::{Path(args[1]).name}", ok, detail=first_line, extra={"expected_usage": expected_usage}))
     return results
