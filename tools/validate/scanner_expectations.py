@@ -84,6 +84,51 @@ def run_scanner_reference_check_on_clean_df(ticker, clean_df, params):
     return stats
 
 
+def rebuild_scanner_reference_stats_from_single_stats(single_stats, clean_df, params):
+    if clean_df is None or clean_df.empty:
+        raise ValueError("clean_df 不可為空")
+    if not isinstance(single_stats, dict):
+        raise TypeError("single_stats 必須為 dict")
+
+    rebuilt = dict(single_stats)
+    history_trade_count = int(single_stats.get("history_trade_count", 0) or 0)
+    history_ev = float(single_stats.get("history_ev", 0.0) or 0.0)
+    history_win_rate = float(single_stats.get("history_win_rate", 0.0) or 0.0)
+
+    min_trades_req = int(getattr(params, "min_history_trades", 0) or 0)
+    min_ev_req = float(getattr(params, "min_history_ev", 0.0) or 0.0)
+    min_win_rate_req = float(getattr(params, "min_history_win_rate", 0.0) or 0.0)
+
+    if history_trade_count < min_trades_req:
+        scanner_expected_value = 0.0
+        scanner_history_win_rate = 0.0
+        scanner_is_candidate = False
+    elif history_trade_count == 0:
+        allow_zero_history = (
+            (min_trades_req == 0)
+            and (min_ev_req <= 0)
+            and (min_win_rate_req <= 0)
+        )
+        scanner_expected_value = 0.0
+        scanner_history_win_rate = 0.0
+        scanner_is_candidate = bool(allow_zero_history)
+    else:
+        scanner_expected_value = history_ev
+        scanner_history_win_rate = history_win_rate
+        scanner_is_candidate = (
+            scanner_history_win_rate >= min_win_rate_req
+            and scanner_expected_value >= min_ev_req
+        )
+
+    rebuilt["expected_value"] = scanner_expected_value
+    rebuilt["history_ev"] = scanner_expected_value
+    rebuilt["history_win_rate"] = scanner_history_win_rate
+    rebuilt["history_trade_count"] = history_trade_count
+    rebuilt["is_candidate"] = scanner_is_candidate
+    rebuilt["trade_date"] = resolve_latest_trade_date_from_frame(clean_df)
+    return rebuilt
+
+
 def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, trade_date=None):
     if scanner_ref_stats.get("scanner_expected_status") == "skip_insufficient":
         return "skip_insufficient"

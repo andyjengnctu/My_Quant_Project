@@ -23,6 +23,7 @@ from .scanner_expectations import (
     derive_expected_scanner_status,
     make_synthetic_validation_params,
     normalize_scanner_result,
+    rebuild_scanner_reference_stats_from_single_stats,
     run_scanner_reference_check,
     run_scanner_reference_check_on_clean_df,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "derive_expected_scanner_status",
     "make_synthetic_validation_params",
     "normalize_scanner_result",
+    "rebuild_scanner_reference_stats_from_single_stats",
     "run_scanner_reference_check",
     "run_scanner_reference_check_on_clean_df",
 ]

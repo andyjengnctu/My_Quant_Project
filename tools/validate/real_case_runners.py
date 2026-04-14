@@ -13,7 +13,7 @@ from tools.validate.checks import (
     build_scanner_validation_params,
     extract_yearly_profile_fields,
     make_consistency_params,
-    run_scanner_reference_check_on_clean_df,
+    rebuild_scanner_reference_stats_from_single_stats,
 )
 from tools.validate.real_case_assertions import append_real_case_checks
 from tools.validate.real_case_io import load_clean_df, load_clean_df_from_path
@@ -176,7 +176,7 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     else:
         single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
         portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
-    scanner_ref_stats = run_scanner_reference_check_on_clean_df(ticker, df, scanner_params)
+    scanner_ref_stats = rebuild_scanner_reference_stats_from_single_stats(single_stats, df, scanner_params)
     parity_params = build_consistency_parity_params(params)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, parity_params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
