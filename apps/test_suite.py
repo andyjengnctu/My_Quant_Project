@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import os
 import sys
 import time
@@ -72,7 +73,34 @@ class ConsoleProgress:
             return False
         if os.name != "nt":
             return True
-        return bool(os.environ.get("WT_SESSION") or os.environ.get("ANSICON") or os.environ.get("TERM"))
+        if self._enable_windows_virtual_terminal():
+            return True
+        return bool(
+            os.environ.get("WT_SESSION")
+            or os.environ.get("ANSICON")
+            or os.environ.get("TERM")
+            or os.environ.get("ConEmuANSI") == "ON"
+        )
+
+    def _enable_windows_virtual_terminal(self) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            kernel32 = ctypes.windll.kernel32
+            std_output_handle = -11
+            enable_virtual_terminal_processing = 0x0004
+            handle = kernel32.GetStdHandle(std_output_handle)
+            if handle in (0, -1):
+                return False
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+                return False
+            desired_mode = mode.value | enable_virtual_terminal_processing
+            if kernel32.SetConsoleMode(handle, desired_mode) == 0:
+                return False
+            return True
+        except Exception:
+            return False
 
     def _format_label(self, state: Dict[str, Any]) -> str:
         label = STEP_LABELS.get(state["name"], EXTRA_STEP_LABELS.get(state["name"], state["name"]))
