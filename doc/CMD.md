@@ -54,7 +54,8 @@ python apps/workbench.py
 - `outputs/portfolio_sim/`：投組報表與載入摘要。
 - `outputs/vip_scanner/`：scanner issue log。
 - `outputs/smart_downloader/`：下載器 issue log。
-- `outputs/debug_trade_log/`：trade-analysis 單股分析輸出。
+- `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
+- `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
 
 ## 其他文件
 

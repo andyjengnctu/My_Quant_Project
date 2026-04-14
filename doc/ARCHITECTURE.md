@@ -90,7 +90,7 @@ project/
 
 - `apps/`：正式入口層，只從對應子系統 façade 匯入公開介面。
 - `core/`：核心規則、帳務、價格、統計、path 與共用 helper；不得放 UI orchestration 或 validate 腳本。
-- `tools/`：下載、最佳化、單股分析、validate、local regression 與 GUI 子系統。
+- `tools/`：下載、最佳化、單股分析、validate、local regression 與 GUI 子系統；workbench 的交易明細與 Console 改以獨立分頁承接。
 - `config/`：共用政策與執行預設。
 - `models/`：最佳參數檔與模型相關輸入。
 - `doc/`：架構、常用指令與 formal checklist 文件。
@@ -103,8 +103,8 @@ project/
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
 - `apps/vip_scanner.py`：scanner 正式入口。
-- `apps/workbench.py`：GUI / workbench 正式入口。
-- `tools/trade_analysis/trade_log.py`：單股 trade-analysis 正式入口。
+- `apps/workbench.py`：GUI / workbench 正式入口；`apps/workbench.py` 為單一 GUI 啟用入口。
+- `tools/trade_analysis/trade_log.py`：單股 trade-analysis 共用 backend / 開發輔助 CLI。
 
 ## 子系統責任
 
@@ -114,7 +114,7 @@ project/
 - `trade_analysis`：單股分析、圖表與交易明細輸出。
 - `validate`：formal contract、schema、synthetic 與 real-case 驗證。
 - `local_regression`：reduced formal orchestrator 與 bundle 產出。
-- `workbench_ui`：GUI 主視窗與單股檢視頁面。
+- `workbench_ui`：GUI 主視窗與單股檢視頁面；K 線圖主檢視下，交易明細與 Console 以獨立分頁承接。
 
 ## 依賴方向
 

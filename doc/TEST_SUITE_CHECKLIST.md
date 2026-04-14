@@ -449,7 +449,7 @@
 | T234 | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` | B148 |
 | T235 | `validate_debug_exit_total_return_milli_binding_contract_case` | B149 |
 | T236 | `validate_core_r_multiple_exact_ledger_contract_case` | B150 |
-| T237 | `validate_gui_workbench_documentation_sync_case` | B152 |
+| T237 | `validate_gui_workbench_documentation_sync_case` | B151 |
 | T238 | `validate_trade_analysis_legacy_naming_documentation_contract_case` | B152 |
 | T239 | `validate_trade_analysis_canonical_alias_export_contract_case` | B153 |
 | T241 | `validate_checklist_g_transition_sequence_case` | B155 |
