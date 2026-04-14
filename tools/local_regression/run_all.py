@@ -1099,7 +1099,9 @@ def execute_all(
                 })
 
             with ThreadPoolExecutor(max_workers=parallel_workers, thread_name_prefix="test_suite") as executor:
-                future_map: Dict[Future[Dict[str, Any]], tuple[int, str, str]] = {}
+                future_map: Dict[Future[Dict[str, Any]], tuple[int, str, str, int]] = {}
+                future_started_at: Dict[Future[Dict[str, Any]], float] = {}
+                future_last_progress_at: Dict[Future[Dict[str, Any]], float] = {}
                 for script_offset, name, relative_script, summary_name, timeout_sec in parallel_specs:
                     log_path = run_dir / f"{name}.log"
                     future = executor.submit(
@@ -1114,13 +1116,31 @@ def execute_all(
                         major_total=major_total,
                         execution_mode="parallel",
                     )
-                    future_map[future] = (script_offset, name, summary_name)
+                    future_map[future] = (script_offset, name, summary_name, timeout_sec)
+                    started_at = time.time()
+                    future_started_at[future] = started_at
+                    future_last_progress_at[future] = 0.0
 
                 pending = set(future_map)
                 while pending:
                     done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+                    now = time.time()
+                    for future in list(pending):
+                        last_emit_at = future_last_progress_at.get(future, 0.0)
+                        if now - last_emit_at < 0.2:
+                            continue
+                        future_last_progress_at[future] = now
+                        script_offset, name, _summary_name, timeout_sec = future_map[future]
+                        _emit_progress(progress_callback, "step_progress", {
+                            "name": name,
+                            "major_index": script_offset,
+                            "major_total": major_total,
+                            "elapsed_sec": round(now - future_started_at.get(future, now), 1),
+                            "timeout_sec": timeout_sec,
+                            "execution_mode": "parallel",
+                        })
                     for future in done:
-                        script_offset, name, summary_name = future_map[future]
+                        script_offset, name, summary_name, _timeout_sec = future_map[future]
                         try:
                             run_result = future.result()
                         except Exception as exc:
@@ -1139,6 +1159,8 @@ def execute_all(
                             run_result=run_result,
                         )
                         script_summaries_by_name[name] = script_summary
+                        future_started_at.pop(future, None)
+                        future_last_progress_at.pop(future, None)
                         if script_summary["status"] != "PASS":
                             overall_ok = False
                         _emit_progress(progress_callback, "step_finish", {
