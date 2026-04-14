@@ -60,10 +60,14 @@ def print_scanner_header(params):
         f"評分模型 [{C_YELLOW}{SCORE_CALC_METHOD}{C_RESET}] | "
         f"評分分子 [{C_YELLOW}{SCORE_NUMERATOR_METHOD}{C_RESET}]"
     )
+    sort_metric_label = get_buy_sort_metric_label(BUY_SORT_METHOD)
+    sort_probe_fields = "EV / 勝率 / 資產成長 / 交易次數"
+    if sort_metric_label != "資產成長":
+        sort_probe_fields = f"{sort_probe_fields} / {sort_metric_label}"
     print(
         f"   ➤ 排序探針: "
-        f"逐項輸出應顯示 EV / 勝率 / 交易次數 / 資產成長 / {get_buy_sort_metric_label(BUY_SORT_METHOD)}；"
-        f"目前排序欄位 = {get_buy_sort_metric_label(BUY_SORT_METHOD)}"
+        f"逐項輸出應顯示 {sort_probe_fields}；"
+        f"目前排序欄位 = {sort_metric_label}"
     )
     print(
         f"   ➤ 訓練參數: "
