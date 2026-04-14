@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import os
 import py_compile
+import runpy
 import shutil
 import sys
 import time
@@ -61,6 +64,148 @@ RUN_ALL_CLI_CASES = [
     (["--only", "bad"], "--only 只接受"),
     (["--bad"], "不支援的參數"),
 ]
+INLINE_CLI_TARGETS = {
+    "apps/workbench.py",
+    "apps/ml_optimizer.py",
+    "apps/package_zip.py",
+    "apps/portfolio_sim.py",
+    "apps/smart_downloader.py",
+    "apps/test_suite.py",
+    "apps/vip_scanner.py",
+    "requirements/export_requirements_lock.py",
+    "tools/downloader/main.py",
+    "tools/local_regression/run_all.py",
+    "tools/local_regression/run_chain_checks.py",
+    "tools/local_regression/run_ml_smoke.py",
+    "tools/local_regression/run_meta_quality.py",
+    "tools/local_regression/run_quick_gate.py",
+    "tools/optimizer/main.py",
+    "tools/portfolio_sim/main.py",
+    "tools/scanner/main.py",
+    "tools/validate/cli.py",
+    "tools/validate/main.py",
+    "tools/validate/preflight_env.py",
+}
+
+
+def _is_project_module_name(module_name: str, module_obj: Any) -> bool:
+    if module_name == __name__:
+        return False
+    module_file = getattr(module_obj, '__file__', None)
+    if not module_file:
+        return False
+    try:
+        return Path(module_file).resolve().is_relative_to(PROJECT_ROOT)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _cleanup_inline_imports(module_snapshot: Dict[str, Any]) -> None:
+    removable_names = [
+        name
+        for name, module_obj in list(sys.modules.items())
+        if name not in module_snapshot and _is_project_module_name(name, module_obj)
+    ]
+    removable_names.sort(key=lambda item: item.count('.'), reverse=True)
+    for name in removable_names:
+        sys.modules.pop(name, None)
+        parent_name, _, attr_name = name.rpartition('.')
+        if not parent_name or not attr_name:
+            continue
+        parent_module = sys.modules.get(parent_name)
+        if parent_module is None:
+            continue
+        existing_attr = getattr(parent_module, attr_name, None)
+        if getattr(existing_attr, '__name__', None) == name:
+            try:
+                delattr(parent_module, attr_name)
+            except AttributeError:
+                pass
+
+
+def _capture_python_script_inline(
+    args: List[str],
+    *,
+    env: Optional[Dict[str, str]] = None,
+    input_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    script_path = str(args[1]).replace('\\', '/')
+    started = time.time()
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    original_argv = list(sys.argv)
+    original_stdin = sys.stdin
+    env_overrides = {str(key): str(value) for key, value in (env or {}).items()}
+    previous_cwd = os.getcwd()
+    captured_returncode = 0
+    launch_error_type = ''
+    launch_error_message = ''
+    module_snapshot = dict(sys.modules)
+
+    previous_env = {key: os.environ.get(key) for key in env_overrides}
+    try:
+        os.chdir(PROJECT_ROOT)
+        for key, value in env_overrides.items():
+            os.environ[key] = value
+        sys.argv = [script_path, *[str(item) for item in args[2:]]]
+        sys.stdin = io.StringIO('' if input_text is None else input_text)
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            try:
+                runpy.run_path(str(PROJECT_ROOT / script_path), run_name='__main__')
+            except SystemExit as exc:
+                code = exc.code
+                if code is None:
+                    captured_returncode = 0
+                elif isinstance(code, int):
+                    captured_returncode = code
+                else:
+                    captured_returncode = 1
+                    print(code, file=sys.stderr)
+    except Exception as exc:
+        launch_error_type = type(exc).__name__
+        launch_error_message = str(exc)
+        captured_returncode = 127
+        print(f'[quick_gate] inline_launch_failed: {launch_error_type}: {launch_error_message}', file=stderr_buffer)
+    finally:
+        _cleanup_inline_imports(module_snapshot)
+        sys.argv = original_argv
+        sys.stdin = original_stdin
+        os.chdir(previous_cwd)
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    return {
+        'args': args,
+        'cmd': ' '.join(str(item) for item in args),
+        'returncode': captured_returncode,
+        'stdout': stdout_buffer.getvalue(),
+        'stderr': stderr_buffer.getvalue(),
+        'duration_sec': round(time.time() - started, 3),
+        'timed_out': False,
+        'error_type': launch_error_type,
+        'error_message': launch_error_message,
+        'timeout_sec': 0,
+        'execution_mode': 'inline',
+    }
+
+
+def _run_python_cli_probe(
+    args: List[str],
+    *,
+    timeout: int,
+    env: Optional[Dict[str, str]] = None,
+    input_text: Optional[str] = None,
+) -> Dict[str, Any]:
+    if (
+        len(args) >= 2
+        and str(args[0]) == sys.executable
+        and str(args[1]).replace('\\', '/') in INLINE_CLI_TARGETS
+    ):
+        return _capture_python_script_inline(args, env=env, input_text=input_text)
+    return run_command(args, timeout=timeout, env=env, input_text=input_text)
 
 
 def _outcome_detail(outcome: Dict[str, Any], fallback_text: str) -> str:
@@ -472,7 +617,7 @@ def check_local_regression_contract() -> List[Dict[str, Any]]:
 def check_help(timeout: int) -> List[Dict[str, Any]]:
     results = []
     for args, expected_usage in HELP_TARGETS:
-        outcome = run_command(args, timeout=timeout)
+        outcome = _run_python_cli_probe(args, timeout=timeout)
         first_line = outcome["stdout"].splitlines()[0] if outcome["stdout"].strip() else _outcome_detail(outcome, expected_usage)
         ok = (
             (not outcome.get("timed_out"))
@@ -499,7 +644,7 @@ def check_dataset_cli_errors(timeout: int) -> List[Dict[str, Any]]:
     ]
     for target in targets:
         for suffix_args, expected in cases:
-            outcome = run_command([sys.executable, target, *suffix_args], timeout=timeout)
+            outcome = _run_python_cli_probe([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
             ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
             results.append(summarize_result(f"dataset_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
@@ -514,13 +659,13 @@ def check_generic_cli_errors(timeout: int) -> List[Dict[str, Any]]:
     ]
     for target in NO_ARG_CLI_TARGETS:
         for suffix_args, expected in no_arg_cases:
-            outcome = run_command([sys.executable, target, *suffix_args], timeout=timeout)
+            outcome = _run_python_cli_probe([sys.executable, target, *suffix_args], timeout=timeout)
             combined = f"{outcome['stdout']}\n{outcome['stderr']}"
             ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
             results.append(summarize_result(f"generic_cli::{Path(target).name}::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
 
     for suffix_args, expected in RUN_ALL_CLI_CASES:
-        outcome = run_command([sys.executable, "tools/local_regression/run_all.py", *suffix_args], timeout=timeout)
+        outcome = _run_python_cli_probe([sys.executable, "tools/local_regression/run_all.py", *suffix_args], timeout=timeout)
         combined = f"{outcome['stdout']}\n{outcome['stderr']}"
         ok = (not outcome.get("timed_out")) and outcome["returncode"] != 0 and expected in combined
         results.append(summarize_result(f"generic_cli::run_all.py::{' '.join(suffix_args)}", ok, detail=_outcome_detail(outcome, expected)))
@@ -547,7 +692,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
 
     params_missing_models_dir = _build_models_sandbox_dir("missing_best_params")
     params_missing_models_dir.mkdir(parents=True, exist_ok=True)
-    outcome = run_command(
+    outcome = _run_python_cli_probe(
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
         input_text="\n\n\n\n",
         timeout=timeout,
@@ -558,7 +703,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     params_broken_models_dir = _build_models_sandbox_dir("broken_best_params")
     params_broken_models_dir.mkdir(parents=True, exist_ok=True)
     (params_broken_models_dir / "best_params.json").write_text("{not-valid-json", encoding="utf-8")
-    outcome = run_command(
+    outcome = _run_python_cli_probe(
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
         input_text="\n\n\n\n",
         timeout=timeout,
@@ -572,7 +717,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     sandbox_db_path = broken_db_models_dir / db_path.name
 
     sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")
-    outcome = run_command(
+    outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
@@ -580,7 +725,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     results.append(summarize_result("error_path::broken_optimizer_db", (not outcome.get("timed_out")) and outcome["returncode"] != 0 and "Optimizer 記憶庫檔案損壞或不可讀" in f"{outcome['stdout']}\n{outcome['stderr']}", detail=_outcome_detail(outcome, "壞 DB 應 fail-fast")))
 
     sandbox_db_path.unlink(missing_ok=True)
-    outcome = run_command(
+    outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
@@ -590,7 +735,7 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     import sqlite3
 
     sqlite3.connect(sandbox_db_path).close()
-    outcome = run_command(
+    outcome = _run_python_cli_probe(
         [sys.executable, "apps/ml_optimizer.py", "--dataset", "reduced"],
         timeout=timeout,
         env={"V16_OPTIMIZER_TRIALS": "0", MODELS_DIR_ENV_VAR: str(broken_db_models_dir)},
