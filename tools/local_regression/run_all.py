@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
+from core.params_io import load_params_from_json
 from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_COMMAND_ORDER, FORMAL_STEP_ORDER
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
