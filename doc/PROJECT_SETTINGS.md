@@ -1,19 +1,15 @@
 # 專案設定
 
-1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md` 與 `/doc/TEST_SUITE_CHECKLIST.md`；
-2.  `PROJECT_SETTINGS.md` 為全專案的最上層原則，視為憲法; 條款以長期穩定、可泛化為主; 不包含高波動 wording、暫時事故補丁、validator 內部命名、單次案例 hygiene 與細部驗證技巧。
-3. `TEST_SUITE_CHECKLIST.md` 為本地端 formal test suite 收斂與維護清單，以驗證主程式與測試程式本身為主。
+1. 每輪開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`； 為全專案的最上層原則，視為憲法; 條款以長期穩定、可泛化為主; 
 
 ## A. 標準測試流程
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT交付之程式碼、patched ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；若當前基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
-3. GPT 需做全專案測試，但不用測`apps/test_suite.py`與其涵蓋的steps，本地會測`apps/test_suite.py`並提供結果。
-5. 若使用者未提供 bundle，GPT可視為已在本地完成 `apps/test_suite.py` 且全數通過；若提供 bundle，GPT必須額外逐條對照 bundle 原始失敗項完成閉環修正。
-6. 執行檢查時，GPT必須一次性找出全專案的所有問題，不得透過多輪檢查一次修一點。
-7. 每輪找到問題就直接修正。
-8. `/doc/PROJECT_SETTINGS.md` 不得被本地端的 `apps/test_suite.py` 反向檢查。
-
+3. GPT 需做全專案最完整測試，且必須一次性找出全專案的所有問題，不得透過多輪檢查一次修一點。
+4. GPT 不用執行`apps/test_suite.py`與呼叫的函式，但需完善其必要的涵蓋測項; `/doc/PROJECT_SETTINGS.md` 不得被 `apps/test_suite.py` 反向檢查。
+5. 本地端會執行`apps/test_suite.py`並提供 boundle 測試結果，若未提供代表本地端已測試且全數通過；若提供 bundle，GPT必須額外逐條對照 bundle 原始失敗項完成閉環修正。
+6. 每輪找到問題就直接修正。
 
 ## B. 回覆、交付與輸出
 
