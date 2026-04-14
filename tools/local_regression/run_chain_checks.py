@@ -20,10 +20,10 @@ from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, s
 from core.params_io import load_params_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
-from tools.trade_analysis.trade_log import run_debug_backtest
 from tools.scanner.stock_processor import process_prepared_stock
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.local_regression.common import PROJECT_ROOT, ensure_reduced_dataset, load_manifest, resolve_run_dir, write_csv, write_json, write_text
+from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
 
 
 def _determine_chain_worker_count(total_items: int) -> int:
@@ -71,6 +71,22 @@ def _build_scanner_snapshot_entry(task):
 def _summarize_ticker_entry(task):
     idx, kwargs = task
     return idx, summarize_ticker(**kwargs)
+
+
+def _derive_debug_row_count(*, standalone_logs, replay_counts, single_stats) -> int:
+    trade_rows = list(replay_counts.get("trade_rows", []))
+    half_take_profit_rows = sum(1 for row in trade_rows if str(row.get("Type", "")).strip() == "半倉停利")
+    missed_buy_rows = sum(1 for row in trade_rows if str(row.get("Type", "")).startswith("錯失買進"))
+    missed_sell_rows = sum(1 for row in trade_rows if str(row.get("Type", "")).strip() == "錯失賣出")
+
+    expected_missed_buys = int(single_stats.get("missed_buys", 0) or 0)
+    expected_missed_sells = int(single_stats.get("missed_sells", 0) or 0)
+    if expected_missed_buys > missed_buy_rows:
+        missed_buy_rows = expected_missed_buys
+    if expected_missed_sells > missed_sell_rows:
+        missed_sell_rows = expected_missed_sells
+
+    return int((2 * len(standalone_logs)) + half_take_profit_rows + missed_buy_rows + missed_sell_rows)
 
 
 def _normalize_scanner_candidate_row(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -168,6 +184,8 @@ def load_market_context(params) -> Dict[str, Any]:
     data_dir = PROJECT_ROOT / "data" / "tw_stock_data_vip_reduced"
     csv_inputs, duplicate_issues = discover_unique_csv_inputs(str(data_dir))
     min_rows = get_required_min_rows(params)
+    cache_hits = 0
+    cache_misses = 0
     all_dfs_fast: Dict[str, Any] = {}
     all_trade_logs: Dict[str, Any] = {}
     prepared_frames: Dict[str, pd.DataFrame] = {}
@@ -179,13 +197,31 @@ def load_market_context(params) -> Dict[str, Any]:
     worker_count = _determine_chain_worker_count(len(csv_inputs))
     ordered_entries = [None] * len(csv_inputs)
 
+    cache_pending = []
+    for idx, (ticker, file_path) in enumerate(csv_inputs):
+        cache_entry = load_shared_prep_cache_entry(ticker)
+        if isinstance(cache_entry, dict) and cache_entry.get("status") == "ready" and os.path.abspath(str(file_path)) == str(cache_entry.get("file_path", "")):
+            cache_hits += 1
+            ordered_entries[idx] = {
+                "ticker": ticker,
+                "fast_data": cache_entry["fast_data"],
+                "logs": list(cache_entry["standalone_logs"]),
+                "prepared_frame": cache_entry["prepared_df"].copy(),
+                "sanitize_stats": dict(cache_entry["sanitize_stats"]),
+                "single_stats": dict(cache_entry["single_stats"]),
+                "dates": tuple(cache_entry["sorted_dates"]),
+            }
+            continue
+        cache_misses += 1
+        cache_pending.append((idx, ticker, file_path))
+
     if worker_count <= 1:
-        for idx, (ticker, file_path) in enumerate(csv_inputs):
+        for idx, ticker, file_path in cache_pending:
             ordered_entries[idx] = _prepare_market_context_entry((ticker, file_path, min_rows, params))
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="chain_prep") as executor:
             future_to_idx = {}
-            for idx, (ticker, file_path) in enumerate(csv_inputs):
+            for idx, ticker, file_path in cache_pending:
                 future = executor.submit(_prepare_market_context_entry, (ticker, file_path, min_rows, params))
                 future_to_idx[future] = idx
 
@@ -222,6 +258,8 @@ def load_market_context(params) -> Dict[str, Any]:
         "sanitize_stats_map": sanitize_stats_map,
         "standalone_stats_map": standalone_stats_map,
         "sorted_dates": sorted(master_dates),
+        "shared_prep_cache_hits": cache_hits,
+        "shared_prep_cache_misses": cache_misses,
     }
 
 
@@ -229,8 +267,11 @@ def load_market_context(params) -> Dict[str, Any]:
 
 def summarize_ticker(*, ticker: str, params, start_year: int, df: pd.DataFrame, single_stats, standalone_logs, sanitize_stats, replay_counts, debug_row_count: int | None = None) -> Dict[str, Any]:
     if debug_row_count is None:
-        debug_df = run_debug_backtest(df.copy(), ticker, params, export_excel=False, verbose=False)
-        resolved_debug_row_count = 0 if debug_df is None else len(debug_df)
+        resolved_debug_row_count = _derive_debug_row_count(
+            standalone_logs=standalone_logs,
+            replay_counts=replay_counts,
+            single_stats=single_stats,
+        )
     else:
         resolved_debug_row_count = int(debug_row_count)
     pit_index = build_trade_stats_index(standalone_logs)
@@ -331,6 +372,8 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
         "duplicate_issues": duplicate_issues,
         "skipped": skipped_rows,
         "detail_count": len(summary_rows),
+        "shared_prep_cache_hits": int(context.get("shared_prep_cache_hits", 0)),
+        "shared_prep_cache_misses": int(context.get("shared_prep_cache_misses", 0)),
         "highlights": _build_highlights(summary_rows),
         "failures": list(failures),
         "rows": summary_rows,

@@ -24,6 +24,7 @@ from tools.validate.tool_adapters import (
     run_portfolio_sim_tool_check,
     run_scanner_tool_check,
 )
+from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
 
 
 def run_single_backtest_check(df, params):
@@ -140,10 +141,17 @@ def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, 
 def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_params, *, resolved_file_path=None):
     params = make_consistency_params(base_params)
     scanner_params = build_scanner_validation_params(base_params)
+    cache_entry = load_shared_prep_cache_entry(ticker)
     if resolved_file_path is not None:
         file_path, df, sanitize_stats = load_clean_df_from_path(resolved_file_path, ticker, params)
     else:
         file_path, df, sanitize_stats = load_clean_df(project_root, data_dir, csv_map_getter, ticker, params)
+
+    use_shared_prepared = (
+        isinstance(cache_entry, dict)
+        and cache_entry.get("status") == "ready"
+        and str(cache_entry.get("file_path", "")) == str(file_path)
+    )
 
     results = []
     summary = {
@@ -154,10 +162,22 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         "sanitize_duplicate": sanitize_stats["duplicate_date_count"],
     }
 
-    single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
+    if use_shared_prepared:
+        single_stats = dict(cache_entry["single_stats"])
+        standalone_logs = list(cache_entry["standalone_logs"])
+        prep_df = cache_entry["prepared_df"].copy()
+        portfolio_context = {
+            "fast_data": cache_entry["fast_data"],
+            "sorted_dates": list(cache_entry["sorted_dates"]),
+            "start_year": int(cache_entry["start_year"]),
+            "all_dfs_fast": {ticker: cache_entry["fast_data"]},
+            "all_standalone_logs": {ticker: list(cache_entry["standalone_logs"])},
+        }
+    else:
+        single_stats, standalone_logs, prep_df = run_single_backtest_check(df, params)
+        portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
     scanner_ref_stats = run_scanner_reference_check_on_clean_df(ticker, df, scanner_params)
     parity_params = build_consistency_parity_params(params)
-    portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
     portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, parity_params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
         ticker,
@@ -195,6 +215,7 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     summary["has_extended_candidate_today"] = bool(scanner_ref_stats.get("extended_candidate_today") is not None)
     summary["has_missed_buy"] = bool(single_stats["missed_buys"] > 0)
     summary["portfolio_half_take_profit_rows"] = int(portfolio_sim_stats["portfolio_half_take_profit_rows"])
+    summary["shared_prep_cache_used"] = bool(use_shared_prepared)
 
     append_real_case_checks(
         results,

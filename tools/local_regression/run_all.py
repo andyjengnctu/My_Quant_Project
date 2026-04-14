@@ -41,6 +41,10 @@ from tools.local_regression.common import (
     write_json,
     write_text,
 )
+from tools.local_regression.shared_prep_cache import (
+    LOCAL_REGRESSION_SHARED_PREP_CACHE_ENV,
+    build_shared_prep_cache,
+)
 
 SCRIPT_ORDER = list(FORMAL_COMMAND_ORDER)
 SCRIPT_TIMEOUT_GRACE_SEC = 30
@@ -894,7 +898,11 @@ def execute_all(
             manifest_error=exc,
             progress_callback=progress_callback,
         )
-    shared_env = build_python_env({LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)})
+    shared_prep_cache_dir = run_dir / "_shared_prep_cache"
+    shared_env = build_python_env({
+        LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir),
+        LOCAL_REGRESSION_SHARED_PREP_CACHE_ENV: str(shared_prep_cache_dir),
+    })
     major_total = _major_step_total(selected_steps=selected_step_names, include_dataset=include_dataset)
 
     try:
@@ -981,12 +989,29 @@ def execute_all(
 
             def _prepare_dataset() -> Dict[str, Any]:
                 dataset_info_local = ensure_reduced_dataset()
+                cache_summary: Dict[str, Any] = {}
+                cache_error = ""
+                try:
+                    params_for_cache = load_params_from_json(PROJECT_ROOT / "models" / "best_params.json")
+                    cache_summary = build_shared_prep_cache(
+                        PROJECT_ROOT,
+                        Path(dataset_info_local["dataset_dir"]),
+                        params_for_cache,
+                        shared_prep_cache_dir,
+                    )
+                except (FileNotFoundError, OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
+                    cache_error = f"{type(exc).__name__}: {exc}"
                 return _safe_write_dataset_prepare_summary(
                     run_dir,
                     {
                         "status": "PASS",
                         "duration_sec": round(time.time() - dataset_prepare_started, 3),
                         **dataset_info_local,
+                        "shared_prep_cache_dir": str(shared_prep_cache_dir),
+                        "shared_prep_cache_prepared_count": int(cache_summary.get("prepared_count", 0)),
+                        "shared_prep_cache_skipped_count": int(cache_summary.get("skipped_count", 0)),
+                        "shared_prep_cache_duplicate_issue_count": int(cache_summary.get("duplicate_issue_count", 0)),
+                        "shared_prep_cache_error": cache_error,
                     },
                 )
 
