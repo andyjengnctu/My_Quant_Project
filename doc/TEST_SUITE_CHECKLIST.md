@@ -449,6 +449,8 @@
 | T234 | `validate_exact_ledger_return_ratio_no_money_float_division_contract_case` | B148 |
 | T235 | `validate_debug_exit_total_return_milli_binding_contract_case` | B149 |
 | T236 | `validate_core_r_multiple_exact_ledger_contract_case` | B150 |
+| T237 | `validate_gui_workbench_documentation_sync_case` | B152 |
+| T238 | `validate_trade_analysis_legacy_naming_documentation_contract_case` | B152 |
 | T239 | `validate_trade_analysis_canonical_alias_export_contract_case` | B153 |
 | T241 | `validate_checklist_g_transition_sequence_case` | B155 |
 | T242 | `validate_single_backtest_public_profit_equity_consistency_contract_case` | B156 |
@@ -1254,6 +1256,9 @@
 | 2026-04-13 | T255 | 依 formal 瘦身將 `G` 備註欄 canonical path existence hygiene guard 退出正式長期 test suite，改列 N/A | DONE -> N/A | `doc/PROJECT_SETTINGS.md` |
 | 2026-04-14 | B152 | 最嚴格檢查檢出 trade_analysis 文件與 helper CLI 仍把 `trade_log.py` 誤綁為正式入口並保留 debug-only prompt / banner，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-14 | B152 | 將 trade_analysis 正式使用者入口收斂為 `apps/workbench.py`，並同步修正文檔與 helper CLI 語意後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
+| 2026-04-14 | B162 | 依文件瘦身方向將 ARCHITECTURE apps exact file-tree 同步契約退出 long-term formal scope，補齊最新狀態為 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
+| 2026-04-14 | B163 | 依文件瘦身方向將 ARCHITECTURE models exact file-tree 同步契約退出 long-term formal scope，補齊最新狀態為 N/A | DONE -> N/A | `doc/ARCHITECTURE.md` |
+| 2026-04-14 | B166 | 目前主表仍保留 Local Regression `run_meta_quality.py` 檔案樹同步契約為正式 DONE，補齊最新狀態鏈 | N/A -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
 | 2026-04-14 | B167 | 新增 validate runtime 暫存 staging 契約並驗證 | NEW -> DONE | `validate_validate_runtime_tmp_output_staging_contract_case` |
 | 2026-04-14 | T238 | 最嚴格檢查檢出 trade_analysis legacy naming 文件契約仍將 `trade_log.py` 綁為正式入口且 helper CLI 殘留 debug-only prompt / banner，改回 PARTIAL | DONE -> PARTIAL | `validate_trade_analysis_legacy_naming_documentation_contract_case` |
 | 2026-04-14 | T238 | 將 trade_analysis legacy naming 文件契約與文件 / helper CLI 一起收斂為 `apps/workbench.py` 單一使用者入口後重新收斂為 DONE | PARTIAL -> DONE | `validate_trade_analysis_legacy_naming_documentation_contract_case` |
