@@ -12,8 +12,7 @@
 5. GPT 不得執行 `apps/test_suite.py`，也不得以重建 formal suite 或直接執行其涵蓋 step 的方式替代本地正式執行；但仍必須以非 formal-suite 的方式獨立檢查整個專案，並檢查 `apps/test_suite.py` 本身是否可信，以及 `doc/TEST_SUITE_CHECKLIST.md` 是否涵蓋必要測項。
 6. 若使用者提供 `apps/test_suite.py` 的 bundle 測試結果，GPT 必須完成閉環修正；若未提供 bundle，僅代表本地端聲稱已完成 formal double check，不得取代 GPT 的獨立完整檢查，也不得直接作為 correctness 項目已確認的依據。
 7. `/doc/PROJECT_SETTINGS.md` 不得被 `apps/test_suite.py` 反向檢查。
-8. GPT 回報檢查結果時，必須明確區分：本輪 GPT 已獨立確認、僅有本地 formal suite / checklist 覆蓋宣稱、以及本輪仍未能確認；不得混寫或誤標。
-
+8. GPT 回報檢查結果時，必須明確區分本輪已獨立確認、僅有本地 formal suite / checklist 覆蓋宣稱、以及本輪仍未能確認，不得混寫或誤標；「全專案完整檢查」必須以固定檢查矩陣逐項完成，且每項均須標示為前述三類之一，未逐項完成者不得宣稱已完成完整檢查。
 
 ## B. 回覆、交付與輸出
 
