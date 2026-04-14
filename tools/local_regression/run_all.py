@@ -793,6 +793,7 @@ def _run_script(
     progress_callback: Optional[ProgressCallback],
     major_index: int,
     major_total: int,
+    execution_mode: str = "serial",
 ) -> Dict[str, Any]:
     started = time.time()
     process = None
@@ -849,6 +850,7 @@ def _run_script(
                     "major_total": major_total,
                     "elapsed_sec": elapsed_sec,
                     "timeout_sec": timeout_sec,
+                    "execution_mode": execution_mode,
                 })
                 time.sleep(0.2)
         finally:
@@ -1067,6 +1069,7 @@ def execute_all(
                     "major_index": script_offset,
                     "major_total": major_total,
                     "timeout_sec": timeout_sec,
+                    "execution_mode": "parallel",
                 })
 
             with ThreadPoolExecutor(max_workers=parallel_workers, thread_name_prefix="test_suite") as executor:
@@ -1083,6 +1086,7 @@ def execute_all(
                         progress_callback=None,
                         major_index=script_offset,
                         major_total=major_total,
+                        execution_mode="parallel",
                     )
                     future_map[future] = (script_offset, name, summary_name)
 
@@ -1115,6 +1119,7 @@ def execute_all(
                             **script_summary,
                             "major_index": script_offset,
                             "major_total": major_total,
+                            "execution_mode": "parallel",
                         })
 
         for script_offset, name, relative_script, summary_name, timeout_sec in serial_specs:
@@ -1123,6 +1128,7 @@ def execute_all(
                 "major_index": script_offset,
                 "major_total": major_total,
                 "timeout_sec": timeout_sec,
+                "execution_mode": "serial",
             })
             log_path = run_dir / f"{name}.log"
             run_result = _run_script(
@@ -1134,6 +1140,7 @@ def execute_all(
                 progress_callback=progress_callback,
                 major_index=script_offset,
                 major_total=major_total,
+                execution_mode="serial",
             )
             script_summary = _build_script_summary(
                 run_dir=run_dir,
@@ -1149,6 +1156,7 @@ def execute_all(
                 **script_summary,
                 "major_index": script_offset,
                 "major_total": major_total,
+                "execution_mode": "serial",
             })
 
         script_summaries = [script_summaries_by_name[name] for name, _relative_script, _summary_name in selected_script_order]

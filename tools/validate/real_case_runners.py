@@ -1,3 +1,6 @@
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
+
 import pandas as pd
 
 from core.portfolio_engine import run_portfolio_timeline
@@ -13,7 +16,7 @@ from tools.validate.checks import (
     run_scanner_reference_check_on_clean_df,
 )
 from tools.validate.real_case_assertions import append_real_case_checks
-from tools.validate.real_case_io import load_clean_df
+from tools.validate.real_case_io import load_clean_df, load_clean_df_from_path
 from tools.validate.tool_adapters import (
     VALIDATION_RECOVERABLE_EXCEPTIONS,
     run_debug_trade_log_check,
@@ -134,10 +137,13 @@ def run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, params, 
     return payload
 
 
-def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_params):
+def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_params, *, resolved_file_path=None):
     params = make_consistency_params(base_params)
     scanner_params = build_scanner_validation_params(base_params)
-    file_path, df, sanitize_stats = load_clean_df(project_root, data_dir, csv_map_getter, ticker, params)
+    if resolved_file_path is not None:
+        file_path, df, sanitize_stats = load_clean_df_from_path(resolved_file_path, ticker, params)
+    else:
+        file_path, df, sanitize_stats = load_clean_df(project_root, data_dir, csv_map_getter, ticker, params)
 
     results = []
     summary = {
@@ -211,6 +217,28 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     return results, summary
 
 
+def _determine_real_scan_worker_count(total_tickers):
+    if total_tickers <= 1:
+        return 1
+
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 2:
+        return 1
+    if cpu_count <= 4:
+        return min(total_tickers, 2)
+    return min(total_tickers, 3)
+
+
+def _validate_one_ticker_worker(task):
+    return validate_one_ticker(
+        task["project_root"],
+        task["data_dir"],
+        None,
+        task["ticker"],
+        task["base_params"],
+        resolved_file_path=task["resolved_file_path"],
+    )
+
 
 
 def run_real_ticker_scan(
@@ -226,51 +254,57 @@ def run_real_ticker_scan(
     is_insufficient_data_error,
     progress_printer=None,
 ):
-    all_results = []
-    summaries = []
+    total_tickers = len(selected_tickers)
     ticker_pass_count = 0
     ticker_skip_count = 0
     ticker_fail_count = 0
+    completed_count = 0
 
-    total_tickers = len(selected_tickers)
-    for idx, ticker in enumerate(selected_tickers, start=1):
-        ticker_results_before = len(all_results)
+    csv_map = csv_map_getter()
+    worker_count = _determine_real_scan_worker_count(total_tickers)
+    ordered_results = [None] * total_tickers
+    ordered_summaries = [None] * total_tickers
 
-        try:
-            results, summary = validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_params)
-            all_results.extend(results)
-            summaries.append(summary)
-        except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
-            if is_insufficient_data_error(e):
-                add_skip_result(
-                    all_results,
-                    "system",
-                    ticker,
-                    "validation_runtime",
-                    f"資料不足，跳過驗證。({type(e).__name__}: {e})",
-                )
-                summaries.append({
-                    "ticker": ticker,
-                    "validation_runtime": f"SKIP: {format_exception_summary(e)}",
-                })
-            else:
-                add_fail_result(
-                    all_results,
-                    "system",
-                    ticker,
-                    "validation_runtime",
-                    "no exception",
-                    format_exception_summary(e),
-                    "單一 ticker 的 runtime / import side effect / 路徑權限問題，不可讓整體 validate 中斷。",
-                )
-                summaries.append({
-                    "ticker": ticker,
-                    "validation_runtime": f"FAIL: {format_exception_summary(e)}",
-                })
+    def _record_outcome(idx, ticker, *, results=None, summary=None, exc=None):
+        nonlocal completed_count, ticker_pass_count, ticker_skip_count, ticker_fail_count
 
-        ticker_results = all_results[ticker_results_before:]
+        ticker_results = []
+        ticker_summary = None
+        if exc is None:
+            ticker_results = list(results or [])
+            ticker_summary = dict(summary or {"ticker": ticker})
+        elif is_insufficient_data_error(exc):
+            ticker_results = []
+            add_skip_result(
+                ticker_results,
+                "system",
+                ticker,
+                "validation_runtime",
+                f"資料不足，跳過驗證。({type(exc).__name__}: {exc})",
+            )
+            ticker_summary = {
+                "ticker": ticker,
+                "validation_runtime": f"SKIP: {format_exception_summary(exc)}",
+            }
+        else:
+            ticker_results = []
+            add_fail_result(
+                ticker_results,
+                "system",
+                ticker,
+                "validation_runtime",
+                "no exception",
+                format_exception_summary(exc),
+                "單一 ticker 的 runtime / import side effect / 路徑權限問題，不可讓整體 validate 中斷。",
+            )
+            ticker_summary = {
+                "ticker": ticker,
+                "validation_runtime": f"FAIL: {format_exception_summary(exc)}",
+            }
+
+        ordered_results[idx] = ticker_results
+        ordered_summaries[idx] = ticker_summary
         ticker_statuses = {row["status"] for row in ticker_results}
-
         if "FAIL" in ticker_statuses:
             ticker_fail_count += 1
         elif "PASS" in ticker_statuses:
@@ -278,12 +312,57 @@ def run_real_ticker_scan(
         else:
             ticker_skip_count += 1
 
+        completed_count += 1
         if progress_printer is not None:
-            progress_printer(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_count, ticker_fail_count)
+            progress_printer(completed_count, total_tickers, ticker, ticker_pass_count, ticker_skip_count, ticker_fail_count)
+
+    if worker_count <= 1:
+        for idx, ticker in enumerate(selected_tickers):
+            try:
+                results, summary = validate_one_ticker(
+                    project_root,
+                    data_dir,
+                    csv_map_getter,
+                    ticker,
+                    base_params,
+                    resolved_file_path=csv_map.get(ticker),
+                )
+                _record_outcome(idx, ticker, results=results, summary=summary)
+            except VALIDATION_RECOVERABLE_EXCEPTIONS as exc:
+                _record_outcome(idx, ticker, exc=exc)
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            future_to_task = {}
+            for idx, ticker in enumerate(selected_tickers):
+                task = {
+                    "project_root": project_root,
+                    "data_dir": data_dir,
+                    "ticker": ticker,
+                    "base_params": base_params,
+                    "resolved_file_path": csv_map.get(ticker),
+                }
+                future = executor.submit(_validate_one_ticker_worker, task)
+                future_to_task[future] = (idx, ticker)
+
+            for future in as_completed(future_to_task):
+                idx, ticker = future_to_task[future]
+                try:
+                    results, summary = future.result()
+                    _record_outcome(idx, ticker, results=results, summary=summary)
+                except Exception as exc:
+                    _record_outcome(idx, ticker, exc=exc)
+
+    all_results = []
+    summaries = []
+    for idx in range(total_tickers):
+        all_results.extend(ordered_results[idx] or [])
+        if ordered_summaries[idx] is not None:
+            summaries.append(ordered_summaries[idx])
 
     return all_results, summaries, {
         "total_tickers": total_tickers,
         "pass_count": ticker_pass_count,
         "skip_count": ticker_skip_count,
         "fail_count": ticker_fail_count,
+        "worker_count": worker_count,
     }

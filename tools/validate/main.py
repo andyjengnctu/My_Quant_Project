@@ -246,7 +246,7 @@ def main(argv=None, environ=None):
             print(" " * 160, end="\r")
             print()
         else:
-            scan_stats = {"total_tickers": 0}
+            scan_stats = {"total_tickers": 0, "worker_count": 1}
 
         print("開始執行 synthetic coverage suite...")
         try:
@@ -299,6 +299,8 @@ def main(argv=None, environ=None):
 
         if not df_failed.empty:
             df_failed = df_failed.sort_values(by=["ticker", "module", "metric"]).reset_index(drop=True)
+
+        worker_count = int(scan_stats.get("worker_count", 1) or 1)
 
         timestamp = get_taipei_now().strftime("%Y%m%d_%H%M%S")
         csv_path = None

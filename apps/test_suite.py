@@ -45,6 +45,12 @@ class ConsoleProgress:
         print()
         self.last_line_width = 0
 
+    def _format_label(self, payload: Dict[str, Any]) -> str:
+        label = STEP_LABELS.get(payload["name"], payload["name"])
+        if str(payload.get("execution_mode", "")).strip() == "parallel":
+            return f"{label}（並行）"
+        return label
+
     def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool, progress_index: int | None = None) -> str:
         major_index = int(payload.get("major_index", 0) or 0)
         major_total = int(payload.get("major_total", 1) or 1)
@@ -53,13 +59,13 @@ class ConsoleProgress:
         return (
             f"[{display_index}/{major_total}] "
             f"{self._build_bar(display_index, major_total, done=done)} "
-            f"{body} | 累計 {elapsed_total:.1f}s"
+            f"{body} | 經過 {elapsed_total:.1f}s"
         )
 
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
         now = time.time()
         if event == "step_start":
-            label = STEP_LABELS.get(payload["name"], payload["name"])
+            label = self._format_label(payload)
             self._render_inline(self._step_text(payload, f"準備執行 {label}", done=False))
             self.last_render_ts = 0.0
             return
@@ -70,7 +76,7 @@ class ConsoleProgress:
             self.last_render_ts = now
             spinner = SPINNER_FRAMES[self.spinner_index % len(SPINNER_FRAMES)]
             self.spinner_index += 1
-            label = STEP_LABELS.get(payload["name"], payload["name"])
+            label = self._format_label(payload)
             self._render_inline(
                 self._step_text(
                     payload,
@@ -82,7 +88,7 @@ class ConsoleProgress:
 
         if event == "step_finish":
             symbol = "✓" if payload["status"] == "PASS" else "✗"
-            label = STEP_LABELS.get(payload["name"], payload["name"])
+            label = self._format_label(payload)
             self._finish_line(
                 self._step_text(
                     payload,
