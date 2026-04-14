@@ -21,11 +21,11 @@ EXTRA_STEP_LABELS = {"done": "完成"}
 DISPLAY_STEP_ORDER = [
     "preflight",
     "dataset_prepare",
-    "meta_quality",
     "ml_smoke",
     "quick_gate",
     "chain_checks",
     "consistency",
+    "meta_quality",
     "done",
 ]
 BAR_WIDTH = 28
