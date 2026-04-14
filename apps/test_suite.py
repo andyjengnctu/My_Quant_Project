@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -13,108 +14,180 @@ from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, 
 from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_STEP_ORDER
 
-SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 REGRESSION_STEP_ORDER = FORMAL_STEP_ORDER
-
 STEP_LABELS = TEST_SUITE_STEP_LABELS
+EXTRA_STEP_LABELS = {"done": "完成"}
+BAR_WIDTH = 28
+STEP_EXPECTED_SECONDS = {
+    "preflight": 1.0,
+    "dataset_prepare": 1.0,
+    "quick_gate": 7.0,
+    "consistency": 36.0,
+    "chain_checks": 13.0,
+    "ml_smoke": 5.0,
+    "meta_quality": 2.0,
+    "done": 1.0,
+}
+PENDING_STATUS = "等待中"
+RUNNING_STATUS = "執行中"
+FINALIZING_STATUS = "整理中"
 
 # consistency step 的正式 coverage 以 synthetic registry、`--help`、文件與 `doc/TEST_SUITE_CHECKLIST.md` 為準；註解僅供閱讀，不作可機械比對的 formal contract。
 
+
 class ConsoleProgress:
     def __init__(self) -> None:
-        self.spinner_index = 0
-        self.last_render_ts = 0.0
-        self.last_line_width = 0
         self.suite_started = time.time()
+        self.rendered_once = False
+        self.finalized = False
+        self.last_render_ts = 0.0
+        self.step_order = [
+            "preflight",
+            "dataset_prepare",
+            "quick_gate",
+            "consistency",
+            "chain_checks",
+            "ml_smoke",
+            "meta_quality",
+            "done",
+        ]
+        self.major_total = len(self.step_order)
+        self.use_ansi_redraw = self._supports_ansi_redraw()
+        self.step_states: Dict[str, Dict[str, Any]] = {
+            name: {
+                "name": name,
+                "major_index": index,
+                "major_total": self.major_total,
+                "status": "PENDING",
+                "display_status": PENDING_STATUS,
+                "elapsed_sec": 0.0,
+                "duration_sec": None,
+                "execution_mode": "serial",
+            }
+            for index, name in enumerate(self.step_order, start=1)
+        }
 
-    def _build_bar(self, major_index: int, major_total: int, *, done: bool) -> str:
-        width = 28
-        completed_units = major_index if done else max(major_index - 1, 0)
-        filled = int(width * completed_units / max(major_total, 1))
-        return "█" * filled + "░" * (width - filled)
+    def _supports_ansi_redraw(self) -> bool:
+        if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+            return False
+        if os.name != "nt":
+            return True
+        return bool(os.environ.get("WT_SESSION") or os.environ.get("ANSICON") or os.environ.get("TERM"))
 
-    def _render_inline(self, text: str) -> None:
-        padded = text
-        if self.last_line_width > len(text):
-            padded = text + (" " * (self.last_line_width - len(text)))
-        print(f"\r{padded}", end="", flush=True)
-        self.last_line_width = max(self.last_line_width, len(text))
-
-    def _finish_line(self, text: str) -> None:
-        self._render_inline(text)
-        print()
-        self.last_line_width = 0
-
-    def _format_label(self, payload: Dict[str, Any]) -> str:
-        label = STEP_LABELS.get(payload["name"], payload["name"])
-        if str(payload.get("execution_mode", "")).strip() == "parallel":
+    def _format_label(self, state: Dict[str, Any]) -> str:
+        label = STEP_LABELS.get(state["name"], EXTRA_STEP_LABELS.get(state["name"], state["name"]))
+        if str(state.get("execution_mode", "")).strip() == "parallel" and state["name"] not in {"preflight", "dataset_prepare", "meta_quality", "done"}:
             return f"{label}（並行）"
         return label
 
-    def _step_text(self, payload: Dict[str, Any], body: str, *, done: bool, progress_index: int | None = None) -> str:
-        major_index = int(payload.get("major_index", 0) or 0)
-        major_total = int(payload.get("major_total", 1) or 1)
-        display_index = major_index if progress_index is None else int(progress_index)
+    def _build_bar(self, state: Dict[str, Any]) -> str:
+        status = state["status"]
+        if status == "PASS":
+            return "█" * BAR_WIDTH
+        if status == "FAIL":
+            return "■" * BAR_WIDTH
+        if status in {"RUNNING", "FINALIZING"}:
+            expected = max(float(STEP_EXPECTED_SECONDS.get(state["name"], 10.0)), 0.5)
+            elapsed = max(float(state.get("elapsed_sec") or 0.0), 0.0)
+            ratio = min(elapsed / expected, 0.97)
+            filled = max(1, min(BAR_WIDTH - 1, int(round(BAR_WIDTH * ratio))))
+            return "█" * filled + "░" * (BAR_WIDTH - filled)
+        return "░" * BAR_WIDTH
+
+    def _format_line(self, state: Dict[str, Any]) -> str:
+        index = int(state["major_index"])
+        total = int(state["major_total"])
+        label = self._format_label(state)
+        bar = self._build_bar(state)
+        status = state["display_status"]
         elapsed_total = time.time() - self.suite_started
-        return (
-            f"[{display_index}/{major_total}] "
-            f"{self._build_bar(display_index, major_total, done=done)} "
-            f"{body} | 經過 {elapsed_total:.1f}s"
+        if state["status"] in {"RUNNING", "FINALIZING"}:
+            detail = f"{status} | {float(state.get('elapsed_sec') or 0.0):.1f}s"
+        elif state["status"] in {"PASS", "FAIL"}:
+            detail = f"{status} | {float(state.get('duration_sec') or 0.0):.2f}s"
+        else:
+            detail = status
+        return f"[{index}/{total}] {bar} {label} | {detail} | 經過 {elapsed_total:.1f}s"
+
+    def _render_block(self, *, force: bool = False) -> None:
+        if self.finalized:
+            return
+        now = time.time()
+        if not force and (now - self.last_render_ts) < 0.1:
+            return
+        self.last_render_ts = now
+        lines = [self._format_line(self.step_states[name]) for name in self.step_order]
+        if self.use_ansi_redraw and self.rendered_once:
+            sys.stdout.write(f"\x1b[{len(lines)}F")
+        block = "\n".join(lines)
+        sys.stdout.write(block + "\n")
+        sys.stdout.flush()
+        self.rendered_once = True
+
+    def _ensure_step_state(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        name = str(payload["name"])
+        state = self.step_states.setdefault(
+            name,
+            {
+                "name": name,
+                "major_index": int(payload.get("major_index", 0) or 0),
+                "major_total": int(payload.get("major_total", self.major_total) or self.major_total),
+                "status": "PENDING",
+                "display_status": PENDING_STATUS,
+                "elapsed_sec": 0.0,
+                "duration_sec": None,
+                "execution_mode": str(payload.get("execution_mode", "serial") or "serial"),
+            },
         )
+        state["major_index"] = int(payload.get("major_index", state.get("major_index", 0)) or 0)
+        state["major_total"] = int(payload.get("major_total", state.get("major_total", self.major_total)) or self.major_total)
+        if "execution_mode" in payload:
+            state["execution_mode"] = str(payload.get("execution_mode") or "serial")
+        return state
 
     def __call__(self, event: str, payload: Dict[str, Any]) -> None:
-        now = time.time()
         if event == "step_start":
-            label = self._format_label(payload)
-            self._render_inline(self._step_text(payload, f"準備執行 {label}", done=False))
-            self.last_render_ts = 0.0
+            state = self._ensure_step_state(payload)
+            state["status"] = "RUNNING"
+            state["display_status"] = RUNNING_STATUS
+            state["elapsed_sec"] = 0.0
+            state["duration_sec"] = None
+            self._render_block(force=True)
             return
 
         if event == "step_progress":
-            if now - self.last_render_ts < 0.15:
-                return
-            self.last_render_ts = now
-            spinner = SPINNER_FRAMES[self.spinner_index % len(SPINNER_FRAMES)]
-            self.spinner_index += 1
-            label = self._format_label(payload)
-            self._render_inline(
-                self._step_text(
-                    payload,
-                    f"{spinner} 執行中 {label} | {payload['elapsed_sec']:.1f}s",
-                    done=False,
-                )
-            )
+            state = self._ensure_step_state(payload)
+            state["status"] = "RUNNING"
+            state["display_status"] = RUNNING_STATUS
+            state["elapsed_sec"] = float(payload.get("elapsed_sec", state.get("elapsed_sec", 0.0)) or 0.0)
+            self._render_block(force=False)
             return
 
         if event == "step_finish":
-            symbol = "✓" if payload["status"] == "PASS" else "✗"
-            label = self._format_label(payload)
-            self._finish_line(
-                self._step_text(
-                    payload,
-                    f"{symbol} {label} | {payload['status']} | {payload['duration_sec']:.2f}s",
-                    done=True,
-                )
-            )
+            state = self._ensure_step_state(payload)
+            state["status"] = str(payload.get("status", "FAIL") or "FAIL")
+            state["display_status"] = state["status"]
+            state["duration_sec"] = float(payload.get("duration_sec", 0.0) or 0.0)
+            state["elapsed_sec"] = state["duration_sec"]
+            self._render_block(force=True)
             return
 
         if event == "finalizing":
-            self._render_inline(self._step_text(payload, "整理輸出與打包 bundle", done=False))
+            state = self._ensure_step_state(payload)
+            state["status"] = "RUNNING"
+            state["display_status"] = FINALIZING_STATUS
+            state["elapsed_sec"] = float(payload.get("elapsed_sec", state.get("elapsed_sec", 0.0)) or 0.0)
+            self._render_block(force=True)
             return
 
         if event == "done":
-            if payload["overall_status"] == "PASS":
-                self._finish_line(self._step_text(payload, f"✓ 完成 | {payload['overall_status']}", done=True))
-            else:
-                failed_at = int(payload.get("failed_at_major_index", payload.get("major_index", 0)) or 0)
-                self._finish_line(
-                    self._step_text(
-                        payload,
-                        f"✗ 結束 | {payload['overall_status']}",
-                        done=False,
-                        progress_index=failed_at,
-                    )
-                )
+            state = self._ensure_step_state({"name": "done", **payload})
+            state["status"] = str(payload.get("overall_status", "FAIL") or "FAIL")
+            state["display_status"] = state["status"]
+            state["duration_sec"] = float(payload.get("elapsed_sec", payload.get("duration_sec", 0.0)) or 0.0)
+            state["elapsed_sec"] = state["duration_sec"]
+            self._render_block(force=True)
+            self.finalized = True
 
 
 def _print_human_summary(result: Dict[str, Any]) -> None:
