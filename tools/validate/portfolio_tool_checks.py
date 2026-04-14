@@ -10,7 +10,7 @@ from .portfolio_payloads import build_portfolio_stats_payload
 from .tool_check_common import resolve_source_date_column, suppress_tool_output
 
 
-def _build_portfolio_stats_from_result(result, module_path):
+def _build_portfolio_stats_from_result(result, module_path, *, sorted_dates=None, start_year=None):
     (
         _df_eq,
         _df_tr,
@@ -67,6 +67,8 @@ def _build_portfolio_stats_from_result(result, module_path):
         annual_return_pct=annual_return_pct,
         bm_annual_return_pct=bm_annual_return_pct,
         profile_stats=pf_profile,
+        sorted_dates=sorted_dates,
+        start_year=start_year,
     )
 
 
@@ -128,4 +130,9 @@ def run_portfolio_sim_tool_check(ticker, file_path, params, *, prepared_df=None,
         benchmark_ticker=ticker,
         verbose=False,
     )
-    return _build_portfolio_stats_from_result(result, module_path)
+    return _build_portfolio_stats_from_result(
+        result,
+        module_path,
+        sorted_dates=effective_sorted_dates,
+        start_year=int(min_year),
+    )

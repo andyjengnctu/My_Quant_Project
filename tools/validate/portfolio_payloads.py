@@ -68,7 +68,7 @@ def summarize_portfolio_trade_output(df_trades):
     }
 
 
-def build_portfolio_stats_payload(*, module_path, df_trades, total_return, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, profile_stats):
+def build_portfolio_stats_payload(*, module_path, df_trades, total_return, mdd, trade_count, win_rate, pf_ev, pf_payoff, final_eq, avg_exp, max_exp, bm_ret, bm_mdd, total_missed, total_missed_sells, r_sq, m_win_rate, bm_r_sq, bm_m_win_rate, normal_trade_count, extended_trade_count, annual_trades, reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, profile_stats, sorted_dates=None, start_year=None):
     payload = {
         "module_path": module_path,
         "total_return": total_return,
@@ -94,6 +94,8 @@ def build_portfolio_stats_payload(*, module_path, df_trades, total_return, mdd, 
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "annual_return_pct": annual_return_pct,
         "bm_annual_return_pct": bm_annual_return_pct,
+        "sorted_dates": list(sorted_dates or []),
+        "start_year": None if start_year is None else int(start_year),
         "df_trades": df_trades.copy() if isinstance(df_trades, pd.DataFrame) else pd.DataFrame(),
     }
     payload.update(summarize_portfolio_trade_output(payload["df_trades"]))

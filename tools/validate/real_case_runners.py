@@ -178,7 +178,6 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
     scanner_ref_stats = rebuild_scanner_reference_stats_from_single_stats(single_stats, df, scanner_params)
     parity_params = build_consistency_parity_params(params)
-    portfolio_stats = run_single_ticker_portfolio_check(ticker, prep_df, standalone_logs, parity_params, portfolio_context=portfolio_context)
     portfolio_sim_stats = run_portfolio_sim_tool_check(
         ticker,
         file_path,
@@ -189,6 +188,7 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         sorted_dates=portfolio_context["sorted_dates"],
         start_year=portfolio_context["start_year"],
     )
+    portfolio_stats = dict(portfolio_sim_stats)
     scanner_result, scanner_module_path = run_scanner_tool_check(
         ticker,
         file_path,
