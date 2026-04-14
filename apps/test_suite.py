@@ -128,14 +128,18 @@ class ConsoleProgress:
         label = self._format_label(state)
         bar = self._build_bar(state)
         status = state["display_status"]
-        elapsed_total = time.time() - self.suite_started
         if state["status"] in {"RUNNING", "FINALIZING"}:
             detail = f"{status} | {float(state.get('elapsed_sec') or 0.0):.1f}s"
         elif state["status"] in {"PASS", "FAIL"}:
             detail = f"{status} | {float(state.get('duration_sec') or 0.0):.2f}s"
         else:
             detail = status
-        return f"[{index}/{total}] {bar} {label} | {detail} | 經過 {elapsed_total:.1f}s"
+
+        line = f"[{index}/{total}] {bar} {label} | {detail}"
+        if state["name"] == "done":
+            elapsed_total = time.time() - self.suite_started
+            line += f" | 總經過 {elapsed_total:.1f}s"
+        return line
 
     def _render_block(self, *, force: bool = False) -> None:
         if self.finalized:
