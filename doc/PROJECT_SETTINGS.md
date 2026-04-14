@@ -6,9 +6,10 @@
 
 1. 本輪基準為使用者最新提供的程式、ZIP、檔案，或本輪最新 GPT交付之程式碼、patched ZIP；後出現者即為當前基準。
 2. 每次開始前，必須先回報當前工作基準與已讀文件；若當前基準為 ZIP，另須回報 ZIP 檔名、SHA256 與全新解壓目錄。
-3. GPT 需做全專案最完整測試，且必須一輪就找出所有問題，不得透過多輪一點一點修補。
-4. GPT 不用執行`apps/test_suite.py`與其呼叫的函式，但必須檢查`apps/test_suite.py`本身是否可信，以及`doc/TEST_SUITE_CHECKLIST.md`是否涵蓋必要測項; 
-5. 本地端會執行`apps/test_suite.py`並提供 boundle 測試結果，若未提供代表本地端已測試且全數通過；若提供 bundle，GPT必須完成閉環修正。
+3. 需做全專案最完整測試，且必須一輪就找出所有問題，不得透過多輪一點一點修補。
+4. `apps/test_suite.py` 為`已實作`測試的單一正式入口，僅限在本地端執行; 
+5. GPT 不得執行`apps/test_suite.py`，也不得繞過正式入口直接執行其涵蓋的step; 但必須檢`apps/test_suite.py`本身是否可信，以及`doc/TEST_SUITE_CHECKLIST.md`是否涵蓋必要測項。
+6. 若使用者提供 `apps/test_suite.py` 的 bundle 測試結果，GPT必須完成閉環修正; 若未提供 boundle，代表本地端已測試，且全數通過。
 6. `/doc/PROJECT_SETTINGS.md` 不得被`apps/test_suite.py`反向檢查。
 7. 每輪找到問題就直接提供修正。
 
