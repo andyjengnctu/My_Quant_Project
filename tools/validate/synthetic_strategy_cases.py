@@ -113,7 +113,11 @@ class _FakeProfileRecorder:
 class _FakeOptimizerSession:
     def __init__(self, *, fixed_tp_percent=0.25):
         self.raw_data_cache = {}
+        self.raw_data_cache_data_dir = None
         self.default_max_workers = 1
+        self.static_fast_cache = {}
+        self.master_dates = set()
+        self.sorted_master_dates = []
         self.train_start_year = 2020
         self.train_max_positions = 3
         self.train_enable_rotation = False
