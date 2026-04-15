@@ -123,35 +123,17 @@ def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, tar
     return resolved_init_sl, resolved_init_trail, resolved_target_price
 
 
-def _apply_entry_day_virtual_exit_trigger(position, *, t_high, t_low, params):
+def _apply_entry_day_position_state(position, *, t_high):
     position["entry_day_stop_triggered"] = False
     position["entry_day_tp_triggered"] = False
     position["pending_exit_action"] = None
     position["pending_exit_trigger_price"] = np.nan
 
-    if position.get("qty", 0) <= 0:
-        return position
-
-    is_stop_hit = (not pd.isna(t_low)) and price_to_milli(t_low) <= position["sl_milli"]
-    half_sell_qty = calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)
-    is_tp_hit = (
-        (not pd.isna(t_high))
-        and price_to_milli(t_high) >= position["tp_half_milli"]
-        and not position["sold_half"]
-        and half_sell_qty > 0
-    )
-
-    if is_stop_hit and is_tp_hit:
-        is_tp_hit = False
-
-    position["entry_day_stop_triggered"] = bool(is_stop_hit)
-    position["entry_day_tp_triggered"] = bool(is_tp_hit)
-    if is_stop_hit:
-        position["pending_exit_action"] = "STOP"
-        position["pending_exit_trigger_price"] = float(position["sl"])
-    elif is_tp_hit:
-        position["pending_exit_action"] = "TP_HALF"
-        position["pending_exit_trigger_price"] = float(position["tp_half"])
+    highest_high_milli = position.get("highest_high_since_entry_milli", position["entry_fill_price_milli"])
+    if not pd.isna(t_high):
+        highest_high_milli = max(highest_high_milli, price_to_milli(t_high))
+    position["highest_high_since_entry_milli"] = highest_high_milli
+    position["highest_high_since_entry"] = milli_to_price(highest_high_milli)
     return position
 
 
@@ -193,6 +175,7 @@ def build_position_from_entry_fill(
     buy_price_milli = price_to_milli(buy_price)
     initial_stop_milli = price_to_milli(resolved_init_sl)
     trailing_stop_milli = price_to_milli(resolved_init_trail)
+    effective_stop_milli = max(initial_stop_milli, trailing_stop_milli)
     target_price_milli = price_to_milli(resolved_target_price)
     pure_limit_price_milli = None if limit_price is None or pd.isna(limit_price) else price_to_milli(limit_price)
 
@@ -220,11 +203,11 @@ def build_position_from_entry_fill(
         "buy_fee_milli": buy_ledger["buy_fee_milli"],
         "net_buy_total_milli": buy_ledger["net_buy_total_milli"],
         "remaining_cost_basis_milli": buy_ledger["net_buy_total_milli"],
-        "sl_milli": initial_stop_milli,
+        "sl_milli": effective_stop_milli,
         "initial_stop_milli": initial_stop_milli,
         "trailing_stop_milli": trailing_stop_milli,
         "tp_half_milli": target_price_milli,
-        "sl": milli_to_price(initial_stop_milli),
+        "sl": milli_to_price(effective_stop_milli),
         "initial_stop": milli_to_price(initial_stop_milli),
         "trailing_stop": milli_to_price(trailing_stop_milli),
         "tp_half": milli_to_price(target_price_milli),
@@ -244,6 +227,8 @@ def build_position_from_entry_fill(
         "entry_day_tp_triggered": False,
         "pending_exit_action": None,
         "pending_exit_trigger_price": np.nan,
+        "highest_high_since_entry_milli": buy_price_milli,
+        "highest_high_since_entry": milli_to_price(buy_price_milli),
     }
     return sync_position_display_fields(position)
 
@@ -302,7 +287,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         security_profile=resolved_security_profile,
         trade_date=trade_date,
     )
-    position = _apply_entry_day_virtual_exit_trigger(position, t_high=t_high, t_low=t_low, params=params)
+    position = _apply_entry_day_position_state(position, t_high=t_high)
     result["filled"] = True
     result["count_as_missed_buy"] = False
     result["position"] = position

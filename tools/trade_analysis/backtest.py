@@ -266,6 +266,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
                 atr_prev=atr_main[j - 1],
                 sell_condition_prev=sell_condition[j - 1],
                 close_prev=c[j - 1],
+                high_prev=h[j - 1],
                 t_open=o[j],
                 t_high=h[j],
                 t_low=l[j],

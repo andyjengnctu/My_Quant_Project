@@ -99,6 +99,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 V[j],
                 params,
                 current_date=Dates[j],
+                y_high=H[j - 1],
             )
             freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
             currentCapital_milli += freed_cash_milli

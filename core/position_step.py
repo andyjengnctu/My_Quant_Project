@@ -57,11 +57,6 @@ def sum_last_exec_contexts_milli(position):
     return freed_cash_milli, pnl_realized_milli
 
 
-def _clear_pending_exit(position):
-    position['pending_exit_action'] = None
-    position['pending_exit_trigger_price'] = pd.NA
-
-
 def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None):
     sell_ledger = build_sell_ledger_from_price(
         exec_price,
@@ -100,56 +95,29 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
     return freed_cash_milli, pnl_milli
 
 
-def _process_pending_exit_action(position, *, t_open, t_high, t_low, t_close, t_volume, y_close, params, events, current_date=None):
-    pending_action = position.get('pending_exit_action')
-    resolved_ticker = position.get('ticker')
-    if pending_action not in {'STOP', 'TP_HALF'}:
-        return False, 0, 0
+def _update_trailing_stop(position, *, y_high, y_atr, params):
+    if pd.isna(y_atr):
+        return
 
-    sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=resolved_ticker)
-    if sell_block_reason is not None:
-        events.extend(['MISSED_SELL', sell_block_reason])
-        return True, 0, 0
+    highest_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
+    if not pd.isna(y_high):
+        highest_high_milli = max(highest_high_milli, price_to_milli(y_high))
+    position['highest_high_since_entry_milli'] = highest_high_milli
+    position['highest_high_since_entry'] = milli_to_money(highest_high_milli)
 
-    trigger_price = position.get('pending_exit_trigger_price', pd.NA)
-    exec_price = adjust_long_sell_fill_price(t_open, ticker=resolved_ticker)
-    if pending_action == 'STOP':
-        freed_cash_milli, pnl_milli = _execute_sell_leg(
-            position,
-            event='STOP',
-            exec_price=exec_price,
-            sell_qty=position['qty'],
-            params=params,
-            deferred=True,
-            trigger_price=trigger_price,
-            trade_date=current_date,
-        )
-        _clear_pending_exit(position)
-        events.extend(['STOP', 'DEFERRED_STOP_ON_OPEN'])
-        return True, freed_cash_milli, pnl_milli
-
-    sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
-    if sell_qty <= 0:
-        _clear_pending_exit(position)
-        return False, 0, 0
-
-    freed_cash_milli, pnl_milli = _execute_sell_leg(
-        position,
-        event='TP_HALF',
-        exec_price=exec_price,
-        sell_qty=sell_qty,
-        params=params,
-        deferred=True,
-        trigger_price=trigger_price,
-        trade_date=current_date,
+    trail_reference = milli_to_money(highest_high_milli)
+    candidate_trail = adjust_long_stop_price(
+        trail_reference - (y_atr * params.atr_times_trail),
+        ticker=position.get('ticker'),
     )
-    position['sold_half'] = True
-    _clear_pending_exit(position)
-    events.extend(['TP_HALF', 'DEFERRED_TP_HALF_ON_OPEN'])
-    return False, freed_cash_milli, pnl_milli
+    candidate_trail_milli = price_to_milli(candidate_trail)
+    position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
+    position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
+    position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
+    position['sl'] = milli_to_money(position['sl_milli'])
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None):
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
     _reset_exec_contexts(position)
@@ -157,32 +125,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     if position['qty'] <= 0:
         return position, 0.0, 0.0, events
 
-    should_return, pending_freed_cash_milli, pending_pnl_milli = _process_pending_exit_action(
-        position,
-        t_open=t_open,
-        t_high=t_high,
-        t_low=t_low,
-        t_close=t_close,
-        t_volume=t_volume,
-        y_close=y_close,
-        params=params,
-        events=events,
-        current_date=current_date,
-    )
-    freed_cash_milli += pending_freed_cash_milli
-    pnl_realized_milli += pending_pnl_milli
-    if should_return:
-        return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
-    if position['qty'] <= 0:
-        return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
-
-    if y_close > position['pure_buy_price'] + (y_atr * params.atr_times_trail):
-        new_trail = adjust_long_stop_price(y_close - (y_atr * params.atr_times_trail), ticker=position.get("ticker"))
-        new_trail_milli = price_to_milli(new_trail)
-        position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), new_trail_milli)
-        position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
-        position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
-        position['sl'] = milli_to_money(position['sl_milli'])
+    _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params)
 
     if y_ind_sell:
         sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))

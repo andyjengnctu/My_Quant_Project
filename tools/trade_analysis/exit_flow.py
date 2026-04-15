@@ -118,6 +118,7 @@ def process_debug_position_step(
     atr_prev,
     sell_condition_prev,
     close_prev,
+    high_prev,
     t_open,
     t_high,
     t_low,
@@ -147,6 +148,7 @@ def process_debug_position_step(
         t_close,
         t_volume,
         params,
+        y_high=high_prev,
     )
 
     freed_cash_milli, pnl_realized_milli = sum_last_exec_contexts_milli(position)

@@ -244,6 +244,7 @@ def settle_portfolio_positions(
             get_fast_value(fast_df, 'Volume', pos=t_pos),
             params,
             current_date=today,
+            y_high=get_fast_value(fast_df, 'High', pos=y_pos),
         )
         freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
         cash += freed_cash_milli
