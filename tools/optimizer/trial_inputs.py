@@ -131,8 +131,10 @@ def _build_process_pool_executor(max_workers, raw_data_cache):
         try:
             executor_kwargs["mp_context"] = get_context("fork")
             pool_start_method = "fork"
-        except ValueError:
-            pass
+        except ValueError as exc:
+            pool_start_method = (
+                f"{pool_start_method or 'default'}|fork_unavailable:{type(exc).__name__}"
+            )
     supports_initializer = "initializer" in inspect.signature(ProcessPoolExecutor).parameters
     if supports_initializer:
         executor_kwargs["initializer"] = init_worker_raw_data_cache
