@@ -600,7 +600,7 @@ def validate_synthetic_portfolio_entry_preserves_fill_based_first_actionable_cas
     add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_initial_stop_uses_actual_fill_plus_atr", expected_position_stop, None if position is None else float(position['initial_stop']))
     add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_position_trail, None if position is None else float(position['trailing_stop']))
     add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_position_target, None if position is None else float(position['tp_half']))
-    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "entry_day_has_no_queued_action", None, None if position is None else position.get('pending_exit_action'))
+    add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if position is None else position.get('pending_exit_action'))
     add_check(results, "synthetic_portfolio_entry_preserves_fill_based_first_actionable", case_id, "cash_uses_actual_entry_cost_not_reserved_limit_cost", True, float(cash) > (1_000_000.0 - (100.0 * (position['initial_qty'] if position else 0))))
 
     summary['candidate_target_price'] = None if candidate is None else float(candidate['target_price'])
