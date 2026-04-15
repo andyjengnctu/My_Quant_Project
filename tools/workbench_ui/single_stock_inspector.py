@@ -9,6 +9,7 @@ import ssl
 import subprocess
 import sys
 import traceback
+import threading
 import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
@@ -396,6 +397,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
         self._selected_actual_spend_var = tk.StringVar(value="實支: -")
+        self._ui_thread = threading.current_thread()
+        self._analysis_thread = None
+        self._analysis_pending_ticker = ""
+        self._analysis_active_token = 0
+        self._company_name_refresh_inflight = False
         self._build_ui()
 
     def destroy(self):
@@ -543,6 +549,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._append_console_text(f"[常用股票] {normalized_message}\n")
 
     def _refresh_reduced_stock_company_names_if_needed(self):
+        if self._company_name_refresh_inflight:
+            return
         reduced_tickers = _load_reduced_stock_tickers()
         current_reduced_set = set(reduced_tickers)
         cache_payload = _load_reduced_stock_company_name_cache()
@@ -569,27 +577,67 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 f"缺少中文名稱，嘗試查詢：{', '.join(missing_tickers)}"
             )
 
+        self._company_name_refresh_inflight = True
+        refresh_thread = threading.Thread(
+            target=self._refresh_reduced_stock_company_names_worker,
+            args=(tuple(reduced_tickers), dict(cache_ticker_to_name)),
+            name="workbench-reduced-name-refresh",
+            daemon=True,
+        )
+        refresh_thread.start()
+
+    def _refresh_reduced_stock_company_names_worker(self, reduced_tickers, cache_ticker_to_name):
         try:
             fetched_company_name_map, source_failures = _fetch_company_names_from_official_sources()
+            updated_ticker_to_name = dict(cache_ticker_to_name)
+            newly_resolved_tickers = []
+            unresolved_tickers = []
+            for ticker in reduced_tickers:
+                fetched_company_name = _normalize_company_name(fetched_company_name_map.get(ticker))
+                if fetched_company_name:
+                    if updated_ticker_to_name.get(ticker) != fetched_company_name:
+                        newly_resolved_tickers.append(ticker)
+                    updated_ticker_to_name[ticker] = fetched_company_name
+                    continue
+                if not _normalize_company_name(self._reduced_stock_company_name_map.get(ticker) or updated_ticker_to_name.get(ticker)):
+                    unresolved_tickers.append(ticker)
+            self.after(
+                0,
+                self._finish_reduced_stock_company_names_refresh,
+                dict(updated_ticker_to_name),
+                list(reduced_tickers),
+                list(source_failures),
+                list(newly_resolved_tickers),
+                list(unresolved_tickers),
+                None,
+            )
         except (ValueError, HTTPError, URLError, OSError) as exc:
+            self.after(
+                0,
+                self._finish_reduced_stock_company_names_refresh,
+                None,
+                list(reduced_tickers),
+                [],
+                [],
+                [],
+                exc,
+            )
+
+    def _finish_reduced_stock_company_names_refresh(
+        self,
+        updated_ticker_to_name,
+        reduced_tickers,
+        source_failures,
+        newly_resolved_tickers,
+        unresolved_tickers,
+        error,
+    ):
+        self._company_name_refresh_inflight = False
+        if error is not None:
             self._append_reduced_stock_lookup_message(
-                f"官方中文名稱查詢失敗，保留既有快取：{type(exc).__name__}: {exc}"
+                f"官方中文名稱查詢失敗，保留既有快取：{type(error).__name__}: {error}"
             )
             return
-
-        updated_ticker_to_name = dict(cache_ticker_to_name)
-        newly_resolved_tickers = []
-        unresolved_tickers = []
-        for ticker in reduced_tickers:
-            fetched_company_name = _normalize_company_name(fetched_company_name_map.get(ticker))
-            if fetched_company_name:
-                if updated_ticker_to_name.get(ticker) != fetched_company_name:
-                    newly_resolved_tickers.append(ticker)
-                updated_ticker_to_name[ticker] = fetched_company_name
-                self._reduced_stock_company_name_map[ticker] = fetched_company_name
-                continue
-            if not _normalize_company_name(self._reduced_stock_company_name_map.get(ticker) or updated_ticker_to_name.get(ticker)):
-                unresolved_tickers.append(ticker)
 
         try:
             _save_reduced_stock_company_name_cache(
@@ -602,7 +650,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
             return
 
-        self._reduced_stock_company_name_map.update(updated_ticker_to_name)
+        self._reduced_stock_company_name_map.update(dict(updated_ticker_to_name or {}))
         self._apply_reduced_stock_dropdown_values()
         if source_failures:
             self._append_reduced_stock_lookup_message(
@@ -618,9 +666,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
 
     def _append_console_text(self, text):
-        self._console_text.insert("end", text)
+        normalized_text = str(text or "")
+        if not normalized_text:
+            return
+        if threading.current_thread() is not self._ui_thread:
+            self.after(0, self._append_console_text, normalized_text)
+            return
+        self._console_text.insert("end", normalized_text)
         self._console_text.see("end")
-        self.update_idletasks()
 
     def _clear_console(self):
         self._console_text.delete("1.0", "end")
@@ -741,15 +794,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._status_var.set(f"掃描完成：歷史績效股 {len(display_values)} 檔")
 
-    def _run_analysis(self):
-        ticker = self._ticker_var.get().strip()
-        if not ticker:
-            messagebox.showerror("股票工具工作台", "請先輸入股票代號。")
-            return
-
-        self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
-        self.update_idletasks()
-
+    def _run_analysis_worker(self, ticker, request_token):
         try:
             result = run_ticker_analysis(
                 ticker,
@@ -760,12 +805,63 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 verbose=False,
             )
         except Exception as exc:
-            self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
+            self.after(0, self._finish_analysis_error, ticker, request_token, exc)
             return
+        self.after(0, self._finish_analysis_success, ticker, request_token, result)
 
+    def _start_analysis(self, ticker):
+        ticker = str(ticker or "").strip()
+        if not ticker:
+            return
+        self._analysis_active_token += 1
+        request_token = self._analysis_active_token
+        self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
+        analysis_thread = threading.Thread(
+            target=self._run_analysis_worker,
+            args=(ticker, request_token),
+            name=f"workbench-analysis-{ticker}",
+            daemon=True,
+        )
+        self._analysis_thread = analysis_thread
+        analysis_thread.start()
+
+    def _consume_pending_analysis_request(self, completed_ticker):
+        pending_ticker = str(self._analysis_pending_ticker or "").strip()
+        self._analysis_pending_ticker = ""
+        if pending_ticker and pending_ticker != str(completed_ticker or "").strip():
+            self.after_idle(lambda ticker=pending_ticker: self._start_analysis(ticker))
+
+    def _finish_analysis_success(self, ticker, request_token, result):
+        if request_token != self._analysis_active_token:
+            return
+        self._analysis_thread = None
         self._result = result
         self._render_result(result)
         self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
+        self._consume_pending_analysis_request(ticker)
+
+    def _finish_analysis_error(self, ticker, request_token, exc):
+        if request_token != self._analysis_active_token:
+            return
+        self._analysis_thread = None
+        self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
+        self._consume_pending_analysis_request(ticker)
+
+    def _run_analysis(self):
+        ticker = self._ticker_var.get().strip()
+        if not ticker:
+            messagebox.showerror("股票工具工作台", "請先輸入股票代號。")
+            return
+
+        if self._analysis_thread is not None and self._analysis_thread.is_alive():
+            self._analysis_pending_ticker = ticker
+            self._status_var.set(
+                f"查股進行中，已排入最新請求：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}"
+            )
+            return
+
+        self._analysis_pending_ticker = ""
+        self._start_analysis(ticker)
 
     def _render_result(self, result):
         trade_logs_df = result.get("trade_logs_df")
