@@ -5,16 +5,19 @@ from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_filters import apply_filter_rules
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
+from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
 
 
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
     ai_params = build_trial_params(session, trial)
+    prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,
         params=ai_params,
         default_max_workers=session.default_max_workers,
+        executor_bundle=prep_executor_bundle,
     )
     trial.set_user_attr("prep_mode", prep_result["prep_mode"])
     trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")

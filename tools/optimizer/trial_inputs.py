@@ -1,7 +1,10 @@
+import inspect
+import os
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
+from multiprocessing import get_context
 
 import pandas as pd
 
@@ -10,6 +13,13 @@ from core.log_utils import format_exception_summary
 from core.portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
 from core.runtime_utils import get_process_pool_executor_kwargs
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
+
+_WORKER_RAW_DATA_CACHE = None
+
+
+def init_worker_raw_data_cache(raw_data_cache):
+    global _WORKER_RAW_DATA_CACHE
+    _WORKER_RAW_DATA_CACHE = raw_data_cache
 
 
 def worker_prep_data(ticker, df, params):
@@ -80,6 +90,17 @@ def worker_prep_data(ticker, df, params):
         ) from exc
 
 
+def worker_prep_data_from_cache(ticker, params):
+    global _WORKER_RAW_DATA_CACHE
+    if _WORKER_RAW_DATA_CACHE is None:
+        raise RuntimeError("optimizer worker raw_data_cache 尚未初始化")
+    try:
+        df = _WORKER_RAW_DATA_CACHE[ticker]
+    except KeyError as exc:
+        raise RuntimeError(f"optimizer worker 找不到 ticker={ticker} 的快取資料") from exc
+    return worker_prep_data(ticker, df, params)
+
+
 def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
     ticker = result["ticker"]
     result_profile = result.get("profile", {})
@@ -103,7 +124,30 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_f
     prep_failures.append((ticker, result["reason"]))
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers):
+def _build_process_pool_executor(max_workers, raw_data_cache):
+    process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
+    executor_kwargs = dict(process_pool_kwargs)
+    if os.name != "nt" and "mp_context" in inspect.signature(ProcessPoolExecutor).parameters:
+        try:
+            executor_kwargs["mp_context"] = get_context("fork")
+            pool_start_method = "fork"
+        except ValueError:
+            pass
+    supports_initializer = "initializer" in inspect.signature(ProcessPoolExecutor).parameters
+    if supports_initializer:
+        executor_kwargs["initializer"] = init_worker_raw_data_cache
+        executor_kwargs["initargs"] = (raw_data_cache,)
+    return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
+
+
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
+    futures = [executor.submit(worker_prep_data_from_cache, ticker, params) for ticker in tickers]
+    for future in as_completed(futures):
+        result = future.result()
+        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+
+
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None):
     all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
     prep_failures = []
     prep_profile = {
@@ -122,14 +166,27 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers):
     pool_start_method = None
     prep_wall_start = time.perf_counter()
     pool_error_text = None
+    tickers = list(raw_data_cache.keys())
+    created_executor = None
 
     try:
-        process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
-        with ProcessPoolExecutor(max_workers=max_workers, **process_pool_kwargs) as executor:
-            futures = [executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
-            for future in as_completed(futures):
-                result = future.result()
-                merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+        if executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
+            created_executor = executor_bundle["executor"]
+            pool_start_method = executor_bundle.get("pool_start_method")
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+        else:
+            created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
+            try:
+                if supports_initializer:
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+                else:
+                    futures = [created_executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
+                    for future in as_completed(futures):
+                        result = future.result()
+                        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+            finally:
+                created_executor.shutdown(wait=True, cancel_futures=False)
+                created_executor = None
     except BrokenProcessPool as exc:
         prep_mode = "sequential_fallback"
         pool_error_text = f"{type(exc).__name__}: {exc}"

@@ -1,6 +1,5 @@
 ## Going
 
-- 確認Traling stop物理意議，R-based Trailing Stop update
 - 先提升訓練分數
 - 訓練/測試樣本分離
 - overfitting量化驗證工具
@@ -9,7 +8,6 @@
 
 ## To do
 - 如何精準公式算出停利%，讓先停利後停損絕對不會是負的?
-
 - ajd/raw整合交易策略 
 - 加入大盤過濾
 - 加入低點買入 + 盤整期策略

@@ -1,5 +1,6 @@
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
+from tools.optimizer.trial_inputs import _build_process_pool_executor
 
 
 def close_study_storage(study):
@@ -73,14 +74,58 @@ class OptimizerSession:
             console_print=enable_profile_console_print,
             print_every_n_trials=profile_print_every_n_trials,
         )
+        self._trial_prep_executor_bundle = None
 
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
+        self.close_trial_prep_executor()
         self.raw_data_cache = load_all_raw_data(
             data_dir=data_dir,
             required_min_rows=required_min_rows,
             output_dir=self.output_dir,
         )
         self.raw_data_cache_data_dir = data_dir
+
+    def get_trial_prep_executor_bundle(self, max_workers):
+        try:
+            requested_workers = int(max_workers)
+        except (TypeError, ValueError):
+            requested_workers = int(self.default_max_workers)
+        requested_workers = max(1, requested_workers)
+
+        existing = self._trial_prep_executor_bundle
+        if existing is not None:
+            existing_data_dir = existing.get("data_dir")
+            existing_workers = int(existing.get("max_workers", 0))
+            if existing_data_dir == self.raw_data_cache_data_dir and existing_workers == requested_workers:
+                return existing
+            self.close_trial_prep_executor()
+
+        if not self.raw_data_cache:
+            return None
+
+        executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
+        if not supports_initializer:
+            executor.shutdown(wait=True, cancel_futures=False)
+            return None
+
+        bundle = {
+            "executor": executor,
+            "max_workers": requested_workers,
+            "data_dir": self.raw_data_cache_data_dir,
+            "pool_start_method": pool_start_method,
+        }
+        self._trial_prep_executor_bundle = bundle
+        return bundle
+
+    def close_trial_prep_executor(self):
+        bundle = self._trial_prep_executor_bundle
+        self._trial_prep_executor_bundle = None
+        if bundle is None:
+            return
+        executor = bundle.get("executor")
+        shutdown = getattr(executor, "shutdown", None)
+        if callable(shutdown):
+            shutdown(wait=True, cancel_futures=False)
 
     def record_optimizer_prep_failures(self, insufficient_failures):
         insufficient_count = len(insufficient_failures)

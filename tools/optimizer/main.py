@@ -274,6 +274,7 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
     finally:
+        session.close_trial_prep_executor()
         close_study_storage(study)
 
 
