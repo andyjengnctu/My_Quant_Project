@@ -20,11 +20,18 @@ _WORKER_FEATURE_CACHE = None
 _WORKER_FEATURE_CONFIG = None
 
 
-def init_worker_raw_data_cache(raw_data_cache, feature_config):
+def init_worker_raw_data_cache(raw_data_cache, feature_config, eager_prebuild=False):
     global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_CACHE, _WORKER_FEATURE_CONFIG
     _WORKER_RAW_DATA_CACHE = raw_data_cache
     _WORKER_FEATURE_CACHE = {}
     _WORKER_FEATURE_CONFIG = feature_config
+    if eager_prebuild and feature_config is not None:
+        for ticker, df in raw_data_cache.items():
+            _WORKER_FEATURE_CACHE[ticker] = build_optimizer_feature_cache_for_ticker(df, feature_lengths=feature_config)
+
+
+def worker_ping():
+    return os.getpid()
 
 
 def _resolve_feature_cache_for_ticker(*, ticker, df, optimizer_feature_cache, optimizer_feature_config):
@@ -147,7 +154,7 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_f
     prep_failures.append((ticker, result["reason"]))
 
 
-def _build_process_pool_executor(max_workers, raw_data_cache, feature_config):
+def _build_process_pool_executor(max_workers, raw_data_cache, feature_config, *, eager_prebuild=False):
     process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
     executor_kwargs = dict(process_pool_kwargs)
     if os.name != "nt" and "mp_context" in inspect.signature(ProcessPoolExecutor).parameters:
@@ -161,7 +168,7 @@ def _build_process_pool_executor(max_workers, raw_data_cache, feature_config):
     supports_initializer = "initializer" in inspect.signature(ProcessPoolExecutor).parameters
     if supports_initializer:
         executor_kwargs["initializer"] = init_worker_raw_data_cache
-        executor_kwargs["initargs"] = (raw_data_cache, feature_config)
+        executor_kwargs["initargs"] = (raw_data_cache, feature_config, eager_prebuild)
     return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
 
 

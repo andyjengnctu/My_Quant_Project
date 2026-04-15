@@ -232,6 +232,15 @@ def main(argv=None, environ=None):
             required_min_rows=optimizer_required_min_rows,
         )
 
+        print(f"{C_GRAY}🔥 正在預熱 optimizer workers 與特徵快取 (trial 前一次性暖機)...{C_RESET}")
+        warm_started = time.perf_counter()
+        warmed = session.warm_trial_prep_executor()
+        warm_sec = time.perf_counter() - warm_started
+        if warmed:
+            print(f"{C_GREEN}✅ 暖機完成，耗時 {warm_sec:.2f}s；後續 trial 不再把 worker 特徵快取建立成本算進前幾輪。{C_RESET}")
+        else:
+            print(f"{C_YELLOW}⚠️ 暖機未啟用，後續 trial 可能仍包含 worker 快取建立成本。{C_RESET}")
+
         session.profile_recorder.init_output_files()
         if session.profile_recorder.enabled:
             print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
