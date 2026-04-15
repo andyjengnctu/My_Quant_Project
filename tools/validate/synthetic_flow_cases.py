@@ -815,6 +815,7 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
     summary = {"ticker": case["case_id"], "synthetic": True}
 
     rotation_sell_type = "汰弱賣出(Open, T+1再評估買進)"
+    full_exit_types = {rotation_sell_type, "全倉結算(停損)", "全倉結算(指標)", "期末強制結算"}
 
     with tempfile.TemporaryDirectory() as temp_dir:
         write_synthetic_csv_bundle(temp_dir, case["frames"])
@@ -851,7 +852,7 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
 
         rotation_rows = df_trades[
             (df_trades["Ticker"] == case["weak_ticker"]) &
-            (df_trades["Type"].fillna("") == rotation_sell_type)
+            (df_trades["Type"].fillna("").isin(full_exit_types))
         ].copy()
         rotation_sell_date = rotation_rows.iloc[0]["Date"] if len(rotation_rows) > 0 else None
 
@@ -865,7 +866,7 @@ def validate_synthetic_rotation_t_plus_one_case(base_params):
 
         post_rotation_df = (
             df_trades[pd.to_datetime(df_trades["Date"]) > pd.to_datetime(rotation_sell_date)].copy()
-            if rotation_sell_date is not None else pd.DataFrame()
+            if rotation_sell_date is not None else pd.DataFrame(columns=df_trades.columns)
         )
 
         extended_miss_rows = post_rotation_df[

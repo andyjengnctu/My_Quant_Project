@@ -13,7 +13,7 @@ from core.entry_plans import (
 )
 from core.position_step import execute_bar_step
 from core.exact_accounting import build_buy_ledger_from_price, build_sell_ledger_from_price, milli_to_money
-from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
+from core.price_utils import adjust_long_sell_fill_price, adjust_long_stop_price, calc_net_sell_price
 from core.portfolio_fast_data import calc_mark_to_market_equity, pack_prepared_stock_data, prep_stock_data_and_trades
 from core.portfolio_engine import run_portfolio_timeline
 from .synthetic_frame_utils import build_synthetic_baseline_frame, set_synthetic_bar
@@ -51,6 +51,14 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
     stop_level = float(position["sl"])
     tp_half_level = float(position["tp_half"])
     original_cost_basis_milli = int(position["remaining_cost_basis_milli"])
+    highest_high_since_entry = float(position.get("highest_high_since_entry", buy_price))
+    expected_stop_level = max(
+        stop_level,
+        adjust_long_stop_price(
+            highest_high_since_entry - (1.0 * params.atr_times_trail),
+            ticker=position.get("ticker"),
+        ),
+    )
 
     updated_position, freed_cash, pnl_realized, events = execute_bar_step(
         position,
@@ -65,7 +73,7 @@ def validate_synthetic_same_bar_stop_priority_case(base_params):
         params=params,
     )
 
-    expected_exec_price = adjust_long_sell_fill_price(min(stop_level, 100.0))
+    expected_exec_price = adjust_long_sell_fill_price(min(expected_stop_level, 100.0))
     expected_sell_ledger = build_sell_ledger_from_price(expected_exec_price, qty, params)
     expected_freed_cash = milli_to_money(expected_sell_ledger["net_sell_total_milli"])
     expected_pnl = milli_to_money(expected_sell_ledger["net_sell_total_milli"] - original_cost_basis_milli)
