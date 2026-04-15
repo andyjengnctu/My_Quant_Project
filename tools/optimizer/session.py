@@ -1,6 +1,7 @@
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
 from tools.optimizer.trial_inputs import _build_process_pool_executor
+from tools.optimizer.feature_cache import build_optimizer_feature_cache
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 
 
@@ -77,6 +78,7 @@ class OptimizerSession:
         )
         self._trial_prep_executor_bundle = None
         self.static_fast_cache = {}
+        self.optimizer_feature_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
 
@@ -89,6 +91,11 @@ class OptimizerSession:
         )
         self.raw_data_cache_data_dir = data_dir
         self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
+        high_len_values = range(self.optimizer_high_len_min, self.optimizer_high_len_max + 1, self.optimizer_high_len_step)
+        self.optimizer_feature_cache = build_optimizer_feature_cache(
+            self.raw_data_cache,
+            high_len_values=high_len_values,
+        )
         self.master_dates = set()
         for fast_df in self.static_fast_cache.values():
             self.master_dates.update(get_fast_dates(fast_df))
@@ -112,7 +119,7 @@ class OptimizerSession:
         if not self.raw_data_cache:
             return None
 
-        executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
+        executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache, self.optimizer_feature_cache)
         executor_kind = 'process'
         if executor_kind != 'thread' and not supports_initializer:
             executor.shutdown(wait=True, cancel_futures=False)
@@ -132,6 +139,7 @@ class OptimizerSession:
         bundle = self._trial_prep_executor_bundle
         self._trial_prep_executor_bundle = None
         self.static_fast_cache = {}
+        self.optimizer_feature_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
         if bundle is None:
