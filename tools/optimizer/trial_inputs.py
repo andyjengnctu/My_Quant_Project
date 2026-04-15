@@ -142,11 +142,40 @@ def _build_process_pool_executor(max_workers, raw_data_cache):
     return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
 
 
-def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
-    futures = [executor.submit(worker_prep_data_from_cache, ticker, params) for ticker in tickers]
+def worker_prep_batch_from_cache(tickers, params):
+    return [worker_prep_data_from_cache(ticker, params) for ticker in tickers]
+
+
+def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
+    worker_count = max(1, int(max_workers))
+    if len(tickers) <= worker_count * 4:
+        return [[ticker] for ticker in tickers]
+
+    target_batch_count = min(len(tickers), max(worker_count, worker_count * 4))
+    ordered_tickers = sorted(
+        tickers,
+        key=lambda ticker: len(raw_data_cache.get(ticker, ())),
+        reverse=True,
+    )
+    batch_rows = [0] * target_batch_count
+    batches = [[] for _ in range(target_batch_count)]
+
+    for ticker in ordered_tickers:
+        row_count = len(raw_data_cache.get(ticker, ()))
+        target_idx = min(range(target_batch_count), key=lambda idx: batch_rows[idx])
+        batches[target_idx].append(ticker)
+        batch_rows[target_idx] += row_count
+
+    return [batch for batch in batches if batch]
+
+
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers):
+    ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
+    futures = [executor.submit(worker_prep_batch_from_cache, batch, params) for batch in ticker_batches]
     for future in as_completed(futures):
-        result = future.result()
-        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+        batch_results = future.result()
+        for result in batch_results:
+            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
 
 
 def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None):
@@ -175,12 +204,12 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
         if executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
-            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers)
         else:
             created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
             try:
                 if supports_initializer:
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers)
                 else:
                     futures = [created_executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
                     for future in as_completed(futures):
