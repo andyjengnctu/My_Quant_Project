@@ -109,6 +109,7 @@ def _update_trailing_stop(position, *, y_high, y_atr, params):
     candidate_trail = adjust_long_stop_price(
         trail_reference - (y_atr * params.atr_times_trail),
         ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
     )
     candidate_trail_milli = price_to_milli(candidate_trail)
     position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)

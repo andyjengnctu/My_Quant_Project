@@ -85,8 +85,9 @@ def _collect_normal_candidates(
     today,
     sizing_equity,
     params,
+    collect_all_candidates,
 ):
-    candidates_today = []
+    candidates_today = [] if collect_all_candidates else None
     orderable_candidates_today = []
     normal_setup_tickers_today = set()
 
@@ -152,7 +153,8 @@ def _collect_normal_candidates(
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
         )
-        candidates_today.append(candidate_row)
+        if candidates_today is not None:
+            candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:
             orderable_candidates_today.append(candidate_row)
 
@@ -170,8 +172,9 @@ def _collect_extended_candidates(
     today,
     sizing_equity,
     params,
+    collect_all_candidates,
 ):
-    candidates_today = []
+    candidates_today = [] if collect_all_candidates else None
     orderable_candidates_today = []
 
     for ticker in sorted(list(active_extended_signals.keys())):
@@ -238,7 +241,8 @@ def _collect_extended_candidates(
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
         )
-        candidates_today.append(candidate_row)
+        if candidates_today is not None:
+            candidates_today.append(candidate_row)
         if candidate_row['is_orderable']:
             orderable_candidates_today.append(candidate_row)
 
@@ -256,6 +260,7 @@ def build_daily_candidates(
     today,
     sizing_equity,
     params,
+    collect_all_candidates=True,
 ):
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
@@ -267,6 +272,7 @@ def build_daily_candidates(
         today=today,
         sizing_equity=sizing_equity,
         params=params,
+        collect_all_candidates=collect_all_candidates,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
         active_extended_signals=active_extended_signals,
@@ -278,10 +284,15 @@ def build_daily_candidates(
         today=today,
         sizing_equity=sizing_equity,
         params=params,
+        collect_all_candidates=collect_all_candidates,
     )
 
-    candidates_today = normal_candidates + extended_candidates
+    if collect_all_candidates:
+        candidates_today = normal_candidates + extended_candidates
+    else:
+        candidates_today = []
     orderable_candidates_today = normal_orderable + extended_orderable
-    candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
+    if collect_all_candidates:
+        candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
     orderable_candidates_today.sort(key=lambda x: (x['sort_value'], x['ticker']), reverse=True)
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today

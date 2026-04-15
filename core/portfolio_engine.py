@@ -122,6 +122,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             today=today,
             sizing_equity=sizing_equity,
             params=params,
+            collect_all_candidates=replay_counts is not None,
         )
         if profile_stats is not None:
             candidate_scan_sec += time.perf_counter() - t0

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from numbers import Integral
+from functools import lru_cache
 from typing import Any, Dict
 
 MILLI_SCALE = 1000
@@ -22,8 +23,15 @@ def _round_decimal_to_int(value: Decimal, *, rounding=ROUND_HALF_UP) -> int:
     return int(value.quantize(Decimal("1"), rounding=rounding))
 
 
+@lru_cache(maxsize=131072)
+def _price_text_to_milli_cached(price_text: str) -> int:
+    return _round_decimal_to_int(Decimal(price_text) * _DECIMAL_THOUSAND)
+
+
 def price_to_milli(price) -> int:
-    return _round_decimal_to_int(_to_decimal(price) * _DECIMAL_THOUSAND)
+    if isinstance(price, Decimal):
+        return _round_decimal_to_int(price * _DECIMAL_THOUSAND)
+    return _price_text_to_milli_cached(str(price))
 
 
 money_to_milli = price_to_milli
@@ -153,11 +161,8 @@ def _build_security_profile(*, code: str, family: str, broad_type: str, tick_pro
     }
 
 
-def infer_security_profile(symbol=None, *, cfi_code=None, security_name=None) -> Dict[str, str]:
-    code = normalize_security_symbol(symbol)
-    cfi = "" if cfi_code is None else str(cfi_code).strip().upper()
-    name = _normalize_security_name(security_name)
-
+@lru_cache(maxsize=512)
+def _infer_security_profile_cached(code: str, cfi: str, name: str):
     def _etf_like_profile(*, family: str, broad_type: str) -> Dict[str, str]:
         return _build_security_profile(code=code, family=family, broad_type=broad_type, tick_profile=_TICK_PROFILE_FUND)
 
@@ -211,6 +216,34 @@ def infer_security_profile(symbol=None, *, cfi_code=None, security_name=None) ->
         return _etf_like_profile(family="reit", broad_type=_SECURITY_BROAD_ETF)
 
     return _build_security_profile(code=code, family="stock", broad_type=_SECURITY_BROAD_STOCK, tick_profile=_TICK_PROFILE_STOCK)
+
+
+@lru_cache(maxsize=2048)
+def _resolve_fee_schedule_cached(buy_fee, sell_fee, tax_rate, min_fee, family: str, broad_type: str, trade_day_ord):
+    buy_fee_ppm = rate_to_ppm(buy_fee)
+    sell_fee_ppm = rate_to_ppm(sell_fee)
+    stock_tax_ppm = rate_to_ppm(tax_rate)
+    if family == "stock":
+        tax_ppm = stock_tax_ppm
+    elif family == "reit":
+        tax_ppm = _REIT_SELL_TAX_PPM
+    elif family == "etf" and broad_type == _SECURITY_BROAD_BOND:
+        if trade_day_ord is None or trade_day_ord <= _BOND_ETF_TAX_EXEMPTION_END.toordinal():
+            tax_ppm = 0
+        else:
+            tax_ppm = _FUND_SELL_TAX_PPM
+    elif family in {"etf", "etn"}:
+        tax_ppm = _FUND_SELL_TAX_PPM
+    else:
+        tax_ppm = stock_tax_ppm
+    return (buy_fee_ppm, sell_fee_ppm, tax_ppm, money_to_milli(min_fee))
+
+
+def infer_security_profile(symbol=None, *, cfi_code=None, security_name=None) -> Dict[str, str]:
+    code = normalize_security_symbol(symbol)
+    cfi = "" if cfi_code is None else str(cfi_code).strip().upper()
+    name = _normalize_security_name(security_name)
+    return dict(_infer_security_profile_cached(code, cfi, name))
 
 
 def resolve_security_profile(security_profile=None, *, ticker=None, cfi_code=None, security_name=None) -> Dict[str, str]:
@@ -276,15 +309,20 @@ def round_price_milli_to_tick(price_milli: int, direction: str = "nearest", *, t
     return tv_round_int(price_milli, tick_milli) * tick_milli
 
 
-def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
-    price_decimal = _to_decimal(price)
-    tick_milli = get_tick_milli_from_price(
-        price_decimal,
-        ticker=ticker,
-        security_profile=security_profile,
-        cfi_code=cfi_code,
-        security_name=security_name,
-    )
+@lru_cache(maxsize=131072)
+def _round_price_to_tick_milli_cached(price_text: str, direction: str, tick_profile: str) -> int:
+    price_decimal = Decimal(price_text)
+    if tick_profile == _TICK_PROFILE_FUND:
+        tick_ladder = FUND_MILLI_TICK_LADDER
+        default_tick_milli = _FUND_DEFAULT_TICK_MILLI
+    else:
+        tick_ladder = STOCK_MILLI_TICK_LADDER
+        default_tick_milli = _STOCK_DEFAULT_TICK_MILLI
+    for threshold_milli, tick_milli in tick_ladder:
+        if price_decimal < (Decimal(int(threshold_milli)) / _DECIMAL_THOUSAND):
+            break
+    else:
+        tick_milli = default_tick_milli
     tick_decimal = _tick_decimal_from_milli(tick_milli)
     ratio = price_decimal / tick_decimal
     if direction == "up":
@@ -293,7 +331,12 @@ def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None,
         rounded_ratio = ratio.quantize(Decimal("1"), rounding=ROUND_FLOOR)
     else:
         rounded_ratio = ratio.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    return price_to_milli(rounded_ratio * tick_decimal)
+    return _price_text_to_milli_cached(str(rounded_ratio * tick_decimal))
+
+
+def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
+    resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
+    return _round_price_to_tick_milli_cached(str(price), direction, resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK))
 
 
 def calc_fee_milli(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:
@@ -306,18 +349,27 @@ def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
 
 
 def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
+    resolved_profile = resolve_security_profile(
+        security_profile,
+        ticker=ticker,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    trade_day = _normalize_trade_date(trade_date)
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli = _resolve_fee_schedule_cached(
+        float(params.buy_fee),
+        float(params.sell_fee),
+        float(params.tax_rate),
+        float(params.min_fee),
+        resolved_profile.get("family", "stock"),
+        resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK),
+        None if trade_day is None else trade_day.toordinal(),
+    )
     return {
-        "buy_fee_ppm": rate_to_ppm(params.buy_fee),
-        "sell_fee_ppm": rate_to_ppm(params.sell_fee),
-        "tax_ppm": resolve_sell_tax_ppm(
-            params,
-            ticker=ticker,
-            security_profile=security_profile,
-            trade_date=trade_date,
-            cfi_code=cfi_code,
-            security_name=security_name,
-        ),
-        "min_fee_milli": money_to_milli(params.min_fee),
+        "buy_fee_ppm": buy_fee_ppm,
+        "sell_fee_ppm": sell_fee_ppm,
+        "tax_ppm": tax_ppm,
+        "min_fee_milli": min_fee_milli,
         "fixed_risk_ppm": rate_to_ppm(params.fixed_risk),
     }
 
