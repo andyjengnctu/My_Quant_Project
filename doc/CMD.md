@@ -36,6 +36,7 @@ python apps/workbench.py
 # Workbench
 
 - `apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口。
+- Workbench 上方控制列提供股票代號輸入、常用股票下拉、候選股掃描與歷史績效股掃描。
 - K 線檢視中，交易明細與 Console 為獨立分頁。
 - 日常 GUI 問題先檢查 `tools/workbench_ui/single_stock_inspector.py`，再看 `tools/workbench_ui/workbench.py`。
 
@@ -56,6 +57,7 @@ python apps/workbench.py
 - `outputs/smart_downloader/`：下載器 issue log。
 - `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
+- `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取。
 
 ## 其他文件
 

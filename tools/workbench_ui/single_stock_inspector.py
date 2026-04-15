@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import io
+import json
 import os
+import re
 import subprocess
 import sys
 import traceback
 import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
+from html import unescape
 from tkinter import messagebox, ttk
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_profile_label
+from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
+from core.output_paths import ensure_output_dir
 from core.scanner_display import build_scanner_sort_probe_text
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
@@ -46,6 +53,162 @@ SIDEBAR_HISTORY_CHIP_TEXT = "符合歷史績效"
 SIDEBAR_CHIP_ACTIVE_BG = "#2090ff"
 SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
 SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
+WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
+WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
+OFFICIAL_COMPANY_NAME_SOURCE_URLS = (
+    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
+    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
+    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=5",
+    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=1",
+)
+SECURITY_CODE_PATTERN = re.compile(r"^[0-9A-Z]{4,7}$")
+FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP = {
+    "0050": "元大台灣50",
+    "00631L": "元大台灣50正2",
+    "00632R": "元大台灣50反1",
+    "00635U": "期元大S&P黃金",
+    "00679B": "元大美債20年",
+    "1101": "台泥",
+    "1216": "統一",
+    "2330": "台積電",
+    "2603": "長榮",
+    "2881": "富邦金",
+}
+
+
+def _normalize_security_code(value):
+    return str(value or "").strip().upper()
+
+
+def _build_workbench_cache_path():
+    output_dir = ensure_output_dir(WORKBENCH_PROJECT_ROOT, WORKBENCH_OUTPUT_CATEGORY)
+    return os.path.join(output_dir, WORKBENCH_CACHE_FILENAME)
+
+
+def _load_reduced_stock_company_name_cache():
+    cache_path = _build_workbench_cache_path()
+    if not os.path.isfile(cache_path):
+        return {"ticker_to_name": {}, "reduced_members": []}
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as cache_file:
+            payload = json.load(cache_file)
+    except (OSError, json.JSONDecodeError):
+        return {"ticker_to_name": {}, "reduced_members": []}
+
+    ticker_to_name = {
+        _normalize_security_code(ticker): str(name).strip()
+        for ticker, name in dict(payload.get("ticker_to_name") or {}).items()
+        if str(name).strip()
+    }
+    reduced_members = [
+        _normalize_security_code(ticker)
+        for ticker in list(payload.get("reduced_members") or [])
+        if _normalize_security_code(ticker)
+    ]
+    return {"ticker_to_name": ticker_to_name, "reduced_members": reduced_members}
+
+
+def _save_reduced_stock_company_name_cache(*, ticker_to_name, reduced_members):
+    cache_path = _build_workbench_cache_path()
+    payload = {
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_urls": list(OFFICIAL_COMPANY_NAME_SOURCE_URLS),
+        "reduced_members": sorted({_normalize_security_code(ticker) for ticker in reduced_members if _normalize_security_code(ticker)}),
+        "ticker_to_name": {
+            _normalize_security_code(ticker): str(name).strip()
+            for ticker, name in sorted(dict(ticker_to_name).items())
+            if _normalize_security_code(ticker) and str(name).strip()
+        },
+    }
+    with open(cache_path, "w", encoding="utf-8") as cache_file:
+        json.dump(payload, cache_file, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _normalize_company_name(raw_name):
+    return re.sub(r"\s+", " ", str(raw_name or "").strip())
+
+
+def _extract_company_name_pair_from_cells(cells):
+    normalized_cells = [_normalize_company_name(cell) for cell in cells if _normalize_company_name(cell)]
+    if not normalized_cells:
+        return None
+
+    first_cell = normalized_cells[0]
+    if first_cell in {"有價證券代號及名稱", "證券代號", "證券名稱"}:
+        return None
+
+    combined_match = re.match(r"^([0-9A-Z]{4,7})\s+(.+)$", first_cell)
+    if combined_match:
+        ticker = _normalize_security_code(combined_match.group(1))
+        company_name = _normalize_company_name(combined_match.group(2))
+        if SECURITY_CODE_PATTERN.fullmatch(ticker) and company_name:
+            return ticker, company_name
+
+    if len(normalized_cells) >= 2:
+        ticker = _normalize_security_code(normalized_cells[0])
+        company_name = _normalize_company_name(normalized_cells[1])
+        if SECURITY_CODE_PATTERN.fullmatch(ticker) and company_name and not SECURITY_CODE_PATTERN.fullmatch(company_name):
+            return ticker, company_name
+    return None
+
+
+def _extract_company_name_pairs_from_html(html_text):
+    tables = pd.read_html(io.StringIO(html_text))
+    company_name_map = {}
+    for table in tables:
+        normalized_columns = [_normalize_company_name(column) for column in list(table.columns)]
+        if not any("代號" in column or "名稱" in column for column in normalized_columns):
+            continue
+        normalized_table = table.copy().fillna("")
+        for row in normalized_table.itertuples(index=False):
+            pair = _extract_company_name_pair_from_cells(list(row))
+            if pair is None:
+                continue
+            ticker, company_name = pair
+            company_name_map.setdefault(ticker, company_name)
+    return company_name_map
+
+
+def _fetch_company_names_from_official_sources(timeout_seconds=6):
+    company_name_map = {}
+    request_headers = {"User-Agent": "Mozilla/5.0"}
+    for source_url in OFFICIAL_COMPANY_NAME_SOURCE_URLS:
+        request = Request(source_url, headers=request_headers)
+        with urlopen(request, timeout=timeout_seconds) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            html_text = response.read().decode(charset, errors="replace")
+        company_name_map.update(_extract_company_name_pairs_from_html(unescape(html_text)))
+    return company_name_map
+
+
+def _load_reduced_stock_tickers():
+    data_dir = get_dataset_dir(WORKBENCH_PROJECT_ROOT, "reduced")
+    if not os.path.isdir(data_dir):
+        return []
+    return sorted(
+        _normalize_security_code(os.path.splitext(name)[0])
+        for name in os.listdir(data_dir)
+        if name.lower().endswith(".csv")
+    )
+
+
+def _build_reduced_stock_dropdown_options(*, company_name_map=None):
+    tickers = _load_reduced_stock_tickers()
+    normalized_name_map = {
+        _normalize_security_code(ticker): _normalize_company_name(name)
+        for ticker, name in dict(company_name_map or {}).items()
+        if _normalize_company_name(name)
+    }
+    display_values = []
+    display_map = {}
+    for ticker in tickers:
+        company_name = normalized_name_map.get(ticker, "")
+        display_label = f"{ticker} | {company_name}" if company_name else ticker
+        display_values.append(display_label)
+        display_map[display_label] = ticker
+    return tickers, display_values, display_map
 
 
 class SingleStockBacktestInspectorPanel(ttk.Frame):
@@ -54,6 +217,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._result = None
         self._status_var = tk.StringVar(value="尚未執行")
         self._ticker_var = tk.StringVar()
+        self._reduced_stock_display_var = tk.StringVar()
+        self._reduced_stock_map = {}
+        self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
         self._candidate_display_var = tk.StringVar()
         self._candidate_map = {}
@@ -86,28 +252,35 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _build_ui(self):
         controls = ttk.Frame(self, padding=(8, 2, 8, 2), style="Workbench.TFrame")
         controls.pack(fill="x", pady=(0, 4))
-        controls.columnconfigure(10, weight=1)
+        controls.columnconfigure(11, weight=1)
 
         ttk.Label(controls, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, sticky="w")
         ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=18, style="Workbench.TEntry")
-        ticker_entry.grid(row=0, column=1, padx=(6, 12), sticky="w")
+        ticker_entry.grid(row=0, column=1, padx=(6, 8), sticky="w")
         ticker_entry.focus_set()
 
         ticker_entry.bind("<Return>", self._on_ticker_enter)
 
-        ttk.Button(controls, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=2, padx=(0, 8), sticky="w")
+        ttk.Label(controls, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, sticky="w")
+        self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
+        _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
+        self._reduced_stock_combo = ttk.Combobox(controls, state="readonly", width=28, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
+        self._reduced_stock_combo.grid(row=0, column=3, padx=(6, 8), sticky="w")
+        self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
+
+        ttk.Button(controls, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
         self._candidate_combo = ttk.Combobox(controls, state="readonly", width=34, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
-        self._candidate_combo.grid(row=0, column=3, padx=(0, 12), sticky="w")
+        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
         self._history_combo = ttk.Combobox(controls, state="readonly", width=58, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
-        self._history_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
+        self._history_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
-        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=6, padx=(0, 12), sticky="w")
-        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=7, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=8, sticky="w")
+        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=8, padx=(0, 12), sticky="w")
+        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=9, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=10, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -189,6 +362,103 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(footer, textvariable=self._status_var, style="Workbench.TLabel").pack(anchor="w")
 
         self._notebook.select(chart_tab)
+        self.after_idle(self._refresh_reduced_stock_company_names_if_needed)
+
+    def _build_initial_reduced_stock_company_name_map(self):
+        name_map = dict(FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP)
+        cache_payload = _load_reduced_stock_company_name_cache()
+        name_map.update(dict(cache_payload.get("ticker_to_name") or {}))
+        return name_map
+
+    def _apply_reduced_stock_dropdown_values(self, *, preferred_ticker=None):
+        current_ticker = _normalize_security_code(preferred_ticker or self._ticker_var.get())
+        _, display_values, display_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
+        self._reduced_stock_map = display_map
+        self._reduced_stock_combo.configure(values=display_values)
+        selected_display = ""
+        if current_ticker:
+            for display_label, ticker in display_map.items():
+                if ticker == current_ticker:
+                    selected_display = display_label
+                    break
+        self._reduced_stock_display_var.set(selected_display)
+
+    def _append_reduced_stock_lookup_message(self, message):
+        normalized_message = str(message or "").strip()
+        if not normalized_message:
+            return
+        self._append_console_text(f"[常用股票] {normalized_message}\n")
+
+    def _refresh_reduced_stock_company_names_if_needed(self):
+        reduced_tickers = _load_reduced_stock_tickers()
+        current_reduced_set = set(reduced_tickers)
+        cache_payload = _load_reduced_stock_company_name_cache()
+        cache_ticker_to_name = dict(cache_payload.get("ticker_to_name") or {})
+        cached_reduced_members = {
+            _normalize_security_code(ticker)
+            for ticker in list(cache_payload.get("reduced_members") or [])
+            if _normalize_security_code(ticker)
+        }
+        missing_tickers = sorted(
+            ticker for ticker in reduced_tickers
+            if not _normalize_company_name(self._reduced_stock_company_name_map.get(ticker) or cache_ticker_to_name.get(ticker))
+        )
+        reduced_members_changed = current_reduced_set != cached_reduced_members
+        if not missing_tickers and not reduced_members_changed:
+            return
+
+        if reduced_members_changed:
+            self._append_reduced_stock_lookup_message(
+                f"偵測到 reduced 代碼組變動，目前 {len(reduced_tickers)} 檔。"
+            )
+        if missing_tickers:
+            self._append_reduced_stock_lookup_message(
+                f"缺少中文名稱，嘗試查詢：{', '.join(missing_tickers)}"
+            )
+
+        try:
+            fetched_company_name_map = _fetch_company_names_from_official_sources()
+        except (ValueError, HTTPError, URLError, OSError) as exc:
+            self._append_reduced_stock_lookup_message(
+                f"官方中文名稱查詢失敗，保留既有快取：{type(exc).__name__}: {exc}"
+            )
+            return
+
+        updated_ticker_to_name = dict(cache_ticker_to_name)
+        newly_resolved_tickers = []
+        unresolved_tickers = []
+        for ticker in reduced_tickers:
+            fetched_company_name = _normalize_company_name(fetched_company_name_map.get(ticker))
+            if fetched_company_name:
+                if updated_ticker_to_name.get(ticker) != fetched_company_name:
+                    newly_resolved_tickers.append(ticker)
+                updated_ticker_to_name[ticker] = fetched_company_name
+                self._reduced_stock_company_name_map[ticker] = fetched_company_name
+                continue
+            if not _normalize_company_name(self._reduced_stock_company_name_map.get(ticker) or updated_ticker_to_name.get(ticker)):
+                unresolved_tickers.append(ticker)
+
+        try:
+            _save_reduced_stock_company_name_cache(
+                ticker_to_name=updated_ticker_to_name,
+                reduced_members=reduced_tickers,
+            )
+        except OSError as exc:
+            self._append_reduced_stock_lookup_message(
+                f"寫回常用股票中文名稱快取失敗：{type(exc).__name__}: {exc}"
+            )
+            return
+
+        self._reduced_stock_company_name_map.update(updated_ticker_to_name)
+        self._apply_reduced_stock_dropdown_values()
+        if newly_resolved_tickers:
+            self._append_reduced_stock_lookup_message(
+                f"已更新中文名稱：{', '.join(sorted(set(newly_resolved_tickers)))}"
+            )
+        if unresolved_tickers:
+            self._append_reduced_stock_lookup_message(
+                f"仍查不到中文名稱：{', '.join(unresolved_tickers)}"
+            )
 
     def _append_console_text(self, text):
         self._console_text.insert("end", text)
@@ -208,6 +478,13 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if show_dialog:
             messagebox.showerror("股票工具工作台", error_text)
         return error_text
+
+    def _on_reduced_stock_selected(self, _event=None):
+        selected = self._reduced_stock_display_var.get().strip()
+        ticker = self._reduced_stock_map.get(selected)
+        if ticker:
+            self._ticker_var.set(ticker)
+            self.after_idle(self._run_analysis)
 
     def _on_candidate_selected(self, _event=None):
         selected = self._candidate_display_var.get().strip()

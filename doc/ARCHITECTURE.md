@@ -114,7 +114,7 @@ project/
 - `trade_analysis`：單股分析、圖表與交易明細輸出。
 - `validate`：formal contract、schema、synthetic 與 real-case 驗證。
 - `local_regression`：reduced formal orchestrator 與 bundle 產出。
-- `workbench_ui`：GUI 主視窗與單股檢視頁面；K 線圖主檢視下，交易明細與 Console 以獨立分頁承接。
+- `workbench_ui`：GUI 主視窗與單股檢視頁面；上方控制列提供股票代號、常用股票、候選股與歷史績效股操作，K 線圖主檢視下交易明細與 Console 以獨立分頁承接。
 
 ## 依賴方向
 
@@ -128,6 +128,7 @@ project/
 - `outputs/local_regression/_staging/` 為 local regression / validate 共用暫存 staging 子目錄；不新增 `outputs/validate/` 根分類。
 - `outputs/debug_trade_log/` 為 `trade_analysis` 相容輸出目錄；為維持相容性，暫沿用 `debug_trade_log` 這個 legacy 名稱。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界，不代表子系統角色仍是 debug-only。
+- `outputs/workbench_ui/` 為 GUI runtime 快取分類；目前承接常用股票中文名稱快取。
 
 ## 維護原則
 
