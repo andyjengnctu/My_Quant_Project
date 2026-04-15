@@ -98,13 +98,16 @@ project/
 ## 正式入口
 
 - `apps/test_suite.py`：日常一鍵測試正式入口。
-- `tools/local_regression/formal_pipeline.py`：formal 步驟單一真理來源。
 - `apps/ml_optimizer.py`：optimizer 正式入口。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
 - `apps/vip_scanner.py`：scanner 正式入口。
-- `apps/workbench.py`：GUI / workbench 正式入口；`apps/workbench.py` 為單一 GUI 啟用入口。
-- `tools/trade_analysis/trade_log.py`：單股 trade-analysis 共用 backend / 開發輔助 CLI。
+- `apps/workbench.py`：GUI / workbench 正式入口；也是單股 trade-analysis 的單一使用者入口。
+
+## 正式單一真理來源 / 開發輔助
+
+- `tools/local_regression/formal_pipeline.py`：formal 步驟單一真理來源，供正式入口與 local regression 內部編排使用；不是使用者正式入口。
+- `tools/trade_analysis/trade_log.py`：單股 trade-analysis 共用 backend / 開發輔助 CLI；不是正式使用者入口。
 
 ## 子系統責任
 

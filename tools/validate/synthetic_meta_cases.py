@@ -457,6 +457,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     cmd_has_legacy_debug_labels = all(fragment in cmd_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_has_legacy_debug_labels = all(fragment in architecture_text for fragment in ("legacy `run_debug_*`", "`debug_trade_log`"))
     architecture_marks_legacy_as_compatibility = ("為維持相容性" in architecture_text) or ("以維持相容性" in architecture_text)
+    architecture_formal_entry_section = architecture_text.split("## 正式入口", 1)[1].split("## ", 1)[0] if "## 正式入口" in architecture_text else ""
 
     add_check(results, "meta_cmd_contract", case_id, "cmd_workbench_is_single_user_entry_for_trade_analysis", True, "`apps/workbench.py` 為 GUI 正式入口，也是單股 trade-analysis 的單一使用者入口" in cmd_text)
     add_check(results, "meta_cmd_contract", case_id, "cmd_trade_analysis_helper_described_as_backend_not_formal_entry", True, "`tools/trade_analysis/trade_log.py` 提供單股 trade-analysis 共用 backend / 開發輔助 CLI；正式使用者入口仍為 `apps/workbench.py`" in cmd_text)
@@ -471,6 +472,7 @@ def validate_trade_analysis_legacy_naming_documentation_contract_case(_base_para
     add_check(results, "meta_architecture_contract", case_id, "architecture_trade_analysis_mentions_legacy_debug_api_labels", True, architecture_has_legacy_debug_labels and architecture_marks_legacy_as_compatibility)
     add_check(results, "meta_architecture_contract", case_id, "architecture_output_section_marks_legacy_output_dir", True, "`outputs/debug_trade_log/`（trade_analysis legacy output dir）" in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_trade_log_formal_entry_label", False, "`tools/trade_analysis/trade_log.py` 為單股 trade-analysis 正式入口" in architecture_text)
+    add_check(results, "meta_architecture_contract", case_id, "architecture_formal_entry_section_excludes_trade_log_helper", False, "`tools/trade_analysis/trade_log.py`" in architecture_formal_entry_section)
     add_check(results, "meta_architecture_contract", case_id, "architecture_has_no_stale_debug_subsystem_label", False, "交易除錯子系統" in architecture_text)
 
     add_check(results, "meta_trade_analysis_cli_contract", case_id, "trade_log_prompt_uses_analysis_wording", True, "請輸入要分析的股票代號" in trade_log_text)
