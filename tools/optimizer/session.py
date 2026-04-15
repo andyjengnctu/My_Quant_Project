@@ -1,6 +1,7 @@
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
-from tools.optimizer.trial_inputs import _build_process_pool_executor, _build_thread_pool_executor
+from tools.optimizer.trial_inputs import _build_process_pool_executor
+from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 
 
 def close_study_storage(study):
@@ -75,6 +76,9 @@ class OptimizerSession:
             print_every_n_trials=profile_print_every_n_trials,
         )
         self._trial_prep_executor_bundle = None
+        self.static_fast_cache = {}
+        self.master_dates = set()
+        self.sorted_master_dates = []
 
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
         self.close_trial_prep_executor()
@@ -84,6 +88,11 @@ class OptimizerSession:
             output_dir=self.output_dir,
         )
         self.raw_data_cache_data_dir = data_dir
+        self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
+        self.master_dates = set()
+        for fast_df in self.static_fast_cache.values():
+            self.master_dates.update(get_fast_dates(fast_df))
+        self.sorted_master_dates = sorted(self.master_dates)
 
     def get_trial_prep_executor_bundle(self, max_workers):
         try:
@@ -103,12 +112,8 @@ class OptimizerSession:
         if not self.raw_data_cache:
             return None
 
-        if __import__('os').name == 'nt':
-            executor, pool_start_method, supports_initializer = _build_thread_pool_executor(requested_workers)
-            executor_kind = 'thread'
-        else:
-            executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
-            executor_kind = 'process'
+        executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
+        executor_kind = 'process'
         if executor_kind != 'thread' and not supports_initializer:
             executor.shutdown(wait=True, cancel_futures=False)
             return None
@@ -126,6 +131,9 @@ class OptimizerSession:
     def close_trial_prep_executor(self):
         bundle = self._trial_prep_executor_bundle
         self._trial_prep_executor_bundle = None
+        self.static_fast_cache = {}
+        self.master_dates = set()
+        self.sorted_master_dates = []
         if bundle is None:
             return
         executor = bundle.get("executor")

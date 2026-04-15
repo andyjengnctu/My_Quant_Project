@@ -41,20 +41,47 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
     return restore_money_like_from_milli(equity_milli, cash_template)
 
 
-FAST_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'Volume', 'ATR', 'buy_limit')
-FAST_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
+FAST_STATIC_FLOAT_FIELDS = ('Open', 'High', 'Low', 'Close', 'Volume')
+FAST_DYNAMIC_FLOAT_FIELDS = ('ATR', 'buy_limit')
+FAST_DYNAMIC_BOOL_FIELDS = ('is_setup', 'ind_sell_signal')
+FAST_FLOAT_FIELDS = FAST_STATIC_FLOAT_FIELDS + FAST_DYNAMIC_FLOAT_FIELDS
+FAST_BOOL_FIELDS = FAST_DYNAMIC_BOOL_FIELDS
 
 
-def pack_prepared_stock_data(df):
+
+def pack_static_market_data(df):
     packed = {
         '_packed_market_data': True,
         'dates': tuple(df.index.tolist()),
         'date_to_pos': {dt: i for i, dt in enumerate(df.index)},
         'security_profile': df.attrs.get('security_profile'),
     }
-    for field in FAST_FLOAT_FIELDS:
+    for field in FAST_STATIC_FLOAT_FIELDS:
         packed[field] = df[field].to_numpy(dtype=np.float64, copy=True)
-    for field in FAST_BOOL_FIELDS:
+    return packed
+
+
+def pack_optimizer_dynamic_data(precomputed_signals):
+    atr_main, buy_condition, sell_condition, buy_limits = precomputed_signals
+    return {
+        'ATR': np.asarray(atr_main, dtype=np.float64),
+        'buy_limit': np.asarray(buy_limits, dtype=np.float64),
+        'is_setup': np.asarray(buy_condition, dtype=bool),
+        'ind_sell_signal': np.asarray(sell_condition, dtype=bool),
+    }
+
+
+def merge_static_market_with_dynamic(static_data, dynamic_data):
+    merged = dict(static_data)
+    merged.update(dynamic_data)
+    return merged
+
+
+def pack_prepared_stock_data(df):
+    packed = pack_static_market_data(df)
+    for field in FAST_DYNAMIC_FLOAT_FIELDS:
+        packed[field] = df[field].to_numpy(dtype=np.float64, copy=True)
+    for field in FAST_DYNAMIC_BOOL_FIELDS:
         packed[field] = df[field].to_numpy(dtype=bool, copy=True)
     return packed
 
@@ -138,6 +165,40 @@ def build_normal_setup_index(all_dfs_fast):
                 if fast_df[y_date]['is_setup']:
                     setup_index.setdefault(dates[i], []).append((ticker, i - 1, i))
     return setup_index
+
+
+def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None):
+    t_total_start = time.perf_counter() if profile_stats is not None else None
+    resolved_ticker = ticker or df.attrs.get('ticker')
+
+    if profile_stats is not None:
+        profile_stats['copy_sec'] = 0.0
+        profile_stats['assign_columns_sec'] = 0.0
+
+    t0 = time.perf_counter() if profile_stats is not None else None
+    precomputed_signals = generate_signals(df, params, ticker=resolved_ticker)
+    if profile_stats is not None:
+        profile_stats['generate_signals_sec'] = time.perf_counter() - t0
+
+    t0 = time.perf_counter() if profile_stats is not None else None
+    _stats_unused, standalone_logs = run_v16_backtest(
+        df,
+        params,
+        return_logs=True,
+        precomputed_signals=precomputed_signals,
+        ticker=resolved_ticker,
+        collect_stats=False,
+    )
+    if profile_stats is not None:
+        profile_stats['run_backtest_sec'] = time.perf_counter() - t0
+
+    t0 = time.perf_counter() if profile_stats is not None else None
+    dynamic_data = pack_optimizer_dynamic_data(precomputed_signals)
+    if profile_stats is not None:
+        profile_stats['to_dict_sec'] = time.perf_counter() - t0
+        profile_stats['total_sec'] = time.perf_counter() - t_total_start
+
+    return dynamic_data, standalone_logs
 
 
 def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False, ticker=None):

@@ -10,7 +10,7 @@ import pandas as pd
 
 from core.data_utils import get_required_min_rows
 from core.log_utils import format_exception_summary
-from core.portfolio_fast_data import get_fast_dates, pack_prepared_stock_data, prep_stock_data_and_trades
+from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
@@ -32,7 +32,7 @@ def worker_prep_data(ticker, df, params):
                 "ticker": ticker,
                 "ok": False,
                 "reason": f"有效資料不足: 清洗後僅剩 {len(df)} 列，至少需要 {min_rows_needed} 列",
-                "data": None,
+                "dynamic": None,
                 "logs": None,
                 "profile": {
                     "worker_total_sec": time.perf_counter() - worker_start,
@@ -45,15 +45,13 @@ def worker_prep_data(ticker, df, params):
                 },
             }
 
-        df_prepared, logs = prep_stock_data_and_trades(df, params, profile_stats=profile_stats)
-        pack_start = time.perf_counter()
-        packed_data = pack_prepared_stock_data(df_prepared)
-        pack_sec = time.perf_counter() - pack_start
+        dynamic_data, logs = prep_optimizer_stock_data_bundle(df, params, profile_stats=profile_stats, ticker=ticker)
+        pack_sec = float(profile_stats.get('to_dict_sec', 0.0))
         return {
             "ticker": ticker,
             "ok": True,
             "reason": "",
-            "data": packed_data,
+            "dynamic": dynamic_data,
             "logs": logs,
             "profile": {
                 "worker_total_sec": time.perf_counter() - worker_start,
@@ -73,7 +71,7 @@ def worker_prep_data(ticker, df, params):
                 "ticker": ticker,
                 "ok": False,
                 "reason": f"{type(exc).__name__}: {exc}" + (f" | Traceback: {tb_tail}" if tb_tail else ""),
-                "data": None,
+                "dynamic": None,
                 "logs": None,
                 "profile": {
                     "worker_total_sec": time.perf_counter() - worker_start,
@@ -101,7 +99,7 @@ def worker_prep_data_from_cache(ticker, params):
     return worker_prep_data(ticker, df, params)
 
 
-def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile):
+def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache):
     ticker = result["ticker"]
     result_profile = result.get("profile", {})
 
@@ -115,9 +113,9 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_f
 
     if result["ok"]:
         prep_profile["ok_count"] += 1
-        all_dfs_fast[ticker] = result["data"]
+        all_dfs_fast[ticker] = merge_static_market_with_dynamic(static_fast_cache[ticker], result["dynamic"])
         all_trade_logs[ticker] = result["logs"]
-        master_dates.update(get_fast_dates(result["data"]))
+        master_dates.update(static_fast_cache[ticker]['dates'])
         return
 
     prep_profile["fail_count"] += 1
@@ -177,7 +175,7 @@ def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
     return [batch for batch in batches if batch]
 
 
-def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind):
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, max_workers, executor_kind):
     ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
     if executor_kind == 'thread':
         futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params) for batch in ticker_batches]
@@ -186,11 +184,13 @@ def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_l
     for future in as_completed(futures):
         batch_results = future.result()
         for result in batch_results:
-            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None):
-    all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None):
+    resolved_static_fast_cache = static_fast_cache or {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
+    all_dfs_fast, all_trade_logs = {}, {}
+    master_dates = set()
     prep_failures = []
     prep_profile = {
         "worker_total_sum_sec": 0.0,
@@ -217,31 +217,28 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
             executor_kind = executor_bundle.get("executor_kind", 'process')
-            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
         else:
-            if os.name == 'nt':
-                created_executor, pool_start_method, supports_initializer = _build_thread_pool_executor(max_workers)
-                executor_kind = 'thread'
-            else:
-                created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
-                executor_kind = 'process'
+            created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
+            executor_kind = 'process'
             try:
                 if executor_kind == 'thread':
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
                 elif supports_initializer:
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
                 else:
                     futures = [created_executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
                     for future in as_completed(futures):
                         result = future.result()
-                        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+                        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
             finally:
                 created_executor.shutdown(wait=True, cancel_futures=False)
                 created_executor = None
     except BrokenProcessPool as exc:
         prep_mode = "sequential_fallback"
         pool_error_text = f"{type(exc).__name__}: {exc}"
-        all_dfs_fast, all_trade_logs, master_dates = {}, {}, set()
+        all_dfs_fast, all_trade_logs = {}, {}
+        master_dates = set()
         prep_failures = []
         prep_profile = {
             "worker_total_sum_sec": 0.0,
@@ -256,7 +253,7 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
         }
         for ticker, df in raw_data_cache.items():
             result = worker_prep_data(ticker, df, params)
-            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile)
+            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
 
     prep_wall_sec = time.perf_counter() - prep_wall_start
     return {
