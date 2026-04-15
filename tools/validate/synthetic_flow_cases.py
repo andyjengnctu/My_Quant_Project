@@ -6,6 +6,7 @@ import pandas as pd
 from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
+from core.price_utils import calc_half_take_profit_sell_qty
 from core.trade_plans import build_normal_candidate_plan, create_signal_tracking_state, execute_pre_market_entry_plan
 from core.position_step import execute_bar_step
 
@@ -411,8 +412,8 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_current_sl_starts_from_tighter_of_initial_vs_trail", expected_filled_current_sl, None if tp_position is None else float(tp_position['sl']))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_trailing_stop_uses_actual_fill_basis", expected_filled_init_trail, None if tp_position is None else float(tp_position['trailing_stop']))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "filled_position_tp_half_uses_actual_fill_not_limit", expected_filled_target, None if tp_position is None else float(tp_position['tp_half']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_does_not_queue_tp_action", None, None if tp_position is None else tp_position.get('pending_exit_action'))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_does_not_queue_stop_action", None, None if stop_position is None else stop_position.get('pending_exit_action'))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if tp_position is None else tp_position.get('pending_exit_action'))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_stop_hit_queues_next_day_open_action", 'STOP', None if stop_position is None else stop_position.get('pending_exit_action'))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_high_watermark_tracks_entry_bar_high", 109.0, None if tp_position is None else float(tp_position.get('highest_high_since_entry', float('nan'))))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_counterfactual_entry_ref_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_invalidation_barrier_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
@@ -450,12 +451,13 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     )
     stop_exec_context = next((ctx for ctx in updated_stop_position.get('_last_exec_contexts', []) if ctx.get('event') == 'STOP'), None)
 
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_trailing_stop_uses_entry_to_date_high_watermark", 104.0, float(updated_tp_position['trailing_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_effective_stop_updates_from_high_watermark_trail", 104.0, float(updated_tp_position['sl']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_no_exit_when_bar_stays_above_updated_stop", [], list(tp_events))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_executes_only_when_rehit_after_entry_day", True, 'STOP' in stop_events)
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_executes_at_open_without_rehit", True, 'DEFERRED_TP_HALF_ON_OPEN' in tp_events and 'TP_HALF' in tp_events)
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_trailing_stop_updates_after_deferred_tp", 104.0, float(updated_tp_position['trailing_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_effective_stop_updates_after_deferred_tp", 104.0, float(updated_tp_position['sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_reduces_position_even_without_rehit", tp_position['initial_qty'] - calc_half_take_profit_sell_qty(tp_position['initial_qty'], params.tp_percent), int(updated_tp_position['qty']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_executes_from_queued_entry_day_trigger", True, 'DEFERRED_STOP_ON_OPEN' in stop_events and 'STOP' in stop_events)
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_records_current_bar_execution_context", 92.0, None if stop_exec_context is None else float(stop_exec_context['exec_price']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_closes_position_after_rehit", 0, int(updated_stop_position['qty']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_closes_position_without_rehit", 0, int(updated_stop_position['qty']))
 
     summary['candidate_target_price'] = None if candidate_plan is None else float(candidate_plan['target_price'])
     summary['filled_tp_half'] = None if tp_position is None else float(tp_position['tp_half'])

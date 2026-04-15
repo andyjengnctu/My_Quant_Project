@@ -137,6 +137,29 @@ def _apply_entry_day_position_state(position, *, t_high):
     return position
 
 
+def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
+    if position is None or position.get("qty", 0) <= 0:
+        return position
+
+    stop_hit = (not pd.isna(t_low)) and price_to_milli(t_low) <= int(position["sl_milli"])
+    half_sell_qty = calc_half_take_profit_sell_qty(position["qty"], params.tp_percent)
+    tp_hit = (not pd.isna(t_high)) and price_to_milli(t_high) >= int(position["tp_half_milli"])
+
+    if stop_hit and tp_hit:
+        tp_hit = False
+
+    position["entry_day_stop_triggered"] = bool(stop_hit)
+    position["entry_day_tp_triggered"] = bool(tp_hit)
+
+    if stop_hit:
+        position["pending_exit_action"] = "STOP"
+        position["pending_exit_trigger_price"] = milli_to_price(position["sl_milli"])
+    elif tp_hit and half_sell_qty > 0 and not position.get("sold_half", False):
+        position["pending_exit_action"] = "TP_HALF"
+        position["pending_exit_trigger_price"] = milli_to_price(position["tp_half_milli"])
+    return position
+
+
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
 def build_position_from_entry_fill(
     buy_price,
@@ -288,6 +311,7 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         trade_date=trade_date,
     )
     position = _apply_entry_day_position_state(position, t_high=t_high)
+    position = _apply_entry_day_pending_exit(position, t_high=t_high, t_low=t_low, params=params)
     result["filled"] = True
     result["count_as_missed_buy"] = False
     result["position"] = position

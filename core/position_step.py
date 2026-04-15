@@ -117,6 +117,55 @@ def _update_trailing_stop(position, *, y_high, y_atr, params):
     position['sl'] = milli_to_money(position['sl_milli'])
 
 
+def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None):
+    pending_action = position.get('pending_exit_action')
+    if pending_action is None or position.get('qty', 0) <= 0:
+        return False, 0, 0, []
+
+    sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get('ticker'))
+    if sell_block_reason is not None:
+        return True, 0, 0, ['MISSED_SELL', sell_block_reason]
+
+    exec_price = adjust_long_sell_fill_price(t_open, ticker=position.get('ticker'))
+    if pending_action == 'STOP':
+        leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
+            position,
+            event='STOP',
+            exec_price=exec_price,
+            sell_qty=position['qty'],
+            params=params,
+            deferred=True,
+            trigger_price=position.get('pending_exit_trigger_price'),
+            trade_date=current_date,
+        )
+        position['pending_exit_action'] = None
+        position['pending_exit_trigger_price'] = float('nan')
+        return True, leg_freed_cash_milli, leg_pnl_milli, ['DEFERRED_STOP_ON_OPEN', 'STOP']
+
+    if pending_action == 'TP_HALF':
+        sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
+        if sell_qty <= 0:
+            position['pending_exit_action'] = None
+            position['pending_exit_trigger_price'] = float('nan')
+            return True, 0, 0, []
+        leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
+            position,
+            event='TP_HALF',
+            exec_price=exec_price,
+            sell_qty=sell_qty,
+            params=params,
+            deferred=True,
+            trigger_price=position.get('pending_exit_trigger_price'),
+            trade_date=current_date,
+        )
+        position['sold_half'] = True
+        position['pending_exit_action'] = None
+        position['pending_exit_trigger_price'] = float('nan')
+        return True, leg_freed_cash_milli, leg_pnl_milli, ['DEFERRED_TP_HALF_ON_OPEN', 'TP_HALF']
+
+    return False, 0, 0, []
+
+
 def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None):
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
@@ -124,6 +173,24 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
 
     if position['qty'] <= 0:
         return position, 0.0, 0.0, events
+
+    pending_consumed, pending_freed_cash_milli, pending_pnl_milli, pending_events = _try_execute_pending_exit_on_open(
+        position,
+        y_close=y_close,
+        t_open=t_open,
+        t_high=t_high,
+        t_low=t_low,
+        t_close=t_close,
+        t_volume=t_volume,
+        params=params,
+        current_date=current_date,
+    )
+    if pending_consumed:
+        freed_cash_milli += pending_freed_cash_milli
+        pnl_realized_milli += pending_pnl_milli
+        events.extend(pending_events)
+        if position['qty'] <= 0 or 'MISSED_SELL' in pending_events:
+            return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
 
     _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params)
 

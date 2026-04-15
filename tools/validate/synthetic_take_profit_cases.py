@@ -154,7 +154,7 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     if deferred_stop_position is None:
         raise ValueError("validate_synthetic_conservative_executable_exit_interpretation_case 需要有效成交部位")
 
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "entry_day_stop_is_not_queued_under_t_plus_2_rule", None, deferred_stop_position.get("pending_exit_action"))
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "entry_day_stop_queues_next_day_open_execution", "STOP", deferred_stop_position.get("pending_exit_action"))
 
     deferred_original_qty = int(deferred_stop_position["qty"])
     deferred_original_cost_basis_milli = int(deferred_stop_position["remaining_cost_basis_milli"])
@@ -164,8 +164,8 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
         y_ind_sell=False,
         y_close=89.0,
         t_open=92.0,
-        t_high=93.0,
-        t_low=91.5,
+        t_high=92.8,
+        t_low=92.0,
         t_close=92.5,
         t_volume=1000.0,
         params=params,
@@ -176,12 +176,12 @@ def validate_synthetic_conservative_executable_exit_interpretation_case(base_par
     expected_deferred_freed_cash = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"])
     expected_deferred_pnl = milli_to_money(expected_deferred_sell_ledger["net_sell_total_milli"] - deferred_original_cost_basis_milli)
 
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_executes_only_after_current_bar_rehits_stop", True, "STOP" in deferred_events)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_has_no_deferred_marker", False, "DEFERRED_STOP_ON_OPEN" in deferred_events)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_executes_from_queued_open_without_rehit", True, "STOP" in deferred_events)
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_keeps_deferred_marker", True, "DEFERRED_STOP_ON_OPEN" in deferred_events)
     add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_uses_current_bar_first_worse_executable_open", 92.0, None if deferred_stop_context is None else float(deferred_stop_context["exec_price"]))
     add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_freed_cash_uses_current_bar_execution", expected_deferred_freed_cash, float(deferred_freed_cash), tol=0.01)
     add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_realized_pnl_uses_current_bar_execution", expected_deferred_pnl, float(deferred_pnl_realized), tol=0.01)
-    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_closes_position_after_rehit", 0, int(updated_deferred_position["qty"]))
+    add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_closes_position_without_rehit", 0, int(updated_deferred_position["qty"]))
     add_check(results, "synthetic_conservative_executable_exit_interpretation", case_id, "next_day_stop_leaves_no_pending_action", None, updated_deferred_position.get("pending_exit_action"))
 
     summary["same_bar_events"] = list(events)
