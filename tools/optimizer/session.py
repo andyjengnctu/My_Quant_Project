@@ -1,6 +1,6 @@
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
-from tools.optimizer.trial_inputs import _build_process_pool_executor
+from tools.optimizer.trial_inputs import _build_process_pool_executor, _build_thread_pool_executor
 
 
 def close_study_storage(study):
@@ -103,8 +103,13 @@ class OptimizerSession:
         if not self.raw_data_cache:
             return None
 
-        executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
-        if not supports_initializer:
+        if __import__('os').name == 'nt':
+            executor, pool_start_method, supports_initializer = _build_thread_pool_executor(requested_workers)
+            executor_kind = 'thread'
+        else:
+            executor, pool_start_method, supports_initializer = _build_process_pool_executor(requested_workers, self.raw_data_cache)
+            executor_kind = 'process'
+        if executor_kind != 'thread' and not supports_initializer:
             executor.shutdown(wait=True, cancel_futures=False)
             return None
 
@@ -113,6 +118,7 @@ class OptimizerSession:
             "max_workers": requested_workers,
             "data_dir": self.raw_data_cache_data_dir,
             "pool_start_method": pool_start_method,
+            "executor_kind": executor_kind,
         }
         self._trial_prep_executor_bundle = bundle
         return bundle

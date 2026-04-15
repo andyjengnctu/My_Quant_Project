@@ -33,6 +33,7 @@ def finalize_open_position_at_end(
     return_logs,
     params,
     ticker=None,
+    collect_stats=True,
 ):
     end_position_qty = position['qty']
     had_open_position_at_end = end_position_qty > 0
@@ -77,19 +78,21 @@ def finalize_open_position_at_end(
     if return_logs:
         trade_logs.append({'exit_date': final_date, 'pnl': total_pnl, 'r_mult': trade_r_mult})
 
-    if total_pnl_milli > 0:
-        full_wins += 1
-        total_profit_milli += total_pnl_milli
-        total_r_win += trade_r_mult
-    else:
-        total_loss_milli += abs(total_pnl_milli)
-        total_r_loss += abs(trade_r_mult)
+    if collect_stats:
+        if total_pnl_milli > 0:
+            full_wins += 1
+            total_profit_milli += total_pnl_milli
+            total_r_win += trade_r_mult
+        else:
+            total_loss_milli += abs(total_pnl_milli)
+            total_r_loss += abs(trade_r_mult)
 
     current_capital_milli += sell_ledger['net_sell_total_milli']
     current_equity_milli = current_capital_milli
-    peak_capital_milli = max(peak_capital_milli, current_equity_milli)
-    current_drawdown_pct = ((peak_capital_milli - current_equity_milli) / peak_capital_milli) * 100 if peak_capital_milli > 0 else 0.0
-    max_drawdown_pct = max(max_drawdown_pct, current_drawdown_pct)
+    if collect_stats:
+        peak_capital_milli = max(peak_capital_milli, current_equity_milli)
+        current_drawdown_pct = ((peak_capital_milli - current_equity_milli) / peak_capital_milli) * 100 if peak_capital_milli > 0 else 0.0
+        max_drawdown_pct = max(max_drawdown_pct, current_drawdown_pct)
     position['qty'] = 0
     position['remaining_cost_basis_milli'] = 0
 

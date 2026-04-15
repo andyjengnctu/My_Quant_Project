@@ -16,7 +16,7 @@ from core.trade_plans import (
 )
 
 
-def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None):
+def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True):
     if params is None:
         params = V16StrategyParams()
 
@@ -44,6 +44,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     total_r_multiple, total_r_win, total_r_loss, total_bars_held = 0.0, 0.0, 0.0, 0
     trade_logs = []
     currentEquity_milli = currentCapital_milli
+    collect_stats = bool(collect_stats)
 
     if len(C) == 0:
         stats_dict = build_backtest_stats(
@@ -73,20 +74,22 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         )
         stats_dict['is_candidate'] = False
         if return_logs:
-            return stats_dict, trade_logs
-        return stats_dict
+            return (stats_dict if collect_stats else None), trade_logs
+        return stats_dict if collect_stats else None
 
     for j in range(1, len(C)):
         if np.isnan(ATR_main[j - 1]):
-            currentEquity_milli = currentCapital_milli
-            peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
-            currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
-            maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
+            if collect_stats:
+                currentEquity_milli = currentCapital_milli
+                peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
+                currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
+                maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
             continue
 
         pos_start_of_current_bar = position['qty']
         if pos_start_of_current_bar > 0:
-            total_bars_held += 1
+            if collect_stats:
+                total_bars_held += 1
             position, _freed_cash, _pnl_realized, events = execute_bar_step(
                 position,
                 ATR_main[j - 1],
@@ -106,18 +109,20 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
                 trade_r_mult = calc_ratio_from_milli(position['realized_pnl_milli'], position.get('initial_risk_total_milli', 0))
-                total_r_multiple += trade_r_mult
-                tradeCount += 1
+                if collect_stats:
+                    total_r_multiple += trade_r_mult
+                    tradeCount += 1
                 if return_logs:
                     trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
-                if position['realized_pnl_milli'] > 0:
-                    fullWins += 1
-                    totalProfit_milli += position['realized_pnl_milli']
-                    total_r_win += trade_r_mult
-                else:
-                    totalLoss_milli += abs(position['realized_pnl_milli'])
-                    total_r_loss += abs(trade_r_mult)
-            elif 'MISSED_SELL' in events:
+                if collect_stats:
+                    if position['realized_pnl_milli'] > 0:
+                        fullWins += 1
+                        totalProfit_milli += position['realized_pnl_milli']
+                        total_r_win += trade_r_mult
+                    else:
+                        totalLoss_milli += abs(position['realized_pnl_milli'])
+                        total_r_loss += abs(trade_r_mult)
+            elif 'MISSED_SELL' in events and collect_stats:
                 missedSellCount += 1
 
         isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
@@ -162,7 +167,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
-            elif entry_result['count_as_missed_buy']:
+            elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
@@ -193,28 +198,29 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
-            elif entry_result['count_as_missed_buy']:
+            elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
 
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j], t_open=O[j], params=params):
             active_extended_signal = None
 
-        currentEquity_milli = currentCapital_milli
-        if position['qty'] > 0:
-            floating_exec_price = adjust_long_sell_fill_price(C[j], ticker=resolved_ticker)
-            floating_sell_ledger = build_sell_ledger_from_price(
-                floating_exec_price,
-                position['qty'],
-                params,
-                ticker=position.get('ticker', resolved_ticker),
-                security_profile=position.get('security_profile'),
-                trade_date=Dates[j],
-            )
-            currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
+        if collect_stats:
+            currentEquity_milli = currentCapital_milli
+            if position['qty'] > 0:
+                floating_exec_price = adjust_long_sell_fill_price(C[j], ticker=resolved_ticker)
+                floating_sell_ledger = build_sell_ledger_from_price(
+                    floating_exec_price,
+                    position['qty'],
+                    params,
+                    ticker=position.get('ticker', resolved_ticker),
+                    security_profile=position.get('security_profile'),
+                    trade_date=Dates[j],
+                )
+                currentEquity_milli = currentCapital_milli + floating_sell_ledger['net_sell_total_milli']
 
-        peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
-        currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
-        maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
+            peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
+            currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
+            maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
     final_state = finalize_open_position_at_end(
         position=position,
@@ -235,6 +241,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         trade_logs=trade_logs,
         return_logs=return_logs,
         params=params,
+        collect_stats=collect_stats,
     )
     currentCapital_milli = final_state['current_capital_milli']
     currentEquity_milli = final_state['current_equity_milli']
@@ -249,6 +256,11 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     had_open_position_at_end = final_state['had_open_position_at_end']
     end_position_qty = final_state['end_position_qty']
     trade_logs = final_state['trade_logs']
+
+    if not collect_stats:
+        if return_logs:
+            return None, trade_logs
+        return None
 
     avg_bars_held = total_bars_held / tradeCount if tradeCount > 0 else 0
     stats_dict = build_backtest_stats(

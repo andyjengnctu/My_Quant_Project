@@ -164,7 +164,25 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
         profile_stats['assign_columns_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    stats_dict, standalone_logs = run_v16_backtest(df, params, return_logs=True, precomputed_signals=precomputed_signals, ticker=resolved_ticker)
+    if return_stats:
+        stats_dict, standalone_logs = run_v16_backtest(
+            df,
+            params,
+            return_logs=True,
+            precomputed_signals=precomputed_signals,
+            ticker=resolved_ticker,
+            collect_stats=True,
+        )
+    else:
+        _stats_unused, standalone_logs = run_v16_backtest(
+            df,
+            params,
+            return_logs=True,
+            precomputed_signals=precomputed_signals,
+            ticker=resolved_ticker,
+            collect_stats=False,
+        )
+        stats_dict = None
     if profile_stats is not None:
         profile_stats['run_backtest_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start

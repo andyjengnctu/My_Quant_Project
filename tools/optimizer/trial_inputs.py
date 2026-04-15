@@ -2,7 +2,7 @@ import inspect
 import os
 import time
 import traceback
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 
@@ -142,6 +142,14 @@ def _build_process_pool_executor(max_workers, raw_data_cache):
     return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
 
 
+def _build_thread_pool_executor(max_workers):
+    return ThreadPoolExecutor(max_workers=max_workers), 'thread', False
+
+
+def worker_prep_batch(raw_data_cache, tickers, params):
+    return [worker_prep_data(ticker, raw_data_cache[ticker], params) for ticker in tickers]
+
+
 def worker_prep_batch_from_cache(tickers, params):
     return [worker_prep_data_from_cache(ticker, params) for ticker in tickers]
 
@@ -169,9 +177,12 @@ def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
     return [batch for batch in batches if batch]
 
 
-def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers):
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind):
     ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
-    futures = [executor.submit(worker_prep_batch_from_cache, batch, params) for batch in ticker_batches]
+    if executor_kind == 'thread':
+        futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params) for batch in ticker_batches]
+    else:
+        futures = [executor.submit(worker_prep_batch_from_cache, batch, params) for batch in ticker_batches]
     for future in as_completed(futures):
         batch_results = future.result()
         for result in batch_results:
@@ -199,17 +210,26 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
     pool_error_text = None
     tickers = list(raw_data_cache.keys())
     created_executor = None
+    executor_kind = 'process'
 
     try:
         if executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
-            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers)
+            executor_kind = executor_bundle.get("executor_kind", 'process')
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
         else:
-            created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
+            if os.name == 'nt':
+                created_executor, pool_start_method, supports_initializer = _build_thread_pool_executor(max_workers)
+                executor_kind = 'thread'
+            else:
+                created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
+                executor_kind = 'process'
             try:
-                if supports_initializer:
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers)
+                if executor_kind == 'thread':
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
+                elif supports_initializer:
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, max_workers, executor_kind)
                 else:
                     futures = [created_executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
                     for future in as_completed(futures):
