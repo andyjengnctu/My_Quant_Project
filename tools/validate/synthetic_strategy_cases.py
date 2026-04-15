@@ -1117,6 +1117,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         def print_optimizer_prep_summary(self):
             return None
 
+        def close_trial_prep_executor(self):
+            return None
+
     qualified_trial = SimpleNamespace(
         number=7,
         params={"high_len": 65, "atr_len": 13},
