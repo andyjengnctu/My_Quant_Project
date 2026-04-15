@@ -12,42 +12,17 @@ from core.data_utils import get_required_min_rows
 from core.log_utils import format_exception_summary
 from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
-from tools.optimizer.feature_cache import build_optimizer_feature_cache_for_ticker
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
 _WORKER_RAW_DATA_CACHE = None
-_WORKER_FEATURE_CACHE = None
-_WORKER_FEATURE_CONFIG = None
 
 
-def init_worker_raw_data_cache(raw_data_cache, feature_config, eager_prebuild=False):
-    global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_CACHE, _WORKER_FEATURE_CONFIG
+def init_worker_raw_data_cache(raw_data_cache):
+    global _WORKER_RAW_DATA_CACHE
     _WORKER_RAW_DATA_CACHE = raw_data_cache
-    _WORKER_FEATURE_CACHE = {}
-    _WORKER_FEATURE_CONFIG = feature_config
-    if eager_prebuild and feature_config is not None:
-        for ticker, df in raw_data_cache.items():
-            _WORKER_FEATURE_CACHE[ticker] = build_optimizer_feature_cache_for_ticker(df, feature_lengths=feature_config)
 
 
-def worker_ping():
-    return os.getpid()
-
-
-def _resolve_feature_cache_for_ticker(*, ticker, df, optimizer_feature_cache, optimizer_feature_config):
-    if optimizer_feature_cache is not None:
-        cached = optimizer_feature_cache.get(ticker)
-        if cached is not None:
-            return cached
-    if optimizer_feature_config is None:
-        return None
-    built = build_optimizer_feature_cache_for_ticker(df, feature_lengths=optimizer_feature_config)
-    if optimizer_feature_cache is not None:
-        optimizer_feature_cache[ticker] = built
-    return built
-
-
-def worker_prep_data(ticker, df, params, feature_cache=None):
+def worker_prep_data(ticker, df, params):
     worker_start = time.perf_counter()
     profile_stats = {}
     try:
@@ -70,7 +45,7 @@ def worker_prep_data(ticker, df, params, feature_cache=None):
                 },
             }
 
-        dynamic_data, logs = prep_optimizer_stock_data_bundle(df, params, profile_stats=profile_stats, ticker=ticker, feature_cache=feature_cache)
+        dynamic_data, logs = prep_optimizer_stock_data_bundle(df, params, profile_stats=profile_stats, ticker=ticker)
         pack_sec = float(profile_stats.get('to_dict_sec', 0.0))
         return {
             "ticker": ticker,
@@ -114,23 +89,17 @@ def worker_prep_data(ticker, df, params, feature_cache=None):
 
 
 def worker_prep_data_from_cache(ticker, params):
-    global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_CACHE, _WORKER_FEATURE_CONFIG
+    global _WORKER_RAW_DATA_CACHE
     if _WORKER_RAW_DATA_CACHE is None:
         raise RuntimeError("optimizer worker raw_data_cache 尚未初始化")
     try:
         df = _WORKER_RAW_DATA_CACHE[ticker]
     except KeyError as exc:
         raise RuntimeError(f"optimizer worker 找不到 ticker={ticker} 的快取資料") from exc
-    feature_cache = _resolve_feature_cache_for_ticker(
-        ticker=ticker,
-        df=df,
-        optimizer_feature_cache=_WORKER_FEATURE_CACHE,
-        optimizer_feature_config=_WORKER_FEATURE_CONFIG,
-    )
-    return worker_prep_data(ticker, df, params, feature_cache=feature_cache)
+    return worker_prep_data(ticker, df, params)
 
 
-def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache, *, use_static_master_dates=False):
+def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache):
     ticker = result["ticker"]
     result_profile = result.get("profile", {})
 
@@ -146,15 +115,14 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_f
         prep_profile["ok_count"] += 1
         all_dfs_fast[ticker] = merge_static_market_with_dynamic(static_fast_cache[ticker], result["dynamic"])
         all_trade_logs[ticker] = result["logs"]
-        if not use_static_master_dates:
-            master_dates.update(static_fast_cache[ticker]['dates'])
+        master_dates.update(static_fast_cache[ticker]['dates'])
         return
 
     prep_profile["fail_count"] += 1
     prep_failures.append((ticker, result["reason"]))
 
 
-def _build_process_pool_executor(max_workers, raw_data_cache, feature_config, *, eager_prebuild=False):
+def _build_process_pool_executor(max_workers, raw_data_cache):
     process_pool_kwargs, pool_start_method = get_process_pool_executor_kwargs()
     executor_kwargs = dict(process_pool_kwargs)
     if os.name != "nt" and "mp_context" in inspect.signature(ProcessPoolExecutor).parameters:
@@ -168,7 +136,7 @@ def _build_process_pool_executor(max_workers, raw_data_cache, feature_config, *,
     supports_initializer = "initializer" in inspect.signature(ProcessPoolExecutor).parameters
     if supports_initializer:
         executor_kwargs["initializer"] = init_worker_raw_data_cache
-        executor_kwargs["initargs"] = (raw_data_cache, feature_config, eager_prebuild)
+        executor_kwargs["initargs"] = (raw_data_cache,)
     return ProcessPoolExecutor(max_workers=max_workers, **executor_kwargs), pool_start_method, supports_initializer
 
 
@@ -176,33 +144,20 @@ def _build_thread_pool_executor(max_workers):
     return ThreadPoolExecutor(max_workers=max_workers), 'thread', False
 
 
-def worker_prep_batch(raw_data_cache, feature_cache_store, feature_config, tickers, params):
-    results = []
-    for ticker in tickers:
-        df = raw_data_cache[ticker]
-        feature_cache = _resolve_feature_cache_for_ticker(
-            ticker=ticker,
-            df=df,
-            optimizer_feature_cache=feature_cache_store,
-            optimizer_feature_config=feature_config,
-        )
-        results.append(worker_prep_data(ticker, df, params, feature_cache=feature_cache))
-    return results
+def worker_prep_batch(raw_data_cache, tickers, params):
+    return [worker_prep_data(ticker, raw_data_cache[ticker], params) for ticker in tickers]
 
 
 def worker_prep_batch_from_cache(tickers, params):
     return [worker_prep_data_from_cache(ticker, params) for ticker in tickers]
 
 
-def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers, *, sticky_process_assignment=False):
+def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
     worker_count = max(1, int(max_workers))
-    if sticky_process_assignment:
-        target_batch_count = min(len(tickers), worker_count)
-    elif len(tickers) <= worker_count * 4:
+    if len(tickers) <= worker_count * 4:
         return [[ticker] for ticker in tickers]
-    else:
-        target_batch_count = min(len(tickers), max(worker_count, worker_count * 4))
 
+    target_batch_count = min(len(tickers), max(worker_count, worker_count * 4))
     ordered_tickers = sorted(
         tickers,
         key=lambda ticker: len(raw_data_cache.get(ticker, ())),
@@ -220,38 +175,22 @@ def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers, *, stic
     return [batch for batch in batches if batch]
 
 
-def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, optimizer_feature_cache, optimizer_feature_config, max_workers, executor_kind, *, use_static_master_dates=False):
-    sticky_process_assignment = executor_kind == 'process'
-    ticker_batches = _build_balanced_ticker_batches(
-        raw_data_cache,
-        tickers,
-        max_workers,
-        sticky_process_assignment=sticky_process_assignment,
-    )
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, max_workers, executor_kind):
+    ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
     if executor_kind == 'thread':
-        futures = [executor.submit(worker_prep_batch, raw_data_cache, optimizer_feature_cache, optimizer_feature_config, batch, params) for batch in ticker_batches]
+        futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params) for batch in ticker_batches]
     else:
         futures = [executor.submit(worker_prep_batch_from_cache, batch, params) for batch in ticker_batches]
     for future in as_completed(futures):
         batch_results = future.result()
         for result in batch_results:
-            merge_prep_result(
-                result,
-                all_dfs_fast,
-                all_trade_logs,
-                master_dates,
-                prep_failures,
-                prep_profile,
-                static_fast_cache,
-                use_static_master_dates=use_static_master_dates,
-            )
+            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, optimizer_feature_cache=None, optimizer_feature_config=None):
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None):
     resolved_static_fast_cache = static_fast_cache or {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
-    use_static_master_dates = static_master_dates is not None and len(static_master_dates) > 0
     all_dfs_fast, all_trade_logs = {}, {}
-    master_dates = set(static_master_dates) if use_static_master_dates else set()
+    master_dates = set()
     prep_failures = []
     prep_profile = {
         "worker_total_sum_sec": 0.0,
@@ -278,20 +217,20 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
             executor_kind = executor_bundle.get("executor_kind", 'process')
-            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, optimizer_feature_cache, optimizer_feature_config, max_workers, executor_kind, use_static_master_dates=use_static_master_dates)
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
         else:
-            created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache, optimizer_feature_config)
+            created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
             executor_kind = 'process'
             try:
                 if executor_kind == 'thread':
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, optimizer_feature_cache, optimizer_feature_config, max_workers, executor_kind, use_static_master_dates=use_static_master_dates)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
                 elif supports_initializer:
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, optimizer_feature_cache, optimizer_feature_config, max_workers, executor_kind, use_static_master_dates=use_static_master_dates)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind)
                 else:
-                    futures = [created_executor.submit(worker_prep_data, ticker, df, params, _resolve_feature_cache_for_ticker(ticker=ticker, df=df, optimizer_feature_cache=optimizer_feature_cache, optimizer_feature_config=optimizer_feature_config)) for ticker, df in raw_data_cache.items()]
+                    futures = [created_executor.submit(worker_prep_data, ticker, df, params) for ticker, df in raw_data_cache.items()]
                     for future in as_completed(futures):
                         result = future.result()
-                        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache, use_static_master_dates=use_static_master_dates)
+                        merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
             finally:
                 created_executor.shutdown(wait=True, cancel_futures=False)
                 created_executor = None
@@ -313,8 +252,8 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             "fail_count": 0,
         }
         for ticker, df in raw_data_cache.items():
-            result = worker_prep_data(ticker, df, params, _resolve_feature_cache_for_ticker(ticker=ticker, df=df, optimizer_feature_cache=optimizer_feature_cache, optimizer_feature_config=optimizer_feature_config))
-            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache, use_static_master_dates=use_static_master_dates)
+            result = worker_prep_data(ticker, df, params)
+            merge_prep_result(result, all_dfs_fast, all_trade_logs, master_dates, prep_failures, prep_profile, static_fast_cache)
 
     prep_wall_sec = time.perf_counter() - prep_wall_start
     return {
