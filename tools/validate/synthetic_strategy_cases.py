@@ -127,6 +127,9 @@ class _FakeOptimizerSession:
     def record_optimizer_prep_failures(self, failures):
         self.recorded_prep_failures.extend(list(failures))
 
+    def get_trial_prep_executor_bundle(self, max_workers):
+        return None
+
     def resolve_optimizer_tp_percent(self, trial, fixed_tp_percent):
         if fixed_tp_percent is None:
             return trial.suggest_float(
