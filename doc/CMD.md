@@ -57,7 +57,7 @@ python apps/workbench.py
 - `outputs/smart_downloader/`：下載器 issue log。
 - `outputs/debug_trade_log/`：`trade_analysis` 單股分析輸出；為維持既有工具鏈相容，暫沿用 legacy 目錄名 `debug_trade_log`。
 - `outputs/debug_trade_log/`（trade_analysis legacy output dir）屬既有工具鏈相容邊界。
-- `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取。
+- `outputs/workbench_ui/`：Workbench GUI runtime 快取；目前用於常用股票中文名稱快取；若 reduced 代碼組變動或缺名，Workbench 會優先查官方 CSV / ISIN 名錄並於必要時做 SSL 容錯與 HTTP fallback。
 
 ## 其他文件
 

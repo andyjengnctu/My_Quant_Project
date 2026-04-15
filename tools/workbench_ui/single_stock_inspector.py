@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import traceback
@@ -13,6 +15,7 @@ from datetime import datetime, timezone
 from html import unescape
 from tkinter import messagebox, ttk
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -56,11 +59,55 @@ SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
-OFFICIAL_COMPANY_NAME_SOURCE_URLS = (
-    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
-    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
-    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=5",
-    "https://isin.twse.com.tw/isin/C_public.jsp?strMode=1",
+OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
+    {
+        "kind": "csv",
+        "label": "MOPS 上市公司基本資料",
+        "urls": (
+            "https://mopsfin.twse.com.tw/opendata/t187ap03_L.csv",
+            "http://mopsfin.twse.com.tw/opendata/t187ap03_L.csv",
+        ),
+    },
+    {
+        "kind": "csv",
+        "label": "MOPS 上櫃公司基本資料",
+        "urls": (
+            "https://mopsfin.twse.com.tw/opendata/t187ap03_O.csv",
+            "http://mopsfin.twse.com.tw/opendata/t187ap03_O.csv",
+        ),
+    },
+    {
+        "kind": "html",
+        "label": "ISIN 上市證券名錄",
+        "urls": (
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
+            "http://isin.twse.com.tw/isin/C_public.jsp?strMode=2",
+        ),
+    },
+    {
+        "kind": "html",
+        "label": "ISIN 上櫃證券名錄",
+        "urls": (
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
+            "http://isin.twse.com.tw/isin/C_public.jsp?strMode=4",
+        ),
+    },
+    {
+        "kind": "html",
+        "label": "ISIN 興櫃證券名錄",
+        "urls": (
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=5",
+            "http://isin.twse.com.tw/isin/C_public.jsp?strMode=5",
+        ),
+    },
+    {
+        "kind": "html",
+        "label": "ISIN 公開發行證券名錄",
+        "urls": (
+            "https://isin.twse.com.tw/isin/C_public.jsp?strMode=1",
+            "http://isin.twse.com.tw/isin/C_public.jsp?strMode=1",
+        ),
+    },
 )
 SECURITY_CODE_PATTERN = re.compile(r"^[0-9A-Z]{4,7}$")
 FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP = {
@@ -114,7 +161,7 @@ def _save_reduced_stock_company_name_cache(*, ticker_to_name, reduced_members):
     cache_path = _build_workbench_cache_path()
     payload = {
         "updated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source_urls": list(OFFICIAL_COMPANY_NAME_SOURCE_URLS),
+        "source_urls": [url for spec in OFFICIAL_COMPANY_NAME_SOURCE_SPECS for url in spec["urls"]],
         "reduced_members": sorted({_normalize_security_code(ticker) for ticker in reduced_members if _normalize_security_code(ticker)}),
         "ticker_to_name": {
             _normalize_security_code(ticker): str(name).strip()
@@ -136,7 +183,7 @@ def _extract_company_name_pair_from_cells(cells):
         return None
 
     first_cell = normalized_cells[0]
-    if first_cell in {"有價證券代號及名稱", "證券代號", "證券名稱"}:
+    if first_cell in {"有價證券代號及名稱", "證券代號", "證券名稱", "公司代號", "公司簡稱", "公司名稱"}:
         return None
 
     combined_match = re.match(r"^([0-9A-Z]{4,7})\s+(.+)$", first_cell)
@@ -152,6 +199,76 @@ def _extract_company_name_pair_from_cells(cells):
         if SECURITY_CODE_PATTERN.fullmatch(ticker) and company_name and not SECURITY_CODE_PATTERN.fullmatch(company_name):
             return ticker, company_name
     return None
+
+
+def _decode_official_text(raw_bytes, *, declared_charset=""):
+    candidate_charsets = []
+    normalized_declared_charset = str(declared_charset or "").strip()
+    if normalized_declared_charset:
+        candidate_charsets.append(normalized_declared_charset)
+    candidate_charsets.extend(["utf-8-sig", "utf-8", "cp950", "big5", "latin-1"])
+    for charset in candidate_charsets:
+        try:
+            return raw_bytes.decode(charset)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw_bytes.decode("utf-8", errors="replace")
+
+
+def _should_retry_without_ssl_verification(exc):
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, ssl.SSLCertVerificationError)
+
+
+def _build_http_fallback_url(source_url):
+    parts = urlsplit(source_url)
+    if parts.scheme != "https":
+        return None
+    return urlunsplit(("http", parts.netloc, parts.path, parts.query, parts.fragment))
+
+
+def _fetch_official_text(source_url, *, timeout_seconds=6):
+    request_headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/json,text/csv,application/xml;q=0.9,*/*;q=0.8",
+    }
+    request = Request(source_url, headers=request_headers)
+    tried_unverified_ssl = False
+    candidates = [source_url]
+    http_fallback_url = _build_http_fallback_url(source_url)
+    if http_fallback_url and http_fallback_url not in candidates:
+        candidates.append(http_fallback_url)
+
+    last_error = None
+    for candidate_url in candidates:
+        request = Request(candidate_url, headers=request_headers)
+        ssl_contexts = [None]
+        if candidate_url.startswith("https://"):
+            ssl_contexts.append(ssl._create_unverified_context())
+        for ssl_context in ssl_contexts:
+            if ssl_context is not None and tried_unverified_ssl:
+                continue
+            try:
+                open_kwargs = {"timeout": timeout_seconds}
+                if ssl_context is not None:
+                    open_kwargs["context"] = ssl_context
+                with urlopen(request, **open_kwargs) as response:
+                    raw_bytes = response.read()
+                    charset = response.headers.get_content_charset() or ""
+                if ssl_context is not None:
+                    tried_unverified_ssl = True
+                return _decode_official_text(raw_bytes, declared_charset=charset)
+            except URLError as exc:
+                last_error = exc
+                if ssl_context is None and candidate_url.startswith("https://") and _should_retry_without_ssl_verification(exc):
+                    continue
+                break
+            except (HTTPError, OSError) as exc:
+                last_error = exc
+                break
+    if last_error is None:
+        raise URLError(f"無法讀取官方來源：{source_url}")
+    raise last_error
 
 
 def _extract_company_name_pairs_from_html(html_text):
@@ -171,16 +288,52 @@ def _extract_company_name_pairs_from_html(html_text):
     return company_name_map
 
 
+def _extract_company_name_pairs_from_csv(csv_text):
+    reader = csv.DictReader(io.StringIO(csv_text))
+    company_name_map = {}
+    for row in reader:
+        normalized_row = {
+            _normalize_company_name(key): _normalize_company_name(value)
+            for key, value in dict(row or {}).items()
+        }
+        ticker = _normalize_security_code(
+            normalized_row.get("公司代號")
+            or normalized_row.get("公司代碼")
+            or normalized_row.get("證券代號")
+            or normalized_row.get("股票代號")
+        )
+        company_name = _normalize_company_name(
+            normalized_row.get("公司簡稱")
+            or normalized_row.get("公司名稱")
+            or normalized_row.get("證券名稱")
+            or normalized_row.get("股票名稱")
+        )
+        if SECURITY_CODE_PATTERN.fullmatch(ticker) and company_name:
+            company_name_map.setdefault(ticker, company_name)
+    return company_name_map
+
+
 def _fetch_company_names_from_official_sources(timeout_seconds=6):
     company_name_map = {}
-    request_headers = {"User-Agent": "Mozilla/5.0"}
-    for source_url in OFFICIAL_COMPANY_NAME_SOURCE_URLS:
-        request = Request(source_url, headers=request_headers)
-        with urlopen(request, timeout=timeout_seconds) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            html_text = response.read().decode(charset, errors="replace")
-        company_name_map.update(_extract_company_name_pairs_from_html(unescape(html_text)))
-    return company_name_map
+    source_failures = []
+    for source_spec in OFFICIAL_COMPANY_NAME_SOURCE_SPECS:
+        last_source_error = None
+        for source_url in source_spec["urls"]:
+            try:
+                payload_text = _fetch_official_text(source_url, timeout_seconds=timeout_seconds)
+                if source_spec["kind"] == "csv":
+                    company_name_map.update(_extract_company_name_pairs_from_csv(payload_text))
+                else:
+                    company_name_map.update(_extract_company_name_pairs_from_html(unescape(payload_text)))
+                last_source_error = None
+                break
+            except (ValueError, HTTPError, URLError, OSError) as exc:
+                last_source_error = exc
+        if last_source_error is not None:
+            source_failures.append(f"{source_spec['label']}: {type(last_source_error).__name__}: {last_source_error}")
+    if not company_name_map:
+        raise URLError("; ".join(source_failures) or "所有官方來源皆查詢失敗")
+    return company_name_map, source_failures
 
 
 def _load_reduced_stock_tickers():
@@ -417,7 +570,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             )
 
         try:
-            fetched_company_name_map = _fetch_company_names_from_official_sources()
+            fetched_company_name_map, source_failures = _fetch_company_names_from_official_sources()
         except (ValueError, HTTPError, URLError, OSError) as exc:
             self._append_reduced_stock_lookup_message(
                 f"官方中文名稱查詢失敗，保留既有快取：{type(exc).__name__}: {exc}"
@@ -451,6 +604,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         self._reduced_stock_company_name_map.update(updated_ticker_to_name)
         self._apply_reduced_stock_dropdown_values()
+        if source_failures:
+            self._append_reduced_stock_lookup_message(
+                f"部分官方來源查詢失敗，但已改用可用來源完成補名：{' | '.join(source_failures)}"
+            )
         if newly_resolved_tickers:
             self._append_reduced_stock_lookup_message(
                 f"已更新中文名稱：{', '.join(sorted(set(newly_resolved_tickers)))}"
