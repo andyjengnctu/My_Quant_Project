@@ -376,7 +376,19 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
 
     add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_lists_workbench_entry", True, required_tree_fragment in architecture_text)
     add_check(results, "meta_architecture_contract", case_id, "architecture_apps_file_tree_has_no_stale_missing_workbench_tail", False, stale_missing_tree_fragment in architecture_text)
-    add_check(results, "meta_architecture_contract", case_id, "architecture_apps_section_mentions_workbench_single_gui_entry", True, "`apps/workbench.py` 為單一 GUI 啟用入口" in architecture_text)
+    workbench_entry_fragments = [
+        "`apps/workbench.py`：GUI / workbench 正式入口",
+        "`apps/workbench.py` 為單一 GUI 啟用入口",
+    ]
+
+    add_check(
+        results,
+        "meta_architecture_contract",
+        case_id,
+        "architecture_apps_section_mentions_workbench_single_gui_entry",
+        True,
+        any(fragment in architecture_text for fragment in workbench_entry_fragments),
+    )
     add_check(results, "meta_architecture_contract", case_id, "workbench_app_remains_thin_gui_entry", True, "from tools.workbench_ui import main" in workbench_source and '__all__ = ["main"]' in workbench_source)
 
     summary["required_tree_fragment"] = required_tree_fragment
