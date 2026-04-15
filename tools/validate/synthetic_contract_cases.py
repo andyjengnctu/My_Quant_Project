@@ -20,9 +20,10 @@ from core.output_retention import RetentionRule, apply_retention_rules
 from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from tools.local_regression import common as local_common
 from tools.local_regression import run_all as run_all_module
-from tools.local_regression import run_meta_quality as run_meta_quality_module
 from tools.local_regression import run_quick_gate as run_quick_gate_module
-from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR
+from tools.local_regression.meta_quality_coverage import build_coverage_summary
+from tools.local_regression.meta_quality_performance import build_performance_summary
+from tools.local_regression.meta_quality_targets import COVERAGE_BRANCH_MIN_FLOOR, COVERAGE_LINE_MIN_FLOOR, COVERAGE_TARGETS, CRITICAL_COVERAGE_TARGETS
 from tools.optimizer.profile import OptimizerProfileRecorder, PROFILE_FIELDS
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json, write_csv, write_text
 from tools.validate.reporting import write_issue_excel_report, write_local_regression_summary
@@ -1344,7 +1345,7 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
 
         manifest = dict(local_common.MANIFEST_DEFAULTS)
         with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
-            perf = run_meta_quality_module._build_performance_summary(
+            perf = build_performance_summary(
                 run_dir,
                 manifest,
                 current_meta_quality_duration_sec=1.25,
@@ -3017,14 +3018,14 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
             "files": {
                 rel_path: {
                     "summary": {
-                        "covered_lines": int(critical_line_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
-                        "num_statements": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
-                        "percent_covered": float(critical_line_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 100.0,
-                        "covered_branches": int(critical_branch_floor) if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
-                        "num_branches": 100 if rel_path in run_meta_quality_module.CRITICAL_COVERAGE_TARGETS else 1,
+                        "covered_lines": int(critical_line_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
+                        "num_statements": 100 if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
+                        "percent_covered": float(critical_line_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 100.0,
+                        "covered_branches": int(critical_branch_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
+                        "num_branches": 100 if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
                     }
                 }
-                for rel_path in run_meta_quality_module.COVERAGE_TARGETS
+                for rel_path in COVERAGE_TARGETS
             },
         }
         write_text(coverage_dir / "coverage_synthetic.json", json.dumps(coverage_payload, ensure_ascii=False, indent=2))
@@ -3040,7 +3041,7 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
         })
 
         with patch("tools.validate.synthetic_cases.run_synthetic_consistency_suite", side_effect=AssertionError("should reuse existing coverage artifacts")):
-            coverage_summary = run_meta_quality_module._build_coverage_summary(run_dir, manifest)
+            coverage_summary = build_coverage_summary(run_dir, manifest)
 
     add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_ok", True, coverage_summary.get("ok"))
     add_check(results, "output_contract", case_id, "meta_quality_reuse_coverage_flag", True, coverage_summary.get("reused_existing"))

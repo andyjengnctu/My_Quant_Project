@@ -99,6 +99,7 @@ project/
 
 - `apps/test_suite.py`：日常一鍵測試正式入口。
 - `apps/ml_optimizer.py`：optimizer 正式入口。
+- `apps/package_zip.py`：打包正式入口。
 - `apps/portfolio_sim.py`：投組模擬正式入口。
 - `apps/smart_downloader.py`：下載器正式入口。
 - `apps/vip_scanner.py`：scanner 正式入口。

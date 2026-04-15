@@ -1044,7 +1044,7 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
 
 
 def validate_checklist_t_formal_command_single_entry_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_T_FORMAL_COMMAND_SINGLE_ENTRY"
     results = []
@@ -1129,7 +1129,7 @@ def validate_checklist_done_test_summary_markdown_structure_case(_base_params):
 
 
 def validate_checklist_t_single_entry_delimiter_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_T_SINGLE_ENTRY_DELIMITER"
     results = []
@@ -1170,7 +1170,7 @@ def validate_checklist_t_single_entry_delimiter_case(_base_params):
 
 
 def validate_checklist_g_transition_format_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_G_TRANSITION_FORMAT"
     results = []
@@ -1210,7 +1210,7 @@ def validate_checklist_g_transition_format_case(_base_params):
 
 
 def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_G_NEW_TRANSITION_FIRST_OCCURRENCE"
     results = []
@@ -1260,7 +1260,7 @@ def validate_checklist_g_new_transition_first_occurrence_case(_base_params):
 
 
 def validate_checklist_g_transition_sequence_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_G_TRANSITION_SEQUENCE"
     results = []
@@ -1309,7 +1309,7 @@ def validate_checklist_g_transition_sequence_case(_base_params):
     return results, summary
 
 def validate_checklist_g_ordering_case(_base_params):
-    import tools.local_regression.run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_G_ORDERING"
     results = []
@@ -1350,7 +1350,7 @@ def validate_checklist_g_ordering_case(_base_params):
 
 
 def validate_checklist_summary_tables_sorted_by_id_case(_base_params):
-    from tools.local_regression import run_meta_quality as meta_quality_module
+    meta_quality_module = importlib.import_module("tools.local_regression.run_meta_quality")
 
     case_id = "META_CHECKLIST_SUMMARY_TABLE_ORDER"
     results = []

@@ -47,6 +47,7 @@ from tools.local_regression.meta_quality_targets import (
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 from tools.local_regression.meta_quality_coverage import build_coverage_summary as _shared_build_coverage_summary
+from tools.local_regression.meta_quality_performance import build_performance_summary as _shared_build_performance_summary
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
 PERFORMANCE_STEP_FILES = {
     "quick_gate": ("quick_gate_summary.json",),
@@ -682,175 +683,14 @@ def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str
 
 
 def _build_performance_summary(run_dir: Path, manifest: Dict[str, Any], *, current_meta_quality_duration_sec: float, current_meta_quality_peak_traced_memory_mb: float) -> Dict[str, Any]:
-    has_shared_run_dir = bool(os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip())
-    available_step_files = {
-        name: next((run_dir / file_name for file_name in file_names if (run_dir / file_name).exists()), run_dir / file_names[0])
-        for name, file_names in PERFORMANCE_STEP_FILES.items()
-    }
-    if not has_shared_run_dir and not any(path.exists() for path in available_step_files.values()):
-        results = [
-            summarize_result(
-                "performance_baseline_skipped_without_shared_run_dir",
-                True,
-                detail="standalone run_meta_quality 無 shared run_dir；略過 step performance baseline",
-            )
-        ]
-        return {
-            "ok": True,
-            "skipped": True,
-            "results": results,
-            "step_durations": {},
-            "step_peak_traced_memory_mb": {},
-            "optimizer_trial_avg_objective_wall_sec": None,
-            "optimizer_profile_trial_count": 0,
-            "total_duration_sec": current_meta_quality_duration_sec,
-            "max_step_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
-            "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
-        }
-
-    results: List[Dict[str, Any]] = []
-    step_durations: Dict[str, float] = {}
-    step_peak_traced_memory_mb: Dict[str, float] = {}
-    missing_step_files: List[str] = []
-    missing_memory_steps: List[str] = []
-    for step_name, path in available_step_files.items():
-        if not path.exists():
-            missing_step_files.append(step_name)
-            continue
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        duration_value = payload.get("duration_sec")
-        if duration_value in (None, ""):
-            duration_value = payload.get("elapsed_time_sec")
-        if duration_value in (None, ""):
-            duration_value = payload.get("duration_seconds")
-        step_durations[step_name] = round(float(duration_value or 0.0), 3)
-        peak_memory_mb = payload.get("peak_traced_memory_mb")
-        if peak_memory_mb in (None, ""):
-            missing_memory_steps.append(step_name)
-        else:
-            step_peak_traced_memory_mb[step_name] = round(float(peak_memory_mb), 3)
-
-    results.append(
-        summarize_result(
-            "performance_required_step_summaries_present",
-            not missing_step_files,
-            detail=f"missing={missing_step_files}",
-            extra={"missing_step_files": missing_step_files},
-        )
+    return _shared_build_performance_summary(
+        run_dir,
+        manifest,
+        current_meta_quality_duration_sec=current_meta_quality_duration_sec,
+        current_meta_quality_peak_traced_memory_mb=current_meta_quality_peak_traced_memory_mb,
+        performance_step_files=PERFORMANCE_STEP_FILES,
+        performance_manifest_keys=PERFORMANCE_MANIFEST_KEYS,
     )
-    results.append(
-        summarize_result(
-            "performance_required_step_peak_memory_present",
-            not missing_memory_steps,
-            detail=f"missing={missing_memory_steps}",
-            extra={"missing_memory_steps": missing_memory_steps},
-        )
-    )
-
-    for step_name, duration_sec in step_durations.items():
-        budget_key = PERFORMANCE_MANIFEST_KEYS[step_name]
-        budget_sec = float(manifest[budget_key])
-        results.append(
-            summarize_result(
-                f"performance_{step_name}_within_budget",
-                duration_sec <= budget_sec,
-                detail=f"duration={duration_sec:.3f}s | budget={budget_sec:.3f}s",
-                extra={"duration_sec": duration_sec, "budget_sec": budget_sec},
-            )
-        )
-
-    peak_memory_budget_mb = float(manifest[PERFORMANCE_MEMORY_MANIFEST_KEY])
-    for step_name, peak_memory_mb in step_peak_traced_memory_mb.items():
-        results.append(
-            summarize_result(
-                f"performance_{step_name}_peak_memory_within_budget",
-                peak_memory_mb <= peak_memory_budget_mb,
-                detail=f"peak_memory={peak_memory_mb:.3f}MB | budget={peak_memory_budget_mb:.3f}MB",
-                extra={"peak_traced_memory_mb": peak_memory_mb, "budget_mb": peak_memory_budget_mb},
-            )
-        )
-
-    meta_quality_budget_sec = float(manifest["performance_meta_quality_max_sec"])
-    results.append(
-        summarize_result(
-            "performance_meta_quality_within_budget",
-            current_meta_quality_duration_sec <= meta_quality_budget_sec,
-            detail=f"duration={current_meta_quality_duration_sec:.3f}s | budget={meta_quality_budget_sec:.3f}s",
-            extra={"duration_sec": current_meta_quality_duration_sec, "budget_sec": meta_quality_budget_sec},
-        )
-    )
-    results.append(
-        summarize_result(
-            "performance_meta_quality_peak_memory_within_budget",
-            current_meta_quality_peak_traced_memory_mb <= peak_memory_budget_mb,
-            detail=f"peak_memory={current_meta_quality_peak_traced_memory_mb:.3f}MB | budget={peak_memory_budget_mb:.3f}MB",
-            extra={"peak_traced_memory_mb": current_meta_quality_peak_traced_memory_mb, "budget_mb": peak_memory_budget_mb},
-        )
-    )
-
-    total_duration_sec = round(sum(step_durations.values()) + float(current_meta_quality_duration_sec), 3)
-    total_budget_sec = float(manifest["performance_total_max_sec"])
-    results.append(
-        summarize_result(
-            "performance_total_suite_within_budget",
-            total_duration_sec <= total_budget_sec,
-            detail=f"duration={total_duration_sec:.3f}s | budget={total_budget_sec:.3f}s",
-            extra={"duration_sec": total_duration_sec, "budget_sec": total_budget_sec},
-        )
-    )
-
-    ml_smoke_payload = {}
-    ml_smoke_path = available_step_files["ml_smoke"]
-    if ml_smoke_path.exists():
-        ml_smoke_payload = json.loads(ml_smoke_path.read_text(encoding="utf-8"))
-    optimizer_trial_avg = ml_smoke_payload.get("optimizer_profile_avg_objective_wall_sec")
-    optimizer_profile_trial_count = int(ml_smoke_payload.get("optimizer_profile_trial_count", 0) or 0)
-    optimizer_trial_budget_sec = float(manifest["performance_optimizer_trial_avg_max_sec"])
-    optimizer_profile_ready = optimizer_trial_avg not in (None, "")
-    results.append(
-        summarize_result(
-            "performance_optimizer_profile_present",
-            optimizer_profile_ready,
-            detail=(
-                f"avg_objective_wall_sec={optimizer_trial_avg} | trial_count={optimizer_profile_trial_count}"
-                if optimizer_profile_ready
-                else "optimizer profile summary missing"
-            ),
-            extra={
-                "optimizer_profile_trial_count": optimizer_profile_trial_count,
-                "optimizer_profile_avg_objective_wall_sec": optimizer_trial_avg,
-            },
-        )
-    )
-    if optimizer_profile_ready:
-        optimizer_trial_avg_value = float(optimizer_trial_avg)
-        results.append(
-            summarize_result(
-                "performance_optimizer_avg_trial_within_budget",
-                optimizer_trial_avg_value <= optimizer_trial_budget_sec,
-                detail=f"avg_objective_wall={optimizer_trial_avg_value:.3f}s | budget={optimizer_trial_budget_sec:.3f}s",
-                extra={"duration_sec": optimizer_trial_avg_value, "budget_sec": optimizer_trial_budget_sec},
-            )
-        )
-    else:
-        optimizer_trial_avg_value = None
-
-    max_step_peak_memory_mb = round(max([float(current_meta_quality_peak_traced_memory_mb), *step_peak_traced_memory_mb.values()]) if step_peak_traced_memory_mb else float(current_meta_quality_peak_traced_memory_mb), 3)
-    ok = all(item["status"] == "PASS" for item in results)
-    return {
-        "ok": ok,
-        "skipped": False,
-        "results": results,
-        "step_durations": step_durations,
-        "step_peak_traced_memory_mb": step_peak_traced_memory_mb,
-        "optimizer_trial_avg_objective_wall_sec": optimizer_trial_avg_value,
-        "optimizer_profile_trial_count": optimizer_profile_trial_count,
-        "total_duration_sec": total_duration_sec,
-        "max_step_peak_traced_memory_mb": max_step_peak_memory_mb,
-        "meta_quality_peak_traced_memory_mb": round(float(current_meta_quality_peak_traced_memory_mb), 3),
-    }
-
-
 def main(argv=None) -> int:
     cli = parse_no_arg_cli(argv, "tools/local_regression/run_meta_quality.py", description="執行 coverage baseline 與 checklist sufficiency formal check")
     if cli["help"]:
