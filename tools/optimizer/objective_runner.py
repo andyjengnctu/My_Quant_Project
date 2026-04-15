@@ -21,6 +21,7 @@ def run_optimizer_objective(session, trial):
         static_fast_cache=session.static_fast_cache,
         static_master_dates=session.master_dates,
         optimizer_feature_cache=session.optimizer_feature_cache,
+        optimizer_feature_config=session.optimizer_feature_config,
     )
     trial.set_user_attr("prep_mode", prep_result["prep_mode"])
     trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")

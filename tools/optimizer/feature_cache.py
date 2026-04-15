@@ -11,29 +11,38 @@ def _resolve_int_range(spec):
     return range(low, high + 1, step)
 
 
-def build_optimizer_feature_cache(
-    raw_data_cache,
-    *,
-    high_len_values,
-):
+def resolve_optimizer_feature_length_sets(*, high_len_values):
     atr_len_values = set(_resolve_int_range(BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]))
     atr_len_values.update(_resolve_int_range(BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]))
     bb_len_values = list(_resolve_int_range(BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]))
     vol_len_values = set(_resolve_int_range(BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]))
     vol_len_values.update(range(int(BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]["low"]), int(BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]["high"]) + 1))
 
-    resolved_high_len_values = sorted({int(value) for value in high_len_values})
-    resolved_atr_len_values = sorted({int(value) for value in atr_len_values})
-    resolved_bb_len_values = sorted({int(value) for value in bb_len_values})
-    resolved_vol_len_values = sorted({int(value) for value in vol_len_values})
-
     return {
-        ticker: build_optimizer_signal_feature_cache_for_df(
-            df,
-            atr_lengths=resolved_atr_len_values,
-            high_lengths=resolved_high_len_values,
-            bb_lengths=resolved_bb_len_values,
-            vol_lengths=resolved_vol_len_values,
-        )
+        "high_lengths": sorted({int(value) for value in high_len_values}),
+        "atr_lengths": sorted({int(value) for value in atr_len_values}),
+        "bb_lengths": sorted({int(value) for value in bb_len_values}),
+        "vol_lengths": sorted({int(value) for value in vol_len_values}),
+    }
+
+
+def build_optimizer_feature_cache_for_ticker(df, *, feature_lengths):
+    return build_optimizer_signal_feature_cache_for_df(
+        df,
+        atr_lengths=feature_lengths["atr_lengths"],
+        high_lengths=feature_lengths["high_lengths"],
+        bb_lengths=feature_lengths["bb_lengths"],
+        vol_lengths=feature_lengths["vol_lengths"],
+    )
+
+
+def build_optimizer_feature_cache(
+    raw_data_cache,
+    *,
+    high_len_values,
+):
+    feature_lengths = resolve_optimizer_feature_length_sets(high_len_values=high_len_values)
+    return {
+        ticker: build_optimizer_feature_cache_for_ticker(df, feature_lengths=feature_lengths)
         for ticker, df in raw_data_cache.items()
     }
