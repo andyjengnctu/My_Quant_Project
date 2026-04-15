@@ -37,7 +37,7 @@ BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2015
 TRAIN_ENABLE_ROTATION = False
-DEFAULT_OPTIMIZER_MAX_WORKERS = 4 if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
+DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
 OPTIMIZER_HIGH_LEN_MIN = 40
 OPTIMIZER_HIGH_LEN_MAX = 250
 OPTIMIZER_HIGH_LEN_STEP = 5

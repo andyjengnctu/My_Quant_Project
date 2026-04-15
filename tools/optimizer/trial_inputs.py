@@ -154,10 +154,10 @@ def worker_prep_batch_from_cache(tickers, params):
 
 def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
     worker_count = max(1, int(max_workers))
-    if len(tickers) <= worker_count * 4:
+    if len(tickers) <= worker_count:
         return [[ticker] for ticker in tickers]
 
-    target_batch_count = min(len(tickers), max(worker_count, worker_count * 4))
+    target_batch_count = min(len(tickers), worker_count)
     ordered_tickers = sorted(
         tickers,
         key=lambda ticker: len(raw_data_cache.get(ticker, ())),

@@ -131,9 +131,6 @@ class OptimizerSession:
     def close_trial_prep_executor(self):
         bundle = self._trial_prep_executor_bundle
         self._trial_prep_executor_bundle = None
-        self.static_fast_cache = {}
-        self.master_dates = set()
-        self.sorted_master_dates = []
         if bundle is None:
             return
         executor = bundle.get("executor")
