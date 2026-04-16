@@ -1,6 +1,4 @@
-import json
 import os
-import shutil
 import sys
 import warnings
 
@@ -35,10 +33,9 @@ def configure_optuna_logging():
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
-BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
+LEGACY_BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
+RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
 CHAMPION_PARAMS_PATH = os.path.join(MODELS_DIR, "champion_params.json")
-CHAMPION_ARCHIVE_DIR = os.path.join(MODELS_DIR, "champion_archive")
-UPGRADE_RECORD_DIR = os.path.join(OUTPUT_DIR, "upgrade_records")
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2012
 TRAIN_ENABLE_ROTATION = False
@@ -63,8 +60,6 @@ COLORS = {
 def ensure_runtime_dirs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
-    os.makedirs(CHAMPION_ARCHIVE_DIR, exist_ok=True)
-    os.makedirs(UPGRADE_RECORD_DIR, exist_ok=True)
 
 
 def build_optimizer_session():
@@ -157,15 +152,39 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
     return report, report_paths, params_payload
 
 
-def ensure_champion_params_bootstrap(*, champion_params_path: str, best_params_path: str):
+def sync_legacy_best_alias_from_champion(*, champion_params_path: str, legacy_best_params_path: str):
+    import shutil
+
+    if not os.path.exists(champion_params_path):
+        return False
+    shutil.copy2(champion_params_path, legacy_best_params_path)
+    return True
+
+
+def ensure_champion_params_bootstrap(*, champion_params_path: str, legacy_best_params_path: str, run_best_params_path: str):
     import shutil
 
     if os.path.exists(champion_params_path):
-        return False
-    if not os.path.exists(best_params_path):
-        return False
-    shutil.copy2(best_params_path, champion_params_path)
-    return True
+        sync_legacy_best_alias_from_champion(
+            champion_params_path=champion_params_path,
+            legacy_best_params_path=legacy_best_params_path,
+        )
+        return None
+    if os.path.exists(legacy_best_params_path):
+        shutil.copy2(legacy_best_params_path, champion_params_path)
+        sync_legacy_best_alias_from_champion(
+            champion_params_path=champion_params_path,
+            legacy_best_params_path=legacy_best_params_path,
+        )
+        return "legacy_best"
+    if os.path.exists(run_best_params_path):
+        shutil.copy2(run_best_params_path, champion_params_path)
+        sync_legacy_best_alias_from_champion(
+            champion_params_path=champion_params_path,
+            legacy_best_params_path=legacy_best_params_path,
+        )
+        return "run_best"
+    return None
 
 
 def generate_champion_challenger_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report):
@@ -204,157 +223,6 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
     }, compare_paths
 
 
-def _load_json_file(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def _json_payload_equal(left: dict, right: dict) -> bool:
-    return json.dumps(left, sort_keys=True, ensure_ascii=False) == json.dumps(right, sort_keys=True, ensure_ascii=False)
-
-
-def _write_upgrade_record(*, session_ts: str, compare_result: dict, compare_paths: dict, archived_champion_path: str | None, champion_params_path: str, challenger_best_params_path: str, output_dir: str):
-    os.makedirs(output_dir, exist_ok=True)
-    compare_payload = dict((compare_result or {}).get("compare_payload") or {})
-    assessment = dict(compare_payload.get("compare_assessment") or {})
-    summary_compare = dict(compare_payload.get("summary_compare") or {})
-    record = {
-        "meta": {
-            "session_ts": str(session_ts),
-            "champion_params_path": str(champion_params_path),
-            "challenger_best_params_path": str(challenger_best_params_path),
-            "archived_champion_path": str(archived_champion_path or ""),
-            "compare_md_path": str((compare_paths or {}).get("md_path", "")),
-            "compare_json_path": str((compare_paths or {}).get("json_path", "")),
-        },
-        "assessment": assessment,
-        "summary_compare": summary_compare,
-    }
-    base_name = f"upgrade_record_{session_ts}"
-    json_path = os.path.join(output_dir, f"{base_name}.json")
-    md_path = os.path.join(output_dir, f"{base_name}.md")
-    with open(json_path, "w", encoding="utf-8") as handle:
-        json.dump(record, handle, indent=2, ensure_ascii=False)
-
-    ordered_keys = [
-        "median_window_score",
-        "median_ret_pct",
-        "worst_ret_pct",
-        "max_mdd",
-        "median_annual_trades",
-        "median_fill_rate",
-        "flat_median_score",
-        "down_window_count",
-    ]
-    def _fmt_metric(metric_key: str, value: float | int) -> str:
-        if metric_key in ("median_window_score", "flat_median_score"):
-            return f"{float(value):.3f}"
-        if metric_key in ("median_annual_trades",):
-            return f"{float(value):.2f}"
-        if metric_key in ("down_window_count",):
-            return str(int(value))
-        return f"{float(value):.2f}%"
-
-    lines = [
-        "# Champion 升版紀錄",
-        "",
-        f"- 升版時間：{session_ts}",
-        f"- 結果：`{assessment.get('status', 'fail')}`",
-        f"- 建議：{assessment.get('recommendation', 'N/A')}",
-        f"- 新 Champion：`{champion_params_path}`",
-        f"- 舊 Champion 封存：`{archived_champion_path or 'N/A'}`",
-        f"- Compare 報表：`{(compare_paths or {}).get('md_path', '')}`",
-        "",
-        "## 核心差異",
-        "",
-        "| 指標 | Champion(舊) | Challenger(新) | Delta |",
-        "|---|---:|---:|---:|",
-    ]
-    for metric_key in ordered_keys:
-        metric = dict(summary_compare.get(metric_key) or {})
-        lines.append(
-            f"| {metric_key} | {_fmt_metric(metric_key, metric.get('champion', 0.0))} | {_fmt_metric(metric_key, metric.get('challenger', 0.0))} | {_fmt_metric(metric_key, metric.get('delta', 0.0)) if metric_key not in ('down_window_count',) else f'{int(metric.get("delta", 0) or 0):+d}'} |"
-        )
-
-    lines.extend([
-        "",
-        "## 升版檢查項目",
-        "",
-        "| 檢查項目 | 實際值 | 門檻 | 結果 | 說明 |",
-        "|---|---:|---:|---|---|",
-    ])
-    for check in list(assessment.get("checks") or []):
-        actual = check.get("actual")
-        name = str(check.get("name", ""))
-        if "score" in name:
-            actual_str = f"{float(actual):.3f}"
-        elif "coverage" in name:
-            actual_str = str(int(actual))
-        else:
-            actual_str = f"{float(actual):.2f}%"
-        lines.append(
-            f"| {name} | {actual_str} | {check.get('threshold', '')} | {'PASS' if check.get('passed') else 'FAIL'} | {check.get('note', '')} |"
-        )
-
-    with open(md_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    return {"json_path": json_path, "md_path": md_path}
-
-
-def promote_challenger_to_champion(*, compare_result: dict | None, compare_paths: dict | None, challenger_best_params_path: str, champion_params_path: str, archive_dir: str, upgrade_record_dir: str, session_ts: str):
-    if compare_result is None or compare_paths is None:
-        return None
-    compare_payload = dict((compare_result.get("compare_payload") or {}))
-    assessment = dict(compare_payload.get("compare_assessment") or {})
-    if not bool(assessment.get("recommended_for_promotion", False)):
-        return None
-    if not os.path.exists(challenger_best_params_path) or not os.path.exists(champion_params_path):
-        return None
-
-    challenger_payload = _load_json_file(challenger_best_params_path)
-    champion_payload = _load_json_file(champion_params_path)
-    if _json_payload_equal(champion_payload, challenger_payload):
-        return {
-            "status": "noop",
-            "archived_champion_path": None,
-            "champion_params_path": champion_params_path,
-            "upgrade_record_paths": None,
-        }
-
-    os.makedirs(archive_dir, exist_ok=True)
-    archive_path = os.path.join(archive_dir, f"champion_{session_ts}.json")
-    shutil.copy2(champion_params_path, archive_path)
-    shutil.copy2(challenger_best_params_path, champion_params_path)
-    upgrade_record_paths = _write_upgrade_record(
-        session_ts=session_ts,
-        compare_result=compare_result,
-        compare_paths=compare_paths,
-        archived_champion_path=archive_path,
-        champion_params_path=champion_params_path,
-        challenger_best_params_path=challenger_best_params_path,
-        output_dir=upgrade_record_dir,
-    )
-    return {
-        "status": "promoted",
-        "archived_champion_path": archive_path,
-        "champion_params_path": champion_params_path,
-        "upgrade_record_paths": upgrade_record_paths,
-    }
-
-
-def print_promotion_outputs(*, promotion_result):
-    if promotion_result is None:
-        return
-    status = str(promotion_result.get("status", ""))
-    if status == "promoted":
-        record_paths = dict(promotion_result.get("upgrade_record_paths") or {})
-        print(f"{C_GREEN}⬆️ 已將 Challenger 升級為新的 Champion：{promotion_result.get('champion_params_path', '')}{C_RESET}")
-        print(f"{C_GRAY}   舊 Champion 已封存：{promotion_result.get('archived_champion_path', '')}{C_RESET}")
-        print(f"{C_GREEN}📝 已輸出升版紀錄：{record_paths.get('md_path', '')}{C_RESET}")
-    elif status == "noop":
-        print(f"{C_YELLOW}ℹ️ Challenger 與現役 Champion 相同，略過升版與封存。{C_RESET}")
-
-
 def print_walk_forward_outputs(*, report, report_paths):
     print(f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}")
     print(
@@ -368,12 +236,20 @@ def print_walk_forward_outputs(*, report, report_paths):
     print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
 
 
-def print_compare_outputs(*, compare_result, compare_paths, bootstrap_created: bool):
+
+def _format_pct_simple(value) -> str:
+    return f"{float(value):.2f}%"
+
+def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: str | None):
     if compare_result is not None and compare_paths is not None:
         compare_assessment = dict((compare_result.get("compare_payload") or {}).get("compare_assessment") or {})
         compare_status = str(compare_assessment.get("status", "fail")).upper()
         compare_color = C_GREEN if compare_status == "PASS" else (C_YELLOW if compare_status == "WATCH" else C_RED)
-        summary_compare = dict((compare_result.get("compare_payload") or {}).get("summary_compare") or {})
+        payload = dict(compare_result.get("compare_payload") or {})
+        summary_compare = dict(payload.get("summary_compare") or {})
+        total_compare = dict(payload.get("oos_total_compare") or {})
+        total_metrics = dict(total_compare.get("metrics") or {})
+        total_ret = dict(total_metrics.get("linked_total_return_pct") or {})
         mws = dict(summary_compare.get("median_window_score") or {})
         flat_metric = dict(summary_compare.get("flat_median_score") or {})
         print(f"{C_GREEN}🆚 已輸出 Champion/Challenger 比較報表：{compare_paths['md_path']}{C_RESET}")
@@ -382,9 +258,15 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_created: b
             f"({float(mws.get('delta', 0.0)):+.3f}) | flat_median_score: {float(flat_metric.get('champion', 0.0)):.3f} -> {float(flat_metric.get('challenger', 0.0)):.3f} "
             f"({float(flat_metric.get('delta', 0.0)):+.3f}){C_RESET}"
         )
+        print(
+            f"{C_GRAY}   OOS總報酬(串接): Champion {_format_pct_simple(total_ret.get('champion', 0.0))} | "
+            f"Challenger {_format_pct_simple(total_ret.get('challenger', 0.0))} | 0050 {_format_pct_simple(total_ret.get('benchmark', 0.0))}{C_RESET}"
+        )
         print(f"{compare_color}   升版比較(MVP): {compare_status} | {compare_assessment.get('recommendation', 'N/A')}{C_RESET}")
-    elif bootstrap_created:
-        print(f"{C_YELLOW}ℹ️ 已由既有 best_params.json 自動建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
+    elif bootstrap_source == "legacy_best":
+        print(f"{C_YELLOW}ℹ️ 已由既有 best_params.json（相容別名）建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
+    elif bootstrap_source == "run_best":
+        print(f"{C_YELLOW}ℹ️ 已由本輪最佳 run_best_params.json 建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
 
 
 def main(argv=None, environ=None):
@@ -395,7 +277,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；只有完成指定訓練次數或輸入 0 走匯出模式時，才會更新 best_params.json。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；Champion / best_params.json 只作現役正式版與相容別名。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -469,13 +351,14 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
-            bootstrap_created = ensure_champion_params_bootstrap(
+            _bootstrap_source_pre = ensure_champion_params_bootstrap(
                 champion_params_path=CHAMPION_PARAMS_PATH,
-                best_params_path=BEST_PARAMS_PATH,
+                legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
+                run_best_params_path=RUN_BEST_PARAMS_PATH,
             )
             export_status = export_best_params_if_requested(
                 study,
-                best_params_path=BEST_PARAMS_PATH,
+                best_params_path=RUN_BEST_PARAMS_PATH,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
             )
@@ -500,6 +383,11 @@ def main(argv=None, environ=None):
                     db_file=db_file,
                 )
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
+                bootstrap_source = ensure_champion_params_bootstrap(
+                    champion_params_path=CHAMPION_PARAMS_PATH,
+                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
+                    run_best_params_path=RUN_BEST_PARAMS_PATH,
+                )
                 compare_result, compare_paths = generate_champion_challenger_compare_report(
                     session=session,
                     dataset_label=dataset_label,
@@ -510,18 +398,8 @@ def main(argv=None, environ=None):
                 print_compare_outputs(
                     compare_result=compare_result,
                     compare_paths=compare_paths,
-                    bootstrap_created=bootstrap_created,
+                    bootstrap_source=bootstrap_source,
                 )
-                promotion_result = promote_challenger_to_champion(
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    challenger_best_params_path=BEST_PARAMS_PATH,
-                    champion_params_path=CHAMPION_PARAMS_PATH,
-                    archive_dir=CHAMPION_ARCHIVE_DIR,
-                    upgrade_record_dir=UPGRADE_RECORD_DIR,
-                    session_ts=session.session_ts,
-                )
-                print_promotion_outputs(promotion_result=promotion_result)
             return 0
         finally:
             session.close_trial_prep_executor()
@@ -605,13 +483,14 @@ def main(argv=None, environ=None):
         if should_export:
             best_trial = get_best_completed_trial_or_none(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                bootstrap_created = ensure_champion_params_bootstrap(
+                _bootstrap_source_pre = ensure_champion_params_bootstrap(
                     champion_params_path=CHAMPION_PARAMS_PATH,
-                    best_params_path=BEST_PARAMS_PATH,
+                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
+                    run_best_params_path=RUN_BEST_PARAMS_PATH,
                 )
                 export_status = export_best_params_if_requested(
                     study,
-                    best_params_path=BEST_PARAMS_PATH,
+                    best_params_path=RUN_BEST_PARAMS_PATH,
                     fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                     colors=COLORS,
                 )
@@ -624,6 +503,11 @@ def main(argv=None, environ=None):
                     db_file=db_file,
                 )
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
+                bootstrap_source = ensure_champion_params_bootstrap(
+                    champion_params_path=CHAMPION_PARAMS_PATH,
+                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
+                    run_best_params_path=RUN_BEST_PARAMS_PATH,
+                )
                 compare_result, compare_paths = generate_champion_challenger_compare_report(
                     session=session,
                     dataset_label=dataset_label,
@@ -634,22 +518,12 @@ def main(argv=None, environ=None):
                 print_compare_outputs(
                     compare_result=compare_result,
                     compare_paths=compare_paths,
-                    bootstrap_created=bootstrap_created,
+                    bootstrap_source=bootstrap_source,
                 )
-                promotion_result = promote_challenger_to_champion(
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    challenger_best_params_path=BEST_PARAMS_PATH,
-                    champion_params_path=CHAMPION_PARAMS_PATH,
-                    archive_dir=CHAMPION_ARCHIVE_DIR,
-                    upgrade_record_dir=UPGRADE_RECORD_DIR,
-                    session_ts=session.session_ts,
-                )
-                print_promotion_outputs(promotion_result=promotion_result)
         elif export_policy == "interrupted_before_target":
             print(
                 f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，"
-                f"依規則不自動覆寫 {BEST_PARAMS_PATH}。{C_RESET}"
+                f"依規則不自動覆寫 {RUN_BEST_PARAMS_PATH}。{C_RESET}"
             )
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0

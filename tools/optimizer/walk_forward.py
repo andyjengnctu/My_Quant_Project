@@ -471,6 +471,66 @@ def write_walk_forward_report(
 
 
 
+def _parse_iso_date(value) -> pd.Timestamp | None:
+    if not value:
+        return None
+    try:
+        return pd.Timestamp(str(value))
+    except Exception:
+        return None
+
+
+def build_oos_total_performance(rows: list[dict], *, ret_key: str) -> dict:
+    ordered_rows = sorted(list(rows or []), key=lambda row: str(row.get("oos_start") or ""))
+    if not ordered_rows:
+        return {
+            "window_count": 0,
+            "linked_total_return_pct": 0.0,
+            "annualized_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "positive_window_rate": 0.0,
+            "ending_equity_factor": 1.0,
+            "oos_start": "",
+            "oos_end": "",
+        }
+
+    equity = 1.0
+    peak = 1.0
+    max_drawdown_pct = 0.0
+    positive_windows = 0
+    start_ts = _parse_iso_date(ordered_rows[0].get("oos_start"))
+    end_ts = _parse_iso_date(ordered_rows[-1].get("oos_end"))
+
+    for row in ordered_rows:
+        ret_pct = _safe_float(row.get(ret_key, 0.0))
+        if ret_pct > 0.0:
+            positive_windows += 1
+        equity *= 1.0 + (ret_pct / 100.0)
+        peak = max(peak, equity)
+        if peak > 0.0:
+            drawdown_pct = (peak - equity) / peak * 100.0
+            max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
+
+    years = 0.0
+    if start_ts is not None and end_ts is not None:
+        day_span = max(1, int((end_ts - start_ts).days) + 1)
+        years = day_span / 365.25
+    annualized_return_pct = 0.0
+    if years > 0.0 and equity > 0.0:
+        annualized_return_pct = (equity ** (1.0 / years) - 1.0) * 100.0
+
+    return {
+        "window_count": int(len(ordered_rows)),
+        "linked_total_return_pct": (equity - 1.0) * 100.0,
+        "annualized_return_pct": float(annualized_return_pct),
+        "max_drawdown_pct": float(max_drawdown_pct),
+        "positive_window_rate": float(positive_windows / len(ordered_rows) * 100.0),
+        "ending_equity_factor": float(equity),
+        "oos_start": "" if start_ts is None else start_ts.strftime("%Y-%m-%d"),
+        "oos_end": "" if end_ts is None else end_ts.strftime("%Y-%m-%d"),
+    }
+
+
 def _safe_float(value) -> float:
     try:
         return float(value)
@@ -564,6 +624,8 @@ def build_walk_forward_compare_payload(*, champion_payload: dict, champion_repor
     challenger_summary = dict(challenger_report.get("summary") or {})
     champion_regime = dict(champion_report.get("regime_summary") or {})
     challenger_regime = dict(challenger_report.get("regime_summary") or {})
+    champion_windows = list(champion_report.get("windows") or [])
+    challenger_windows = list(challenger_report.get("windows") or [])
     compare_assessment = build_compare_assessment(champion_report=champion_report, challenger_report=challenger_report)
 
     def delta(a, b):
@@ -592,10 +654,30 @@ def build_walk_forward_compare_payload(*, champion_payload: dict, champion_repor
             "max_mdd": {"champion": _safe_float(champ.get("max_mdd", 0.0)), "challenger": _safe_float(chall.get("max_mdd", 0.0)), "delta": delta(champ.get("max_mdd", 0.0), chall.get("max_mdd", 0.0))},
         }
 
-    champion_by_label = _window_row_by_label(list(champion_report.get("windows") or []))
-    challenger_by_label = _window_row_by_label(list(challenger_report.get("windows") or []))
+    champion_oos_total = build_oos_total_performance(champion_windows, ret_key="ret_pct")
+    challenger_oos_total = build_oos_total_performance(challenger_windows, ret_key="ret_pct")
+    benchmark_oos_total = build_oos_total_performance(challenger_windows or champion_windows, ret_key="benchmark_return_pct")
+    reference_oos_total = challenger_oos_total if challenger_windows else champion_oos_total
+    oos_total_compare = {
+        "oos_range": {
+            "start": str(reference_oos_total.get("oos_start", "")),
+            "end": str(reference_oos_total.get("oos_end", "")),
+        },
+        "metrics": {},
+    }
+    for metric_key in ("linked_total_return_pct", "annualized_return_pct", "max_drawdown_pct", "positive_window_rate"):
+        oos_total_compare["metrics"][metric_key] = {
+            "champion": _safe_float(champion_oos_total.get(metric_key, 0.0)),
+            "challenger": _safe_float(challenger_oos_total.get(metric_key, 0.0)),
+            "benchmark": _safe_float(benchmark_oos_total.get(metric_key, 0.0)),
+            "delta_vs_champion": delta(champion_oos_total.get(metric_key, 0.0), challenger_oos_total.get(metric_key, 0.0)),
+            "delta_vs_benchmark": delta(benchmark_oos_total.get(metric_key, 0.0), challenger_oos_total.get(metric_key, 0.0)),
+        }
+
+    champion_by_label = _window_row_by_label(champion_windows)
+    challenger_by_label = _window_row_by_label(challenger_windows)
     ordered_labels = []
-    for source_rows in (list(champion_report.get("windows") or []), list(challenger_report.get("windows") or [])):
+    for source_rows in (champion_windows, challenger_windows):
         for row in source_rows:
             label = str(row.get("label"))
             if label not in ordered_labels:
@@ -628,11 +710,15 @@ def build_walk_forward_compare_payload(*, champion_payload: dict, champion_repor
             "dataset_label": str(dataset_label),
             "source_db_path": str(source_db_path),
             "session_ts": str(session_ts),
+            "champion_params_path": "models/champion_params.json",
+            "challenger_run_best_params_path": "models/run_best_params.json",
+            "compat_best_params_path": "models/best_params.json",
         },
         "champion": {"params": dict(champion_payload), "summary": champion_summary, "regime_summary": champion_regime},
         "challenger": {"params": dict(challenger_payload), "summary": challenger_summary, "regime_summary": challenger_regime},
         "compare_assessment": compare_assessment,
         "summary_compare": summary_compare,
+        "oos_total_compare": oos_total_compare,
         "regime_compare": regime_compare,
         "window_compare_rows": window_compare_rows,
     }
@@ -664,17 +750,17 @@ def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict)
 
     assessment = dict(compare_payload.get("compare_assessment") or {})
     summary_compare = dict(compare_payload.get("summary_compare") or {})
+    oos_total_compare = dict(compare_payload.get("oos_total_compare") or {})
     regime_compare = dict(compare_payload.get("regime_compare") or {})
-
-    def _pct_line(metric_key: str) -> str:
-        metric = dict(summary_compare.get(metric_key) or {})
-        return f"| {metric_key} | {metric.get('champion', 0.0):.3f if 'score' in metric_key else ''} |"
 
     lines = [
         "# Walk-Forward 升版比較報表（Champion vs Challenger）",
         "",
         f"- 資料集：{(compare_payload.get('meta') or {}).get('dataset_label', 'N/A')}",
         f"- 記憶庫：`{(compare_payload.get('meta') or {}).get('source_db_path', '')}`",
+        f"- 現役正式版：`{(compare_payload.get('meta') or {}).get('champion_params_path', 'models/champion_params.json')}`",
+        f"- 本輪最佳：`{(compare_payload.get('meta') or {}).get('challenger_run_best_params_path', 'models/run_best_params.json')}`",
+        f"- 相容別名：`{(compare_payload.get('meta') or {}).get('compat_best_params_path', 'models/best_params.json')}`（同步指向 Champion）",
         f"- 產生時間：{session_ts}",
         "",
         "## 升版比較結論",
@@ -708,6 +794,21 @@ def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict)
             chall = _format_pct(metric.get('challenger', 0.0))
             delt = _format_pct(metric.get('delta', 0.0))
         lines.append(f"| {metric_key} | {champ} | {chall} | {delt} |")
+
+    lines.extend([
+        "",
+        "## OOS 總績效比較",
+        "",
+        f"- OOS 區間：{(oos_total_compare.get('oos_range') or {}).get('start', '')} ~ {(oos_total_compare.get('oos_range') or {}).get('end', '')}",
+        "",
+        "| 指標 | Champion | Challenger | 0050 | Challenger - Champion | Challenger - 0050 |",
+        "|---|---:|---:|---:|---:|---:|",
+    ])
+    for metric_key in ("linked_total_return_pct", "annualized_return_pct", "max_drawdown_pct", "positive_window_rate"):
+        metric = dict((oos_total_compare.get("metrics") or {}).get(metric_key) or {})
+        lines.append(
+            f"| {metric_key} | {_format_pct(metric.get('champion', 0.0))} | {_format_pct(metric.get('challenger', 0.0))} | {_format_pct(metric.get('benchmark', 0.0))} | {_format_pct(metric.get('delta_vs_champion', 0.0))} | {_format_pct(metric.get('delta_vs_benchmark', 0.0))} |"
+        )
 
     lines.extend([
         "",

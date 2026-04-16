@@ -71,9 +71,8 @@
 - [ ] 後續：將 compare gate 接成正式升版阻擋規則。
 
 
-## 本輪新增（Promote MVP）
-- [x] 新增 champion/challenger compare pass 後自動 promote。
-- [x] promote 時自動封存舊 champion 到 `models/champion_archive/`。
-- [x] 輸出 `outputs/ml_optimizer/upgrade_records/upgrade_record_*.md/json`。
-- [x] `.gitignore` 忽略 `models/champion_archive/`，避免舊 champion 歷史 json 進 git。
-- [ ] 後續：將 promote 改成可選開關（例如 CLI / env），避免所有 PASS 都自動升版。
+### 命名收斂（最新）
+- [x] 現役正式版：`models/champion_params.json`
+- [x] 相容別名：`models/best_params.json`（同步指向 Champion，避免舊模組斷裂）
+- [x] 本輪訓練最佳：`models/run_best_params.json`
+- [x] Compare 報表已補 `OOS 總績效比較（Champion vs Challenger vs 0050）`。
