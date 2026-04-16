@@ -5,6 +5,19 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
+DEFAULT_PERFORMANCE_STEP_FILES = {
+    "quick_gate": ("quick_gate_summary.json",),
+    "consistency": ("validate_consistency_summary.json",),
+    "chain_checks": ("chain_summary.json", "chain_checks_summary.json"),
+    "ml_smoke": ("ml_smoke_summary.json",),
+}
+DEFAULT_PERFORMANCE_MANIFEST_KEYS = {
+    "quick_gate": "performance_quick_gate_max_sec",
+    "consistency": "performance_consistency_max_sec",
+    "chain_checks": "performance_chain_checks_max_sec",
+    "ml_smoke": "performance_ml_smoke_max_sec",
+}
+
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_result
 
 
@@ -14,9 +27,13 @@ def build_performance_summary(
     *,
     current_meta_quality_duration_sec: float,
     current_meta_quality_peak_traced_memory_mb: float,
-    performance_step_files: Mapping[str, Sequence[str]],
-    performance_manifest_keys: Mapping[str, str],
+    performance_step_files: Mapping[str, Sequence[str]] | None = None,
+    performance_manifest_keys: Mapping[str, str] | None = None,
 ) -> Dict[str, Any]:
+    if performance_step_files is None:
+        performance_step_files = DEFAULT_PERFORMANCE_STEP_FILES
+    if performance_manifest_keys is None:
+        performance_manifest_keys = DEFAULT_PERFORMANCE_MANIFEST_KEYS
     has_shared_run_dir = bool(os.environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip())
     available_step_files = {
         name: next((run_dir / file_name for file_name in file_names if (run_dir / file_name).exists()), run_dir / file_names[0])
@@ -130,6 +147,7 @@ def build_performance_summary(
 
     return {
         "ok": all(item["status"] == "PASS" for item in results),
+        "skipped": False,
         "results": results,
         "step_durations": step_durations,
         "step_peak_traced_memory_mb": step_peak_traced_memory_mb,

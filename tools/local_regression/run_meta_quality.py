@@ -47,20 +47,14 @@ from tools.local_regression.meta_quality_targets import (
     TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS,
 )
 from tools.local_regression.meta_quality_coverage import build_coverage_summary as _shared_build_coverage_summary
-from tools.local_regression.meta_quality_performance import build_performance_summary as _shared_build_performance_summary
+from tools.local_regression.meta_quality_performance import (
+    DEFAULT_PERFORMANCE_MANIFEST_KEYS,
+    DEFAULT_PERFORMANCE_STEP_FILES,
+    build_performance_summary as _shared_build_performance_summary,
+)
 REQUIRED_META_IDS = ("B22", "B23", "B24", "B25", "B26")
-PERFORMANCE_STEP_FILES = {
-    "quick_gate": ("quick_gate_summary.json",),
-    "consistency": ("validate_consistency_summary.json",),
-    "chain_checks": ("chain_summary.json", "chain_checks_summary.json"),
-    "ml_smoke": ("ml_smoke_summary.json",),
-}
-PERFORMANCE_MANIFEST_KEYS = {
-    "quick_gate": "performance_quick_gate_max_sec",
-    "consistency": "performance_consistency_max_sec",
-    "chain_checks": "performance_chain_checks_max_sec",
-    "ml_smoke": "performance_ml_smoke_max_sec",
-}
+PERFORMANCE_STEP_FILES = DEFAULT_PERFORMANCE_STEP_FILES
+PERFORMANCE_MANIFEST_KEYS = DEFAULT_PERFORMANCE_MANIFEST_KEYS
 PERFORMANCE_MEMORY_MANIFEST_KEY = "performance_peak_traced_memory_mb"
 
 
