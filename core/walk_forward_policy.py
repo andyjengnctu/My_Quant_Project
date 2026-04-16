@@ -9,6 +9,12 @@ DEFAULT_WALK_FORWARD_POLICY = {
     "test_window_months": 6,
     "regime_up_threshold_pct": 8.0,
     "regime_down_threshold_pct": -8.0,
+    "min_window_bars": 20,
+    "gate_min_median_score": 0.0,
+    "gate_min_worst_ret_pct": -8.0,
+    "gate_min_flat_median_score": 0.0,
+    "compare_worst_ret_tolerance_pct": 1.0,
+    "compare_max_mdd_tolerance_pct": 2.0,
 }
 
 
@@ -33,6 +39,14 @@ def _coerce_float(data: dict, key: str) -> float:
     return float(data.get(key, DEFAULT_WALK_FORWARD_POLICY[key]))
 
 
+def _coerce_nonnegative_float(data: dict, key: str) -> float:
+    value = _coerce_float(data, key)
+    if value < 0.0:
+        raise ValueError(f"walk-forward policy: {key} 必須 >= 0，收到: {value}")
+    return value
+
+
+
 def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, str]] = None) -> dict:
     path = _resolve_policy_path(project_root, environ=environ)
     payload = {}
@@ -47,8 +61,14 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
     merged['test_window_months'] = _coerce_int(merged, 'test_window_months', 1)
+    merged['min_window_bars'] = _coerce_int(merged, 'min_window_bars', 1)
     merged['regime_up_threshold_pct'] = _coerce_float(merged, 'regime_up_threshold_pct')
     merged['regime_down_threshold_pct'] = _coerce_float(merged, 'regime_down_threshold_pct')
+    merged['gate_min_median_score'] = _coerce_float(merged, 'gate_min_median_score')
+    merged['gate_min_worst_ret_pct'] = _coerce_float(merged, 'gate_min_worst_ret_pct')
+    merged['gate_min_flat_median_score'] = _coerce_float(merged, 'gate_min_flat_median_score')
+    merged['compare_worst_ret_tolerance_pct'] = _coerce_nonnegative_float(merged, 'compare_worst_ret_tolerance_pct')
+    merged['compare_max_mdd_tolerance_pct'] = _coerce_nonnegative_float(merged, 'compare_max_mdd_tolerance_pct')
     if merged['regime_down_threshold_pct'] > merged['regime_up_threshold_pct']:
         raise ValueError("walk-forward policy: regime_down_threshold_pct 不可大於 regime_up_threshold_pct")
     merged['policy_path'] = path

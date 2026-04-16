@@ -68,13 +68,13 @@
 - [x] Walk-Forward 主設定：2012 + 8（train_start_year=2012, min_train_years=8）。
 - [x] 單版報表：輸出 challenger 的 WF 報表與 gate。
 - [x] 升級 MVP：輸出 Champion / Challenger 比較報表（先不自動升版）。
-- [ ] 後續：將 compare gate 接成正式升版阻擋規則。
+- [x] Compare gate 已接入 promote 決策；僅 `--promote` / `V16_OPTIMIZER_AUTO_PROMOTE=1` 且 compare 建議升版時才會實際覆寫 Champion。
 
 
 ### 命名收斂（最新）
 - [x] 現役正式版：`models/champion_params.json`
 - [x] 正式現役版：`models/champion_params.json`（唯一正式參數來源）
-- [x] 本輪訓練最佳：`models/run_champion_params.json`
+- [x] 本輪訓練最佳：`models/run_best_params.json`
 - [x] Compare 報表已補 `OOS 總績效比較（Champion vs Challenger vs 0050）`。
 
 
@@ -84,3 +84,5 @@
 - [x] Walk-forward 設定外部化到 `config/walk_forward_policy.json`。
 - [x] Compare gate 拆成 `quality_gate` / `coverage_gate`。
 - [x] Compare 報表升為正式升版主入口，console 優先印 compare 結論。
+- [x] WF 視窗 / gate / compare tolerance 已全部收斂到 `config/walk_forward_policy.json`，避免閾值分叉。
+- [x] Compare assessment 已回收為單一邏輯來源，不再在報表組裝處重複實作。

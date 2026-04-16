@@ -126,6 +126,10 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         test_window_months=int(walk_forward_policy["test_window_months"]),
         regime_up_threshold_pct=float(walk_forward_policy["regime_up_threshold_pct"]),
         regime_down_threshold_pct=float(walk_forward_policy["regime_down_threshold_pct"]),
+        min_window_bars=int(walk_forward_policy["min_window_bars"]),
+        gate_min_median_score=float(walk_forward_policy["gate_min_median_score"]),
+        gate_min_worst_ret_pct=float(walk_forward_policy["gate_min_worst_ret_pct"]),
+        gate_min_flat_median_score=float(walk_forward_policy["gate_min_flat_median_score"]),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
@@ -339,6 +343,8 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         dataset_label=dataset_label,
         source_db_path=db_file,
         session_ts=session.session_ts,
+        compare_worst_ret_tolerance_pct=float(walk_forward_policy["compare_worst_ret_tolerance_pct"]),
+        compare_max_mdd_tolerance_pct=float(walk_forward_policy["compare_max_mdd_tolerance_pct"]),
     )
     compare_paths = write_walk_forward_compare_report(
         output_dir=session.output_dir,
@@ -579,7 +585,8 @@ def main(argv=None, environ=None):
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
-    print(f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | test_months={walk_forward_policy['test_window_months']}{C_RESET}")
+    print(f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']}{C_RESET}")
+    print(f"{C_GRAY}🧱 WF gate policy: median>{float(walk_forward_policy['gate_min_median_score']):.3f} | worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.1f}% | flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f} | compare worst tol={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.1f}% | compare mdd tol={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.1f}%{C_RESET}")
     print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
 
     try:
