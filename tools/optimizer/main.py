@@ -170,41 +170,15 @@ def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_para
 
 
 
-def _prompt_promote_choice(default: bool = False) -> tuple[bool, str]:
-    default_text = "N" if not default else "Y"
-    raw = input(f"👉 完成後若 Compare PASS，是否自動升版 Champion？ (y/N，預設 {default_text}): ").strip().lower()
-    if raw == "":
-        return default, "prompt_default"
-    if raw in {"y", "yes", "1", "true", "on"}:
-        return True, "prompt_yes"
-    if raw in {"n", "no", "0", "false", "off"}:
-        return False, "prompt_no"
-    print(f"{C_YELLOW}⚠️ 無法辨識的輸入，沿用預設值：{'啟用' if default else '停用'} promote{C_RESET}")
-    return default, "prompt_invalid_default"
-
-
 def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[bool, str]:
     args = [] if argv is None else list(argv)
     if int(requested_n_trials) == 0:
         return False, "trial_zero_locked"
     if any(str(arg).strip() == "--promote" for arg in args[1:]):
         return True, "cli_flag"
-    env_map = os.environ if environ is None else environ
-    raw_env = str(env_map.get("V16_OPTIMIZER_AUTO_PROMOTE", "")).strip().lower()
+    raw_env = str((os.environ if environ is None else environ).get("V16_OPTIMIZER_AUTO_PROMOTE", "")).strip().lower()
     if raw_env in {"1", "true", "yes", "on"}:
         return True, "env_var"
-    if raw_env in {"0", "false", "no", "off"}:
-        return False, "env_var_off"
-    try:
-        interactive_bare_run = (
-            len(args) <= 1
-            and sys.stdin is not None and sys.stdin.isatty()
-            and sys.stdout is not None and sys.stdout.isatty()
-        )
-        if interactive_bare_run:
-            return _prompt_promote_choice(default=False)
-    except Exception:
-        pass
     return False, "default_off"
 
 
