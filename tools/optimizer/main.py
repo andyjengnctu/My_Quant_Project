@@ -247,6 +247,14 @@ def main(argv=None, environ=None):
                     f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
                     f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
                 )
+                upgrade_gate = dict(report.get("upgrade_gate") or {})
+                gate_status = str(upgrade_gate.get("status", "fail")).upper()
+                gate_color = C_GREEN if gate_status == "PASS" else (C_YELLOW if gate_status == "WATCH" else C_RED)
+                print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
+                upgrade_gate = dict(report.get("upgrade_gate") or {})
+                gate_status = str(upgrade_gate.get("status", "fail")).upper()
+                gate_color = C_GREEN if gate_status == "PASS" else (C_YELLOW if gate_status == "WATCH" else C_RED)
+                print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
             return 0
         finally:
             session.close_trial_prep_executor()

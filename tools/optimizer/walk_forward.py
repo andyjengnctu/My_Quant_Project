@@ -18,6 +18,9 @@ WF_TEST_WINDOW_MONTHS = 6
 WF_REGIME_UP_THRESHOLD_PCT = 8.0
 WF_REGIME_DOWN_THRESHOLD_PCT = -8.0
 WF_MIN_WINDOW_BARS = 20
+WF_GATE_MIN_MEDIAN_SCORE = 0.0
+WF_GATE_MIN_WORST_RET_PCT = -8.0
+WF_GATE_MIN_FLAT_MEDIAN_SCORE = 0.0
 
 
 def _safe_median(values: Iterable[float]) -> float:
@@ -237,16 +240,104 @@ def evaluate_walk_forward(
         "median_annual_trades": _safe_median(row["annual_trades"] for row in rows),
         "median_fill_rate": _safe_median(row["reserved_buy_fill_rate"] for row in rows),
     }
+    upgrade_gate = build_upgrade_gate_assessment(summary=summary, regime_summary=regime_summary)
 
     return {
         "summary": summary,
         "regime_summary": regime_summary,
+        "upgrade_gate": upgrade_gate,
         "windows": rows,
+    }
+
+
+def _build_gate_check(*, name: str, actual: float | int | bool, threshold: str, passed: bool, severity: str, note: str) -> dict:
+    return {
+        "name": str(name),
+        "actual": actual,
+        "threshold": str(threshold),
+        "passed": bool(passed),
+        "severity": str(severity),
+        "note": str(note),
+    }
+
+
+def build_upgrade_gate_assessment(*, summary: dict, regime_summary: dict) -> dict:
+    window_count = int(summary.get("window_count", 0) or 0)
+    median_window_score = float(summary.get("median_window_score", 0.0) or 0.0)
+    worst_ret_pct = float(summary.get("worst_ret_pct", 0.0) or 0.0)
+    flat_row = dict(regime_summary.get("flat") or {})
+    down_row = dict(regime_summary.get("down") or {})
+    flat_window_count = int(flat_row.get("window_count", 0) or 0)
+    flat_median_score = float(flat_row.get("median_score", 0.0) or 0.0)
+    down_window_count = int(down_row.get("window_count", 0) or 0)
+
+    checks = [
+        _build_gate_check(
+            name="median_window_score",
+            actual=median_window_score,
+            threshold="> 0",
+            passed=median_window_score > WF_GATE_MIN_MEDIAN_SCORE,
+            severity="hard",
+            note="整體 OOS 典型視窗需為正分。",
+        ),
+        _build_gate_check(
+            name="worst_ret_pct",
+            actual=worst_ret_pct,
+            threshold=f">= {WF_GATE_MIN_WORST_RET_PCT:.1f}%",
+            passed=worst_ret_pct >= WF_GATE_MIN_WORST_RET_PCT,
+            severity="hard",
+            note="避免單一 OOS 視窗災難性失真。",
+        ),
+        _build_gate_check(
+            name="flat_median_score",
+            actual=flat_median_score,
+            threshold=">= 0 (當 flat 視窗存在時)",
+            passed=(flat_window_count == 0) or (flat_median_score >= WF_GATE_MIN_FLAT_MEDIAN_SCORE),
+            severity="hard",
+            note="盤整期不可連續結構性失分。",
+        ),
+        _build_gate_check(
+            name="down_regime_coverage",
+            actual=down_window_count,
+            threshold=">= 1",
+            passed=down_window_count >= 1,
+            severity="coverage",
+            note="若無 down 視窗，不得宣稱已具跨盤勢穩健性。",
+        ),
+    ]
+
+    hard_pass = all(bool(check["passed"]) for check in checks if check["severity"] == "hard")
+    coverage_pass = all(bool(check["passed"]) for check in checks if check["severity"] == "coverage")
+    if hard_pass and coverage_pass:
+        status = "pass"
+    elif hard_pass:
+        status = "watch"
+    else:
+        status = "fail"
+
+    recommendation = {
+        "pass": "可列為候選升版版本，但仍建議與現役版做對照。",
+        "watch": "核心 OOS 門檻已過，但 regime 覆蓋不足，只能視為有限證據。",
+        "fail": "暫不建議僅依此報表升版；應先改善失敗項目。",
+    }[status]
+
+    return {
+        "status": status,
+        "recommended_for_promotion": bool(hard_pass and coverage_pass),
+        "cross_regime_claim_allowed": bool(coverage_pass),
+        "checks": checks,
+        "recommendation": recommendation,
     }
 
 
 def _format_pct(value: float) -> str:
     return f"{float(value):.2f}%"
+
+
+def _format_gate_actual(name: str, actual) -> str:
+    if name == "down_regime_coverage":
+        return str(int(actual))
+    return f"{float(actual):.3f}" if "score" in name else _format_pct(actual)
 
 
 def write_walk_forward_report(
@@ -266,6 +357,9 @@ def write_walk_forward_report(
     csv_path = os.path.join(output_dir, f"{base_name}.csv")
     md_path = os.path.join(output_dir, f"{base_name}.md")
 
+    summary = dict(report.get("summary") or {})
+    regime_summary = dict(report.get("regime_summary") or {})
+    upgrade_gate = dict(report.get("upgrade_gate") or build_upgrade_gate_assessment(summary=summary, regime_summary=regime_summary))
     payload = {
         "meta": {
             "dataset_label": str(dataset_label),
@@ -274,15 +368,16 @@ def write_walk_forward_report(
             "session_ts": str(resolved_session_ts),
         },
         "params": dict(params_payload),
-        "summary": dict(report.get("summary") or {}),
-        "regime_summary": dict(report.get("regime_summary") or {}),
+        "summary": summary,
+        "regime_summary": regime_summary,
+        "upgrade_gate": upgrade_gate,
         "windows": list(report.get("windows") or []),
     }
 
     with open(json_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
-    windows = list(report.get("windows") or [])
+    windows = list(payload.get("windows") or [])
     if windows:
         fieldnames = list(windows[0].keys())
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as handle:
@@ -294,8 +389,6 @@ def write_walk_forward_report(
             writer = csv.writer(handle)
             writer.writerow(["label", "regime", "window_score", "ret_pct", "mdd", "annual_trades", "reserved_buy_fill_rate"])
 
-    summary = payload["summary"]
-    regime_summary = payload["regime_summary"]
     lines = [
         "# Walk-Forward 驗證報表（MVP）",
         "",
@@ -316,11 +409,30 @@ def write_walk_forward_report(
         f"| 年化交易次數中位數 | {float(summary.get('median_annual_trades', 0.0)):.2f} |",
         f"| 買進成交率中位數 | {_format_pct(summary.get('median_fill_rate', 0.0))} |",
         "",
-        "## Regime Summary",
+        "## 升版門檻（MVP，僅報表判讀，不阻擋匯出）",
         "",
-        "| Regime | 視窗數 | 分數中位數 | 報酬率中位數 | 最差報酬率 | 最大 MDD |",
-        "|---|---:|---:|---:|---:|---:|",
+        f"- 狀態：`{upgrade_gate.get('status', 'fail')}`",
+        f"- 建議：{upgrade_gate.get('recommendation', 'N/A')}",
+        f"- 可宣稱跨盤勢穩健：{'是' if upgrade_gate.get('cross_regime_claim_allowed', False) else '否'}",
+        "",
+        "| 檢查項目 | 實際值 | 門檻 | 結果 | 說明 |",
+        "|---|---:|---:|---|---|",
     ]
+    for check in list(upgrade_gate.get("checks") or []):
+        lines.append(
+            f"| {check['name']} | {_format_gate_actual(str(check['name']), check.get('actual'))} | {check.get('threshold', '')} | "
+            f"{'PASS' if check.get('passed') else 'FAIL'} | {check.get('note', '')} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Regime Summary",
+            "",
+            "| Regime | 視窗數 | 分數中位數 | 報酬率中位數 | 最差報酬率 | 最大 MDD |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
     for regime_name in ("up", "flat", "down"):
         row = regime_summary.get(regime_name, {})
         lines.append(

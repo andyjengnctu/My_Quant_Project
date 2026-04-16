@@ -27,6 +27,7 @@
   - 最差視窗報酬率
   - 最大視窗 MDD
 - [ ] 後續再決定是否把 worst-window / median-score 正式納入 objective。
+- [x] 先新增「報表級升版門檻」：僅輸出 pass/watch/fail，不阻擋匯出。
 
 ### 3) 驗證報表
 - [x] 收斂：MVP 先輸出
@@ -42,17 +43,19 @@
 ### 4) 升版規則
 - [x] 收斂：本輪先不自動用 walk-forward 結果決定 best_params 是否匯出。
 - [x] 收斂：本輪先把 walk-forward 結果當成獨立驗證報表。
-- [ ] 下一階段再考慮升版門檻：
-  - 中位數 OOS 分數不得低於既有基準
-  - 最差 OOS 視窗不可惡化過多
-  - down / flat / up 至少 2 類不退步
+- [x] 報表級 MVP 升版門檻（僅判讀，不阻擋匯出）
+  - median_window_score > 0
+  - worst_ret_pct >= -8%
+  - flat median_score >= 0（若 flat 視窗存在）
+  - down 視窗數 >= 1 否則只可視為 regime 覆蓋不足
+- [ ] 下一階段再考慮是否將門檻接入正式升版流程
 
 ## 2. 本輪 MVP 實作項目
 - [x] 新增暫時規劃檔（本檔）。
-- [ ] 新增 walk-forward 評估模組。
-- [ ] 在 optimizer 匯出 best_params 後，自動產生 walk-forward 驗證報表。
-- [ ] 報表落點遵守 outputs/ml_optimizer/。
-- [ ] GPT 端自檢：語法、匯入、輸出鏈、正式入口鏈。
+- [x] 新增 walk-forward 評估模組。
+- [x] 在 optimizer 匯出 best_params 後，自動產生 walk-forward 驗證報表。
+- [x] 報表落點遵守 outputs/ml_optimizer/。
+- [x] GPT 端自檢：語法、匯入、輸出鏈、正式入口鏈。
 
 ## 3. 下一階段候選
 1. 把 walk-forward summary 指標納入 study callback 顯示。
