@@ -1159,7 +1159,8 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
                 self._session.current_session_trial = 2
                 raise KeyboardInterrupt()
 
-        def _fake_build_optimizer_session():
+        def _fake_build_optimizer_session(*, walk_forward_policy=None):
+            _ = walk_forward_policy
             return fake_session
 
         def _fake_resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
