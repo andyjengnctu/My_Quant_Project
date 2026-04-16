@@ -76,3 +76,11 @@
 - [x] 正式現役版：`models/champion_params.json`（唯一正式參數來源）
 - [x] 本輪訓練最佳：`models/run_champion_params.json`
 - [x] Compare 報表已補 `OOS 總績效比較（Champion vs Challenger vs 0050）`。
+
+
+## 2026-04-16 程式升級（一次到位）
+- [x] Promote 改為明確開關：`--promote` 或 `V16_OPTIMIZER_AUTO_PROMOTE=1`。
+- [x] `trial=0` 永不 promote；只做 `run_best` 匯出與報表。
+- [x] Walk-forward 設定外部化到 `config/walk_forward_policy.json`。
+- [x] Compare gate 拆成 `quality_gate` / `coverage_gate`。
+- [x] Compare 報表升為正式升版主入口，console 優先印 compare 結論。

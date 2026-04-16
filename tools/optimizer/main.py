@@ -18,6 +18,7 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.model_paths import resolve_champion_params_path, resolve_models_dir
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
+from core.walk_forward_policy import load_walk_forward_policy
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
 
 warnings.simplefilter("default")
@@ -35,8 +36,8 @@ OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
 CHAMPION_PARAMS_PATH = resolve_champion_params_path(PROJECT_ROOT)
+DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
-TRAIN_START_YEAR = 2012
 TRAIN_ENABLE_ROTATION = False
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
 OPTIMIZER_HIGH_LEN_MIN = 40
@@ -61,7 +62,7 @@ def ensure_runtime_dirs():
     os.makedirs(MODELS_DIR, exist_ok=True)
 
 
-def build_optimizer_session():
+def build_optimizer_session(*, walk_forward_policy: dict):
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
     from tools.optimizer.profile import OptimizerProfileRecorder
     from tools.optimizer.session import OptimizerSession
@@ -82,7 +83,7 @@ def build_optimizer_session():
         colors=COLORS,
         optimizer_fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
         train_max_positions=TRAIN_MAX_POSITIONS,
-        train_start_year=TRAIN_START_YEAR,
+        train_start_year=int(walk_forward_policy["train_start_year"]),
         train_enable_rotation=TRAIN_ENABLE_ROTATION,
         optimizer_high_len_min=OPTIMIZER_HIGH_LEN_MIN,
         optimizer_high_len_max=OPTIMIZER_HIGH_LEN_MAX,
@@ -94,7 +95,7 @@ def build_optimizer_session():
     )
 
 
-def generate_walk_forward_report_from_payload(*, session, params_payload, dataset_label, db_file, best_trial_number=None):
+def generate_walk_forward_report_from_payload(*, session, params_payload, dataset_label, db_file, best_trial_number=None, walk_forward_policy: dict):
     from core.params_io import build_params_from_mapping
     from core.strategy_params import build_runtime_param_raw_value
     from tools.optimizer.prep import prepare_trial_inputs
@@ -120,7 +121,11 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
         benchmark_ticker="0050",
-        train_start_year=session.train_start_year,
+        train_start_year=int(walk_forward_policy["train_start_year"]),
+        min_train_years=int(walk_forward_policy["min_train_years"]),
+        test_window_months=int(walk_forward_policy["test_window_months"]),
+        regime_up_threshold_pct=float(walk_forward_policy["regime_up_threshold_pct"]),
+        regime_down_threshold_pct=float(walk_forward_policy["regime_down_threshold_pct"]),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
@@ -134,7 +139,7 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
     return report, report_paths
 
 
-def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file):
+def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file, walk_forward_policy: dict):
     from tools.optimizer.study_utils import build_best_params_payload_from_trial
 
     params_payload = build_best_params_payload_from_trial(
@@ -147,6 +152,7 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
         dataset_label=dataset_label,
         db_file=db_file,
         best_trial_number=int(best_trial.number) + 1,
+        walk_forward_policy=walk_forward_policy,
     )
     return report, report_paths, params_payload
 
@@ -163,7 +169,125 @@ def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_para
     return None
 
 
-def generate_champion_challenger_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report):
+
+def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[bool, str]:
+    args = [] if argv is None else list(argv)
+    if int(requested_n_trials) == 0:
+        return False, "trial_zero_locked"
+    if any(str(arg).strip() == "--promote" for arg in args[1:]):
+        return True, "cli_flag"
+    raw_env = str((os.environ if environ is None else environ).get("V16_OPTIMIZER_AUTO_PROMOTE", "")).strip().lower()
+    if raw_env in {"1", "true", "yes", "on"}:
+        return True, "env_var"
+    return False, "default_off"
+
+
+def _json_file_equal(path_a: str, path_b: str) -> bool:
+    import json
+    if not (os.path.exists(path_a) and os.path.exists(path_b)):
+        return False
+    with open(path_a, "r", encoding="utf-8") as handle:
+        left = json.load(handle)
+    with open(path_b, "r", encoding="utf-8") as handle:
+        right = json.load(handle)
+    return left == right
+
+
+def promote_run_best_to_champion(*, session, compare_result, compare_paths, auto_promote_enabled: bool, promote_source: str) -> dict:
+    import json
+    import shutil
+
+    assessment = dict(((compare_result or {}).get("compare_payload") or {}).get("compare_assessment") or {})
+    status = str(assessment.get("status", "fail"))
+    recommended = bool(assessment.get("recommended_for_promotion", False))
+    result = {
+        "attempted": False,
+        "performed": False,
+        "status": status,
+        "reason": "disabled" if not auto_promote_enabled else "not_recommended",
+        "promote_source": str(promote_source),
+        "archive_path": None,
+        "record_md_path": None,
+        "record_json_path": None,
+    }
+    if not auto_promote_enabled:
+        return result
+    result["attempted"] = True
+    if not recommended:
+        return result
+    if not os.path.exists(RUN_BEST_PARAMS_PATH):
+        result["reason"] = "missing_run_best"
+        return result
+    if os.path.exists(CHAMPION_PARAMS_PATH) and _json_file_equal(CHAMPION_PARAMS_PATH, RUN_BEST_PARAMS_PATH):
+        result["reason"] = "same_as_champion"
+        return result
+
+    archive_dir = os.path.join(MODELS_DIR, "champion_archive")
+    records_dir = os.path.join(session.output_dir, "upgrade_records")
+    os.makedirs(archive_dir, exist_ok=True)
+    os.makedirs(records_dir, exist_ok=True)
+    archive_path = None
+    if os.path.exists(CHAMPION_PARAMS_PATH):
+        archive_path = os.path.join(archive_dir, f"champion_{session.session_ts}.json")
+        shutil.copy2(CHAMPION_PARAMS_PATH, archive_path)
+    shutil.copy2(RUN_BEST_PARAMS_PATH, CHAMPION_PARAMS_PATH)
+
+    compare_payload = dict((compare_result or {}).get("compare_payload") or {})
+    summary_compare = dict(compare_payload.get("summary_compare") or {})
+    key_metrics = {}
+    for key in ("median_window_score", "flat_median_score", "worst_ret_pct", "max_mdd", "median_annual_trades"):
+        metric = dict(summary_compare.get(key) or {})
+        key_metrics[key] = {
+            "champion": metric.get("champion"),
+            "challenger": metric.get("challenger"),
+            "delta": metric.get("delta"),
+        }
+    record_payload = {
+        "session_ts": str(session.session_ts),
+        "status": status,
+        "promote_source": str(promote_source),
+        "archive_path": archive_path,
+        "champion_params_path": CHAMPION_PARAMS_PATH,
+        "run_best_params_path": RUN_BEST_PARAMS_PATH,
+        "compare_md_path": None if compare_paths is None else compare_paths.get("md_path"),
+        "compare_json_path": None if compare_paths is None else compare_paths.get("json_path"),
+        "key_metrics": key_metrics,
+        "recommendation": assessment.get("recommendation", "N/A"),
+    }
+    record_json_path = os.path.join(records_dir, f"upgrade_record_{session.session_ts}.json")
+    record_md_path = os.path.join(records_dir, f"upgrade_record_{session.session_ts}.md")
+    with open(record_json_path, "w", encoding="utf-8") as handle:
+        json.dump(record_payload, handle, indent=2, ensure_ascii=False)
+    lines = [
+        "# 升版紀錄",
+        "",
+        f"- 時間：{session.session_ts}",
+        f"- 狀態：`{status}`",
+        f"- promote 來源：{promote_source}",
+        f"- compare 報表：`{record_payload['compare_md_path'] or ''}`",
+        f"- 舊 Champion 封存：`{archive_path or ''}`",
+        "",
+        "## 核心比較",
+        "",
+        "| 指標 | Champion | Challenger | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    for key, metric in key_metrics.items():
+        lines.append(f"| {key} | {metric['champion']} | {metric['challenger']} | {metric['delta']} |")
+    with open(record_md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+    result.update({
+        "performed": True,
+        "reason": "promoted",
+        "archive_path": archive_path,
+        "record_md_path": record_md_path,
+        "record_json_path": record_json_path,
+    })
+    return result
+
+
+def generate_champion_challenger_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report, walk_forward_policy: dict):
     from core.params_io import load_params_from_json, params_to_json_dict
     from tools.optimizer.walk_forward import build_walk_forward_compare_payload, write_walk_forward_compare_report
 
@@ -178,6 +302,7 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         dataset_label=f"{dataset_label}-champion",
         db_file=db_file,
         best_trial_number=None,
+        walk_forward_policy=walk_forward_policy,
     )
     compare_payload = build_walk_forward_compare_payload(
         champion_payload=champion_payload,
@@ -216,19 +341,23 @@ def print_walk_forward_outputs(*, report, report_paths):
 def _format_pct_simple(value) -> str:
     return f"{float(value):.2f}%"
 
-def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: str | None):
+
+
+def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: str | None, promote_result: dict | None = None, auto_promote_enabled: bool = False, promote_source: str = "default_off"):
     if compare_result is not None and compare_paths is not None:
-        compare_assessment = dict((compare_result.get("compare_payload") or {}).get("compare_assessment") or {})
+        compare_payload = dict((compare_result.get("compare_payload") or {}))
+        compare_assessment = dict(compare_payload.get("compare_assessment") or {})
+        quality_gate = dict(compare_assessment.get("quality_gate") or {})
+        coverage_gate = dict(compare_assessment.get("coverage_gate") or {})
         compare_status = str(compare_assessment.get("status", "fail")).upper()
         compare_color = C_GREEN if compare_status == "PASS" else (C_YELLOW if compare_status == "WATCH" else C_RED)
-        payload = dict(compare_result.get("compare_payload") or {})
-        summary_compare = dict(payload.get("summary_compare") or {})
-        total_compare = dict(payload.get("oos_total_compare") or {})
+        summary_compare = dict(compare_payload.get("summary_compare") or {})
+        total_compare = dict(compare_payload.get("oos_total_compare") or {})
         total_metrics = dict(total_compare.get("metrics") or {})
         total_ret = dict(total_metrics.get("linked_total_return_pct") or {})
         mws = dict(summary_compare.get("median_window_score") or {})
         flat_metric = dict(summary_compare.get("flat_median_score") or {})
-        print(f"{C_GREEN}🆚 已輸出 Champion/Challenger 比較報表：{compare_paths['md_path']}{C_RESET}")
+        print(f"{C_GREEN}🆚 已輸出 Champion/Challenger 比較報表（正式升版主入口）：{compare_paths['md_path']}{C_RESET}")
         print(
             f"{C_GRAY}   median_window_score: {float(mws.get('champion', 0.0)):.3f} -> {float(mws.get('challenger', 0.0)):.3f} "
             f"({float(mws.get('delta', 0.0)):+.3f}) | flat_median_score: {float(flat_metric.get('champion', 0.0)):.3f} -> {float(flat_metric.get('challenger', 0.0)):.3f} "
@@ -238,20 +367,29 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: st
             f"{C_GRAY}   OOS總報酬(串接): Champion {_format_pct_simple(total_ret.get('champion', 0.0))} | "
             f"Challenger {_format_pct_simple(total_ret.get('challenger', 0.0))} | 0050 {_format_pct_simple(total_ret.get('benchmark', 0.0))}{C_RESET}"
         )
+        print(
+            f"{C_GRAY}   品質 gate: {str(quality_gate.get('status', 'fail')).upper()} | 覆蓋 gate: {str(coverage_gate.get('status', 'watch')).upper()} | "
+            f"promote: {'ON' if auto_promote_enabled else 'OFF'} ({promote_source}){C_RESET}"
+        )
         print(f"{compare_color}   升版比較(MVP): {compare_status} | {compare_assessment.get('recommendation', 'N/A')}{C_RESET}")
+        if promote_result is not None:
+            if bool(promote_result.get("performed")):
+                print(f"{C_GREEN}   已升級 Champion | 封存: {promote_result.get('archive_path') or 'N/A'}{C_RESET}")
+                print(f"{C_GREEN}   升版紀錄: {promote_result.get('record_md_path') or 'N/A'}{C_RESET}")
+            elif auto_promote_enabled:
+                print(f"{C_YELLOW}   未執行 promote：{promote_result.get('reason', 'N/A')}{C_RESET}")
     elif bootstrap_source == "run_best":
         print(f"{C_YELLOW}ℹ️ 已由本輪最佳 run_best_params.json 建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
-
 
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset",))
+    validate_cli_args(argv, value_options=("--dataset",), flag_options=("--promote",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--promote]")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，才會實際升級 Champion。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -276,8 +414,9 @@ def main(argv=None, environ=None):
         resolve_optimizer_trial_count,
     )
 
+    walk_forward_policy = load_walk_forward_policy(PROJECT_ROOT, environ=environ)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
-    session = build_optimizer_session()
+    session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -303,6 +442,7 @@ def main(argv=None, environ=None):
     )
     if trial_count_exit is not None:
         return trial_count_exit
+    auto_promote_enabled, promote_source = resolve_promote_request(argv, environ, requested_n_trials=session.n_trials)
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -354,6 +494,7 @@ def main(argv=None, environ=None):
                     best_trial=best_trial,
                     dataset_label=dataset_label,
                     db_file=db_file,
+                    walk_forward_policy=walk_forward_policy,
                 )
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
                 bootstrap_source = ensure_champion_params_bootstrap(
@@ -366,11 +507,15 @@ def main(argv=None, environ=None):
                     db_file=db_file,
                     challenger_payload=challenger_payload,
                     challenger_report=report,
+                    walk_forward_policy=walk_forward_policy,
                 )
                 print_compare_outputs(
                     compare_result=compare_result,
                     compare_paths=compare_paths,
                     bootstrap_source=bootstrap_source,
+                    promote_result=None,
+                    auto_promote_enabled=False,
+                    promote_source="trial_zero_locked",
                 )
             return 0
         finally:
@@ -407,6 +552,8 @@ def main(argv=None, environ=None):
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
+    print(f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | test_months={walk_forward_policy['test_window_months']}{C_RESET}")
+    print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
 
     try:
         prompt_existing_db_policy(db_file, COLORS)
@@ -472,6 +619,7 @@ def main(argv=None, environ=None):
                     best_trial=best_trial,
                     dataset_label=dataset_label,
                     db_file=db_file,
+                    walk_forward_policy=walk_forward_policy,
                 )
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
                 bootstrap_source = ensure_champion_params_bootstrap(
@@ -484,11 +632,22 @@ def main(argv=None, environ=None):
                     db_file=db_file,
                     challenger_payload=challenger_payload,
                     challenger_report=report,
+                    walk_forward_policy=walk_forward_policy,
+                )
+                promote_result = promote_run_best_to_champion(
+                    session=session,
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    auto_promote_enabled=auto_promote_enabled,
+                    promote_source=promote_source,
                 )
                 print_compare_outputs(
                     compare_result=compare_result,
                     compare_paths=compare_paths,
                     bootstrap_source=bootstrap_source,
+                    promote_result=promote_result,
+                    auto_promote_enabled=auto_promote_enabled,
+                    promote_source=promote_source,
                 )
         elif export_policy == "interrupted_before_target":
             print(

@@ -1,0 +1,7 @@
+{
+  "train_start_year": 2012,
+  "min_train_years": 8,
+  "test_window_months": 6,
+  "regime_up_threshold_pct": 8.0,
+  "regime_down_threshold_pct": -8.0
+}
