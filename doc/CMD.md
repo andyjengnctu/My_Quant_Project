@@ -19,6 +19,7 @@ python tools/validate/preflight_env.py
 ```bash
 python apps/package_zip.py
 python apps/package_zip.py --run-test-suite
+python apps/package_zip.py --commit-message "chore: package before delivery" --run-test-suite
 ```
 
 ## 主工具入口
