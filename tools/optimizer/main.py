@@ -195,6 +195,16 @@ def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[
         return True, "env_var"
     if raw_env in {"0", "false", "no", "off"}:
         return False, "env_var_off"
+    try:
+        interactive_bare_run = (
+            len(args) <= 1
+            and sys.stdin is not None and sys.stdin.isatty()
+            and sys.stdout is not None and sys.stdout.isatty()
+        )
+        if interactive_bare_run:
+            return _prompt_promote_choice(default=False)
+    except Exception:
+        pass
     return False, "default_off"
 
 
