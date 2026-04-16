@@ -16,7 +16,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_champion_params_path, resolve_models_dir
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt_choice, validate_cli_args
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import load_walk_forward_policy
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
@@ -169,16 +169,56 @@ def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_para
     return None
 
 
+def _has_cli_flag(args, flag: str) -> bool:
+    return any(str(arg).strip() == flag for arg in args[1:])
+
+
+def _resolve_dataset_profile_with_prompt(argv, environ):
+    env = os.environ if environ is None else environ
+    args = [] if argv is None else list(argv)
+    from core.dataset_profiles import extract_dataset_cli_value
+
+    dataset_cli_value = extract_dataset_cli_value(args)
+    if dataset_cli_value is not None:
+        return resolve_dataset_profile_from_cli_env(args, env, default=DEFAULT_DATASET_PROFILE)
+
+    env_value = env.get("V16_DATASET_PROFILE")
+    if env_value is not None and str(env_value).strip() != "":
+        return resolve_dataset_profile_from_cli_env(args, env, default=DEFAULT_DATASET_PROFILE)
+
+    if is_interactive_stdin():
+        choice = safe_prompt_choice(
+            "👉 0. 資料集 [1] 縮減 reduced  [2] 完整 full (預設 2): ",
+            "2",
+            ("1", "2"),
+            "資料集選項",
+        )
+        selected = DEFAULT_DATASET_PROFILE if choice == "2" else "reduced"
+        return selected, "PROMPT"
+
+    return resolve_dataset_profile_from_cli_env(args, env, default=DEFAULT_DATASET_PROFILE)
+
 
 def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[bool, str]:
     args = [] if argv is None else list(argv)
     if int(requested_n_trials) == 0:
         return False, "trial_zero_locked"
-    if any(str(arg).strip() == "--promote" for arg in args[1:]):
+    if _has_cli_flag(args, "--promote"):
         return True, "cli_flag"
-    raw_env = str((os.environ if environ is None else environ).get("V16_OPTIMIZER_AUTO_PROMOTE", "")).strip().lower()
+    env = os.environ if environ is None else environ
+    raw_env = str(env.get("V16_OPTIMIZER_AUTO_PROMOTE", "")).strip().lower()
     if raw_env in {"1", "true", "yes", "on"}:
         return True, "env_var"
+    if is_interactive_stdin():
+        choice = safe_prompt_choice(
+            "👉 2. 升版動作 [1] 僅輸出報表不升版  [2] Compare PASS 後自動升版 (預設 1): ",
+            "1",
+            ("1", "2"),
+            "升版動作選項",
+        )
+        if choice == "2":
+            return True, "prompt"
+        return False, "prompt"
     return False, "default_off"
 
 
@@ -389,7 +429,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--promote]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，才會實際升級 Champion。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，才會實際升級 Champion；互動模式若未提供 CLI，會以選單詢問資料集與是否 promote。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -419,10 +459,9 @@ def main(argv=None, environ=None):
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
     try:
-        dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
+        dataset_profile_key, dataset_source = _resolve_dataset_profile_with_prompt(
             argv,
             environ,
-            default=DEFAULT_DATASET_PROFILE,
         )
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         dataset_label = get_dataset_profile_label(dataset_profile_key)
