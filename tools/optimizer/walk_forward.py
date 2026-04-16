@@ -476,7 +476,8 @@ def _parse_iso_date(value) -> pd.Timestamp | None:
         return None
     try:
         return pd.Timestamp(str(value))
-    except Exception:
+    except Exception as exc:
+        _ = exc
         return None
 
 
