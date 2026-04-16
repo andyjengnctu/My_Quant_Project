@@ -119,7 +119,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "db_trial_count": 1,
         "qualified_trial_count": 1,
         "best_trial_value": 0.5,
-        "best_params_digest": "abc",
+        "champion_params_digest": "abc",
         "optimizer_profile_trial_count": 1,
         "optimizer_profile_avg_objective_wall_sec": profile_info["optimizer_profile_avg_objective_wall_sec"],
         "failures": [],

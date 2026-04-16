@@ -235,12 +235,24 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         write_json(label_dir / "ml_smoke_summary.json", result)
         return result
 
+def _extract_champion_params_digest(run_summary: Dict[str, Any]) -> str:
+    digest = run_summary.get("champion_params_digest")
+    if isinstance(digest, str) and digest != "":
+        return digest
+    legacy_digest = run_summary.get("best_params_digest")
+    if isinstance(legacy_digest, str):
+        return legacy_digest
+    return ""
+
+
 def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) -> Dict[str, Any]:
+    first_digest = _extract_champion_params_digest(first_run)
+    second_digest = _extract_champion_params_digest(second_run)
     comparisons = {
         "trial_count_match": first_run["db_trial_count"] == second_run["db_trial_count"],
         "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
         "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
-        "champion_params_digest_match": first_run["champion_params_digest"] == second_run["champion_params_digest"],
+        "champion_params_digest_match": first_digest == second_digest,
         "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
     all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
@@ -257,7 +269,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "db_trial_count": first_run["db_trial_count"],
                 "qualified_trial_count": first_run["qualified_trial_count"],
                 "best_trial_value": first_run["best_trial_value"],
-                "champion_params_digest": first_run["champion_params_digest"],
+                "champion_params_digest": first_digest,
                 "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": first_run["failures"],
@@ -269,7 +281,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "db_trial_count": second_run["db_trial_count"],
                 "qualified_trial_count": second_run["qualified_trial_count"],
                 "best_trial_value": second_run["best_trial_value"],
-                "champion_params_digest": second_run["champion_params_digest"],
+                "champion_params_digest": second_digest,
                 "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": second_run["failures"],

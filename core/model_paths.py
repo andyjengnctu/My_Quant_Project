@@ -3,8 +3,6 @@ from typing import Mapping, Optional
 
 MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
 CHAMPION_PARAMS_PATH_ENV_VAR = "V16_CHAMPION_PARAMS_PATH"
-LEGACY_BEST_PARAMS_PATH_ENV_VAR = "V16_BEST_PARAMS_PATH"
-
 
 def _resolve_override_path(project_root: str, raw_value: str) -> str:
     resolved = str(raw_value).strip()
@@ -28,7 +26,4 @@ def resolve_champion_params_path(project_root: str, environ: Optional[Mapping[st
     override = str(env.get(CHAMPION_PARAMS_PATH_ENV_VAR, "")).strip()
     if override != "":
         return _resolve_override_path(project_root, override)
-    legacy_override = str(env.get(LEGACY_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
-    if legacy_override != "":
-        return _resolve_override_path(project_root, legacy_override)
     return os.path.join(resolve_models_dir(project_root, environ=env), "champion_params.json")

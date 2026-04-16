@@ -42,7 +42,7 @@
 - [ ] 後續再細分 high-vol / event-driven regime。
 
 ### 4) 升版規則
-- [x] 收斂：本輪先不自動用 walk-forward 結果決定 best_params 是否匯出。
+- [x] 收斂：本輪先不自動用 walk-forward 結果決定 run_best / champion 工件是否流轉。
 - [x] 收斂：本輪先把 walk-forward 結果當成獨立驗證報表。
 - [x] 報表級 MVP 升版門檻（僅判讀，不阻擋匯出）
   - median_window_score > 0
@@ -54,7 +54,7 @@
 ## 2. 本輪 MVP 實作項目
 - [x] 新增暫時規劃檔（本檔）。
 - [x] 新增 walk-forward 評估模組。
-- [x] 在 optimizer 匯出 best_params 後，自動產生 walk-forward 驗證報表。
+- [x] 在 optimizer 匯出 run_best_params 後，自動產生 walk-forward 驗證報表。
 - [x] 報表落點遵守 outputs/ml_optimizer/。
 - [x] GPT 端自檢：語法、匯入、輸出鏈、正式入口鏈。
 

@@ -24,7 +24,7 @@ project/
 │  ├─ exact_accounting.py             # 正式整數 ledger / cost-basis allocation / tick 正規化單一真理來源
 │  ├─ backtest_core.py                # 單股回測總控 façade
 │  ├─ portfolio_engine.py             # 投組 timeline 總控 façade
-│  ├─ model_paths.py              # models 目錄與 best_params 路徑解析 helper
+│  ├─ model_paths.py              # models 目錄與 champion/run_best 路徑解析 helper
 │  ├─ output_paths.py             # outputs/<category> 目錄正規化與建立 helper
 │  ├─ output_retention.py         # outputs retention 雙門檻清理 helper
 │  └─ display.py                      # 顯示 façade
