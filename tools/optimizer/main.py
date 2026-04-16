@@ -203,7 +203,8 @@ def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[
         )
         if interactive_bare_run:
             return _prompt_promote_choice(default=False)
-    except Exception:
+    except Exception as exc:
+        _ = exc
         pass
     return False, "default_off"
 
