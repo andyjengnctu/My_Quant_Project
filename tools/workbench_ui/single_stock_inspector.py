@@ -45,7 +45,7 @@ class _ConsoleWriter(io.TextIOBase):
     def write(self, text):
         if not text:
             return 0
-        self._panel._append_console_text(str(text))
+        self._panel._append_console_stream(str(text))
         return len(text)
 
     def flush(self):
@@ -111,6 +111,7 @@ OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     },
 )
 SECURITY_CODE_PATTERN = re.compile(r"^[0-9A-Z]{4,7}$")
+ANSI_ESCAPE_SEQUENCE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP = {
     "0050": "元大台灣50",
     "00631L": "元大台灣50正2",
@@ -398,9 +399,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_stop_var = tk.StringVar(value="停損: -")
         self._selected_actual_spend_var = tk.StringVar(value="實支: -")
         self._ui_thread = threading.current_thread()
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
         self._analysis_thread = None
         self._analysis_pending_ticker = ""
         self._analysis_active_token = 0
+        self._scanner_thread = None
+        self._scanner_active_token = 0
         self._company_name_refresh_inflight = False
         self._build_ui()
 
@@ -672,10 +678,71 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if threading.current_thread() is not self._ui_thread:
             self.after(0, self._append_console_text, normalized_text)
             return
+        self._flush_console_live_progress(force_newline=True)
         self._console_text.insert("end", normalized_text)
         self._console_text.see("end")
 
+    def _append_console_stream(self, text):
+        normalized_text = ANSI_ESCAPE_SEQUENCE_PATTERN.sub("", str(text or "")).replace("\r\n", "\n")
+        if not normalized_text:
+            return
+        if threading.current_thread() is not self._ui_thread:
+            self.after(0, self._append_console_stream, normalized_text)
+            return
+        current = self._console_stream_buffer
+        mode = self._console_stream_mode
+        ended_with_carriage_return = False
+        for char in normalized_text:
+            if char == "\r":
+                self._set_console_live_progress(current)
+                current = ""
+                mode = "progress"
+                ended_with_carriage_return = True
+                continue
+            ended_with_carriage_return = False
+            if char == "\n":
+                if mode == "progress":
+                    self._set_console_live_progress(current)
+                    self._flush_console_live_progress(force_newline=True)
+                else:
+                    self._console_text.insert("end", current + "\n")
+                    self._console_text.see("end")
+                current = ""
+                mode = "line"
+                continue
+            current += char
+        self._console_stream_buffer = current
+        self._console_stream_mode = mode
+        if mode == "progress" and not ended_with_carriage_return:
+            self._set_console_live_progress(current)
+
+    def _set_console_live_progress(self, text):
+        progress_text = str(text or "")
+        if self._console_live_progress_start is None:
+            self._console_live_progress_start = self._console_text.index("end-1c")
+            self._console_text.insert("end", progress_text)
+        else:
+            self._console_text.delete(self._console_live_progress_start, "end-1c")
+            self._console_text.insert(self._console_live_progress_start, progress_text)
+        self._console_text.see("end")
+
+    def _flush_console_live_progress(self, *, force_newline):
+        if self._console_live_progress_start is None:
+            return
+        if force_newline:
+            line_tail = self._console_text.get(
+                f"{self._console_live_progress_start} lineend",
+                f"{self._console_live_progress_start} lineend +1c",
+            )
+            if line_tail != "\n":
+                self._console_text.insert("end", "\n")
+        self._console_live_progress_start = None
+        self._console_text.see("end")
+
     def _clear_console(self):
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
         self._console_text.delete("1.0", "end")
 
     def _report_runtime_exception(self, context, exc, *, status_prefix, show_dialog=True, switch_to_console=False):
@@ -741,46 +808,60 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
         value_var.set("")
 
-    def _run_scanner(self):
-        self._clear_console()
-        self._notebook.select(2)
-        self._status_var.set("執行中：掃描候選股")
-        self.update_idletasks()
+    def _run_scanner_worker(self, mode, request_token):
         try:
             data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
             params = load_params(verbose=False)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
-                scan_result = run_daily_scanner(data_dir, params)
+                if mode == "candidate":
+                    scan_result = run_daily_scanner(data_dir, params)
+                else:
+                    scan_result = run_history_qualified_scanner(data_dir, params)
         except Exception as exc:
-            self._report_runtime_exception("run_scanner", exc, status_prefix="掃描失敗", switch_to_console=True)
+            self.after(0, self._finish_scanner_error, mode, request_token, exc)
             return
+        self.after(0, self._finish_scanner_success, mode, request_token, scan_result)
 
-        candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
-        candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
-        display_values = [
-            f"{item.get('ticker', '')} | {'新訊號' if item.get('kind') == 'buy' else '延續候選'}"
-            for item in candidate_rows
-        ]
-        self._apply_scan_dropdown(
-            combo=self._candidate_combo,
-            value_var=self._candidate_display_var,
-            mapping=self._candidate_map,
-            display_values=display_values,
-        )
-        self._status_var.set(f"掃描完成：候選股 {len(display_values)} 檔")
-
-    def _run_history_scanner(self):
+    def _start_scanner(self, mode):
+        if self._scanner_thread is not None and self._scanner_thread.is_alive():
+            status_text = "掃描進行中：請等待目前掃描完成"
+            self._status_var.set(status_text)
+            self._append_console_text(f"[scanner] {status_text}\n")
+            return
+        self._scanner_active_token += 1
+        request_token = self._scanner_active_token
         self._clear_console()
         self._notebook.select(2)
-        self._status_var.set("執行中：掃描歷史績效股")
-        self.update_idletasks()
-        try:
-            data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
-            params = load_params(verbose=False)
-            with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
-                scan_result = run_history_qualified_scanner(data_dir, params)
-        except Exception as exc:
-            self._report_runtime_exception("run_history_scanner", exc, status_prefix="掃描失敗", switch_to_console=True)
+        status_text = "執行中：掃描候選股" if mode == "candidate" else "執行中：掃描歷史績效股"
+        self._status_var.set(status_text)
+        self._append_console_text(f"[scanner] {status_text}\n")
+        scanner_thread = threading.Thread(
+            target=self._run_scanner_worker,
+            args=(mode, request_token),
+            name=f"workbench-scanner-{mode}",
+            daemon=True,
+        )
+        self._scanner_thread = scanner_thread
+        scanner_thread.start()
+
+    def _finish_scanner_success(self, mode, request_token, scan_result):
+        if request_token != self._scanner_active_token:
+            return
+        self._scanner_thread = None
+        if mode == "candidate":
+            candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
+            candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
+            display_values = [
+                f"{item.get('ticker', '')} | {'新訊號' if item.get('kind') == 'buy' else '延續候選'}"
+                for item in candidate_rows
+            ]
+            self._apply_scan_dropdown(
+                combo=self._candidate_combo,
+                value_var=self._candidate_display_var,
+                mapping=self._candidate_map,
+                display_values=display_values,
+            )
+            self._status_var.set(f"掃描完成：候選股 {len(display_values)} 檔")
             return
 
         history_rows = list((scan_result or {}).get("history_qualified_rows") or [])
@@ -793,6 +874,19 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             display_values=display_values,
         )
         self._status_var.set(f"掃描完成：歷史績效股 {len(display_values)} 檔")
+
+    def _finish_scanner_error(self, mode, request_token, exc):
+        if request_token != self._scanner_active_token:
+            return
+        self._scanner_thread = None
+        context = "run_scanner" if mode == "candidate" else "run_history_scanner"
+        self._report_runtime_exception(context, exc, status_prefix="掃描失敗", switch_to_console=True)
+
+    def _run_scanner(self):
+        self._start_scanner("candidate")
+
+    def _run_history_scanner(self):
+        self._start_scanner("history")
 
     def _run_analysis_worker(self, ticker, request_token):
         try:
@@ -836,8 +930,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
         self._analysis_thread = None
         self._result = result
-        self._render_result(result)
-        self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
+        render_error_text = self._render_result(result)
+        if not render_error_text:
+            self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
         self._consume_pending_analysis_request(ticker)
 
     def _finish_analysis_error(self, ticker, request_token, exc):
@@ -867,7 +962,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         trade_logs_df = result.get("trade_logs_df")
         self._update_sidebar_from_result(result)
         self._render_trade_table(trade_logs_df)
-        self._render_embedded_chart(result)
+        return self._render_embedded_chart(result)
 
     def _format_sidebar_line_value(self, label, value):
         return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
@@ -988,38 +1083,60 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ticker = result.get("ticker", "")
         if chart_payload is None:
             self._clear_embedded_chart()
-            return
+            self._append_console_text(f"[render_embedded_chart] ticker={ticker or '-'} | chart_payload=None\n")
+            self._status_var.set(f"圖表缺失：{ticker or '-'} 沒有 chart_payload")
+            return self._status_var.get()
         if FigureCanvasTkAgg is None:
             self._clear_embedded_chart()
             backend_error_text = "缺少 matplotlib TkAgg backend，無法內嵌圖表。"
             if FIGURE_CANVAS_TKAGG_IMPORT_ERROR:
                 backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
             self._status_var.set(backend_error_text)
-            return
+            return backend_error_text
+        payload_bar_count = 0
+        payload_dates = chart_payload.get("date_labels") if isinstance(chart_payload, dict) else None
+        if payload_dates is not None:
+            try:
+                payload_bar_count = len(payload_dates)
+            except TypeError:
+                payload_bar_count = 0
+        self._append_console_text(
+            f"[render_embedded_chart] ticker={ticker or '-'} | chart_payload_bars={payload_bar_count} | show_volume={int(bool(self._show_volume_var.get()))}\n"
+        )
         try:
             figure = create_matplotlib_trade_chart_figure(chart_payload=self._build_gui_chart_payload(result), ticker=ticker, show_volume=bool(self._show_volume_var.get()))
         except Exception as exc:
             self._clear_embedded_chart()
-            self._report_runtime_exception("render_embedded_chart", exc, status_prefix="圖表渲染失敗")
-            return
+            error_text = self._report_runtime_exception("render_embedded_chart.figure", exc, status_prefix="圖表渲染失敗")
+            return error_text
 
-        self._clear_embedded_chart()
-        self._chart_placeholder.pack_forget()
-        canvas = FigureCanvasTkAgg(figure, master=self._chart_canvas_host)
-        bind_matplotlib_chart_navigation(figure, canvas)
-        state = getattr(figure, "_stock_chart_navigation_state", None)
-        if isinstance(state, dict):
-            state["external_hover_callback"] = self._update_selected_value_sidebar
-        canvas.draw()
-        canvas_widget = canvas.get_tk_widget()
-        canvas_widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
-        canvas_widget.pack(fill="both", expand=True)
-        canvas_widget.focus_set()
+        try:
+            self._clear_embedded_chart()
+            self._chart_placeholder.pack_forget()
+            canvas = FigureCanvasTkAgg(figure, master=self._chart_canvas_host)
+            bind_matplotlib_chart_navigation(figure, canvas)
+            state = getattr(figure, "_stock_chart_navigation_state", None)
+            if isinstance(state, dict):
+                state["external_hover_callback"] = self._update_selected_value_sidebar
+            canvas.draw()
+            canvas_widget = canvas.get_tk_widget()
+            canvas_widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
+            canvas_widget.pack(fill="both", expand=True)
+            canvas_widget.focus_set()
+        except Exception as exc:
+            self._clear_embedded_chart()
+            try:
+                figure.clear()
+            except Exception:
+                pass
+            error_text = self._report_runtime_exception("render_embedded_chart.canvas", exc, status_prefix="圖表嵌入失敗")
+            return error_text
 
         self._chart_canvas = canvas
         self._chart_figure = figure
         self._notebook.select(0)
         self._move_chart_to_latest()
+        return ""
 
     def _clear_embedded_chart(self):
         if self._chart_canvas is not None:
