@@ -98,11 +98,11 @@ def build_walk_forward_windows(
     return windows
 
 
-def classify_benchmark_regime(benchmark_return_pct: float) -> str:
+def classify_benchmark_regime(benchmark_return_pct: float, *, regime_up_threshold_pct: float = WF_REGIME_UP_THRESHOLD_PCT, regime_down_threshold_pct: float = WF_REGIME_DOWN_THRESHOLD_PCT) -> str:
     benchmark_return_pct = float(benchmark_return_pct)
-    if benchmark_return_pct >= WF_REGIME_UP_THRESHOLD_PCT:
+    if benchmark_return_pct >= float(regime_up_threshold_pct):
         return "up"
-    if benchmark_return_pct <= WF_REGIME_DOWN_THRESHOLD_PCT:
+    if benchmark_return_pct <= float(regime_down_threshold_pct):
         return "down"
     return "flat"
 
@@ -119,6 +119,8 @@ def evaluate_walk_forward(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     test_window_months: int = WF_TEST_WINDOW_MONTHS,
     train_start_year: int | None = None,
+    regime_up_threshold_pct: float = WF_REGIME_UP_THRESHOLD_PCT,
+    regime_down_threshold_pct: float = WF_REGIME_DOWN_THRESHOLD_PCT,
 ):
     benchmark_data = all_dfs_fast.get(str(benchmark_ticker), None)
     windows = build_walk_forward_windows(
@@ -178,7 +180,11 @@ def evaluate_walk_forward(
             r_sq,
             annual_return_pct=annual_return_pct,
         )
-        regime = classify_benchmark_regime(bm_ret)
+        regime = classify_benchmark_regime(
+            bm_ret,
+            regime_up_threshold_pct=regime_up_threshold_pct,
+            regime_down_threshold_pct=regime_down_threshold_pct,
+        )
         rows.append(
             {
                 "label": window["label"],
@@ -231,8 +237,8 @@ def evaluate_walk_forward(
         "min_train_years": int(min_train_years),
         "train_start_year": None if train_start_year is None else int(train_start_year),
         "test_window_months": int(test_window_months),
-        "regime_up_threshold_pct": float(WF_REGIME_UP_THRESHOLD_PCT),
-        "regime_down_threshold_pct": float(WF_REGIME_DOWN_THRESHOLD_PCT),
+        "regime_up_threshold_pct": float(regime_up_threshold_pct),
+        "regime_down_threshold_pct": float(regime_down_threshold_pct),
         "median_window_score": _safe_median(row["window_score"] for row in rows),
         "median_ret_pct": _safe_median(row["ret_pct"] for row in rows),
         "worst_ret_pct": _safe_min(row["ret_pct"] for row in rows),
