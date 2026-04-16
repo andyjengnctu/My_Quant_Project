@@ -94,16 +94,17 @@ def build_optimizer_session():
 
 
 def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file):
+    from core.params_io import build_params_from_mapping
     from core.strategy_params import build_runtime_param_raw_value
     from tools.optimizer.prep import prepare_trial_inputs
     from tools.optimizer.study_utils import build_best_params_payload_from_trial
     from tools.optimizer.walk_forward import evaluate_walk_forward, write_walk_forward_report
 
-    ai_params = session.build_optimizer_trial_params(
-        best_trial.params,
-        best_trial.user_attrs,
+    params_payload = build_best_params_payload_from_trial(
+        best_trial,
         fixed_tp_percent=session.optimizer_fixed_tp_percent,
     )
+    ai_params = build_params_from_mapping(params_payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(
         build_runtime_param_raw_value(ai_params, "optimizer_max_workers")
     )
@@ -125,7 +126,6 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
         benchmark_ticker="0050",
         train_start_year=session.train_start_year,
     )
-    params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
         params_payload=params_payload,
