@@ -15,7 +15,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.model_paths import resolve_best_params_path, resolve_models_dir
+from core.model_paths import resolve_champion_params_path, resolve_models_dir
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
@@ -33,9 +33,8 @@ def configure_optuna_logging():
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
-LEGACY_BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
 RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
-CHAMPION_PARAMS_PATH = os.path.join(MODELS_DIR, "champion_params.json")
+CHAMPION_PARAMS_PATH = resolve_champion_params_path(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2012
 TRAIN_ENABLE_ROTATION = False
@@ -152,37 +151,14 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
     return report, report_paths, params_payload
 
 
-def sync_legacy_best_alias_from_champion(*, champion_params_path: str, legacy_best_params_path: str):
-    import shutil
 
-    if not os.path.exists(champion_params_path):
-        return False
-    shutil.copy2(champion_params_path, legacy_best_params_path)
-    return True
-
-
-def ensure_champion_params_bootstrap(*, champion_params_path: str, legacy_best_params_path: str, run_best_params_path: str):
+def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_params_path: str):
     import shutil
 
     if os.path.exists(champion_params_path):
-        sync_legacy_best_alias_from_champion(
-            champion_params_path=champion_params_path,
-            legacy_best_params_path=legacy_best_params_path,
-        )
         return None
-    if os.path.exists(legacy_best_params_path):
-        shutil.copy2(legacy_best_params_path, champion_params_path)
-        sync_legacy_best_alias_from_champion(
-            champion_params_path=champion_params_path,
-            legacy_best_params_path=legacy_best_params_path,
-        )
-        return "legacy_best"
     if os.path.exists(run_best_params_path):
         shutil.copy2(run_best_params_path, champion_params_path)
-        sync_legacy_best_alias_from_champion(
-            champion_params_path=champion_params_path,
-            legacy_best_params_path=legacy_best_params_path,
-        )
         return "run_best"
     return None
 
@@ -263,8 +239,6 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: st
             f"Challenger {_format_pct_simple(total_ret.get('challenger', 0.0))} | 0050 {_format_pct_simple(total_ret.get('benchmark', 0.0))}{C_RESET}"
         )
         print(f"{compare_color}   升版比較(MVP): {compare_status} | {compare_assessment.get('recommendation', 'N/A')}{C_RESET}")
-    elif bootstrap_source == "legacy_best":
-        print(f"{C_YELLOW}ℹ️ 已由既有 best_params.json（相容別名）建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
     elif bootstrap_source == "run_best":
         print(f"{C_YELLOW}ℹ️ 已由本輪最佳 run_best_params.json 建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
 
@@ -277,7 +251,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；Champion / best_params.json 只作現役正式版與相容別名。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -353,7 +327,6 @@ def main(argv=None, environ=None):
         try:
             _bootstrap_source_pre = ensure_champion_params_bootstrap(
                 champion_params_path=CHAMPION_PARAMS_PATH,
-                legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
                 run_best_params_path=RUN_BEST_PARAMS_PATH,
             )
             export_status = export_best_params_if_requested(
@@ -385,7 +358,6 @@ def main(argv=None, environ=None):
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
                 bootstrap_source = ensure_champion_params_bootstrap(
                     champion_params_path=CHAMPION_PARAMS_PATH,
-                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
                     run_best_params_path=RUN_BEST_PARAMS_PATH,
                 )
                 compare_result, compare_paths = generate_champion_challenger_compare_report(
@@ -485,7 +457,6 @@ def main(argv=None, environ=None):
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
                 _bootstrap_source_pre = ensure_champion_params_bootstrap(
                     champion_params_path=CHAMPION_PARAMS_PATH,
-                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
                     run_best_params_path=RUN_BEST_PARAMS_PATH,
                 )
                 export_status = export_best_params_if_requested(
@@ -505,7 +476,6 @@ def main(argv=None, environ=None):
                 print_walk_forward_outputs(report=report, report_paths=report_paths)
                 bootstrap_source = ensure_champion_params_bootstrap(
                     champion_params_path=CHAMPION_PARAMS_PATH,
-                    legacy_best_params_path=LEGACY_BEST_PARAMS_PATH,
                     run_best_params_path=RUN_BEST_PARAMS_PATH,
                 )
                 compare_result, compare_paths = generate_champion_challenger_compare_report(

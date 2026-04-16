@@ -29,7 +29,7 @@ def main(argv=None, env=None):
 
     from core.data_utils import discover_unique_csv_inputs
     from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-    from tools.portfolio_sim.runtime import BEST_PARAMS_PATH, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from tools.portfolio_sim.runtime import CHAMPION_PARAMS_PATH, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -48,7 +48,7 @@ def main(argv=None, env=None):
         return 1
 
     try:
-        params = load_strict_params(BEST_PARAMS_PATH)
+        params = load_strict_params(CHAMPION_PARAMS_PATH)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1

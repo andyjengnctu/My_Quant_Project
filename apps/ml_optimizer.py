@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；Champion / best_params.json 則代表現役正式版與相容別名。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；Champion 使用 champion_params.json；本輪訓練最佳使用 run_best_params.json。"
 
 
 def main(argv=None, environ=None):

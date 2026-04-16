@@ -73,6 +73,6 @@
 
 ### 命名收斂（最新）
 - [x] 現役正式版：`models/champion_params.json`
-- [x] 相容別名：`models/best_params.json`（同步指向 Champion，避免舊模組斷裂）
-- [x] 本輪訓練最佳：`models/run_best_params.json`
+- [x] 正式現役版：`models/champion_params.json`（唯一正式參數來源）
+- [x] 本輪訓練最佳：`models/run_champion_params.json`
 - [x] Compare 報表已補 `OOS 總績效比較（Champion vs Challenger vs 0050）`。

@@ -237,7 +237,7 @@ def validate_model_io_schema_case(base_params):
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
 
-    shipped_best_params_paths = [Path("models/best_params.json"), *sorted(Path("models").glob("all_best_params_*.json"))]
+    shipped_best_params_paths = [Path("models/champion_params.json"), *sorted(Path("models").glob("all_best_params_*.json"))]
     shipped_payload_keys = {}
     shipped_payload_type_mismatches = {}
     for shipped_path in shipped_best_params_paths:
@@ -264,7 +264,7 @@ def validate_model_io_schema_case(base_params):
         results,
         "strategy_schema",
         case_id,
-        "repo_shipped_best_params_payload_keys_match_strategy_schema",
+        "repo_shipped_champion_payload_keys_match_strategy_schema",
         {path.name: sorted(default_payload.keys()) for path in shipped_best_params_paths},
         shipped_payload_keys,
     )
@@ -272,7 +272,7 @@ def validate_model_io_schema_case(base_params):
         results,
         "strategy_schema",
         case_id,
-        "repo_shipped_best_params_payload_types_match_strategy_schema",
+        "repo_shipped_champion_payload_types_match_strategy_schema",
         {path.name: [] for path in shipped_best_params_paths},
         shipped_payload_type_mismatches,
     )
@@ -730,7 +730,7 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
     export_colors = {"red": "", "green": "", "reset": ""}
 
     with TemporaryDirectory() as tmp_dir:
-        export_path = Path(tmp_dir) / "best_params.json"
+        export_path = Path(tmp_dir) / "run_best_params.json"
         study = _FakeStudy([export_trial], best_trial=export_trial)
         export_status = export_best_params_if_requested(
             study,
@@ -1027,7 +1027,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
     canonical_model_files = [
-        Path("models/best_params.json"),
+        Path("models/run_best_params.json"),
         Path("models/all_best_params_1.json"),
         Path("models/all_best_params_2.json"),
         Path("models/all_best_params_3.json"),
@@ -1051,7 +1051,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "repo_shipped_best_params_artifacts_use_canonical_optimizer_decimal_repr",
+        "repo_shipped_champion_artifacts_use_canonical_optimizer_decimal_repr",
         expected_shipped_repr_map,
         shipped_repr_map,
     )
@@ -1142,7 +1142,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         csv_path.write_text("Date,Open,High,Low,Close,Volume\n2026-01-02,1,1,1,1,1\n", encoding="utf-8")
         db_file = tmp_root / "portfolio_ai.db"
         db_file.write_text("stub", encoding="utf-8")
-        best_params_path = tmp_root / "best_params.json"
+        best_params_path = tmp_root / "run_best_params.json"
         best_params_path.write_text(json.dumps({"marker": "keep"}, ensure_ascii=False, indent=2), encoding="utf-8")
 
         fake_session = _FakeMainSession()
@@ -1181,7 +1181,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         with ExitStack() as stack:
             stack.enter_context(patch.object(optimizer_main, "OUTPUT_DIR", str(tmp_root / "outputs")))
             stack.enter_context(patch.object(optimizer_main, "MODELS_DIR", str(tmp_root / "models")))
-            stack.enter_context(patch.object(optimizer_main, "BEST_PARAMS_PATH", str(best_params_path)))
+            stack.enter_context(patch.object(optimizer_main, "CHAMPION_PARAMS_PATH", str(best_params_path)))
             stack.enter_context(patch.object(optimizer_main, "ensure_runtime_dirs", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "configure_optuna_logging", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "build_optimizer_session", side_effect=_fake_build_optimizer_session))
@@ -1208,7 +1208,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     stderr_text = stderr_buffer.getvalue()
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_returns_zero", 0, rc)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_does_not_call_export", 0, len(fake_export_calls))
-    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_preserves_existing_best_params_json", "keep", persisted_payload.get("marker"))
+    add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_preserves_existing_run_best_params_json", "keep", persisted_payload.get("marker"))
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_stderr_empty", "", stderr_text)

@@ -396,8 +396,8 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
     return results, summary
 
 
-def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
-    case_id = "META_ARCHITECTURE_MODELS_BEST_PARAMS_FILE_TREE_SYNC"
+def validate_architecture_models_champion_params_file_tree_sync_case(_base_params):
+    case_id = "META_ARCHITECTURE_MODELS_CHAMPION_PARAMS_FILE_TREE_SYNC"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -408,7 +408,7 @@ def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
         "│  ├─ all_best_params_1.json         # 特定評分口徑下的最佳參數紀錄",
         "│  ├─ all_best_params_2.json         # 特定評分口徑下的最佳參數紀錄",
         "│  ├─ all_best_params_3.json         # 歷史最佳參數或不同批次最佳化輸出",
-        "│  └─ best_params.json               # 目前主要使用的最佳參數檔",
+        "│  └─ champion_params.json           # 目前正式現役參數檔",
     ]
     stale_tree_fragments = [
         "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
@@ -423,7 +423,7 @@ def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_1", True, (models_dir / "all_best_params_1.json").exists())
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_2", True, (models_dir / "all_best_params_2.json").exists())
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_3", True, (models_dir / "all_best_params_3.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_best_params", True, (models_dir / "best_params.json").exists())
+    add_check(results, "meta_architecture_contract", case_id, "repo_ships_champion_params", True, (models_dir / "champion_params.json").exists())
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
@@ -431,7 +431,7 @@ def validate_architecture_models_best_params_file_tree_sync_case(_base_params):
         "models/all_best_params_1.json",
         "models/all_best_params_2.json",
         "models/all_best_params_3.json",
-        "models/best_params.json",
+        "models/champion_params.json",
     ]
     return results, summary
 

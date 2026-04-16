@@ -43,7 +43,7 @@ DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
 OUTPUT_DIR = build_output_dir(BASE_DIR, "debug_trade_log")
 
 
-def load_params(json_file=os.path.join(BASE_DIR, "models", "best_params.json"), *, verbose=True):
+def load_params(json_file=os.path.join(BASE_DIR, "models", "champion_params.json"), *, verbose=True):
     params = load_params_from_json(json_file)
     if verbose:
         print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
@@ -322,7 +322,7 @@ def main(argv=None, environ=None):
     sanitize_stats = analysis_result["sanitize_stats"]
 
     print(f"📥 讀取 {analysis_result['file_path']}...")
-    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'best_params.json')}{C_RESET}")
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'champion_params.json')}{C_RESET}")
 
     dropped_row_count = sanitize_stats['dropped_row_count']
     invalid_row_count = sanitize_stats['invalid_row_count']

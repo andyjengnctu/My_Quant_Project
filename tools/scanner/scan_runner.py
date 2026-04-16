@@ -15,7 +15,7 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.log_utils import write_issue_log
 from core.runtime_utils import enable_line_buffered_stdout, get_process_pool_executor_kwargs, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from .reporting import print_history_qualified_summary, print_scanner_start_banner, print_scanner_summary
-from .runtime_common import BEST_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
+from .runtime_common import CHAMPION_PARAMS_PATH, OUTPUT_DIR, PROJECT_ROOT, SCANNER_PROGRESS_EVERY, ensure_runtime_dirs, load_strict_params, resolve_scanner_max_workers
 
 
 def _prepare_scan_inputs(data_dir, params):
@@ -241,7 +241,7 @@ def main(argv=None, env=None):
         csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
         if not csv_inputs:
             raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
-        params = load_strict_params(BEST_PARAMS_PATH)
+        params = load_strict_params(CHAMPION_PARAMS_PATH)
         print(
             f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
             f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"

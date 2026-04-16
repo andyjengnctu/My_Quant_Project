@@ -194,12 +194,12 @@
 
 | ID | 優先級 | 類別 | 項目 | 目前判定 | 缺口摘要 | 建議落點 |
 |---|---|---|---|---|---|---|
-| B47 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | DONE | 已新增 model I/O schema case，直接驗輸入欄位、輸出欄位、型別與缺值處理，並釘死 repo 內 `models/*best_params*.json` shipped 工件不得對 float-schema 欄位輸出 `int` 型別 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/`, `tools/scanner/`, `models/best_params.json`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
+| B47 | P1 | 模型介面 | model feature schema / prediction schema 穩定 | DONE | 已新增 model I/O schema case，直接驗輸入欄位、輸出欄位、型別與缺值處理，並釘死 repo 內 `models/*best_params*.json` shipped 工件不得對 float-schema 欄位輸出 `int` 型別 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/`, `tools/scanner/`, `models/champion_params.json`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
 | B48 | P1 | 重現性 | 同 seed 下 optimizer / model inference 可重現 | DONE | 已新增 strategy repeatability case，直接雙跑 scanner inference 與 optimizer objective，驗證輸出 payload、trial params 與 profile_row 在固定 seed / 固定輸入下可重現 | `tools/validate/synthetic_strategy_cases.py`, `tools/local_regression/`, `tools/optimizer/` |
 | B49 | P1 | 排序輸出 | ranking / scoring 輸出可排序、可比較、無 NaN | DONE | 已新增 ranking / scoring sanity case，直接驗 EV / PROJ_COST / HIST_WIN_X_TRADES / ASSET_GROWTH 排序值可用、方向一致與型別正確 | `tools/validate/synthetic_strategy_cases.py`, `core/buy_sort.py`, `tools/scanner/` |
 | B50 | P2 | 最低可用性 | 模型升級後 scanner / optimizer / reporting 仍可跑通 | DONE | 已新增 strategy minimum viability case，直接驗 scanner、optimizer、strategy dashboard、scanner summary 與 yearly return report 在策略輸入下可正常執行，並釘死 scanner summary 的 issue-log path 必須維持 canonical `outputs/vip_scanner/`，不得回流退役 `outputs/scanner/` 類別 | `tools/validate/synthetic_strategy_cases.py`, `apps/ml_optimizer.py`, `apps/vip_scanner.py` |
-| B51 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | DONE | 已新增 strategy reporting schema compatibility case，直接驗 best_params export payload keys、scanner normalized payload keys 與 yearly return report columns 維持既有 schema | `tools/validate/synthetic_strategy_cases.py`, `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
-| B52 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / best_params export 穩定 | DONE | 已新增 optimizer objective / export contract case，直接驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序、export 成敗、`atr_buy_tol` / `min_history_ev` / `tp_percent` step-float canonicalization、預設費率 decimal canonical 輸出、repo 內 `models/best_params.json` 與 `models/all_best_params*.json` 既有最佳參數工件不得殘留浮點尾差，以及訓練中斷且未達指定 trial 數時不得自動覆寫 `best_params.json`；僅完成指定訓練次數或輸入 0 走 export-only 模式時才可更新 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/main.py`, `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py`, `strategies/breakout/search_space.py`, `strategies/breakout/adapter.py`, `config/training_policy.py`, `config/execution_policy.py`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
+| B51 | P2 | 報表相容 | 新策略輸出仍符合既有 artifact / reporting schema | DONE | 已新增 strategy reporting schema compatibility case，直接驗 champion_params export payload keys、scanner normalized payload keys 與 yearly return report columns 維持既有 schema | `tools/validate/synthetic_strategy_cases.py`, `tools/portfolio_sim/`, `tools/scanner/reporting.py` |
+| B52 | P1 | Optimizer 契約 | objective 淘汰值 / fail_reason / profile_row / run_best/champion 參數工件 export 穩定 | DONE | 已新增 optimizer objective / export contract case，直接驗 `INVALID_TRIAL_VALUE`、fail_reason、profile_row、`tp_percent` 還原優先序、export 成敗、`atr_buy_tol` / `min_history_ev` / `tp_percent` step-float canonicalization、預設費率 decimal canonical 輸出、repo 內 `models/champion_params.json` 與 `models/all_best_params*.json` 既有最佳參數工件不得殘留浮點尾差，以及訓練中斷且未達指定 trial 數時不得自動覆寫 `models/run_best_params.json`；僅完成指定訓練次數或輸入 0 走 export-only 模式時才可更新 | `tools/validate/synthetic_strategy_cases.py`, `tools/optimizer/main.py`, `tools/optimizer/objective_runner.py`, `tools/optimizer/runtime.py`, `tools/optimizer/study_utils.py`, `strategies/breakout/search_space.py`, `strategies/breakout/adapter.py`, `config/training_policy.py`, `config/execution_policy.py`, `models/all_best_params_1.json`, `models/all_best_params_2.json`, `models/all_best_params_3.json` |
 | B53 | P1 | I/O | reduced dataset 契約必須依目前目錄快照動態推導，不得綁死固定成員或固定筆數 | DONE | 已將 reduced dataset contract 改為直接根據目前資料夾中的 CSV members / content 動態計算 `csv_count` 與 fingerprint；formal guard 只要求資料夾非空且 members 不重複，避免之後調整 reduced dataset 又必須回頭改程式常數 | `tools/local_regression/common.py`, `tools/validate/synthetic_contract_cases.py`, `data/tw_stock_data_vip_reduced/` |
 
 ## E. 未完成缺口摘要
@@ -457,7 +457,7 @@
 | T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B162 |
-| T250 | `validate_architecture_models_best_params_file_tree_sync_case` | B163 |
+| T250 | `validate_architecture_models_champion_params_file_tree_sync_case` | B163 |
 | T253 | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` | B166 |
 | T256 | `validate_validate_runtime_tmp_output_staging_contract_case` | B167 |
 
@@ -1019,8 +1019,8 @@
 | 2026-04-12 | B52 | 補齊 best_params export canonicalization contract 與匯出鏈後重新收斂為 DONE | PARTIAL -> DONE | `tools/optimizer/study_utils.py` |
 | 2026-04-12 | B52 | 檢出 repo 內 `models/all_best_params*.json` 既有最佳參數工件仍殘留浮點尾差，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-12 | B52 | 補齊 shipped optimizer artifacts canonical decimal contract 並同步清理 `models/all_best_params*.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
-| 2026-04-12 | B52 | 檢出 shipped optimizer artifacts canonical decimal contract 尚未覆蓋 `models/best_params.json`，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
-| 2026-04-12 | B52 | 擴充 shipped optimizer artifacts canonical decimal contract 納入 `models/best_params.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-12 | B52 | 檢出 shipped optimizer artifacts canonical decimal contract 尚未覆蓋 `models/champion_params.json`，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
+| 2026-04-12 | B52 | 擴充 shipped optimizer artifacts canonical decimal contract 納入 `models/champion_params.json` 後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | B66 | 檢出 workbench panel registry / inspector 仍綁定 legacy debug aliases，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B66 | 將 workbench panel registry / inspector 改為優先使用 canonical trade_analysis aliases 並補齊 formal guard 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B71 | 檢出 GUI embedded chart contract 仍比對舊 debug chart alias，改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
@@ -1073,7 +1073,7 @@
 | 2026-04-12 | B158 | 新增正式入口 help 舊 wording / 裸用詞排除契約並驗證 | NEW -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B161 | 新增同一事件保守可執行解讀契約，補 formal case 明確覆蓋 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | B162 | 最嚴格檢查檢出 `doc/ARCHITECTURE.md` apps 檔案樹漏列 `apps/workbench.py`，補上 file-tree sync contract 與文件列後收斂為 DONE | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
-| 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
+| 2026-04-12 | B163 | 新增 ARCHITECTURE models 檔案樹 shipped champion 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_champion_params_file_tree_sync_case` |
 | 2026-04-12 | B164 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | B165 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | B166 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
@@ -1083,8 +1083,8 @@
 | 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 canonicalization 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未覆蓋 repo 內 `models/all_best_params*.json` 既有最佳參數工件 canonical decimal，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 shipped optimizer artifacts canonical decimal 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
-| 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未覆蓋 `models/best_params.json` shipped artifact canonical decimal，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
-| 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 `models/best_params.json` canonical decimal 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-12 | T105 | 檢出 optimizer objective / export contract case 尚未覆蓋 `models/champion_params.json` shipped artifact canonical decimal，改回 PARTIAL | DONE -> PARTIAL | `validate_optimizer_objective_export_contract_case` |
+| 2026-04-12 | T105 | 擴充 optimizer objective / export contract case 納入 `models/champion_params.json` canonical decimal 檢查後重新驗證 | PARTIAL -> DONE | `validate_optimizer_objective_export_contract_case` |
 | 2026-04-12 | T124 | 依 bundle 再次檢出 `G` 同日追蹤列回寫後未整段重排，排序 guard 再被真實失敗擊中 | DONE -> PARTIAL | `validate_checklist_g_ordering_case` |
 | 2026-04-12 | T145 | 檢出 GUI workbench contract 尚未禁止 panel registry / inspector 使用 legacy debug aliases，改回 PARTIAL | DONE -> PARTIAL | `validate_gui_workbench_contract_case` |
 | 2026-04-12 | T145 | 擴充 GUI workbench contract 納入 canonical trade_analysis alias 偏好後重新驗證 | PARTIAL -> DONE | `validate_gui_workbench_contract_case` |
@@ -1139,7 +1139,7 @@
 | 2026-04-12 | T247 | 新增 checklist E/T 摘要區唯一性契約並驗證 | NEW -> DONE | `validate_checklist_summary_section_headings_unique_case` |
 | 2026-04-12 | T248 | 新增同一事件保守可執行解讀 synthetic case，明確驗證同棒 stop/tp 歧義、gap-to-open 與 deferred stop 次日開盤執行 | NEW -> DONE | `validate_synthetic_conservative_executable_exit_interpretation_case` |
 | 2026-04-12 | T249 | 新增 ARCHITECTURE apps 檔案樹 workbench 入口同步契約並驗證 | NEW -> DONE | `validate_architecture_workbench_entry_file_tree_sync_case` |
-| 2026-04-12 | T250 | 新增 ARCHITECTURE models 檔案樹 shipped best_params 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_best_params_file_tree_sync_case` |
+| 2026-04-12 | T250 | 新增 ARCHITECTURE models 檔案樹 shipped champion 工件同步契約並驗證 | NEW -> DONE | `validate_architecture_models_champion_params_file_tree_sync_case` |
 | 2026-04-12 | T251 | 新增 ARCHITECTURE shipped helper modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | T252 | 新增 ARCHITECTURE shipped support modules 檔案樹同步契約並驗證 | NEW -> DONE | `doc/ARCHITECTURE.md` |
 | 2026-04-12 | T253 | 新增 ARCHITECTURE Local Regression `run_meta_quality.py` 檔案樹同步契約並驗證 | NEW -> DONE | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` |
