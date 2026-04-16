@@ -93,6 +93,51 @@ def build_optimizer_session():
     )
 
 
+def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file):
+    from core.strategy_params import build_runtime_param_raw_value
+    from tools.optimizer.prep import prepare_trial_inputs
+    from tools.optimizer.study_utils import build_best_params_payload_from_trial
+    from tools.optimizer.walk_forward import evaluate_walk_forward, write_walk_forward_report
+
+    ai_params = session.build_optimizer_trial_params(
+        best_trial.params,
+        best_trial.user_attrs,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
+    )
+    prep_executor_bundle = session.get_trial_prep_executor_bundle(
+        build_runtime_param_raw_value(ai_params, "optimizer_max_workers")
+    )
+    prep_result = prepare_trial_inputs(
+        raw_data_cache=session.raw_data_cache,
+        params=ai_params,
+        default_max_workers=session.default_max_workers,
+        executor_bundle=prep_executor_bundle,
+        static_fast_cache=session.static_fast_cache,
+        static_master_dates=session.master_dates,
+    )
+    report = evaluate_walk_forward(
+        all_dfs_fast=prep_result["all_dfs_fast"],
+        all_trade_logs=prep_result["all_trade_logs"],
+        sorted_dates=sorted(prep_result["master_dates"]),
+        params=ai_params,
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+        benchmark_ticker="0050",
+        train_start_year=session.train_start_year,
+    )
+    params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    report_paths = write_walk_forward_report(
+        output_dir=session.output_dir,
+        params_payload=params_payload,
+        dataset_label=dataset_label,
+        report=report,
+        best_trial_number=int(best_trial.number) + 1,
+        source_db_path=db_file,
+        session_ts=session.session_ts,
+    )
+    return report, report_paths
+
+
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
@@ -168,13 +213,43 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
-            return export_best_params_if_requested(
+            export_status = export_best_params_if_requested(
                 study,
                 best_params_path=BEST_PARAMS_PATH,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
             )
+            if export_status != 0:
+                return export_status
+            if not os.path.isdir(selected_data_dir):
+                raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+            if not csv_inputs:
+                raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            best_trial = get_best_completed_trial_or_none(study)
+            if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                session.load_raw_data(
+                    selected_data_dir,
+                    load_all_raw_data=load_all_raw_data,
+                    required_min_rows=optimizer_required_min_rows,
+                )
+                report, report_paths = generate_best_trial_walk_forward_report(
+                    session=session,
+                    best_trial=best_trial,
+                    dataset_label=dataset_label,
+                    db_file=db_file,
+                )
+                print(
+                    f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}"
+                )
+                print(
+                    f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
+                    f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
+                    f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+                )
+            return 0
         finally:
+            session.close_trial_prep_executor()
             close_study_storage(study)
 
     try:
@@ -263,6 +338,18 @@ def main(argv=None, environ=None):
                 )
                 if export_status != 0:
                     return 1
+                report, report_paths = generate_best_trial_walk_forward_report(
+                    session=session,
+                    best_trial=best_trial,
+                    dataset_label=dataset_label,
+                    db_file=db_file,
+                )
+                print(f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}")
+                print(
+                    f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
+                    f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
+                    f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+                )
         elif export_policy == "interrupted_before_target":
             print(
                 f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，"
