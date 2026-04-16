@@ -98,11 +98,11 @@ def build_walk_forward_windows(
     return windows
 
 
-def classify_benchmark_regime(benchmark_return_pct: float) -> str:
+def classify_benchmark_regime(benchmark_return_pct: float, *, regime_up_threshold_pct: float = WF_REGIME_UP_THRESHOLD_PCT, regime_down_threshold_pct: float = WF_REGIME_DOWN_THRESHOLD_PCT) -> str:
     benchmark_return_pct = float(benchmark_return_pct)
-    if benchmark_return_pct >= WF_REGIME_UP_THRESHOLD_PCT:
+    if benchmark_return_pct >= float(regime_up_threshold_pct):
         return "up"
-    if benchmark_return_pct <= WF_REGIME_DOWN_THRESHOLD_PCT:
+    if benchmark_return_pct <= float(regime_down_threshold_pct):
         return "down"
     return "flat"
 
@@ -119,6 +119,8 @@ def evaluate_walk_forward(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     test_window_months: int = WF_TEST_WINDOW_MONTHS,
     train_start_year: int | None = None,
+    regime_up_threshold_pct: float = WF_REGIME_UP_THRESHOLD_PCT,
+    regime_down_threshold_pct: float = WF_REGIME_DOWN_THRESHOLD_PCT,
 ):
     benchmark_data = all_dfs_fast.get(str(benchmark_ticker), None)
     windows = build_walk_forward_windows(
@@ -178,7 +180,11 @@ def evaluate_walk_forward(
             r_sq,
             annual_return_pct=annual_return_pct,
         )
-        regime = classify_benchmark_regime(bm_ret)
+        regime = classify_benchmark_regime(
+            bm_ret,
+            regime_up_threshold_pct=regime_up_threshold_pct,
+            regime_down_threshold_pct=regime_down_threshold_pct,
+        )
         rows.append(
             {
                 "label": window["label"],
@@ -231,8 +237,8 @@ def evaluate_walk_forward(
         "min_train_years": int(min_train_years),
         "train_start_year": None if train_start_year is None else int(train_start_year),
         "test_window_months": int(test_window_months),
-        "regime_up_threshold_pct": float(WF_REGIME_UP_THRESHOLD_PCT),
-        "regime_down_threshold_pct": float(WF_REGIME_DOWN_THRESHOLD_PCT),
+        "regime_up_threshold_pct": float(regime_up_threshold_pct),
+        "regime_down_threshold_pct": float(regime_down_threshold_pct),
         "median_window_score": _safe_median(row["window_score"] for row in rows),
         "median_ret_pct": _safe_median(row["ret_pct"] for row in rows),
         "worst_ret_pct": _safe_min(row["ret_pct"] for row in rows),
@@ -628,6 +634,192 @@ def build_compare_assessment(*, champion_report: dict, challenger_report: dict) 
         "coverage_gate": {"status": coverage_status, "checks": coverage_checks},
         "checks": quality_checks + coverage_checks,
         "recommendation": recommendation,
+    }
+
+
+
+def _link_total_return_pct(rows: list[dict]) -> float:
+    equity = 1.0
+    for row in rows:
+        equity *= 1.0 + (float(row.get("ret_pct", 0.0) or 0.0) / 100.0)
+    return (equity - 1.0) * 100.0
+
+
+def _annualized_return_pct(*, linked_total_return_pct: float, start_date: str | None, end_date: str | None) -> float:
+    if not start_date or not end_date:
+        return 0.0
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    days = max((end_ts - start_ts).days + 1, 1)
+    years = days / 365.25
+    if years <= 0:
+        return float(linked_total_return_pct)
+    growth = 1.0 + float(linked_total_return_pct) / 100.0
+    if growth <= 0:
+        return -100.0
+    return (growth ** (1.0 / years) - 1.0) * 100.0
+
+
+def _positive_window_rate(rows: list[dict], key: str) -> float:
+    if not rows:
+        return 0.0
+    positives = sum(1 for row in rows if float(row.get(key, 0.0) or 0.0) > 0.0)
+    return positives * 100.0 / len(rows)
+
+
+def _metric_triplet(*, champion, challenger, benchmark=None) -> dict:
+    payload = {
+        "champion": float(champion),
+        "challenger": float(challenger),
+        "delta": float(challenger) - float(champion),
+    }
+    if benchmark is not None:
+        payload.update({
+            "benchmark": float(benchmark),
+            "delta_vs_champion": float(challenger) - float(champion),
+            "delta_vs_benchmark": float(challenger) - float(benchmark),
+        })
+    return payload
+
+
+def build_walk_forward_compare_payload(*, champion_payload: dict, champion_report: dict, challenger_payload: dict, challenger_report: dict, dataset_label: str, source_db_path: str, session_ts: str | None = None) -> dict:
+    champion_windows = list((champion_report or {}).get("windows") or [])
+    challenger_windows = list((challenger_report or {}).get("windows") or [])
+    champion_summary = dict((champion_report or {}).get("summary") or {})
+    challenger_summary = dict((challenger_report or {}).get("summary") or {})
+    champion_regime = dict((champion_report or {}).get("regime_summary") or {})
+    challenger_regime = dict((challenger_report or {}).get("regime_summary") or {})
+
+    champion_by_label = {str(row.get("label")): dict(row) for row in champion_windows}
+    challenger_by_label = {str(row.get("label")): dict(row) for row in challenger_windows}
+    ordered_labels = sorted(set(champion_by_label) | set(challenger_by_label), key=lambda x: (int(x[:4]), x[-2:]))
+    window_compare_rows = []
+    for label in ordered_labels:
+        c = dict(champion_by_label.get(label) or {})
+        h = dict(challenger_by_label.get(label) or {})
+        regime = str(h.get("regime") or c.get("regime") or "flat")
+        oos_start = str(h.get("oos_start") or c.get("oos_start") or "")
+        oos_end = str(h.get("oos_end") or c.get("oos_end") or "")
+        row = {
+            "label": label,
+            "oos_start": oos_start,
+            "oos_end": oos_end,
+            "regime": regime,
+            "champion_window_score": float(c.get("window_score", 0.0) or 0.0),
+            "challenger_window_score": float(h.get("window_score", 0.0) or 0.0),
+            "delta_window_score": float(h.get("window_score", 0.0) or 0.0) - float(c.get("window_score", 0.0) or 0.0),
+            "champion_ret_pct": float(c.get("ret_pct", 0.0) or 0.0),
+            "challenger_ret_pct": float(h.get("ret_pct", 0.0) or 0.0),
+            "delta_ret_pct": float(h.get("ret_pct", 0.0) or 0.0) - float(c.get("ret_pct", 0.0) or 0.0),
+            "champion_mdd": float(c.get("mdd", 0.0) or 0.0),
+            "challenger_mdd": float(h.get("mdd", 0.0) or 0.0),
+            "delta_mdd": float(h.get("mdd", 0.0) or 0.0) - float(c.get("mdd", 0.0) or 0.0),
+        }
+        window_compare_rows.append(row)
+
+    flat_champion = dict(champion_regime.get("flat") or {})
+    flat_challenger = dict(challenger_regime.get("flat") or {})
+    down_champion = dict(champion_regime.get("down") or {})
+    down_challenger = dict(challenger_regime.get("down") or {})
+
+    summary_compare = {
+        "median_window_score": _metric_triplet(champion=champion_summary.get("median_window_score", 0.0), challenger=challenger_summary.get("median_window_score", 0.0)),
+        "median_ret_pct": _metric_triplet(champion=champion_summary.get("median_ret_pct", 0.0), challenger=challenger_summary.get("median_ret_pct", 0.0)),
+        "worst_ret_pct": _metric_triplet(champion=champion_summary.get("worst_ret_pct", 0.0), challenger=challenger_summary.get("worst_ret_pct", 0.0)),
+        "max_mdd": _metric_triplet(champion=champion_summary.get("max_mdd", 0.0), challenger=challenger_summary.get("max_mdd", 0.0)),
+        "median_annual_trades": _metric_triplet(champion=champion_summary.get("median_annual_trades", 0.0), challenger=challenger_summary.get("median_annual_trades", 0.0)),
+        "median_fill_rate": _metric_triplet(champion=champion_summary.get("median_fill_rate", 0.0), challenger=challenger_summary.get("median_fill_rate", 0.0)),
+        "flat_median_score": _metric_triplet(champion=flat_champion.get("median_score", 0.0), challenger=flat_challenger.get("median_score", 0.0)),
+        "down_window_count": {
+            "champion": int(down_champion.get("window_count", 0) or 0),
+            "challenger": int(down_challenger.get("window_count", 0) or 0),
+            "delta": int(down_challenger.get("window_count", 0) or 0) - int(down_champion.get("window_count", 0) or 0),
+        },
+    }
+
+    regime_compare = {}
+    for regime_name in ("up", "flat", "down"):
+        c = dict(champion_regime.get(regime_name) or {})
+        h = dict(challenger_regime.get(regime_name) or {})
+        regime_compare[regime_name] = {
+            "window_count": {"champion": int(c.get("window_count", 0) or 0), "challenger": int(h.get("window_count", 0) or 0), "delta": int(h.get("window_count", 0) or 0) - int(c.get("window_count", 0) or 0)},
+            "median_score": _metric_triplet(champion=c.get("median_score", 0.0), challenger=h.get("median_score", 0.0)),
+            "median_ret_pct": _metric_triplet(champion=c.get("median_ret_pct", 0.0), challenger=h.get("median_ret_pct", 0.0)),
+            "worst_ret_pct": _metric_triplet(champion=c.get("worst_ret_pct", 0.0), challenger=h.get("worst_ret_pct", 0.0)),
+            "max_mdd": _metric_triplet(champion=c.get("max_mdd", 0.0), challenger=h.get("max_mdd", 0.0)),
+        }
+
+    labels_with_dates = [row for row in window_compare_rows if row.get("oos_start") and row.get("oos_end")]
+    start_date = labels_with_dates[0]["oos_start"] if labels_with_dates else ""
+    end_date = labels_with_dates[-1]["oos_end"] if labels_with_dates else ""
+    champion_linked = _link_total_return_pct(champion_windows)
+    challenger_linked = _link_total_return_pct(challenger_windows)
+    benchmark_linked = _link_total_return_pct([{"ret_pct": row.get("benchmark_return_pct", 0.0)} for row in challenger_windows])
+    oos_total_compare = {
+        "oos_range": {"start": start_date, "end": end_date},
+        "metrics": {
+            "linked_total_return_pct": _metric_triplet(champion=champion_linked, challenger=challenger_linked, benchmark=benchmark_linked),
+            "annualized_return_pct": _metric_triplet(
+                champion=_annualized_return_pct(linked_total_return_pct=champion_linked, start_date=start_date, end_date=end_date),
+                challenger=_annualized_return_pct(linked_total_return_pct=challenger_linked, start_date=start_date, end_date=end_date),
+                benchmark=_annualized_return_pct(linked_total_return_pct=benchmark_linked, start_date=start_date, end_date=end_date),
+            ),
+            "max_drawdown_pct": _metric_triplet(
+                champion=_safe_max(float(r.get("mdd", 0.0) or 0.0) for r in champion_windows),
+                challenger=_safe_max(float(r.get("mdd", 0.0) or 0.0) for r in challenger_windows),
+                benchmark=_safe_max(float(r.get("benchmark_mdd", 0.0) or 0.0) for r in challenger_windows),
+            ),
+            "positive_window_rate": _metric_triplet(
+                champion=_positive_window_rate(champion_windows, "ret_pct"),
+                challenger=_positive_window_rate(challenger_windows, "ret_pct"),
+                benchmark=_positive_window_rate(challenger_windows, "benchmark_return_pct"),
+            ),
+        },
+    }
+
+    quality_checks = [
+        _build_gate_check(name="median_window_score_vs_champion", actual=float(summary_compare["median_window_score"]["challenger"]), threshold=f">= {float(summary_compare['median_window_score']['champion']):.3f}", passed=float(summary_compare["median_window_score"]["challenger"]) >= float(summary_compare["median_window_score"]["champion"]), severity="quality", note="候選版整體 OOS 典型視窗分數不得低於現役版。"),
+        _build_gate_check(name="flat_median_score_vs_champion", actual=float(summary_compare["flat_median_score"]["challenger"]), threshold=f">= {float(summary_compare['flat_median_score']['champion']):.3f}", passed=float(summary_compare["flat_median_score"]["challenger"]) >= float(summary_compare["flat_median_score"]["champion"]), severity="quality", note="候選版盤整期中位分數不得低於現役版。"),
+        _build_gate_check(name="worst_ret_pct_vs_champion", actual=float(summary_compare["worst_ret_pct"]["challenger"]), threshold=f">= {float(summary_compare['worst_ret_pct']['champion']) - 1.0:.2f}%", passed=float(summary_compare["worst_ret_pct"]["challenger"]) >= (float(summary_compare["worst_ret_pct"]["champion"]) - 1.0), severity="quality", note="候選版最差視窗報酬不可比現役版惡化超過 1%。"),
+        _build_gate_check(name="max_mdd_vs_champion", actual=float(summary_compare["max_mdd"]["challenger"]), threshold=f"<= {float(summary_compare['max_mdd']['champion']) + 2.0:.2f}%", passed=float(summary_compare["max_mdd"]["challenger"]) <= (float(summary_compare["max_mdd"]["champion"]) + 2.0), severity="quality", note="候選版最大視窗 MDD 不可比現役版惡化超過 2%。"),
+    ]
+    coverage_checks = [
+        _build_gate_check(name="down_regime_coverage_vs_champion", actual=int(summary_compare["down_window_count"]["challenger"]), threshold=f">= {int(summary_compare['down_window_count']['champion'])}", passed=int(summary_compare["down_window_count"]["challenger"]) >= int(summary_compare["down_window_count"]["champion"]), severity="coverage", note="候選版 down 視窗覆蓋不可少於現役版。"),
+    ]
+    quality_pass = all(bool(check["passed"]) for check in quality_checks)
+    coverage_pass = all(bool(check["passed"]) for check in coverage_checks)
+    quality_status = "pass" if quality_pass else "fail"
+    coverage_status = "pass" if coverage_pass else "watch"
+    status = "pass" if (quality_pass and coverage_pass) else ("watch" if quality_pass else "fail")
+    recommendation = {
+        "pass": "候選版整體優於現役版，可列為升版候選。",
+        "watch": "候選版品質優於現役版，但 regime 覆蓋證據仍有限。",
+        "fail": "候選版相對現役版仍不具穩定升級優勢。",
+    }[status]
+    compare_assessment = {
+        "status": status,
+        "recommended_for_promotion": bool(quality_pass and coverage_pass),
+        "quality_gate": {"status": quality_status, "checks": quality_checks},
+        "coverage_gate": {"status": coverage_status, "checks": coverage_checks},
+        "checks": quality_checks + coverage_checks,
+        "recommendation": recommendation,
+    }
+
+    return {
+        "meta": {
+            "dataset_label": str(dataset_label),
+            "source_db_path": str(source_db_path),
+            "session_ts": str(session_ts or get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")),
+            "champion_params_path": "models/champion_params.json",
+            "challenger_run_best_params_path": "models/run_best_params.json",
+        },
+        "champion_params": dict(champion_payload or {}),
+        "challenger_params": dict(challenger_payload or {}),
+        "summary_compare": summary_compare,
+        "oos_total_compare": oos_total_compare,
+        "regime_compare": regime_compare,
+        "window_compare_rows": window_compare_rows,
+        "compare_assessment": compare_assessment,
     }
 
 def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict):
