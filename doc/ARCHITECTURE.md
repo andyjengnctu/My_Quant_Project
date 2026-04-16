@@ -33,9 +33,6 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
-│  ├─ all_best_params_1.json         # 特定評分口徑下的最佳參數紀錄
-│  ├─ all_best_params_2.json         # 特定評分口徑下的最佳參數紀錄
-│  ├─ all_best_params_3.json         # 歷史最佳參數或不同批次最佳化輸出
 │  └─ champion_params.json               # 目前主要使用的最佳參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統

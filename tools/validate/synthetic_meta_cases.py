@@ -405,9 +405,7 @@ def validate_architecture_models_champion_params_file_tree_sync_case(_base_param
     models_dir = PROJECT_ROOT / "models"
 
     required_tree_fragments = [
-        "│  ├─ all_best_params_1.json         # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params_2.json         # 特定評分口徑下的最佳參數紀錄",
-        "│  ├─ all_best_params_3.json         # 歷史最佳參數或不同批次最佳化輸出",
+        "│  ├─ run_best_params.json           # 本輪訓練最佳參數檔",
         "│  └─ champion_params.json           # 目前正式現役參數檔",
     ]
     stale_tree_fragments = [
@@ -420,17 +418,13 @@ def validate_architecture_models_champion_params_file_tree_sync_case(_base_param
     for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
         add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_best_params_name_{stale_idx}", False, fragment in architecture_text)
 
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_1", True, (models_dir / "all_best_params_1.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_2", True, (models_dir / "all_best_params_2.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_all_best_params_3", True, (models_dir / "all_best_params_3.json").exists())
+    add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_champion_params", True, (models_dir / "champion_params.json").exists())
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
-        "models/all_best_params_1.json",
-        "models/all_best_params_2.json",
-        "models/all_best_params_3.json",
+        "models/run_best_params.json",
         "models/champion_params.json",
     ]
     return results, summary
