@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import sys
 import warnings
 
@@ -35,6 +37,8 @@ OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
 CHAMPION_PARAMS_PATH = os.path.join(MODELS_DIR, "champion_params.json")
+CHAMPION_ARCHIVE_DIR = os.path.join(MODELS_DIR, "champion_archive")
+UPGRADE_RECORD_DIR = os.path.join(OUTPUT_DIR, "upgrade_records")
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2012
 TRAIN_ENABLE_ROTATION = False
@@ -59,6 +63,8 @@ COLORS = {
 def ensure_runtime_dirs():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(MODELS_DIR, exist_ok=True)
+    os.makedirs(CHAMPION_ARCHIVE_DIR, exist_ok=True)
+    os.makedirs(UPGRADE_RECORD_DIR, exist_ok=True)
 
 
 def build_optimizer_session():
@@ -196,6 +202,157 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         "champion_report_paths": champion_report_paths,
         "compare_payload": compare_payload,
     }, compare_paths
+
+
+def _load_json_file(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _json_payload_equal(left: dict, right: dict) -> bool:
+    return json.dumps(left, sort_keys=True, ensure_ascii=False) == json.dumps(right, sort_keys=True, ensure_ascii=False)
+
+
+def _write_upgrade_record(*, session_ts: str, compare_result: dict, compare_paths: dict, archived_champion_path: str | None, champion_params_path: str, challenger_best_params_path: str, output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+    compare_payload = dict((compare_result or {}).get("compare_payload") or {})
+    assessment = dict(compare_payload.get("compare_assessment") or {})
+    summary_compare = dict(compare_payload.get("summary_compare") or {})
+    record = {
+        "meta": {
+            "session_ts": str(session_ts),
+            "champion_params_path": str(champion_params_path),
+            "challenger_best_params_path": str(challenger_best_params_path),
+            "archived_champion_path": str(archived_champion_path or ""),
+            "compare_md_path": str((compare_paths or {}).get("md_path", "")),
+            "compare_json_path": str((compare_paths or {}).get("json_path", "")),
+        },
+        "assessment": assessment,
+        "summary_compare": summary_compare,
+    }
+    base_name = f"upgrade_record_{session_ts}"
+    json_path = os.path.join(output_dir, f"{base_name}.json")
+    md_path = os.path.join(output_dir, f"{base_name}.md")
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2, ensure_ascii=False)
+
+    ordered_keys = [
+        "median_window_score",
+        "median_ret_pct",
+        "worst_ret_pct",
+        "max_mdd",
+        "median_annual_trades",
+        "median_fill_rate",
+        "flat_median_score",
+        "down_window_count",
+    ]
+    def _fmt_metric(metric_key: str, value: float | int) -> str:
+        if metric_key in ("median_window_score", "flat_median_score"):
+            return f"{float(value):.3f}"
+        if metric_key in ("median_annual_trades",):
+            return f"{float(value):.2f}"
+        if metric_key in ("down_window_count",):
+            return str(int(value))
+        return f"{float(value):.2f}%"
+
+    lines = [
+        "# Champion 升版紀錄",
+        "",
+        f"- 升版時間：{session_ts}",
+        f"- 結果：`{assessment.get('status', 'fail')}`",
+        f"- 建議：{assessment.get('recommendation', 'N/A')}",
+        f"- 新 Champion：`{champion_params_path}`",
+        f"- 舊 Champion 封存：`{archived_champion_path or 'N/A'}`",
+        f"- Compare 報表：`{(compare_paths or {}).get('md_path', '')}`",
+        "",
+        "## 核心差異",
+        "",
+        "| 指標 | Champion(舊) | Challenger(新) | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    for metric_key in ordered_keys:
+        metric = dict(summary_compare.get(metric_key) or {})
+        lines.append(
+            f"| {metric_key} | {_fmt_metric(metric_key, metric.get('champion', 0.0))} | {_fmt_metric(metric_key, metric.get('challenger', 0.0))} | {_fmt_metric(metric_key, metric.get('delta', 0.0)) if metric_key not in ('down_window_count',) else f'{int(metric.get("delta", 0) or 0):+d}'} |"
+        )
+
+    lines.extend([
+        "",
+        "## 升版檢查項目",
+        "",
+        "| 檢查項目 | 實際值 | 門檻 | 結果 | 說明 |",
+        "|---|---:|---:|---|---|",
+    ])
+    for check in list(assessment.get("checks") or []):
+        actual = check.get("actual")
+        name = str(check.get("name", ""))
+        if "score" in name:
+            actual_str = f"{float(actual):.3f}"
+        elif "coverage" in name:
+            actual_str = str(int(actual))
+        else:
+            actual_str = f"{float(actual):.2f}%"
+        lines.append(
+            f"| {name} | {actual_str} | {check.get('threshold', '')} | {'PASS' if check.get('passed') else 'FAIL'} | {check.get('note', '')} |"
+        )
+
+    with open(md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return {"json_path": json_path, "md_path": md_path}
+
+
+def promote_challenger_to_champion(*, compare_result: dict | None, compare_paths: dict | None, challenger_best_params_path: str, champion_params_path: str, archive_dir: str, upgrade_record_dir: str, session_ts: str):
+    if compare_result is None or compare_paths is None:
+        return None
+    compare_payload = dict((compare_result.get("compare_payload") or {}))
+    assessment = dict(compare_payload.get("compare_assessment") or {})
+    if not bool(assessment.get("recommended_for_promotion", False)):
+        return None
+    if not os.path.exists(challenger_best_params_path) or not os.path.exists(champion_params_path):
+        return None
+
+    challenger_payload = _load_json_file(challenger_best_params_path)
+    champion_payload = _load_json_file(champion_params_path)
+    if _json_payload_equal(champion_payload, challenger_payload):
+        return {
+            "status": "noop",
+            "archived_champion_path": None,
+            "champion_params_path": champion_params_path,
+            "upgrade_record_paths": None,
+        }
+
+    os.makedirs(archive_dir, exist_ok=True)
+    archive_path = os.path.join(archive_dir, f"champion_{session_ts}.json")
+    shutil.copy2(champion_params_path, archive_path)
+    shutil.copy2(challenger_best_params_path, champion_params_path)
+    upgrade_record_paths = _write_upgrade_record(
+        session_ts=session_ts,
+        compare_result=compare_result,
+        compare_paths=compare_paths,
+        archived_champion_path=archive_path,
+        champion_params_path=champion_params_path,
+        challenger_best_params_path=challenger_best_params_path,
+        output_dir=upgrade_record_dir,
+    )
+    return {
+        "status": "promoted",
+        "archived_champion_path": archive_path,
+        "champion_params_path": champion_params_path,
+        "upgrade_record_paths": upgrade_record_paths,
+    }
+
+
+def print_promotion_outputs(*, promotion_result):
+    if promotion_result is None:
+        return
+    status = str(promotion_result.get("status", ""))
+    if status == "promoted":
+        record_paths = dict(promotion_result.get("upgrade_record_paths") or {})
+        print(f"{C_GREEN}⬆️ 已將 Challenger 升級為新的 Champion：{promotion_result.get('champion_params_path', '')}{C_RESET}")
+        print(f"{C_GRAY}   舊 Champion 已封存：{promotion_result.get('archived_champion_path', '')}{C_RESET}")
+        print(f"{C_GREEN}📝 已輸出升版紀錄：{record_paths.get('md_path', '')}{C_RESET}")
+    elif status == "noop":
+        print(f"{C_YELLOW}ℹ️ Challenger 與現役 Champion 相同，略過升版與封存。{C_RESET}")
 
 
 def print_walk_forward_outputs(*, report, report_paths):
@@ -355,6 +512,16 @@ def main(argv=None, environ=None):
                     compare_paths=compare_paths,
                     bootstrap_created=bootstrap_created,
                 )
+                promotion_result = promote_challenger_to_champion(
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    challenger_best_params_path=BEST_PARAMS_PATH,
+                    champion_params_path=CHAMPION_PARAMS_PATH,
+                    archive_dir=CHAMPION_ARCHIVE_DIR,
+                    upgrade_record_dir=UPGRADE_RECORD_DIR,
+                    session_ts=session.session_ts,
+                )
+                print_promotion_outputs(promotion_result=promotion_result)
             return 0
         finally:
             session.close_trial_prep_executor()
@@ -469,6 +636,16 @@ def main(argv=None, environ=None):
                     compare_paths=compare_paths,
                     bootstrap_created=bootstrap_created,
                 )
+                promotion_result = promote_challenger_to_champion(
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    challenger_best_params_path=BEST_PARAMS_PATH,
+                    champion_params_path=CHAMPION_PARAMS_PATH,
+                    archive_dir=CHAMPION_ARCHIVE_DIR,
+                    upgrade_record_dir=UPGRADE_RECORD_DIR,
+                    session_ts=session.session_ts,
+                )
+                print_promotion_outputs(promotion_result=promotion_result)
         elif export_policy == "interrupted_before_target":
             print(
                 f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，"

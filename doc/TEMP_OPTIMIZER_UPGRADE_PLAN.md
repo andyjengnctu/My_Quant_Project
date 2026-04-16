@@ -69,3 +69,11 @@
 - [x] 單版報表：輸出 challenger 的 WF 報表與 gate。
 - [x] 升級 MVP：輸出 Champion / Challenger 比較報表（先不自動升版）。
 - [ ] 後續：將 compare gate 接成正式升版阻擋規則。
+
+
+## 本輪新增（Promote MVP）
+- [x] 新增 champion/challenger compare pass 後自動 promote。
+- [x] promote 時自動封存舊 champion 到 `models/champion_archive/`。
+- [x] 輸出 `outputs/ml_optimizer/upgrade_records/upgrade_record_*.md/json`。
+- [x] `.gitignore` 忽略 `models/champion_archive/`，避免舊 champion 歷史 json 進 git。
+- [ ] 後續：將 promote 改成可選開關（例如 CLI / env），避免所有 PASS 都自動升版。

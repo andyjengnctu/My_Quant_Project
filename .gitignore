@@ -19,3 +19,5 @@ __pycache__/
 
 # 忽略 VS Code 個人設定
 .vscode/
+# 忽略本地 Champion 歷史封存
+/models/champion_archive/
