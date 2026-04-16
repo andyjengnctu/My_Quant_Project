@@ -1127,8 +1127,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._clear_embedded_chart()
             try:
                 figure.clear()
-            except Exception:
-                pass
+            except Exception as clear_exc:
+                clear_trace = "".join(traceback.format_exception(type(clear_exc), clear_exc, clear_exc.__traceback__))
+                self._append_console_text(f"[render_embedded_chart.figure.clear]\n{clear_trace}\n")
             error_text = self._report_runtime_exception("render_embedded_chart.canvas", exc, status_prefix="圖表嵌入失敗")
             return error_text
 
