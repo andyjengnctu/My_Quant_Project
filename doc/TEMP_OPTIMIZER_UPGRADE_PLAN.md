@@ -12,6 +12,7 @@
 ### 1) 訓練 / 測試取樣方式
 - [x] 收斂：MVP 採 expanding walk-forward。
 - [x] 初版設定：最小訓練窗 8 年、OOS 視窗 6 個月、逐窗往前滾。
+- [x] 主設定已調整為 `train_start_year = 2012`、`min_train_years = 8`（優先補 2020 shock / 2022 bear regime 覆蓋）。
 - [ ] 後續再評估是否改為 rolling walk-forward。
 
 ### 2) 驗證指標
