@@ -34,6 +34,7 @@ def configure_optuna_logging():
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 BEST_PARAMS_PATH = resolve_best_params_path(PROJECT_ROOT)
+CHAMPION_PARAMS_PATH = os.path.join(MODELS_DIR, "champion_params.json")
 TRAIN_MAX_POSITIONS = 10
 TRAIN_START_YEAR = 2012
 TRAIN_ENABLE_ROTATION = False
@@ -93,17 +94,12 @@ def build_optimizer_session():
     )
 
 
-def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file):
+def generate_walk_forward_report_from_payload(*, session, params_payload, dataset_label, db_file, best_trial_number=None):
     from core.params_io import build_params_from_mapping
     from core.strategy_params import build_runtime_param_raw_value
     from tools.optimizer.prep import prepare_trial_inputs
-    from tools.optimizer.study_utils import build_best_params_payload_from_trial
     from tools.optimizer.walk_forward import evaluate_walk_forward, write_walk_forward_report
 
-    params_payload = build_best_params_payload_from_trial(
-        best_trial,
-        fixed_tp_percent=session.optimizer_fixed_tp_percent,
-    )
     ai_params = build_params_from_mapping(params_payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(
         build_runtime_param_raw_value(ai_params, "optimizer_max_workers")
@@ -131,11 +127,107 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
         params_payload=params_payload,
         dataset_label=dataset_label,
         report=report,
-        best_trial_number=int(best_trial.number) + 1,
+        best_trial_number=best_trial_number,
         source_db_path=db_file,
         session_ts=session.session_ts,
     )
     return report, report_paths
+
+
+def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_label, db_file):
+    from tools.optimizer.study_utils import build_best_params_payload_from_trial
+
+    params_payload = build_best_params_payload_from_trial(
+        best_trial,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
+    )
+    report, report_paths = generate_walk_forward_report_from_payload(
+        session=session,
+        params_payload=params_payload,
+        dataset_label=dataset_label,
+        db_file=db_file,
+        best_trial_number=int(best_trial.number) + 1,
+    )
+    return report, report_paths, params_payload
+
+
+def ensure_champion_params_bootstrap(*, champion_params_path: str, best_params_path: str):
+    import shutil
+
+    if os.path.exists(champion_params_path):
+        return False
+    if not os.path.exists(best_params_path):
+        return False
+    shutil.copy2(best_params_path, champion_params_path)
+    return True
+
+
+def generate_champion_challenger_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report):
+    from core.params_io import load_params_from_json, params_to_json_dict
+    from tools.optimizer.walk_forward import build_walk_forward_compare_payload, write_walk_forward_compare_report
+
+    if not os.path.exists(CHAMPION_PARAMS_PATH):
+        return None, None
+
+    champion_params = load_params_from_json(CHAMPION_PARAMS_PATH)
+    champion_payload = params_to_json_dict(champion_params)
+    champion_report, champion_report_paths = generate_walk_forward_report_from_payload(
+        session=session,
+        params_payload=champion_payload,
+        dataset_label=f"{dataset_label}-champion",
+        db_file=db_file,
+        best_trial_number=None,
+    )
+    compare_payload = build_walk_forward_compare_payload(
+        champion_payload=champion_payload,
+        champion_report=champion_report,
+        challenger_payload=challenger_payload,
+        challenger_report=challenger_report,
+        dataset_label=dataset_label,
+        source_db_path=db_file,
+        session_ts=session.session_ts,
+    )
+    compare_paths = write_walk_forward_compare_report(
+        output_dir=session.output_dir,
+        compare_payload=compare_payload,
+    )
+    return {
+        "champion_report": champion_report,
+        "champion_report_paths": champion_report_paths,
+        "compare_payload": compare_payload,
+    }, compare_paths
+
+
+def print_walk_forward_outputs(*, report, report_paths):
+    print(f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}")
+    print(
+        f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
+        f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
+        f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+    )
+    upgrade_gate = dict(report.get("upgrade_gate") or {})
+    gate_status = str(upgrade_gate.get("status", "fail")).upper()
+    gate_color = C_GREEN if gate_status == "PASS" else (C_YELLOW if gate_status == "WATCH" else C_RED)
+    print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
+
+
+def print_compare_outputs(*, compare_result, compare_paths, bootstrap_created: bool):
+    if compare_result is not None and compare_paths is not None:
+        compare_assessment = dict((compare_result.get("compare_payload") or {}).get("compare_assessment") or {})
+        compare_status = str(compare_assessment.get("status", "fail")).upper()
+        compare_color = C_GREEN if compare_status == "PASS" else (C_YELLOW if compare_status == "WATCH" else C_RED)
+        summary_compare = dict((compare_result.get("compare_payload") or {}).get("summary_compare") or {})
+        mws = dict(summary_compare.get("median_window_score") or {})
+        flat_metric = dict(summary_compare.get("flat_median_score") or {})
+        print(f"{C_GREEN}🆚 已輸出 Champion/Challenger 比較報表：{compare_paths['md_path']}{C_RESET}")
+        print(
+            f"{C_GRAY}   median_window_score: {float(mws.get('champion', 0.0)):.3f} -> {float(mws.get('challenger', 0.0)):.3f} "
+            f"({float(mws.get('delta', 0.0)):+.3f}) | flat_median_score: {float(flat_metric.get('champion', 0.0)):.3f} -> {float(flat_metric.get('challenger', 0.0)):.3f} "
+            f"({float(flat_metric.get('delta', 0.0)):+.3f}){C_RESET}"
+        )
+        print(f"{compare_color}   升版比較(MVP): {compare_status} | {compare_assessment.get('recommendation', 'N/A')}{C_RESET}")
+    elif bootstrap_created:
+        print(f"{C_YELLOW}ℹ️ 已由既有 best_params.json 自動建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
 
 
 def main(argv=None, environ=None):
@@ -148,6 +240,7 @@ def main(argv=None, environ=None):
         print(f"用法: python {program_name} [--dataset reduced|full]")
         print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；只有完成指定訓練次數或輸入 0 走匯出模式時，才會更新 best_params.json。")
         return 0
+
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
     from tools.optimizer.prep import load_all_raw_data
     from tools.optimizer.runtime import (
@@ -162,7 +255,13 @@ def main(argv=None, environ=None):
         resolve_trial_count_or_exit,
     )
     from tools.optimizer.session import close_study_storage
-    from tools.optimizer.study_utils import build_optimizer_db_file_path, get_best_completed_trial_or_none, is_qualified_trial_value, resolve_optimizer_seed, resolve_optimizer_trial_count
+    from tools.optimizer.study_utils import (
+        build_optimizer_db_file_path,
+        get_best_completed_trial_or_none,
+        is_qualified_trial_value,
+        resolve_optimizer_seed,
+        resolve_optimizer_trial_count,
+    )
 
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     session = build_optimizer_session()
@@ -213,6 +312,10 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
+            bootstrap_created = ensure_champion_params_bootstrap(
+                champion_params_path=CHAMPION_PARAMS_PATH,
+                best_params_path=BEST_PARAMS_PATH,
+            )
             export_status = export_best_params_if_requested(
                 study,
                 best_params_path=BEST_PARAMS_PATH,
@@ -233,28 +336,25 @@ def main(argv=None, environ=None):
                     load_all_raw_data=load_all_raw_data,
                     required_min_rows=optimizer_required_min_rows,
                 )
-                report, report_paths = generate_best_trial_walk_forward_report(
+                report, report_paths, challenger_payload = generate_best_trial_walk_forward_report(
                     session=session,
                     best_trial=best_trial,
                     dataset_label=dataset_label,
                     db_file=db_file,
                 )
-                print(
-                    f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}"
+                print_walk_forward_outputs(report=report, report_paths=report_paths)
+                compare_result, compare_paths = generate_champion_challenger_compare_report(
+                    session=session,
+                    dataset_label=dataset_label,
+                    db_file=db_file,
+                    challenger_payload=challenger_payload,
+                    challenger_report=report,
                 )
-                print(
-                    f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
-                    f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
-                    f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+                print_compare_outputs(
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    bootstrap_created=bootstrap_created,
                 )
-                upgrade_gate = dict(report.get("upgrade_gate") or {})
-                gate_status = str(upgrade_gate.get("status", "fail")).upper()
-                gate_color = C_GREEN if gate_status == "PASS" else (C_YELLOW if gate_status == "WATCH" else C_RED)
-                print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
-                upgrade_gate = dict(report.get("upgrade_gate") or {})
-                gate_status = str(upgrade_gate.get("status", "fail")).upper()
-                gate_color = C_GREEN if gate_status == "PASS" else (C_YELLOW if gate_status == "WATCH" else C_RED)
-                print(f"{gate_color}   升版門檻(MVP): {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
             return 0
         finally:
             session.close_trial_prep_executor()
@@ -338,6 +438,10 @@ def main(argv=None, environ=None):
         if should_export:
             best_trial = get_best_completed_trial_or_none(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                bootstrap_created = ensure_champion_params_bootstrap(
+                    champion_params_path=CHAMPION_PARAMS_PATH,
+                    best_params_path=BEST_PARAMS_PATH,
+                )
                 export_status = export_best_params_if_requested(
                     study,
                     best_params_path=BEST_PARAMS_PATH,
@@ -346,17 +450,24 @@ def main(argv=None, environ=None):
                 )
                 if export_status != 0:
                     return 1
-                report, report_paths = generate_best_trial_walk_forward_report(
+                report, report_paths, challenger_payload = generate_best_trial_walk_forward_report(
                     session=session,
                     best_trial=best_trial,
                     dataset_label=dataset_label,
                     db_file=db_file,
                 )
-                print(f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}")
-                print(
-                    f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
-                    f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
-                    f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+                print_walk_forward_outputs(report=report, report_paths=report_paths)
+                compare_result, compare_paths = generate_champion_challenger_compare_report(
+                    session=session,
+                    dataset_label=dataset_label,
+                    db_file=db_file,
+                    challenger_payload=challenger_payload,
+                    challenger_report=report,
+                )
+                print_compare_outputs(
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    bootstrap_created=bootstrap_created,
                 )
         elif export_policy == "interrupted_before_target":
             print(
@@ -371,7 +482,6 @@ def main(argv=None, environ=None):
     finally:
         session.close_trial_prep_executor()
         close_study_storage(study)
-
 
 
 if __name__ == "__main__":

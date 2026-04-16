@@ -335,9 +335,13 @@ def _format_pct(value: float) -> str:
 
 
 def _format_gate_actual(name: str, actual) -> str:
-    if name == "down_regime_coverage":
+    if name in ("down_regime_coverage", "down_regime_coverage_vs_champion"):
         return str(int(actual))
-    return f"{float(actual):.3f}" if "score" in name else _format_pct(actual)
+    if "score" in name:
+        return f"{float(actual):.3f}"
+    if "trades" in name:
+        return f"{float(actual):.2f}"
+    return _format_pct(actual)
 
 
 def write_walk_forward_report(
@@ -464,3 +468,299 @@ def write_walk_forward_report(
         "csv_path": csv_path,
         "md_path": md_path,
     }
+
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _window_row_by_label(rows: list[dict]) -> dict[str, dict]:
+    return {str(row.get("label")): dict(row) for row in rows}
+
+
+def build_compare_assessment(*, champion_report: dict, challenger_report: dict) -> dict:
+    champion_summary = dict(champion_report.get("summary") or {})
+    challenger_summary = dict(challenger_report.get("summary") or {})
+    champion_regime = dict(champion_report.get("regime_summary") or {})
+    challenger_regime = dict(challenger_report.get("regime_summary") or {})
+
+    champion_flat_score = _safe_float((champion_regime.get("flat") or {}).get("median_score", 0.0))
+    challenger_flat_score = _safe_float((challenger_regime.get("flat") or {}).get("median_score", 0.0))
+    champion_down_count = int((champion_regime.get("down") or {}).get("window_count", 0) or 0)
+    challenger_down_count = int((challenger_regime.get("down") or {}).get("window_count", 0) or 0)
+
+    checks = [
+        _build_gate_check(
+            name="median_window_score_vs_champion",
+            actual=_safe_float(challenger_summary.get("median_window_score", 0.0)),
+            threshold=f">= { _safe_float(champion_summary.get('median_window_score', 0.0)):.3f}",
+            passed=_safe_float(challenger_summary.get("median_window_score", 0.0)) >= _safe_float(champion_summary.get("median_window_score", 0.0)),
+            severity="hard",
+            note="候選版整體 OOS 典型視窗分數不得低於現役版。",
+        ),
+        _build_gate_check(
+            name="flat_median_score_vs_champion",
+            actual=challenger_flat_score,
+            threshold=f">= {champion_flat_score:.3f}",
+            passed=challenger_flat_score >= champion_flat_score,
+            severity="hard",
+            note="候選版盤整期中位分數不得低於現役版。",
+        ),
+        _build_gate_check(
+            name="worst_ret_pct_vs_champion",
+            actual=_safe_float(challenger_summary.get("worst_ret_pct", 0.0)),
+            threshold=f">= {(_safe_float(champion_summary.get('worst_ret_pct', 0.0)) - 1.0):.2f}%",
+            passed=_safe_float(challenger_summary.get("worst_ret_pct", 0.0)) >= (_safe_float(champion_summary.get("worst_ret_pct", 0.0)) - 1.0),
+            severity="hard",
+            note="候選版最差視窗報酬不可比現役版惡化超過 1%。",
+        ),
+        _build_gate_check(
+            name="max_mdd_vs_champion",
+            actual=_safe_float(challenger_summary.get("max_mdd", 0.0)),
+            threshold=f"<= {(_safe_float(champion_summary.get('max_mdd', 0.0)) + 2.0):.2f}%",
+            passed=_safe_float(challenger_summary.get("max_mdd", 0.0)) <= (_safe_float(champion_summary.get("max_mdd", 0.0)) + 2.0),
+            severity="hard",
+            note="候選版最大視窗 MDD 不可比現役版惡化超過 2%。",
+        ),
+        _build_gate_check(
+            name="down_regime_coverage_vs_champion",
+            actual=challenger_down_count,
+            threshold=f">= {champion_down_count}",
+            passed=challenger_down_count >= champion_down_count,
+            severity="coverage",
+            note="候選版 down 視窗覆蓋不可少於現役版。",
+        ),
+    ]
+
+    hard_pass = all(bool(check["passed"]) for check in checks if check["severity"] == "hard")
+    coverage_pass = all(bool(check["passed"]) for check in checks if check["severity"] == "coverage")
+    if hard_pass and coverage_pass:
+        status = "pass"
+    elif hard_pass:
+        status = "watch"
+    else:
+        status = "fail"
+
+    recommendation = {
+        "pass": "候選版整體優於現役版，可列為升版候選。",
+        "watch": "候選版核心指標不差，但 regime 覆蓋未明顯優於現役版，需審慎人工判讀。",
+        "fail": "候選版尚未穩定優於現役版，暫不建議升版。",
+    }[status]
+
+    return {
+        "status": status,
+        "recommended_for_promotion": bool(hard_pass and coverage_pass),
+        "checks": checks,
+        "recommendation": recommendation,
+    }
+
+
+def build_walk_forward_compare_payload(*, champion_payload: dict, champion_report: dict, challenger_payload: dict, challenger_report: dict, dataset_label: str, source_db_path: str, session_ts: str) -> dict:
+    champion_summary = dict(champion_report.get("summary") or {})
+    challenger_summary = dict(challenger_report.get("summary") or {})
+    champion_regime = dict(champion_report.get("regime_summary") or {})
+    challenger_regime = dict(challenger_report.get("regime_summary") or {})
+    compare_assessment = build_compare_assessment(champion_report=champion_report, challenger_report=challenger_report)
+
+    def delta(a, b):
+        return _safe_float(b) - _safe_float(a)
+
+    summary_compare = {
+        "median_window_score": {"champion": _safe_float(champion_summary.get("median_window_score", 0.0)), "challenger": _safe_float(challenger_summary.get("median_window_score", 0.0)), "delta": delta(champion_summary.get("median_window_score", 0.0), challenger_summary.get("median_window_score", 0.0))},
+        "median_ret_pct": {"champion": _safe_float(champion_summary.get("median_ret_pct", 0.0)), "challenger": _safe_float(challenger_summary.get("median_ret_pct", 0.0)), "delta": delta(champion_summary.get("median_ret_pct", 0.0), challenger_summary.get("median_ret_pct", 0.0))},
+        "worst_ret_pct": {"champion": _safe_float(champion_summary.get("worst_ret_pct", 0.0)), "challenger": _safe_float(challenger_summary.get("worst_ret_pct", 0.0)), "delta": delta(champion_summary.get("worst_ret_pct", 0.0), challenger_summary.get("worst_ret_pct", 0.0))},
+        "max_mdd": {"champion": _safe_float(champion_summary.get("max_mdd", 0.0)), "challenger": _safe_float(challenger_summary.get("max_mdd", 0.0)), "delta": delta(champion_summary.get("max_mdd", 0.0), challenger_summary.get("max_mdd", 0.0))},
+        "median_annual_trades": {"champion": _safe_float(champion_summary.get("median_annual_trades", 0.0)), "challenger": _safe_float(challenger_summary.get("median_annual_trades", 0.0)), "delta": delta(champion_summary.get("median_annual_trades", 0.0), challenger_summary.get("median_annual_trades", 0.0))},
+        "median_fill_rate": {"champion": _safe_float(champion_summary.get("median_fill_rate", 0.0)), "challenger": _safe_float(challenger_summary.get("median_fill_rate", 0.0)), "delta": delta(champion_summary.get("median_fill_rate", 0.0), challenger_summary.get("median_fill_rate", 0.0))},
+        "flat_median_score": {"champion": _safe_float((champion_regime.get("flat") or {}).get("median_score", 0.0)), "challenger": _safe_float((challenger_regime.get("flat") or {}).get("median_score", 0.0)), "delta": delta((champion_regime.get("flat") or {}).get("median_score", 0.0), (challenger_regime.get("flat") or {}).get("median_score", 0.0))},
+        "down_window_count": {"champion": int((champion_regime.get("down") or {}).get("window_count", 0) or 0), "challenger": int((challenger_regime.get("down") or {}).get("window_count", 0) or 0), "delta": int((challenger_regime.get("down") or {}).get("window_count", 0) or 0) - int((champion_regime.get("down") or {}).get("window_count", 0) or 0)},
+    }
+
+    regime_compare = {}
+    for regime_name in ("up", "flat", "down"):
+        champ = dict(champion_regime.get(regime_name) or {})
+        chall = dict(challenger_regime.get(regime_name) or {})
+        regime_compare[regime_name] = {
+            "window_count": {"champion": int(champ.get("window_count", 0) or 0), "challenger": int(chall.get("window_count", 0) or 0), "delta": int(chall.get("window_count", 0) or 0) - int(champ.get("window_count", 0) or 0)},
+            "median_score": {"champion": _safe_float(champ.get("median_score", 0.0)), "challenger": _safe_float(chall.get("median_score", 0.0)), "delta": delta(champ.get("median_score", 0.0), chall.get("median_score", 0.0))},
+            "median_ret_pct": {"champion": _safe_float(champ.get("median_ret_pct", 0.0)), "challenger": _safe_float(chall.get("median_ret_pct", 0.0)), "delta": delta(champ.get("median_ret_pct", 0.0), chall.get("median_ret_pct", 0.0))},
+            "worst_ret_pct": {"champion": _safe_float(champ.get("worst_ret_pct", 0.0)), "challenger": _safe_float(chall.get("worst_ret_pct", 0.0)), "delta": delta(champ.get("worst_ret_pct", 0.0), chall.get("worst_ret_pct", 0.0))},
+            "max_mdd": {"champion": _safe_float(champ.get("max_mdd", 0.0)), "challenger": _safe_float(chall.get("max_mdd", 0.0)), "delta": delta(champ.get("max_mdd", 0.0), chall.get("max_mdd", 0.0))},
+        }
+
+    champion_by_label = _window_row_by_label(list(champion_report.get("windows") or []))
+    challenger_by_label = _window_row_by_label(list(challenger_report.get("windows") or []))
+    ordered_labels = []
+    for source_rows in (list(champion_report.get("windows") or []), list(challenger_report.get("windows") or [])):
+        for row in source_rows:
+            label = str(row.get("label"))
+            if label not in ordered_labels:
+                ordered_labels.append(label)
+    window_compare_rows = []
+    for label in ordered_labels:
+        champ = champion_by_label.get(label, {})
+        chall = challenger_by_label.get(label, {})
+        oos_start = chall.get("oos_start") or champ.get("oos_start") or ""
+        oos_end = chall.get("oos_end") or champ.get("oos_end") or ""
+        regime = chall.get("regime") or champ.get("regime") or ""
+        window_compare_rows.append({
+            "label": label,
+            "oos_start": oos_start,
+            "oos_end": oos_end,
+            "regime": regime,
+            "champion_window_score": _safe_float(champ.get("window_score", 0.0)),
+            "challenger_window_score": _safe_float(chall.get("window_score", 0.0)),
+            "delta_window_score": delta(champ.get("window_score", 0.0), chall.get("window_score", 0.0)),
+            "champion_ret_pct": _safe_float(champ.get("ret_pct", 0.0)),
+            "challenger_ret_pct": _safe_float(chall.get("ret_pct", 0.0)),
+            "delta_ret_pct": delta(champ.get("ret_pct", 0.0), chall.get("ret_pct", 0.0)),
+            "champion_mdd": _safe_float(champ.get("mdd", 0.0)),
+            "challenger_mdd": _safe_float(chall.get("mdd", 0.0)),
+            "delta_mdd": delta(champ.get("mdd", 0.0), chall.get("mdd", 0.0)),
+        })
+
+    return {
+        "meta": {
+            "dataset_label": str(dataset_label),
+            "source_db_path": str(source_db_path),
+            "session_ts": str(session_ts),
+        },
+        "champion": {"params": dict(champion_payload), "summary": champion_summary, "regime_summary": champion_regime},
+        "challenger": {"params": dict(challenger_payload), "summary": challenger_summary, "regime_summary": challenger_regime},
+        "compare_assessment": compare_assessment,
+        "summary_compare": summary_compare,
+        "regime_compare": regime_compare,
+        "window_compare_rows": window_compare_rows,
+    }
+
+
+def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict):
+    os.makedirs(output_dir, exist_ok=True)
+    session_ts = str((compare_payload.get("meta") or {}).get("session_ts") or get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
+    base_name = f"walk_forward_compare_{session_ts}"
+    json_path = os.path.join(output_dir, f"{base_name}.json")
+    csv_path = os.path.join(output_dir, f"{base_name}.csv")
+    md_path = os.path.join(output_dir, f"{base_name}.md")
+
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(compare_payload, handle, indent=2, ensure_ascii=False)
+
+    rows = list(compare_payload.get("window_compare_rows") or [])
+    fieldnames = [
+        "label", "oos_start", "oos_end", "regime",
+        "champion_window_score", "challenger_window_score", "delta_window_score",
+        "champion_ret_pct", "challenger_ret_pct", "delta_ret_pct",
+        "champion_mdd", "challenger_mdd", "delta_mdd",
+    ]
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        if rows:
+            writer.writerows(rows)
+
+    assessment = dict(compare_payload.get("compare_assessment") or {})
+    summary_compare = dict(compare_payload.get("summary_compare") or {})
+    regime_compare = dict(compare_payload.get("regime_compare") or {})
+
+    def _pct_line(metric_key: str) -> str:
+        metric = dict(summary_compare.get(metric_key) or {})
+        return f"| {metric_key} | {metric.get('champion', 0.0):.3f if 'score' in metric_key else ''} |"
+
+    lines = [
+        "# Walk-Forward 升版比較報表（Champion vs Challenger）",
+        "",
+        f"- 資料集：{(compare_payload.get('meta') or {}).get('dataset_label', 'N/A')}",
+        f"- 記憶庫：`{(compare_payload.get('meta') or {}).get('source_db_path', '')}`",
+        f"- 產生時間：{session_ts}",
+        "",
+        "## 升版比較結論",
+        "",
+        f"- 狀態：`{assessment.get('status', 'fail')}`",
+        f"- 建議：{assessment.get('recommendation', 'N/A')}",
+        "",
+        "| 指標 | Champion | Challenger | Delta |",
+        "|---|---:|---:|---:|",
+    ]
+    ordered_summary_keys = [
+        "median_window_score", "median_ret_pct", "worst_ret_pct", "max_mdd",
+        "median_annual_trades", "median_fill_rate", "flat_median_score", "down_window_count",
+    ]
+    for metric_key in ordered_summary_keys:
+        metric = dict(summary_compare.get(metric_key) or {})
+        if metric_key in ("median_window_score", "flat_median_score"):
+            champ = f"{metric.get('champion', 0.0):.3f}"
+            chall = f"{metric.get('challenger', 0.0):.3f}"
+            delt = f"{metric.get('delta', 0.0):+.3f}"
+        elif metric_key in ("median_annual_trades",):
+            champ = f"{metric.get('champion', 0.0):.2f}"
+            chall = f"{metric.get('challenger', 0.0):.2f}"
+            delt = f"{metric.get('delta', 0.0):+.2f}"
+        elif metric_key in ("down_window_count",):
+            champ = str(int(metric.get('champion', 0) or 0))
+            chall = str(int(metric.get('challenger', 0) or 0))
+            delt = f"{int(metric.get('delta', 0) or 0):+d}"
+        else:
+            champ = _format_pct(metric.get('champion', 0.0))
+            chall = _format_pct(metric.get('challenger', 0.0))
+            delt = _format_pct(metric.get('delta', 0.0))
+        lines.append(f"| {metric_key} | {champ} | {chall} | {delt} |")
+
+    lines.extend([
+        "",
+        "## 升版檢查項目",
+        "",
+        "| 檢查項目 | 實際值 | 門檻 | 結果 | 說明 |",
+        "|---|---:|---:|---|---|",
+    ])
+    for check in list(assessment.get("checks") or []):
+        lines.append(
+            f"| {check['name']} | {_format_gate_actual(str(check['name']), check.get('actual'))} | {check.get('threshold', '')} | "
+            f"{'PASS' if check.get('passed') else 'FAIL'} | {check.get('note', '')} |"
+        )
+
+    lines.extend([
+        "",
+        "## Regime 比較",
+        "",
+        "| Regime | 指標 | Champion | Challenger | Delta |",
+        "|---|---|---:|---:|---:|",
+    ])
+    for regime_name in ("up", "flat", "down"):
+        metrics = dict(regime_compare.get(regime_name) or {})
+        for metric_key in ("window_count", "median_score", "median_ret_pct", "worst_ret_pct", "max_mdd"):
+            metric = dict(metrics.get(metric_key) or {})
+            if metric_key == "window_count":
+                champ = str(int(metric.get('champion', 0) or 0))
+                chall = str(int(metric.get('challenger', 0) or 0))
+                delt = f"{int(metric.get('delta', 0) or 0):+d}"
+            elif metric_key == "median_score":
+                champ = f"{metric.get('champion', 0.0):.3f}"
+                chall = f"{metric.get('challenger', 0.0):.3f}"
+                delt = f"{metric.get('delta', 0.0):+.3f}"
+            else:
+                champ = _format_pct(metric.get('champion', 0.0))
+                chall = _format_pct(metric.get('challenger', 0.0))
+                delt = _format_pct(metric.get('delta', 0.0))
+            lines.append(f"| {regime_name} | {metric_key} | {champ} | {chall} | {delt} |")
+
+    lines.extend([
+        "",
+        "## OOS 視窗比較",
+        "",
+        "| 視窗 | OOS 區間 | Regime | Champion 分數 | Challenger 分數 | Delta | Champion 報酬率 | Challenger 報酬率 | Delta |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|",
+    ])
+    for row in rows:
+        lines.append(
+            f"| {row['label']} | {row['oos_start']} ~ {row['oos_end']} | {row['regime']} | {row['champion_window_score']:.3f} | {row['challenger_window_score']:.3f} | {row['delta_window_score']:+.3f} | "
+            f"{_format_pct(row['champion_ret_pct'])} | {_format_pct(row['challenger_ret_pct'])} | {_format_pct(row['delta_ret_pct'])} |"
+        )
+
+    with open(md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+    return {"json_path": json_path, "csv_path": csv_path, "md_path": md_path}

@@ -62,3 +62,10 @@
 1. 把 walk-forward summary 指標納入 study callback 顯示。
 2. 把 median / worst-window 指標納入升版門檻。
 3. 再評估是否要把 objective 從純 in-sample 改為 in-sample + OOS 混合分數。
+
+
+### 目前主設定
+- [x] Walk-Forward 主設定：2012 + 8（train_start_year=2012, min_train_years=8）。
+- [x] 單版報表：輸出 challenger 的 WF 報表與 gate。
+- [x] 升級 MVP：輸出 Champion / Challenger 比較報表（先不自動升版）。
+- [ ] 後續：將 compare gate 接成正式升版阻擋規則。
