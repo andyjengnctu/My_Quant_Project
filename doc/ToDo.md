@@ -1,8 +1,8 @@
 ## Going
 
-- 先提升訓練分數
 - 訓練/測試樣本分離
 - overfitting量化驗證工具
+- 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
 
 4. GPT必須透過完善 `TEST_SUITE_CHECKLIST.md` 來確保動態測試的完整性; 檢查是否存在應列入但尚未列入 `doc/TEST_SUITE_CHECKLIST.md`的測項。
 
