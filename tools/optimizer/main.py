@@ -16,7 +16,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_champion_params_path, resolve_models_dir
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, safe_prompt_choice, validate_cli_args
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import load_walk_forward_policy
 from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
@@ -46,6 +46,84 @@ OPTIMIZER_HIGH_LEN_STEP = 5
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
+
+
+OPTIMIZER_MODEL_ENV_VAR = "V16_OPTIMIZER_MODEL"
+MODEL_CHOICE_WF = "wf"
+MODEL_CHOICE_LEGACY = "legacy"
+MODEL_TO_OBJECTIVE_MODE = {
+    MODEL_CHOICE_WF: "wf_gate_median",
+    MODEL_CHOICE_LEGACY: "legacy_base_score",
+}
+OBJECTIVE_MODE_TO_MODEL = {value: key for key, value in MODEL_TO_OBJECTIVE_MODE.items()}
+
+
+def _extract_cli_option_value(argv, option_name: str):
+    args = [] if argv is None else list(argv)
+    idx = 1
+    while idx < len(args):
+        raw_arg = str(args[idx]).strip()
+        option, has_inline_value, inline_value = raw_arg.partition("=")
+        if option != option_name:
+            idx += 1
+            continue
+        if has_inline_value:
+            return inline_value.strip()
+        if idx + 1 >= len(args):
+            return ""
+        return str(args[idx + 1]).strip()
+    return None
+
+
+def _normalize_optimizer_model_choice(raw_value: str | None):
+    normalized = str(raw_value or "").strip().lower()
+    if normalized in {MODEL_CHOICE_WF, MODEL_CHOICE_LEGACY}:
+        return normalized
+    if normalized in OBJECTIVE_MODE_TO_MODEL:
+        return OBJECTIVE_MODE_TO_MODEL[normalized]
+    raise ValueError(f"optimizer model 只接受 wf 或 legacy，收到: {raw_value}")
+
+
+def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_WF) -> tuple[str, str]:
+    choice = safe_prompt_choice(
+        "👉 請選擇 optimizer 模式 [1] WF 穩定性主導  [2] 原本模式(全資料到最新日) (預設 1): ",
+        "1" if str(default_choice) == MODEL_CHOICE_WF else "2",
+        ("1", "2"),
+        "optimizer 模式",
+    )
+    return (MODEL_CHOICE_WF, "prompt_menu") if choice == "1" else (MODEL_CHOICE_LEGACY, "prompt_menu")
+
+
+def resolve_optimizer_model_choice(argv, environ, *, default_model: str = MODEL_CHOICE_WF) -> tuple[str, str]:
+    cli_value = _extract_cli_option_value(argv, "--model")
+    if cli_value is not None:
+        return _normalize_optimizer_model_choice(cli_value), "cli_flag"
+
+    env_map = os.environ if environ is None else environ
+    env_value = str(env_map.get(OPTIMIZER_MODEL_ENV_VAR, "")).strip()
+    if env_value:
+        return _normalize_optimizer_model_choice(env_value), f"env:{OPTIMIZER_MODEL_ENV_VAR}"
+
+    args = [] if argv is None else list(argv)
+    try:
+        interactive_bare_run = (
+            len(args) <= 1
+            and sys.stdin is not None and sys.stdin.isatty()
+            and sys.stdout is not None and sys.stdout.isatty()
+        )
+    except Exception:
+        interactive_bare_run = False
+    if interactive_bare_run:
+        return _prompt_optimizer_model_choice(default_choice=default_model)
+    return default_model, "default"
+
+
+def apply_optimizer_model_choice(walk_forward_policy: dict, *, model_choice: str) -> dict:
+    normalized_choice = _normalize_optimizer_model_choice(model_choice)
+    policy = dict(walk_forward_policy)
+    policy["objective_mode"] = MODEL_TO_OBJECTIVE_MODE[normalized_choice]
+    policy["selected_model"] = normalized_choice
+    return policy
 
 COLORS = {
     "cyan": C_CYAN,
@@ -427,11 +505,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset",), flag_options=("--promote",))
+    validate_cli_args(argv, value_options=("--dataset", "--model"), flag_options=("--promote",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--promote]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model wf|legacy] [--promote]")
+        print("說明: 預設資料集為完整、模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -456,7 +534,13 @@ def main(argv=None, environ=None):
         resolve_optimizer_trial_count,
     )
 
-    walk_forward_policy = load_walk_forward_policy(PROJECT_ROOT, environ=environ)
+    loaded_walk_forward_policy = load_walk_forward_policy(PROJECT_ROOT, environ=environ)
+    model_choice, model_source = resolve_optimizer_model_choice(
+        argv,
+        environ,
+        default_model=OBJECTIVE_MODE_TO_MODEL.get(str(loaded_walk_forward_policy["objective_mode"]), MODEL_CHOICE_WF),
+    )
+    walk_forward_policy = apply_optimizer_model_choice(loaded_walk_forward_policy, model_choice=model_choice)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     best_trial_resolver = build_best_completed_trial_resolver(str(walk_forward_policy["objective_mode"]))
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
@@ -596,9 +680,11 @@ def main(argv=None, environ=None):
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
+    search_train_end_text = "latest" if str(walk_forward_policy["objective_mode"]) == "legacy_base_score" else str(int(walk_forward_policy["search_train_end_year"]))
     print(
         f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | "
-        f"objective={walk_forward_policy['objective_mode']} | search_train_end={int(walk_forward_policy['search_train_end_year'])} | "
+        f"model={walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_WF))} | 來源: {model_source} | "
+        f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
         f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
         f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
         f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "

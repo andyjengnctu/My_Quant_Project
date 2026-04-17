@@ -71,14 +71,21 @@ def run_optimizer_objective(session, trial):
     sort_start = time.perf_counter()
     sorted_dates = sorted(master_dates)
     profile_row["sort_dates_sec"] = time.perf_counter() - sort_start
-    search_train_dates = _filter_search_train_dates(
-        sorted_dates=sorted_dates,
-        train_start_year=int(session.train_start_year),
-        search_train_end_year=int(session.search_train_end_year),
-    )
+    use_full_history_search = str(session.objective_mode) == OBJECTIVE_MODE_LEGACY_BASE_SCORE
+    if use_full_history_search:
+        search_train_dates = list(sorted_dates)
+        effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
+    else:
+        search_train_dates = _filter_search_train_dates(
+            sorted_dates=sorted_dates,
+            train_start_year=int(session.train_start_year),
+            search_train_end_year=int(session.search_train_end_year),
+        )
+        effective_search_train_end_year = int(session.search_train_end_year)
+    profile_row["search_train_end_year"] = int(effective_search_train_end_year)
     profile_row["search_train_date_count"] = int(len(search_train_dates))
     trial.set_user_attr("objective_mode", str(session.objective_mode))
-    trial.set_user_attr("search_train_end_year", int(session.search_train_end_year))
+    trial.set_user_attr("search_train_end_year", int(effective_search_train_end_year))
     trial.set_user_attr("search_train_date_count", int(len(search_train_dates)))
     if not search_train_dates:
         return _append_invalid_profile_row(
