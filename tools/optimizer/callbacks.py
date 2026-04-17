@@ -112,10 +112,12 @@ def _worst_full_year_return_from_oos_windows(rows, *, ret_key: str) -> float:
         try:
             year = pd.Timestamp(str(start_raw)).year
         except Exception as exc:
+            _ = exc
             label = str(row.get("label") or "")
             try:
                 year = int(label[:4])
             except Exception as exc:
+                _ = exc
                 continue
         yearly_growth.setdefault(int(year), 1.0)
         yearly_growth[int(year)] *= 1.0 + (_safe_float(row.get(ret_key, 0.0)) / 100.0)

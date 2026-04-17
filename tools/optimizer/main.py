@@ -115,6 +115,7 @@ def resolve_optimizer_model_choice(argv, environ, *, default_model: str = MODEL_
             and sys.stdout is not None and sys.stdout.isatty()
         )
     except Exception as exc:
+        _ = exc
         interactive_bare_run = False
     if interactive_bare_run:
         return _prompt_optimizer_model_choice(default_choice=default_model)
