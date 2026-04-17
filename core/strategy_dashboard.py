@@ -20,6 +20,7 @@ from core.display_common import (
     C_RED,
     C_RESET,
     C_YELLOW,
+    _pad_display,
     _table_row,
     get_p,
 )
