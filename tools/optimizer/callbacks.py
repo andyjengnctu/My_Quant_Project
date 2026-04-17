@@ -30,7 +30,7 @@ from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_WF_GATE_MEDIAN,
     is_qualified_trial_value,
 )
-from tools.optimizer.walk_forward import build_compare_assessment, evaluate_walk_forward
+from tools.optimizer.walk_forward import build_compare_assessment, build_oos_total_performance, evaluate_walk_forward
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -77,6 +77,79 @@ def _latest_data_end_text(session) -> str:
         return "-"
     last_date = session.sorted_master_dates[-1]
     return str(last_date.date()) if hasattr(last_date, 'date') else str(last_date)[:10]
+
+
+
+
+def _weighted_average_from_rows(rows, *, value_key: str, weight_key: str) -> float:
+    rows = list(rows or [])
+    if not rows:
+        return 0.0
+    weighted_total = 0.0
+    total_weight = 0.0
+    fallback_values = []
+    for row in rows:
+        value = _safe_float(row.get(value_key, 0.0))
+        weight = max(0.0, _safe_float(row.get(weight_key, 0.0)))
+        fallback_values.append(value)
+        if weight > 0.0:
+            weighted_total += value * weight
+            total_weight += weight
+    if total_weight > 0.0:
+        return weighted_total / total_weight
+    return sum(fallback_values) / len(fallback_values) if fallback_values else 0.0
+
+
+def _worst_full_year_return_from_oos_windows(rows, *, ret_key: str) -> float:
+    yearly_growth = {}
+    for row in list(rows or []):
+        start_raw = row.get("oos_start") or ""
+        try:
+            year = pd.Timestamp(str(start_raw)).year
+        except Exception:
+            label = str(row.get("label") or "")
+            try:
+                year = int(label[:4])
+            except Exception:
+                continue
+        yearly_growth.setdefault(int(year), 1.0)
+        yearly_growth[int(year)] *= 1.0 + (_safe_float(row.get(ret_key, 0.0)) / 100.0)
+    if not yearly_growth:
+        return 0.0
+    yearly_returns = [((growth - 1.0) * 100.0) for growth in yearly_growth.values()]
+    return min(yearly_returns) if yearly_returns else 0.0
+
+
+def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: float) -> tuple[dict, dict, str]:
+    windows = list((report or {}).get("windows") or [])
+    total = build_oos_total_performance(windows, ret_key="ret_pct")
+    benchmark_total = build_oos_total_performance(windows, ret_key="benchmark_return_pct")
+    candidate_metrics = {
+        "pf_return": float(total.get("linked_total_return_pct", 0.0)),
+        "annual_return_pct": float(total.get("annualized_return_pct", 0.0)),
+        "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="ret_pct")),
+        "pf_mdd": float(total.get("max_drawdown_pct", 0.0)),
+        "pf_romd": _calc_romd(total.get("linked_total_return_pct", 0.0), total.get("max_drawdown_pct", 0.0)),
+        "win_rate": float(_weighted_average_from_rows(windows, value_key="win_rate", weight_key="trade_count")),
+        "pf_trades": int(sum(_safe_int(row.get("trade_count", 0)) for row in windows)),
+        "reserved_buy_fill_rate": float(_weighted_average_from_rows(windows, value_key="reserved_buy_fill_rate", weight_key="trade_count")),
+        "final_equity": float(initial_capital) * float(total.get("ending_equity_factor", 1.0)),
+    }
+    benchmark_metrics = {
+        "pf_return": float(benchmark_total.get("linked_total_return_pct", 0.0)),
+        "annual_return_pct": float(benchmark_total.get("annualized_return_pct", 0.0)),
+        "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="benchmark_return_pct")),
+        "pf_mdd": float(benchmark_total.get("max_drawdown_pct", 0.0)),
+        "pf_romd": _calc_romd(benchmark_total.get("linked_total_return_pct", 0.0), benchmark_total.get("max_drawdown_pct", 0.0)),
+        "final_equity": float(initial_capital) * float(benchmark_total.get("ending_equity_factor", 1.0)),
+    }
+    range_start = str(total.get("oos_start") or "")
+    range_end = str(total.get("oos_end") or "")
+    if range_start and range_end:
+        range_text = f"{range_start} ~ {range_end}"
+    else:
+        range_text = "-"
+    return candidate_metrics, benchmark_metrics, range_text
 
 
 def _build_search_train_dates_for_session(session):
@@ -189,25 +262,26 @@ def _status_candidate_color(status_text: str) -> str:
     return C_RED
 
 
-def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | None):
-    benchmark_return = _safe_float(candidate_metrics.get("bm_return", 0.0))
-    benchmark_annual_return = _safe_float(candidate_metrics.get("bm_annual_return_pct", 0.0))
-    benchmark_worst_year = _safe_float(candidate_metrics.get("bm_min_full_year_return_pct", 0.0))
-    benchmark_mdd = _safe_float(candidate_metrics.get("bm_mdd", 0.0))
-    benchmark_romd = _calc_romd(benchmark_return, benchmark_mdd)
-    benchmark_rsq = _safe_float(candidate_metrics.get("bm_r_squared", 0.0))
-    benchmark_mwin = _safe_float(candidate_metrics.get("bm_m_win_rate", 0.0))
-    initial_capital = _safe_float(candidate_metrics.get("initial_capital", 0.0))
-    benchmark_final_eq = _benchmark_final_equity(initial_capital, benchmark_return)
 
+
+def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | None, benchmark_metrics: dict | None = None):
     champion_metrics = dict(champion_metrics or {})
+    benchmark_metrics = dict(benchmark_metrics or {})
 
     def champ_value(key, default=None):
         return champion_metrics.get(key, default)
 
+    def bench_value(key, default=None):
+        return benchmark_metrics.get(key, default)
+
     rows = []
 
-    def add_row(name, candidate_value, champion_value_raw=None, benchmark_value_raw=None, *, kind="pct", candidate_unit=""):
+    def add_row(name, key, *, kind="pct", candidate_unit=""):
+        candidate_value = candidate_metrics.get(key, 0.0)
+        champion_value_raw = champ_value(key)
+        benchmark_value_raw = bench_value(key)
+        if benchmark_value_raw is None and key.startswith("bm_"):
+            benchmark_value_raw = candidate_metrics.get(key)
         if kind == "pct":
             cand_plain = _format_pct_plain(candidate_value)
             bench_plain = _format_pct_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
@@ -270,21 +344,15 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
             }
         )
 
-    add_row("總資產報酬率", candidate_metrics["pf_return"], champ_value("pf_return"), benchmark_return, kind="pct")
-    add_row("年化報酬率", candidate_metrics["annual_return_pct"], champ_value("annual_return_pct"), benchmark_annual_return, kind="pct")
-    add_row("年度最差報酬", candidate_metrics["min_full_year_return_pct"], champ_value("min_full_year_return_pct"), benchmark_worst_year, kind="pct")
-    add_row("最大回撤 (MDD)", candidate_metrics["pf_mdd"], champ_value("pf_mdd"), benchmark_mdd, kind="mdd")
-    add_row("報酬回撤比 (RoMD)", candidate_metrics["pf_romd"], champ_value("pf_romd"), benchmark_romd, kind="float2")
-    add_row("平滑度 (Log R²)", candidate_metrics["r_squared"], champ_value("r_squared"), benchmark_rsq, kind="float2")
-    add_row("月度獲利勝率", candidate_metrics["m_win_rate"], champ_value("m_win_rate"), benchmark_mwin, kind="pct")
-    add_row("系統實戰勝率", candidate_metrics["win_rate"], champ_value("win_rate"), None, kind="pct")
-    add_row("盈虧因子", candidate_metrics["pf_payoff"], champ_value("pf_payoff"), None, kind="float2")
-    add_row("實戰期望值 (EV)", candidate_metrics["pf_ev"], champ_value("pf_ev"), None, kind="float2", candidate_unit=" R")
-    add_row("總交易次數", candidate_metrics["pf_trades"], champ_value("pf_trades"), None, kind="count")
-    add_row("年化交易次數", candidate_metrics["annual_trades"], champ_value("annual_trades"), None, kind="float2")
-    add_row("保留後買進成交率", candidate_metrics["reserved_buy_fill_rate"], champ_value("reserved_buy_fill_rate"), None, kind="pct")
-    add_row("最終資產", candidate_metrics["final_equity"], champ_value("final_equity"), benchmark_final_eq, kind="money")
-    add_row("平均資金水位", candidate_metrics["avg_exposure"], champ_value("avg_exposure"), None, kind="pct")
+    add_row("總資產報酬率", "pf_return", kind="pct")
+    add_row("年化報酬率", "annual_return_pct", kind="pct")
+    add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
+    add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
+    add_row("報酬回撤比 (RoMD)", "pf_romd", kind="float2")
+    add_row("系統實際勝率", "win_rate", kind="pct")
+    add_row("總交易次數", "pf_trades", kind="count")
+    add_row("保留後買進成交率", "reserved_buy_fill_rate", kind="pct")
+    add_row("最終資產", "final_equity", kind="money")
     return rows
 
 
@@ -508,6 +576,8 @@ def _get_champion_console_cache(session):
     return cache
 
 
+
+
 def _build_optimizer_trial_dashboard_payload(session, trial):
     attrs = trial.user_attrs
     params = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
@@ -516,45 +586,93 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
     if model_mode == "wf":
-        wf_range_text = f"2020-01-01 ~ {latest_data_end}（6 個月 × {_safe_int(attrs.get('wf_window_count', 0))} 窗）"
         system_score_display = f"{_safe_float(attrs.get('wf_median_window_score', 0.0)):.3f}（WF中位分數）"
     else:
-        wf_range_text = "未啟用"
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
-    candidate_metrics = {
+    initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))
+    candidate_train_metrics = {
         "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
         "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
         "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
-        "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
-        "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
         "win_rate": _safe_float(attrs.get("win_rate", 0.0)),
-        "pf_payoff": _safe_float(attrs.get("pf_payoff", 0.0)),
-        "pf_ev": _safe_float(attrs.get("pf_ev", 0.0)),
         "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
-        "annual_trades": _safe_float(attrs.get("annual_trades", 0.0)),
         "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
         "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
-        "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
-        "bm_return": _safe_float(attrs.get("bm_return", 0.0)),
-        "bm_annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
-        "bm_min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
-        "bm_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
-        "bm_r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
-        "bm_m_win_rate": _safe_float(attrs.get("bm_m_win_rate", 0.0)),
-        "initial_capital": _safe_float(get_p(params, "initial_capital", 0.0)),
+        "pf_romd": _calc_romd(_safe_float(attrs.get("pf_return", 0.0)), _safe_float(attrs.get("pf_mdd", 0.0))),
     }
-    candidate_metrics["pf_romd"] = _calc_romd(candidate_metrics["pf_return"], candidate_metrics["pf_mdd"])
+    benchmark_train_metrics = {
+        "pf_return": _safe_float(attrs.get("bm_return", 0.0)),
+        "annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
+        "min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
+        "pf_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
+        "pf_romd": _calc_romd(_safe_float(attrs.get("bm_return", 0.0)), _safe_float(attrs.get("bm_mdd", 0.0))),
+        "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),
+    }
     champion_cache = _get_champion_console_cache(session)
+    training_title = f"【訓練期間績效對比｜{_range_text_from_dates(search_train_dates)}】"
+    train_rows = _build_first_zone_rows(
+        candidate_metrics=candidate_train_metrics,
+        champion_metrics=champion_cache,
+        benchmark_metrics=benchmark_train_metrics,
+    )
+
+    test_title = None
+    test_rows = None
+    if model_mode == "wf":
+        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+        )
+        candidate_wf_report = evaluate_walk_forward(
+            all_dfs_fast=prep_result["all_dfs_fast"],
+            all_trade_logs=prep_result["all_trade_logs"],
+            sorted_dates=sorted(prep_result["master_dates"]),
+            params=params,
+            max_positions=session.train_max_positions,
+            enable_rotation=session.train_enable_rotation,
+            benchmark_ticker="0050",
+            train_start_year=int(session.walk_forward_policy["train_start_year"]),
+            min_train_years=int(session.walk_forward_policy["min_train_years"]),
+            test_window_months=int(session.walk_forward_policy["test_window_months"]),
+            regime_up_threshold_pct=float(session.walk_forward_policy["regime_up_threshold_pct"]),
+            regime_down_threshold_pct=float(session.walk_forward_policy["regime_down_threshold_pct"]),
+            min_window_bars=int(session.walk_forward_policy["min_window_bars"]),
+            gate_min_median_score=float(session.walk_forward_policy["gate_min_median_score"]),
+            gate_min_worst_ret_pct=float(session.walk_forward_policy["gate_min_worst_ret_pct"]),
+            gate_min_flat_median_score=float(session.walk_forward_policy["gate_min_flat_median_score"]),
+        )
+        candidate_test_metrics, benchmark_test_metrics, oos_range_text = _build_oos_metrics_from_report(
+            report=candidate_wf_report,
+            initial_capital=initial_capital,
+        )
+        champion_test_metrics = None
+        if champion_cache and champion_cache.get("wf_report"):
+            champion_test_metrics, _unused_bm, _unused_range = _build_oos_metrics_from_report(
+                report=champion_cache.get("wf_report"),
+                initial_capital=initial_capital,
+            )
+        test_title = f"【測試期間績效對比｜{oos_range_text}｜資料終點：{latest_data_end}】"
+        test_rows = _build_first_zone_rows(
+            candidate_metrics=candidate_test_metrics,
+            champion_metrics=champion_test_metrics,
+            benchmark_metrics=benchmark_test_metrics,
+        )
+
     return {
         "mode_display": mode_display,
         "model_mode": model_mode,
-        "search_train_dates": search_train_dates,
-        "latest_data_end": latest_data_end,
         "system_score_display": system_score_display,
-        "wf_range_text": wf_range_text,
         "params": params,
-        "first_zone_rows": _build_first_zone_rows(candidate_metrics=candidate_metrics, champion_metrics=champion_cache),
+        "training_title": training_title,
+        "train_rows": train_rows,
+        "test_title": test_title,
+        "test_rows": test_rows,
         "upgrade_rows": _build_upgrade_rows(trial=trial, policy=session.walk_forward_policy) if model_mode == "wf" else None,
         "compare_rows": _build_compare_rows(trial=trial, champion_cache=champion_cache, policy=session.walk_forward_policy) if model_mode == "wf" else None,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
@@ -570,15 +688,15 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         mode_display=payload["mode_display"],
         max_pos=session.train_max_positions,
         model_mode=payload["model_mode"],
-        search_train_range_text=_range_text_from_dates(payload["search_train_dates"]),
-        wf_range_text=payload["wf_range_text"],
-        data_end_text=payload["latest_data_end"],
         objective_mode=str(session.objective_mode),
         score_calc_method=SCORE_CALC_METHOD,
         score_numerator_method=SCORE_NUMERATOR_METHOD,
         base_score=payload["base_score"],
         system_score_display=payload["system_score_display"],
-        first_zone_rows=payload["first_zone_rows"],
+        training_title=payload["training_title"],
+        training_rows=payload["train_rows"],
+        testing_title=payload["test_title"],
+        testing_rows=payload["test_rows"],
         upgrade_rows=payload["upgrade_rows"],
         compare_rows=payload["compare_rows"],
         params_lines=_build_training_param_lines(payload["params"]),

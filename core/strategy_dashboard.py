@@ -324,6 +324,8 @@ def _render_optimizer_dashboard_cell(row: dict, key: str, metric_name: str) -> s
 
 # 新版 optimizer console 版型；實際欄位配色規則由 callbacks 依區域語意與 training_policy 門檻預先決定。
 # 這裡僅保留 fallback 顏色推導與最外層版面渲染。
+
+
 def print_optimizer_trial_console_dashboard(*,
     title: str,
     milestone_title: str,
@@ -331,15 +333,15 @@ def print_optimizer_trial_console_dashboard(*,
     mode_display: str,
     max_pos: int,
     model_mode: str,
-    search_train_range_text: str,
-    wf_range_text: str,
-    data_end_text: str,
     objective_mode: str,
     score_calc_method: str,
     score_numerator_method: str,
     base_score: float,
     system_score_display: str,
-    first_zone_rows: list[dict],
+    training_title: str,
+    training_rows: list[dict],
+    testing_title: str | None,
+    testing_rows: list[dict] | None,
     upgrade_rows: list[dict] | None,
     compare_rows: list[dict] | None,
     params_lines: list[str],
@@ -353,24 +355,38 @@ def print_optimizer_trial_console_dashboard(*,
         f"全域戰略：{C_YELLOW}{global_strategy_text}{C_RESET} | "
         f"模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{C_YELLOW}{model_mode.upper()}{C_RESET}"
     )
-    print(f"【區間設定】 主搜尋訓練：{search_train_range_text} | OOS / WF驗證：{wf_range_text} | 本輪資料終點：{data_end_text}")
     print(
         f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
         f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | base_score：{float(base_score):.2f} | "
         f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
     print(separator)
-    print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤 (差異)"))
-    for row in first_zone_rows:
-        name = row["name"]
+    print(training_title)
+    print(separator)
+    print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)"))
+    for row in training_rows:
         print(
             _table_row4_compact(
-                name,
-                _render_optimizer_dashboard_cell(row, "candidate", name),
-                _render_optimizer_dashboard_cell(row, "champion", name),
-                _render_optimizer_dashboard_cell(row, "benchmark", name),
+                row["name"],
+                _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
             )
         )
+    if testing_title and testing_rows:
+        print()
+        print(testing_title)
+        print(separator)
+        print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)"))
+        for row in testing_rows:
+            print(
+                _table_row4_compact(
+                    row["name"],
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+                )
+            )
     if upgrade_rows:
         print(separator)
         print(_table_row4_compact("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態", w1=20, w2=19, w3=24, w4=8))
