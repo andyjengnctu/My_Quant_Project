@@ -138,6 +138,7 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "win_rate": float(_weighted_average_from_rows(windows, value_key="win_rate", weight_key="trade_count")),
         "pf_trades": int(sum(_safe_int(row.get("trade_count", 0)) for row in windows)),
         "reserved_buy_fill_rate": float(_weighted_average_from_rows(windows, value_key="reserved_buy_fill_rate", weight_key="trade_count")),
+        "avg_exposure": float(_weighted_average_from_rows(windows, value_key="avg_exposure", weight_key="trade_count")),
         "final_equity": float(initial_capital) * float(total.get("ending_equity_factor", 1.0)),
     }
     benchmark_metrics = {
@@ -357,7 +358,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     add_row("系統實際勝率", "win_rate", kind="pct")
     add_row("總交易次數", "pf_trades", kind="count")
     add_row("保留後買進成交率", "reserved_buy_fill_rate", kind="pct")
-    add_row("最終資產", "final_equity", kind="money")
+    add_row("平均資金水位", "avg_exposure", kind="pct")
     return rows
 
 
@@ -429,7 +430,7 @@ def _build_compare_rows(*, trial, champion_cache, policy):
         {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _compose_compare_champion_cell("視窗分數中位數", f"{champion_median:.3f}", _format_float_diff(median_diff, 3), median_diff), "threshold": "差異 > 0", "status": checks.get("median_window_score_vs_champion", "FAIL"), "candidate_numeric": candidate_median},
         {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _compose_compare_champion_cell("最差視窗報酬", f"{champion_worst:.2f}%", _format_pct_diff(worst_diff), worst_diff), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL"), "candidate_numeric": candidate_worst},
         {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _compose_compare_champion_cell("flat 視窗中位分數", f"{champion_flat:.3f}", _format_float_diff(flat_diff, 3), flat_diff), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL"), "candidate_numeric": candidate_flat},
-        {"name": "最大視窗 MDD", "candidate": f"-{abs(candidate_mdd):.2f}%", "champion": _compose_compare_champion_cell("最大視窗 MDD", f"-{abs(champion_mdd):.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd), mdd_diff), "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
+        {"name": "最大視窗 MDD", "candidate": f"-{abs(candidate_mdd):.2f}%", "champion": _compose_compare_champion_cell("最大視窗 MDD", f"-{abs(champion_mdd):.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd), mdd_diff), "champion_precolored": True, "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
         {"name": "compare_gate", "candidate": str(assessment.get("status", "fail")).upper(), "champion": "-", "threshold": "必須 PASS", "status": str(assessment.get("status", "fail")).upper(), "candidate_numeric": None},
     ]
     for row in rows:
@@ -537,6 +538,7 @@ def _compute_champion_console_cache(session):
         "pf_payoff": pf_payoff,
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "avg_exposure": avg_exp,
         "annual_return_pct": annual_return_pct,
         "bm_annual_return_pct": bm_annual_return_pct,
         "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
@@ -604,6 +606,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         "win_rate": _safe_float(attrs.get("win_rate", 0.0)),
         "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
         "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
+        "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
         "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
         "pf_romd": _calc_romd(_safe_float(attrs.get("pf_return", 0.0)), _safe_float(attrs.get("pf_mdd", 0.0))),
     }

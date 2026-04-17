@@ -411,7 +411,7 @@ def print_optimizer_trial_console_dashboard(*,
                 _table_row5(
                     row["name"],
                     _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _wrap_optimizer_dashboard_cell(row["champion"], _optimizer_dashboard_metric_color(row["name"], row["champion"])),
+                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
                     row["threshold"],
                     _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
                 )
