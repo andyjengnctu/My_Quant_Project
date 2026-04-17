@@ -67,8 +67,8 @@ def build_optimizer_session(*, walk_forward_policy: dict):
     from tools.optimizer.profile import OptimizerProfileRecorder
     from tools.optimizer.session import OptimizerSession
     from tools.optimizer.study_utils import (
+        build_best_completed_trial_resolver,
         build_optimizer_trial_params,
-        get_best_completed_trial_or_none,
         resolve_optimizer_tp_percent,
     )
 
@@ -77,7 +77,10 @@ def build_optimizer_session(*, walk_forward_policy: dict):
         session_ts=session_ts,
         profile_recorder_cls=OptimizerProfileRecorder,
         build_optimizer_trial_params=build_optimizer_trial_params,
-        get_best_completed_trial_or_none=get_best_completed_trial_or_none,
+        get_best_completed_trial_or_none=build_best_completed_trial_resolver(str(walk_forward_policy["objective_mode"])),
+        objective_mode=str(walk_forward_policy["objective_mode"]),
+        search_train_end_year=int(walk_forward_policy["search_train_end_year"]),
+        walk_forward_policy=walk_forward_policy,
         resolve_optimizer_tp_percent=resolve_optimizer_tp_percent,
         print_strategy_dashboard=print_strategy_dashboard,
         colors=COLORS,
@@ -447,7 +450,7 @@ def main(argv=None, environ=None):
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.study_utils import (
         build_optimizer_db_file_path,
-        get_best_completed_trial_or_none,
+        build_best_completed_trial_resolver,
         is_qualified_trial_value,
         resolve_optimizer_seed,
         resolve_optimizer_trial_count,
@@ -455,6 +458,7 @@ def main(argv=None, environ=None):
 
     walk_forward_policy = load_walk_forward_policy(PROJECT_ROOT, environ=environ)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
+    best_trial_resolver = build_best_completed_trial_resolver(str(walk_forward_policy["objective_mode"]))
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
     try:
@@ -513,6 +517,7 @@ def main(argv=None, environ=None):
                 best_params_path=RUN_BEST_PARAMS_PATH,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
+                best_trial_resolver=best_trial_resolver,
             )
             if export_status != 0:
                 return export_status
@@ -521,7 +526,7 @@ def main(argv=None, environ=None):
             csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
             if not csv_inputs:
                 raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
-            best_trial = get_best_completed_trial_or_none(study)
+            best_trial = best_trial_resolver(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
                 session.load_raw_data(
                     selected_data_dir,
@@ -593,6 +598,7 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
     print(
         f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | "
+        f"objective={walk_forward_policy['objective_mode']} | search_train_end={int(walk_forward_policy['search_train_end_year'])} | "
         f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
         f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
         f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "
@@ -618,6 +624,7 @@ def main(argv=None, environ=None):
             train_enable_rotation=TRAIN_ENABLE_ROTATION,
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
+            best_trial_resolver=best_trial_resolver,
         )
 
         session.load_raw_data(
@@ -647,7 +654,7 @@ def main(argv=None, environ=None):
             interrupted=training_interrupted,
         )
         if should_export:
-            best_trial = get_best_completed_trial_or_none(study)
+            best_trial = best_trial_resolver(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
                 _bootstrap_source_pre = ensure_champion_params_bootstrap(
                     champion_params_path=CHAMPION_PARAMS_PATH,
@@ -658,6 +665,7 @@ def main(argv=None, environ=None):
                     best_params_path=RUN_BEST_PARAMS_PATH,
                     fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                     colors=COLORS,
+                    best_trial_resolver=best_trial_resolver,
                 )
                 if export_status != 0:
                     return 1

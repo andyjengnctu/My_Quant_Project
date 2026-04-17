@@ -1,12 +1,38 @@
 import time
 
+import pandas as pd
+
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_portfolio_score
+from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.objective_filters import apply_filter_rules
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
-from core.strategy_params import build_runtime_param_raw_value
-from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
+from tools.optimizer.study_utils import (
+    INVALID_TRIAL_VALUE,
+    OBJECTIVE_MODE_LEGACY_BASE_SCORE,
+    OBJECTIVE_MODE_WF_GATE_MEDIAN,
+)
+from tools.optimizer.walk_forward import evaluate_walk_forward
+
+
+def _filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int):
+    filtered = []
+    for raw_date in sorted_dates:
+        year = int(pd.Timestamp(raw_date).year)
+        if int(train_start_year) <= year <= int(search_train_end_year):
+            filtered.append(raw_date)
+    return filtered
+
+
+def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
+    trial.set_user_attr("fail_reason", fail_reason)
+    profile_row["fail_reason"] = fail_reason
+    profile_row["trial_value"] = INVALID_TRIAL_VALUE
+    profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
+    session.profile_recorder.append_row(profile_row)
+    trial.set_user_attr("profile_row", profile_row)
+    return INVALID_TRIAL_VALUE
 
 
 def run_optimizer_objective(session, trial):
@@ -32,6 +58,8 @@ def run_optimizer_objective(session, trial):
         session.record_optimizer_prep_failures(insufficient_failures)
 
     profile_row = build_initial_profile_row(trial.number, prep_result["prep_wall_sec"], prep_result["prep_profile"])
+    profile_row["objective_mode"] = str(session.objective_mode)
+    profile_row["search_train_end_year"] = int(session.search_train_end_year)
     master_dates = prep_result["master_dates"]
     if not master_dates:
         profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
@@ -43,6 +71,24 @@ def run_optimizer_objective(session, trial):
     sort_start = time.perf_counter()
     sorted_dates = sorted(master_dates)
     profile_row["sort_dates_sec"] = time.perf_counter() - sort_start
+    search_train_dates = _filter_search_train_dates(
+        sorted_dates=sorted_dates,
+        train_start_year=int(session.train_start_year),
+        search_train_end_year=int(session.search_train_end_year),
+    )
+    profile_row["search_train_date_count"] = int(len(search_train_dates))
+    trial.set_user_attr("objective_mode", str(session.objective_mode))
+    trial.set_user_attr("search_train_end_year", int(session.search_train_end_year))
+    trial.set_user_attr("search_train_date_count", int(len(search_train_dates)))
+    if not search_train_dates:
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason="主搜尋 train 區間無有效資料",
+            objective_start=objective_start,
+        )
+
     all_dfs_fast = prep_result["all_dfs_fast"]
     all_trade_logs = prep_result["all_trade_logs"]
     benchmark_data = all_dfs_fast.get("0050", None)
@@ -76,7 +122,7 @@ def run_optimizer_objective(session, trial):
     ) = run_portfolio_timeline(
         all_dfs_fast,
         all_trade_logs,
-        sorted_dates,
+        search_train_dates,
         session.train_start_year,
         ai_params,
         session.train_max_positions,
@@ -128,17 +174,16 @@ def run_optimizer_objective(session, trial):
     fail_reason = apply_filter_rules(metrics)
     profile_row["filter_rules_sec"] = time.perf_counter() - filter_start
     if fail_reason is not None:
-        trial.set_user_attr("fail_reason", fail_reason)
-        profile_row["fail_reason"] = fail_reason
-        profile_row["trial_value"] = INVALID_TRIAL_VALUE
-        profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
-        session.profile_recorder.append_row(profile_row)
-        trial.set_user_attr("profile_row", profile_row)
-        return INVALID_TRIAL_VALUE
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason=fail_reason,
+            objective_start=objective_start,
+        )
 
     score_start = time.perf_counter()
     base_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
-    final_score = base_score
     profile_row["score_calc_sec"] = time.perf_counter() - score_start
     profile_row["base_score"] = base_score
 
@@ -170,8 +215,86 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("m_win_rate", m_win_rate)
     trial.set_user_attr("bm_r_squared", bm_r_sq)
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
-    profile_row["trial_value"] = final_score
+
+    final_score = float(base_score)
+    if str(session.objective_mode) == OBJECTIVE_MODE_WF_GATE_MEDIAN:
+        wf_policy = dict(session.walk_forward_policy)
+        wf_start = time.perf_counter()
+        wf_report = evaluate_walk_forward(
+            all_dfs_fast=all_dfs_fast,
+            all_trade_logs=all_trade_logs,
+            sorted_dates=sorted_dates,
+            params=ai_params,
+            max_positions=session.train_max_positions,
+            enable_rotation=session.train_enable_rotation,
+            benchmark_ticker="0050",
+            train_start_year=int(wf_policy["train_start_year"]),
+            min_train_years=int(wf_policy["min_train_years"]),
+            test_window_months=int(wf_policy["test_window_months"]),
+            regime_up_threshold_pct=float(wf_policy["regime_up_threshold_pct"]),
+            regime_down_threshold_pct=float(wf_policy["regime_down_threshold_pct"]),
+            min_window_bars=int(wf_policy["min_window_bars"]),
+            gate_min_median_score=float(wf_policy["gate_min_median_score"]),
+            gate_min_worst_ret_pct=float(wf_policy["gate_min_worst_ret_pct"]),
+            gate_min_flat_median_score=float(wf_policy["gate_min_flat_median_score"]),
+        )
+        profile_row["wf_eval_sec"] = time.perf_counter() - wf_start
+        summary = dict(wf_report.get("summary") or {})
+        regime_summary = dict(wf_report.get("regime_summary") or {})
+        upgrade_gate = dict(wf_report.get("upgrade_gate") or {})
+        flat_summary = dict(regime_summary.get("flat") or {})
+        wf_median_window_score = float(summary.get("median_window_score", INVALID_TRIAL_VALUE))
+        wf_worst_ret_pct = float(summary.get("worst_ret_pct", INVALID_TRIAL_VALUE))
+        wf_flat_median_score = float(flat_summary.get("median_score", 0.0))
+        wf_max_mdd = float(summary.get("max_mdd", 0.0))
+        wf_window_count = int(summary.get("window_count", 0))
+        wf_upgrade_status = str(upgrade_gate.get("status", "fail"))
+        wf_quality_gate_status = str(dict(upgrade_gate.get("quality_gate") or {}).get("status", "fail"))
+        wf_coverage_gate_status = str(dict(upgrade_gate.get("coverage_gate") or {}).get("status", "watch"))
+
+        trial.set_user_attr("wf_window_count", wf_window_count)
+        trial.set_user_attr("wf_median_window_score", wf_median_window_score)
+        trial.set_user_attr("wf_worst_ret_pct", wf_worst_ret_pct)
+        trial.set_user_attr("wf_flat_median_score", wf_flat_median_score)
+        trial.set_user_attr("wf_max_mdd", wf_max_mdd)
+        trial.set_user_attr("wf_median_annual_trades", float(summary.get("median_annual_trades", 0.0)))
+        trial.set_user_attr("wf_median_fill_rate", float(summary.get("median_fill_rate", 0.0)))
+        trial.set_user_attr("wf_upgrade_status", wf_upgrade_status)
+        trial.set_user_attr("wf_quality_gate_status", wf_quality_gate_status)
+        trial.set_user_attr("wf_coverage_gate_status", wf_coverage_gate_status)
+
+        profile_row["wf_window_count"] = wf_window_count
+        profile_row["wf_median_window_score"] = wf_median_window_score
+        profile_row["wf_worst_ret_pct"] = wf_worst_ret_pct
+        profile_row["wf_flat_median_score"] = wf_flat_median_score
+        profile_row["wf_max_mdd"] = wf_max_mdd
+        profile_row["wf_upgrade_status"] = wf_upgrade_status
+        profile_row["wf_quality_gate_status"] = wf_quality_gate_status
+        profile_row["wf_coverage_gate_status"] = wf_coverage_gate_status
+
+        if wf_quality_gate_status != "pass":
+            return _append_invalid_profile_row(
+                session=session,
+                trial=trial,
+                profile_row=profile_row,
+                fail_reason=(
+                    f"WF quality gate 未通過 | median={wf_median_window_score:.3f}, "
+                    f"worst={wf_worst_ret_pct:.2f}%, flat={wf_flat_median_score:.3f}"
+                ),
+                objective_start=objective_start,
+            )
+        final_score = wf_median_window_score
+    elif str(session.objective_mode) != OBJECTIVE_MODE_LEGACY_BASE_SCORE:
+        return _append_invalid_profile_row(
+            session=session,
+            trial=trial,
+            profile_row=profile_row,
+            fail_reason=f"未知 objective_mode: {session.objective_mode}",
+            objective_start=objective_start,
+        )
+
+    profile_row["trial_value"] = float(final_score)
     profile_row["objective_wall_sec"] = time.perf_counter() - objective_start
     session.profile_recorder.append_row(profile_row)
     trial.set_user_attr("profile_row", profile_row)
-    return final_score
+    return float(final_score)

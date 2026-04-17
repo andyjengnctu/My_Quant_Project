@@ -1,5 +1,6 @@
 import os
 from decimal import Decimal
+from typing import Callable
 
 from core.config import V16StrategyParams
 from core.dataset_profiles import (
@@ -18,6 +19,8 @@ DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE = 0
 INVALID_TRIAL_VALUE = -9999.0
 MIN_QUALIFIED_TRIAL_VALUE = -9000.0
 OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
+OBJECTIVE_MODE_LEGACY_BASE_SCORE = "legacy_base_score"
+OBJECTIVE_MODE_WF_GATE_MEDIAN = "wf_gate_median"
 
 
 def _resolve_decimal_places_from_step(step_value):
@@ -141,11 +144,57 @@ def list_completed_study_trials(study):
     return [trial for trial in study.trials if trial.value is not None]
 
 
-def get_best_completed_trial_or_none(study):
-    completed_trials = list_completed_study_trials(study)
+def _wf_attr_float(trial, key: str, default: float = float("-inf")) -> float:
+    value = trial.user_attrs.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _resolve_legacy_best_trial_or_none(study):
+    completed_trials = [trial for trial in list_completed_study_trials(study) if is_qualified_trial_value(trial.value)]
     if not completed_trials:
         return None
-    try:
-        return study.best_trial
-    except ValueError:
+    return max(completed_trials, key=lambda trial: (float(trial.value), -int(trial.number)))
+
+
+def _resolve_wf_best_trial_or_none(study):
+    completed_trials = []
+    for trial in list_completed_study_trials(study):
+        if not is_qualified_trial_value(trial.value):
+            continue
+        if str(trial.user_attrs.get("wf_quality_gate_status", "")).strip().lower() != "pass":
+            continue
+        completed_trials.append(trial)
+    if not completed_trials:
         return None
+    return max(
+        completed_trials,
+        key=lambda trial: (
+            1 if str(trial.user_attrs.get("wf_upgrade_status", "")).strip().lower() == "pass" else 0,
+            _wf_attr_float(trial, "wf_median_window_score"),
+            _wf_attr_float(trial, "wf_worst_ret_pct"),
+            _wf_attr_float(trial, "wf_flat_median_score"),
+            _wf_attr_float(trial, "base_score"),
+            -int(trial.number),
+        ),
+    )
+
+
+def resolve_best_completed_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE):
+    mode = str(objective_mode or OBJECTIVE_MODE_LEGACY_BASE_SCORE).strip()
+    if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
+        return _resolve_wf_best_trial_or_none(study)
+    return _resolve_legacy_best_trial_or_none(study)
+
+
+def build_best_completed_trial_resolver(objective_mode: str) -> Callable:
+    def _resolver(study):
+        return resolve_best_completed_trial_or_none(study, objective_mode=objective_mode)
+
+    return _resolver
+
+
+def get_best_completed_trial_or_none(study):
+    return resolve_best_completed_trial_or_none(study, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE)

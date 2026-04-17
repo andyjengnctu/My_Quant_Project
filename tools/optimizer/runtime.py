@@ -127,11 +127,12 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
     )
 
 
-def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, train_max_positions, colors):
+def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, train_max_positions, colors, best_trial_resolver=None):
     if len(study.trials) <= 0:
         return
     print(f"\n{colors['green']}✅ 已累積 {len(study.trials)} 次經驗。{colors['reset']}")
-    best_trial = get_best_completed_trial_or_none(study)
+    resolver = get_best_completed_trial_or_none if best_trial_resolver is None else best_trial_resolver
+    best_trial = resolver(study)
     if best_trial is None:
         print(f"{colors['gray']}ℹ️ 記憶庫目前尚無已完成 trial，略過歷史最佳儀表板還原。{colors['reset']}")
         return
@@ -148,7 +149,7 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
     )
 
 
-def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors):
+def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors, best_trial_resolver=None):
     if len(study.trials) == 0:
         print(f"{colors['red']}❌ 記憶庫為空，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
@@ -157,7 +158,8 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
         print(f"{colors['red']}❌ 目前記憶庫中尚無已完成紀錄，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
 
-    best_trial = get_best_completed_trial_or_none(study)
+    resolver = get_best_completed_trial_or_none if best_trial_resolver is None else best_trial_resolver
+    best_trial = resolver(study)
     if best_trial is None:
         print(f"{colors['red']}❌ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1

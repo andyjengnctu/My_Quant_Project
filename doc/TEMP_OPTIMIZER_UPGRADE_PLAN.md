@@ -28,7 +28,7 @@
 ### 1) 訓練 / 測試取樣方式
 - [x] MVP 已採 expanding walk-forward。
 - [x] 已有主設定：`train_start_year = 2012`、`min_train_years = 8`、`test_window_months = 6`。
-- [ ] **P0：把主搜尋資料從目前的全吃改成明確 train 區間。**
+- [x] **P0：把主搜尋資料從目前的全吃改成明確 train 區間。**
   - 目標：`base_score` 主回測不再使用 `2012 ~ 最新日` 全資料。
   - 先收斂為固定切法：
     - search train：`2012 ~ search_train_end`
@@ -39,23 +39,23 @@
 
 ### 2) objective / trial 評分
 - [x] 目前主 objective 仍以 `base_score` 為主，WF 主要用在報表 / gate / compare。
-- [ ] **P0：在現有 optimizer 內加入 `objective_mode`，不新增第二種 optimizer。**
+- [x] **P0：在現有 optimizer 內加入 `objective_mode`，不新增第二種 optimizer。**
   - `legacy_base_score`
   - `wf_gate_median`
-- [ ] **P0：每個 trial 都跑固定參數版的 WF 穩定性評分。**
-- [ ] **P0：trial 級 hard gate 採現有 WF quality gate。**
+- [x] **P0：每個 trial 都跑固定參數版的 WF 穩定性評分。**
+- [x] **P0：trial 級 hard gate 採現有 WF quality gate。**
   - `median_window_score >= gate_min_median_score`
   - `worst_ret_pct >= gate_min_worst_ret_pct`
   - `flat_median_score >= gate_min_flat_median_score`（若 flat 視窗存在）
-- [ ] **P0：`quality_gate fail` 直接淘汰 trial。**
-- [ ] **P0：`final_score = median_window_score`。**
-- [ ] **P0：`base_score` 降級為 sanity gate / debug / tie-break，不再主導排名。**
+- [x] **P0：`quality_gate fail` 直接淘汰 trial。**
+- [x] **P0：`final_score = median_window_score`。**
+- [x] **P0：`base_score` 降級為 sanity gate / debug / tie-break，不再主導排名。**
 - [ ] 先不做「混權重大公式」：
   - 不先做 `base_score + worst-window + median + mdd penalty` 這種加權混分。
   - 避免新增 magic number 與 objective overfit。
 
 ### 3) best trial / run_best 決策
-- [ ] **P0：新增 mode-aware best-trial resolver，不再直接依賴 `study.best_trial`。**
+- [x] **P0：新增 mode-aware best-trial resolver，不再直接依賴 `study.best_trial`。**
 - [ ] `wf_gate_median` 模式下的排序收斂：
   1. `wf_quality_gate_status == pass`
   2. `wf_median_window_score` 由大到小
@@ -63,11 +63,11 @@
   4. `wf_flat_median_score` 由大到小
   5. `base_score` 由大到小
   6. `trial.number` 由小到大
-- [ ] **P0：`run_best_params.json` 改由新 resolver 產出。**
+- [x] **P0：`run_best_params.json` 改由新 resolver 產出。**
 - [x] compare gate / promote gate 仍維持單一路徑，不另分叉一套 OOS optimizer 流程。
 
 ### 4) trial metadata / 後續顯示共用欄位
-- [ ] **P0：每個 trial 都寫入完整 WF attrs，供 resolver / callback / workbench 共用。**
+- [x] **P0：每個 trial 都寫入完整 WF attrs，供 resolver / callback / workbench 共用。**
   - `base_score`
   - `wf_window_count`
   - `wf_median_window_score`
@@ -139,19 +139,19 @@
 ## 5. 程式修改主清單（下一輪直接動工）
 
 ### P0 必做
-- [ ] `config/walk_forward_policy.json`
+- [x] `config/walk_forward_policy.json`
   - 新增 `objective_mode`
   - 新增 / 明確化主搜尋 train 區間設定（例如 `search_train_end_year` 或同等欄位）
-- [ ] `tools/optimizer/objective_runner.py`
+- [x] `tools/optimizer/objective_runner.py`
   - 主回測改吃固定 train 區間，不再全吃
   - 加入 trial 級 WF 評分與 quality gate
   - `final_score = median_window_score`
   - `base_score` 改成 attrs / tie-break
-- [ ] `tools/optimizer/study_utils.py`
+- [x] `tools/optimizer/study_utils.py`
   - 新增 mode-aware resolver
-- [ ] `tools/optimizer/main.py`
+- [x] `tools/optimizer/main.py`
   - `run_best` 改由新 resolver 決定
-- [ ] `doc/TEMP_OPTIMIZER_UPGRADE_PLAN.md`
+- [x] `doc/TEMP_OPTIMIZER_UPGRADE_PLAN.md`
   - 同步更新本檔狀態
 
 ### P0 後優先進行

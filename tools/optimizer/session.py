@@ -30,6 +30,9 @@ class OptimizerSession:
         profile_recorder_cls,
         build_optimizer_trial_params,
         get_best_completed_trial_or_none,
+        objective_mode,
+        search_train_end_year,
+        walk_forward_policy,
         resolve_optimizer_tp_percent,
         print_strategy_dashboard,
         colors,
@@ -57,6 +60,9 @@ class OptimizerSession:
         self.session_ts = session_ts
         self.build_optimizer_trial_params = build_optimizer_trial_params
         self.get_best_completed_trial_or_none = get_best_completed_trial_or_none
+        self.objective_mode = str(objective_mode)
+        self.search_train_end_year = int(search_train_end_year)
+        self.walk_forward_policy = dict(walk_forward_policy)
         self.resolve_optimizer_tp_percent = resolve_optimizer_tp_percent
         self.print_strategy_dashboard = print_strategy_dashboard
         self.colors = colors

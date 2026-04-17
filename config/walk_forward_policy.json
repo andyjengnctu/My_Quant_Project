@@ -9,5 +9,7 @@
   "gate_min_worst_ret_pct": -8.0,
   "gate_min_flat_median_score": 0.0,
   "compare_worst_ret_tolerance_pct": 1.0,
-  "compare_max_mdd_tolerance_pct": 2.0
+  "compare_max_mdd_tolerance_pct": 2.0,
+  "search_train_end_year": 2019,
+  "objective_mode": "wf_gate_median"
 }
