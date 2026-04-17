@@ -258,6 +258,7 @@ def run_optimizer_objective(session, trial):
         wf_upgrade_status = str(upgrade_gate.get("status", "fail"))
         wf_quality_gate_status = str(dict(upgrade_gate.get("quality_gate") or {}).get("status", "fail"))
         wf_coverage_gate_status = str(dict(upgrade_gate.get("coverage_gate") or {}).get("status", "watch"))
+        wf_down_window_count = int((dict(regime_summary.get("down") or {})).get("window_count", 0) or 0)
 
         trial.set_user_attr("wf_window_count", wf_window_count)
         trial.set_user_attr("wf_median_window_score", wf_median_window_score)
@@ -269,6 +270,7 @@ def run_optimizer_objective(session, trial):
         trial.set_user_attr("wf_upgrade_status", wf_upgrade_status)
         trial.set_user_attr("wf_quality_gate_status", wf_quality_gate_status)
         trial.set_user_attr("wf_coverage_gate_status", wf_coverage_gate_status)
+        trial.set_user_attr("wf_down_window_count", wf_down_window_count)
 
         profile_row["wf_window_count"] = wf_window_count
         profile_row["wf_median_window_score"] = wf_median_window_score
@@ -278,6 +280,7 @@ def run_optimizer_objective(session, trial):
         profile_row["wf_upgrade_status"] = wf_upgrade_status
         profile_row["wf_quality_gate_status"] = wf_quality_gate_status
         profile_row["wf_coverage_gate_status"] = wf_coverage_gate_status
+        profile_row["wf_down_window_count"] = wf_down_window_count
 
         if wf_quality_gate_status != "pass":
             return _append_invalid_profile_row(

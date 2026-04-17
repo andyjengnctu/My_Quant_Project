@@ -194,3 +194,119 @@ def print_strategy_dashboard(
         f"權益曲線 R² >= {MIN_EQUITY_CURVE_R_SQUARED:>4.2f}"
     )
     print(f"{C_CYAN}================================================================================{C_RESET}\n")
+
+
+def _format_pct_plain(value: float) -> str:
+    value = float(value)
+    return f"+{value:.2f}%" if value > 0 else f"{value:.2f}%"
+
+
+def _format_pct_diff(value: float) -> str:
+    value = float(value)
+    return f"(+{value:.2f}%)" if value > 0 else f"({value:.2f}%)"
+
+
+def _format_float_diff(value: float, digits: int = 2, unit: str = "") -> str:
+    value = float(value)
+    if unit:
+        return f"(+{value:.{digits}f}{unit})" if value > 0 else f"({value:.{digits}f}{unit})"
+    return f"(+{value:.{digits}f})" if value > 0 else f"({value:.{digits}f})"
+
+
+def _format_money(value: float) -> str:
+    return f"{float(value):,.0f}"
+
+
+def _format_money_diff(value: float) -> str:
+    value = float(value)
+    sign = "+" if value > 0 else ""
+    return f"({sign}{value:,.0f})"
+
+
+def _format_mdd_plain(value: float) -> str:
+    return f"-{abs(float(value)):.2f}%"
+
+
+def _format_mdd_diff(candidate: float, baseline: float) -> str:
+    diff = float(baseline) - float(candidate)
+    if diff > 0:
+        return f"(少跌 {abs(diff):.2f}%)"
+    if diff < 0:
+        return f"(多跌 {abs(diff):.2f}%)"
+    return "(0.00%)"
+
+
+def _format_value_with_delta(value: str, delta: str) -> str:
+    if delta in ("", "-", None):
+        return str(value)
+    return f"{value} {delta}"
+
+
+def _table_row5(c1, c2, c3, c4, c5, w1=20, w2=19, w3=24, w4=18, w5=6):
+    return (
+        f"| {_pad_display(c1, w1)} "
+        f"| {_pad_display(c2, w2)} "
+        f"| {_pad_display(c3, w3)} "
+        f"| {_pad_display(c4, w4)} "
+        f"| {_pad_display(c5, w5)} |"
+    )
+
+
+def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=19, w3=24, w4=24):
+    return (
+        f"| {_pad_display(c1, w1)} "
+        f"| {_pad_display(c2, w2)} "
+        f"| {_pad_display(c3, w3)} "
+        f"| {_pad_display(c4, w4)} |"
+    )
+
+
+def print_optimizer_trial_console_dashboard(*,
+    title: str,
+    milestone_title: str,
+    global_strategy_text: str,
+    mode_display: str,
+    max_pos: int,
+    model_mode: str,
+    search_train_range_text: str,
+    wf_range_text: str,
+    data_end_text: str,
+    objective_mode: str,
+    score_calc_method: str,
+    score_numerator_method: str,
+    base_score: float,
+    system_score_display: str,
+    first_zone_rows: list[dict],
+    upgrade_rows: list[dict] | None,
+    compare_rows: list[dict] | None,
+    params_lines: list[str],
+    hard_gate_lines: list[str],
+):
+    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
+    print(f"{C_CYAN}{title}{C_RESET}")
+    print(f"{C_RED}{milestone_title}{C_RESET}")
+    print(f"全域戰略：{global_strategy_text} | 模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{model_mode.upper()}")
+    print(f"【區間設定】 主搜尋訓練：{search_train_range_text} | OOS / WF驗證：{wf_range_text} | 本輪資料終點：{data_end_text}")
+    print(f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{score_calc_method}] | 評分分子：[{score_numerator_method}] | base_score：{float(base_score):.2f} | 系統得分：{system_score_display}")
+    print("------------------------------------------------------------------------------------------------------------------------")
+    print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤 (差異)"))
+    for row in first_zone_rows:
+        print(_table_row4_compact(row["name"], row["candidate"], row["champion"], row["benchmark"]))
+    if upgrade_rows:
+        print("------------------------------------------------------------------------------------------------------------------------")
+        print(_table_row4_compact("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態", w1=20, w2=19, w3=24, w4=8))
+        for row in upgrade_rows:
+            print(_table_row4_compact(row["name"], row["candidate"], row["threshold"], row["status"], w1=20, w2=19, w3=24, w4=8))
+    if compare_rows:
+        print("------------------------------------------------------------------------------------------------------------------------")
+        print(_table_row5("接班判斷項目", "本輪候選", "Champion (差異)", "門檻 / 基準", "狀態"))
+        for row in compare_rows:
+            print(_table_row5(row["name"], row["candidate"], row["champion"], row["threshold"], row["status"]))
+    print("------------------------------------------------------------------------------------------------------------------------")
+    for idx, line in enumerate(params_lines):
+        prefix = "【訓練參數】 " if idx == 0 else "　　　　     "
+        print(f"{prefix}{line}")
+    for idx, line in enumerate(hard_gate_lines):
+        prefix = "【共用硬門檻】 " if idx == 0 else "　　　　　     "
+        print(f"{prefix}{line}")
+    print(f"{C_CYAN}========================================================================================================================{C_RESET}\n")
