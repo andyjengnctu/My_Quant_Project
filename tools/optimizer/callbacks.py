@@ -258,6 +258,8 @@ def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: fl
 def _metric_candidate_color_for_gate(metric_name: str, candidate_value: float, passed: bool) -> str:
     if metric_name in {"最大視窗 MDD", "最大回撤 (MDD)"}:
         return _pass_color(passed, pass_color=C_YELLOW, fail_color=C_RED)
+    if metric_name in {"視窗分數中位數", "flat 視窗中位分數"}:
+        return _delta_color(candidate_value)
     return _pass_with_positive_color(passed, candidate_value)
 
 
