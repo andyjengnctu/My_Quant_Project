@@ -4,6 +4,7 @@ import unicodedata
 C_RED = '\033[91m'
 C_YELLOW = '\033[93m'
 C_CYAN = '\033[96m'
+C_BLUE = '\033[94m'
 C_GREEN = '\033[92m'
 C_GRAY = '\033[90m'
 C_RESET = '\033[0m'

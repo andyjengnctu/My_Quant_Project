@@ -1,8 +1,14 @@
 import os
 
 from core.buy_sort import get_buy_sort_title
-from core.config import BUY_SORT_METHOD, SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD
-from core.display_common import get_p
+from core.config import (
+    BUY_SORT_METHOD,
+    MAX_PORTFOLIO_MDD_PCT,
+    MIN_EQUITY_CURVE_R_SQUARED,
+    SCORE_CALC_METHOD,
+    SCORE_NUMERATOR_METHOD,
+)
+from core.display_common import C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.model_paths import resolve_champion_params_path
 from core.params_io import load_params_from_json
 from core.portfolio_engine import run_portfolio_timeline
@@ -120,6 +126,66 @@ def _benchmark_final_equity(initial_capital: float, bm_return_pct: float) -> flo
     return float(initial_capital) * (1.0 + float(bm_return_pct) / 100.0)
 
 
+def _colorize(text: str, color: str) -> str:
+    if not color:
+        return str(text)
+    return f"{color}{text}{C_RESET}"
+
+
+def _delta_color(value: float) -> str:
+    value = float(value)
+    if value > 0:
+        return C_GREEN
+    if value < 0:
+        return C_RED
+    return C_YELLOW
+
+
+def _pass_color(passed: bool, *, pass_color: str = C_GREEN, fail_color: str = C_RED) -> str:
+    return pass_color if bool(passed) else fail_color
+
+
+def _pass_with_positive_color(passed: bool, numeric_value: float) -> str:
+    if not bool(passed):
+        return C_RED
+    return C_GREEN if float(numeric_value) > 0 else C_YELLOW
+
+
+def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
+    if metric_name in {"總資產報酬率", "年度最差報酬"}:
+        return C_GREEN if float(numeric_value) > 0 else C_RED
+    if metric_name == "平滑度 (Log R²)":
+        return C_GREEN if float(numeric_value) >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
+    if metric_name == "最大回撤 (MDD)":
+        return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
+    return ""
+
+
+def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False) -> str:
+    if use_blue:
+        rendered = _colorize(base_text, "\033[94m")
+    else:
+        rendered = _colorize(base_text, _first_zone_base_color(metric_name, numeric_value))
+    if delta_text in {"", "-", None} or delta_value is None:
+        return rendered
+    return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
+
+
+def _metric_candidate_color_for_gate(metric_name: str, candidate_value: float, passed: bool) -> str:
+    if metric_name in {"最大視窗 MDD", "最大回撤 (MDD)"}:
+        return _pass_color(passed, pass_color=C_YELLOW, fail_color=C_RED)
+    return _pass_with_positive_color(passed, candidate_value)
+
+
+def _status_candidate_color(status_text: str) -> str:
+    normalized = str(status_text or "").strip().lower()
+    if normalized == "pass":
+        return C_GREEN
+    if normalized == "watch":
+        return C_YELLOW
+    return C_RED
+
+
 def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | None):
     benchmark_return = _safe_float(candidate_metrics.get("bm_return", 0.0))
     benchmark_annual_return = _safe_float(candidate_metrics.get("bm_annual_return_pct", 0.0))
@@ -138,39 +204,68 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
 
     rows = []
 
-    def add_row(name, candidate_value, champion_value_raw=None, benchmark_value_raw=None, *, kind="pct", champion_better_high=True, candidate_unit=""):
+    def add_row(name, candidate_value, champion_value_raw=None, benchmark_value_raw=None, *, kind="pct", candidate_unit=""):
         if kind == "pct":
-            cand = _format_pct_plain(candidate_value)
-            bench = _format_value_with_delta(_format_pct_plain(benchmark_value_raw), _format_pct_diff(float(candidate_value) - float(benchmark_value_raw))) if benchmark_value_raw is not None else "-"
-            if champion_value_raw is None:
-                champ = "-"
-            else:
-                champ = _format_value_with_delta(_format_pct_plain(champion_value_raw), _format_pct_diff(float(candidate_value) - float(champion_value_raw)))
+            cand_plain = _format_pct_plain(candidate_value)
+            bench_plain = _format_pct_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            champ_plain = _format_pct_plain(champion_value_raw) if champion_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            bench_delta_text = _format_pct_diff(bench_delta_value) if bench_delta_value is not None else ""
+            champ_delta_text = _format_pct_diff(champ_delta_value) if champ_delta_value is not None else ""
         elif kind == "mdd":
-            cand = _format_mdd_plain(candidate_value)
-            bench = _format_value_with_delta(_format_mdd_plain(benchmark_value_raw), _format_mdd_diff(candidate_value, benchmark_value_raw)) if benchmark_value_raw is not None else "-"
-            champ = _format_value_with_delta(_format_mdd_plain(champion_value_raw), _format_mdd_diff(candidate_value, champion_value_raw)) if champion_value_raw is not None else "-"
+            cand_plain = _format_mdd_plain(candidate_value)
+            bench_plain = _format_mdd_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            champ_plain = _format_mdd_plain(champion_value_raw) if champion_value_raw is not None else "-"
+            bench_delta_value = float(benchmark_value_raw) - float(candidate_value) if benchmark_value_raw is not None else None
+            champ_delta_value = float(champion_value_raw) - float(candidate_value) if champion_value_raw is not None else None
+            bench_delta_text = _format_mdd_diff(candidate_value, benchmark_value_raw) if benchmark_value_raw is not None else ""
+            champ_delta_text = _format_mdd_diff(candidate_value, champion_value_raw) if champion_value_raw is not None else ""
         elif kind == "float2":
-            cand = f"{float(candidate_value):.2f}{candidate_unit}"
-            bench = _format_value_with_delta(f"{float(benchmark_value_raw):.2f}{candidate_unit}", _format_float_diff(float(candidate_value) - float(benchmark_value_raw), 2, candidate_unit)) if benchmark_value_raw is not None else "-"
-            champ = _format_value_with_delta(f"{float(champion_value_raw):.2f}{candidate_unit}", _format_float_diff(float(candidate_value) - float(champion_value_raw), 2, candidate_unit)) if champion_value_raw is not None else "-"
-        elif kind == "float3":
-            cand = f"{float(candidate_value):.3f}"
-            bench = _format_value_with_delta(f"{float(benchmark_value_raw):.3f}", _format_float_diff(float(candidate_value) - float(benchmark_value_raw), 3)) if benchmark_value_raw is not None else "-"
-            champ = _format_value_with_delta(f"{float(champion_value_raw):.3f}", _format_float_diff(float(candidate_value) - float(champion_value_raw), 3)) if champion_value_raw is not None else "-"
+            cand_plain = f"{float(candidate_value):.2f}{candidate_unit}"
+            bench_plain = f"{float(benchmark_value_raw):.2f}{candidate_unit}" if benchmark_value_raw is not None else "-"
+            champ_plain = f"{float(champion_value_raw):.2f}{candidate_unit}" if champion_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            bench_delta_text = _format_float_diff(bench_delta_value, 2, candidate_unit) if bench_delta_value is not None else ""
+            champ_delta_text = _format_float_diff(champ_delta_value, 2, candidate_unit) if champ_delta_value is not None else ""
         elif kind == "count":
-            cand = str(int(candidate_value))
-            bench = "-"
-            champ = _format_value_with_delta(str(int(champion_value_raw)), f"({int(candidate_value) - int(champion_value_raw):+d})") if champion_value_raw is not None else "-"
+            cand_plain = str(int(candidate_value))
+            bench_plain = "-"
+            champ_plain = str(int(champion_value_raw)) if champion_value_raw is not None else "-"
+            bench_delta_value = None
+            champ_delta_value = int(candidate_value) - int(champion_value_raw) if champion_value_raw is not None else None
+            bench_delta_text = ""
+            champ_delta_text = f"({int(candidate_value) - int(champion_value_raw):+d})" if champion_value_raw is not None else ""
         elif kind == "money":
-            cand = _format_money(candidate_value)
-            bench = _format_value_with_delta(_format_money(benchmark_value_raw), _format_money_diff(float(candidate_value) - float(benchmark_value_raw))) if benchmark_value_raw is not None else "-"
-            champ = _format_value_with_delta(_format_money(champion_value_raw), _format_money_diff(float(candidate_value) - float(champion_value_raw))) if champion_value_raw is not None else "-"
+            cand_plain = _format_money(candidate_value)
+            bench_plain = _format_money(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            champ_plain = _format_money(champion_value_raw) if champion_value_raw is not None else "-"
+            bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
+            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            bench_delta_text = _format_money_diff(bench_delta_value) if bench_delta_value is not None else ""
+            champ_delta_text = _format_money_diff(champ_delta_value) if champ_delta_value is not None else ""
         else:
-            cand = str(candidate_value)
-            bench = str(benchmark_value_raw) if benchmark_value_raw is not None else "-"
-            champ = str(champion_value_raw) if champion_value_raw is not None else "-"
-        rows.append({"name": name, "candidate": cand, "champion": champ, "benchmark": bench})
+            cand_plain = str(candidate_value)
+            bench_plain = str(benchmark_value_raw) if benchmark_value_raw is not None else "-"
+            champ_plain = str(champion_value_raw) if champion_value_raw is not None else "-"
+            bench_delta_value = None
+            champ_delta_value = None
+            bench_delta_text = ""
+            champ_delta_text = ""
+
+        use_blue = name == "報酬回撤比 (RoMD)"
+        rows.append(
+            {
+                "name": name,
+                "candidate": _compose_first_zone_cell(name, cand_plain, float(candidate_value), use_blue=use_blue),
+                "candidate_precolored": True,
+                "champion": _compose_first_zone_cell(name, champ_plain, float(champion_value_raw), delta_text=champ_delta_text, delta_value=champ_delta_value, use_blue=use_blue) if champion_value_raw is not None else "-",
+                "champion_precolored": True,
+                "benchmark": _compose_first_zone_cell(name, bench_plain, float(benchmark_value_raw), delta_text=bench_delta_text, delta_value=bench_delta_value, use_blue=use_blue) if benchmark_value_raw is not None else "-",
+                "benchmark_precolored": True,
+            }
+        )
 
     add_row("總資產報酬率", candidate_metrics["pf_return"], champ_value("pf_return"), benchmark_return, kind="pct")
     add_row("年化報酬率", candidate_metrics["annual_return_pct"], champ_value("annual_return_pct"), benchmark_annual_return, kind="pct")
@@ -200,14 +295,22 @@ def _build_upgrade_rows(*, trial, policy):
     gate_median = _safe_float(policy.get("gate_min_median_score", 0.0))
     gate_worst = _safe_float(policy.get("gate_min_worst_ret_pct", 0.0))
     gate_flat = _safe_float(policy.get("gate_min_flat_median_score", 0.0))
-    return [
-        {"name": "視窗分數中位數", "candidate": f"{median_score:.3f}", "threshold": f">= {gate_median:.3f}", "status": "PASS" if median_score >= gate_median else "FAIL"},
-        {"name": "最差視窗報酬", "candidate": f"{worst_ret:.2f}%", "threshold": f">= {gate_worst:.2f}%", "status": "PASS" if worst_ret >= gate_worst else "FAIL"},
-        {"name": "flat 視窗中位分數", "candidate": f"{flat_score:.3f}", "threshold": f">= {gate_flat:.3f}", "status": "PASS" if flat_score >= gate_flat else "FAIL"},
-        {"name": "down_regime_coverage", "candidate": str(down_count), "threshold": ">= 1", "status": "PASS" if down_count >= 1 else "FAIL"},
-        {"name": "quality_gate", "candidate": quality_status, "threshold": "必須 PASS", "status": quality_status},
-        {"name": "coverage_gate", "candidate": coverage_status, "threshold": "PASS / WATCH 可接受", "status": coverage_status},
+    rows = [
+        {"name": "視窗分數中位數", "candidate": f"{median_score:.3f}", "threshold": f">= {gate_median:.3f}", "status": "PASS" if median_score >= gate_median else "FAIL", "candidate_numeric": median_score},
+        {"name": "最差視窗報酬", "candidate": f"{worst_ret:.2f}%", "threshold": f">= {gate_worst:.2f}%", "status": "PASS" if worst_ret >= gate_worst else "FAIL", "candidate_numeric": worst_ret},
+        {"name": "flat 視窗中位分數", "candidate": f"{flat_score:.3f}", "threshold": f">= {gate_flat:.3f}", "status": "PASS" if flat_score >= gate_flat else "FAIL", "candidate_numeric": flat_score},
+        {"name": "down_regime_coverage", "candidate": str(down_count), "threshold": ">= 1", "status": "PASS" if down_count >= 1 else "FAIL", "candidate_numeric": float(down_count)},
+        {"name": "quality_gate", "candidate": quality_status, "threshold": "必須 PASS", "status": quality_status, "candidate_numeric": None},
+        {"name": "coverage_gate", "candidate": coverage_status, "threshold": "PASS / WATCH 可接受", "status": coverage_status, "candidate_numeric": None},
     ]
+    for row in rows:
+        status_norm = str(row["status"]).strip().upper()
+        if row["name"] in {"quality_gate", "coverage_gate"}:
+            row["candidate"] = _colorize(row["candidate"], _status_candidate_color(status_norm))
+        else:
+            row["candidate"] = _colorize(row["candidate"], _metric_candidate_color_for_gate(row["name"], row["candidate_numeric"], status_norm in {"PASS", "WATCH"}))
+        row["candidate_precolored"] = True
+    return rows
 
 
 def _build_compare_rows(*, trial, champion_cache, policy):
@@ -235,13 +338,22 @@ def _build_compare_rows(*, trial, champion_cache, policy):
     mdd_tol = _safe_float(policy.get("compare_max_mdd_tolerance_pct", 2.0))
 
     checks = {str(item.get("name")): str("PASS" if item.get("passed") else "FAIL") for item in assessment.get("checks") or []}
-    return [
-        {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _format_value_with_delta(f"{champion_median:.3f}", _format_float_diff(candidate_median - champion_median, 3)), "threshold": "差異 >= 0", "status": checks.get("median_window_score_vs_champion", "FAIL")},
-        {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _format_value_with_delta(f"{champion_worst:.2f}%", _format_pct_diff(candidate_worst - champion_worst)), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL")},
-        {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _format_value_with_delta(f"{champion_flat:.3f}", _format_float_diff(candidate_flat - champion_flat, 3)), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL")},
-        {"name": "最大視窗 MDD", "candidate": f"{candidate_mdd:.2f}%", "champion": _format_value_with_delta(f"{champion_mdd:.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd)), "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL")},
-        {"name": "compare_gate", "candidate": str(assessment.get("status", "fail")).upper(), "champion": "-", "threshold": "必須 PASS", "status": str(assessment.get("status", "fail")).upper()},
+    rows = [
+        {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _format_value_with_delta(f"{champion_median:.3f}", _format_float_diff(candidate_median - champion_median, 3)), "threshold": "差異 >= 0", "status": checks.get("median_window_score_vs_champion", "FAIL"), "candidate_numeric": candidate_median},
+        {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _format_value_with_delta(f"{champion_worst:.2f}%", _format_pct_diff(candidate_worst - champion_worst)), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL"), "candidate_numeric": candidate_worst},
+        {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _format_value_with_delta(f"{champion_flat:.3f}", _format_float_diff(candidate_flat - champion_flat, 3)), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL"), "candidate_numeric": candidate_flat},
+        {"name": "最大視窗 MDD", "candidate": f"{candidate_mdd:.2f}%", "champion": _format_value_with_delta(f"{champion_mdd:.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd)), "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
+        {"name": "compare_gate", "candidate": str(assessment.get("status", "fail")).upper(), "champion": "-", "threshold": "必須 PASS", "status": str(assessment.get("status", "fail")).upper(), "candidate_numeric": None},
     ]
+    for row in rows:
+        status_norm = str(row["status"]).strip().upper()
+        if row["name"] == "compare_gate":
+            row["candidate"] = _colorize(row["candidate"], _status_candidate_color(status_norm))
+        else:
+            row["candidate"] = _colorize(row["candidate"], _metric_candidate_color_for_gate(row["name"], row["candidate_numeric"], status_norm == "PASS"))
+        row["candidate_precolored"] = True
+        row["champion_precolored"] = True
+    return rows
 
 
 def _build_training_param_lines(params):

@@ -15,6 +15,7 @@ from core.config import (
 )
 from core.display_common import (
     C_CYAN,
+    C_BLUE,
     C_GRAY,
     C_GREEN,
     C_RED,
@@ -264,20 +265,27 @@ def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=19, w3=24, w4=24):
 
 def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
     metric_name = str(metric_name or "")
-    value_text = str(value or "")
-    if value_text.strip() in {"-", ""}:
+    value_text = str(value or "").strip()
+    if value_text in {"-", ""}:
         return ""
-    if "最大回撤" in metric_name:
-        return C_YELLOW
-    if any(token in metric_name for token in ("報酬", "勝率", "期望值", "最終資產", "成交率", "平滑度", "報酬回撤比", "RoMD", "盈虧因子")):
-        stripped = value_text.strip()
-        if "少跌" in stripped or stripped.startswith("(+") or stripped.startswith("+"):
+    if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
+        return C_BLUE
+    if metric_name in {"總資產報酬率", "年度最差報酬"}:
+        if value_text.startswith("+"):
             return C_GREEN
-        if "多跌" in stripped or stripped.startswith("(-") or stripped.startswith("-"):
-            return C_RED
-        return C_CYAN
-    if any(token in metric_name for token in ("總交易次數", "年化交易次數", "平均資金水位")):
-        return C_CYAN
+        return C_RED
+    if "平滑度" in metric_name:
+        try:
+            numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
+        except ValueError:
+            return ""
+        return C_GREEN if numeric >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
+    if "最大回撤" in metric_name:
+        try:
+            numeric = abs(float(value_text.replace('少跌', '').replace('多跌', '').replace('%', '').replace('(', '').replace(')', '').replace('-', '').replace(',', '').strip()))
+        except ValueError:
+            return C_YELLOW
+        return C_YELLOW if numeric <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
     return ""
 
 
@@ -298,8 +306,18 @@ def _wrap_optimizer_dashboard_cell(text: str, color: str) -> str:
     return f"{color}{text}{C_RESET}"
 
 
-# 新版 optimizer console 版型；配色沿用舊 dashboard 的語意：
-# 正向績效 / 勝率 / EV 走綠色，風險項走黃色，警示 / 失敗走紅色，標題與系統資訊維持青色。
+def _render_optimizer_dashboard_cell(row: dict, key: str, metric_name: str) -> str:
+    text = row.get(key, "-")
+    if row.get(f"{key}_precolored"):
+        return str(text)
+    explicit_color = row.get(f"{key}_color")
+    if explicit_color is not None:
+        return _wrap_optimizer_dashboard_cell(text, explicit_color)
+    return _wrap_optimizer_dashboard_cell(text, _optimizer_dashboard_metric_color(metric_name, text))
+
+
+# 新版 optimizer console 版型；實際欄位配色規則由 callbacks 依區域語意與 training_policy 門檻預先決定。
+# 這裡僅保留 fallback 顏色推導與最外層版面渲染。
 def print_optimizer_trial_console_dashboard(*,
     title: str,
     milestone_title: str,
@@ -333,7 +351,7 @@ def print_optimizer_trial_console_dashboard(*,
     print(
         f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
         f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | base_score：{float(base_score):.2f} | "
-        f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
+        f"系統得分：{C_BLUE}{system_score_display}{C_RESET}"
     )
     print(separator)
     print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤 (差異)"))
@@ -342,9 +360,9 @@ def print_optimizer_trial_console_dashboard(*,
         print(
             _table_row4_compact(
                 name,
-                _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(name, row["candidate"])),
-                _wrap_optimizer_dashboard_cell(row["champion"], _optimizer_dashboard_metric_color(name, row["champion"])),
-                _wrap_optimizer_dashboard_cell(row["benchmark"], _optimizer_dashboard_metric_color(name, row["benchmark"])),
+                _render_optimizer_dashboard_cell(row, "candidate", name),
+                _render_optimizer_dashboard_cell(row, "champion", name),
+                _render_optimizer_dashboard_cell(row, "benchmark", name),
             )
         )
     if upgrade_rows:
@@ -354,7 +372,7 @@ def print_optimizer_trial_console_dashboard(*,
             print(
                 _table_row4_compact(
                     row["name"],
-                    _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(row["name"], row["candidate"])),
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
                     row["threshold"],
                     _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
                     w1=20,
@@ -370,7 +388,7 @@ def print_optimizer_trial_console_dashboard(*,
             print(
                 _table_row5(
                     row["name"],
-                    _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(row["name"], row["candidate"])),
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
                     _wrap_optimizer_dashboard_cell(row["champion"], _optimizer_dashboard_metric_color(row["name"], row["champion"])),
                     row["threshold"],
                     _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
