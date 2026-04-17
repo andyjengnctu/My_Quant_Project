@@ -271,8 +271,10 @@ def _prompt_promote_choice(default: bool = False) -> tuple[bool, str]:
     return default, "prompt_invalid_default"
 
 
-def resolve_promote_request(argv, environ, *, requested_n_trials: int) -> tuple[bool, str]:
+def resolve_promote_request(argv, environ, *, requested_n_trials: int, requested_action: str = "train") -> tuple[bool, str]:
     args = [] if argv is None else list(argv)
+    if str(requested_action) == "promote_champion":
+        return True, "menu_promotion"
     if int(requested_n_trials) == 0:
         return False, "trial_zero_locked"
     if any(str(arg).strip() == "--promote" for arg in args[1:]):
@@ -572,7 +574,12 @@ def main(argv=None, environ=None):
     )
     if trial_count_exit is not None:
         return trial_count_exit
-    auto_promote_enabled, promote_source = resolve_promote_request(argv, environ, requested_n_trials=session.n_trials)
+    auto_promote_enabled, promote_source = resolve_promote_request(
+        argv,
+        environ,
+        requested_n_trials=session.n_trials,
+        requested_action=str(getattr(session, "run_action", "train")),
+    )
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -640,13 +647,20 @@ def main(argv=None, environ=None):
                     challenger_report=report,
                     walk_forward_policy=walk_forward_policy,
                 )
+                promote_result = promote_run_best_to_champion(
+                    session=session,
+                    compare_result=compare_result,
+                    compare_paths=compare_paths,
+                    auto_promote_enabled=auto_promote_enabled,
+                    promote_source=promote_source,
+                )
                 print_compare_outputs(
                     compare_result=compare_result,
                     compare_paths=compare_paths,
                     bootstrap_source=bootstrap_source,
-                    promote_result=None,
-                    auto_promote_enabled=False,
-                    promote_source="trial_zero_locked",
+                    promote_result=promote_result,
+                    auto_promote_enabled=auto_promote_enabled,
+                    promote_source=promote_source,
                 )
             return 0
         finally:

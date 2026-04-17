@@ -194,6 +194,22 @@ def resolve_run_request_or_exit(*, environ, resolve_optimizer_run_request, color
         return 1, None
 
 
+def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count=None, colors, resolve_optimizer_run_request=None):
+    if resolve_optimizer_run_request is None:
+        from tools.optimizer.study_utils import resolve_optimizer_run_request as _resolve_optimizer_run_request
+        resolve_optimizer_run_request = _resolve_optimizer_run_request
+    exit_code, request = resolve_run_request_or_exit(
+        environ=environ,
+        resolve_optimizer_run_request=resolve_optimizer_run_request,
+        colors=colors,
+    )
+    if exit_code is not None:
+        return exit_code, None
+    session.n_trials = int(request["n_trials"])
+    session.run_action = str(request.get("action", "train"))
+    return None, str(request.get("source", "unknown"))
+
+
 def print_resolved_run_request(*, n_trials, action, source, colors):
     action_labels = {
         "train": f"訓練 {int(n_trials)} 次",
@@ -201,3 +217,13 @@ def print_resolved_run_request(*, n_trials, action, source, colors):
         "promote_champion": "promotion to Champion",
     }
     print(f"{colors['gray']}🎯 Optimizer 動作: {action_labels.get(str(action), str(action))} | 來源: {source}{colors['reset']}")
+
+
+def print_resolved_trial_count(session, *, trial_source, colors):
+    action = str(getattr(session, "run_action", "train"))
+    print_resolved_run_request(
+        n_trials=int(getattr(session, "n_trials", 0)),
+        action=action,
+        source=trial_source,
+        colors=colors,
+    )
