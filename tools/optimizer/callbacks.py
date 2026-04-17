@@ -11,9 +11,9 @@ from core.config import (
 )
 from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.model_paths import resolve_champion_params_path
-from core.params_io import load_params_from_json
+from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_engine import run_portfolio_timeline
-from core.strategy_params import build_runtime_param_raw_value
+from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
     _format_float_diff,
     _format_mdd_diff,
@@ -77,6 +77,11 @@ def _latest_data_end_text(session) -> str:
         return "-"
     last_date = session.sorted_master_dates[-1]
     return str(last_date.date()) if hasattr(last_date, 'date') else str(last_date)[:10]
+
+def _build_trial_params_object(param_mapping: dict) -> V16StrategyParams:
+    base_payload = params_to_json_dict(V16StrategyParams())
+    base_payload.update(dict(param_mapping))
+    return build_params_from_mapping(base_payload)
 
 
 
@@ -580,7 +585,8 @@ def _get_champion_console_cache(session):
 
 def _build_optimizer_trial_dashboard_payload(session, trial):
     attrs = trial.user_attrs
-    params = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    params_mapping = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    params = _build_trial_params_object(params_mapping)
     mode_display = "關閉明牌（穩定鎖倉）" if not session.train_enable_rotation else "啟用 (汰弱換強)"
     model_mode = _resolve_model_mode(session.objective_mode)
     search_train_dates = _build_search_train_dates_for_session(session)
