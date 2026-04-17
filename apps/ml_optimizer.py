@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整、模型模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；互動式 Optimizer 選單預設訓練 50000 次，輸入 0 可寫入 best run，輸入 P 可直接嘗試 promotion to Champion；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；walk-forward 設定來自 config/walk_forward_policy.json；正式現役版固定使用 champion_params.json；實際 promote 仍需候選版自身 upgrade gate 與 compare gate 同時通過。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整、模型模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；互動式 Optimizer 選單預設訓練 50000 次，輸入 0 可寫入 best run，輸入 P 可直接嘗試 promotion to Champion；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；walk-forward 設定來自 config/walk_forward_policy.py；正式現役版固定使用 champion_params.json；實際 promote 仍需候選版自身 upgrade gate 與 compare gate 同時通過。"
 
 
 def main(argv=None, environ=None):

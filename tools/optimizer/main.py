@@ -504,7 +504,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model wf|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
+        print("說明: 預設資料集為完整、模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -689,7 +689,7 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
     search_train_end_text = "latest" if str(walk_forward_policy["objective_mode"]) == "legacy_base_score" else str(int(walk_forward_policy["search_train_end_year"]))
     print(
-        f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | "
+        f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
         f"model={walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_WF))} | 來源: {model_source} | "
         f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
         f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "

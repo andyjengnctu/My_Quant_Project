@@ -127,7 +127,7 @@
 ### 1) 已收斂 / 已接入
 - [x] 候選版自身 `upgrade gate` + `compare gate` 共同決定是否可 promote。
 - [x] compare assessment 已收斂成單一真理來源。
-- [x] compare tolerance 已外部化到 `config/walk_forward_policy.json`。
+- [x] compare tolerance 已外部化到 `config/walk_forward_policy.py`。
 - [x] Promote 已改成明確開關：`--promote` 或 `V16_OPTIMIZER_AUTO_PROMOTE=1`。
 - [x] `trial=0` 永不 promote；只做 `run_best` 匯出與報表。
 
@@ -140,7 +140,7 @@
 ## 5. 程式修改主清單
 
 ### P0 已完成
-- [x] `config/walk_forward_policy.json`
+- [x] `config/walk_forward_policy.py`
   - 新增 `objective_mode`
   - 新增 / 明確化主搜尋 train 區間設定（如 `search_train_end_year`）
 - [x] `tools/optimizer/objective_runner.py`

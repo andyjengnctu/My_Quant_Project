@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 from typing import Mapping, Optional
@@ -29,7 +30,7 @@ def _resolve_policy_path(project_root: str, environ: Optional[Mapping[str, str]]
         if os.path.isabs(override):
             return os.path.abspath(override)
         return os.path.abspath(os.path.join(project_root, override))
-    return os.path.abspath(os.path.join(project_root, "config", "walk_forward_policy.json"))
+    return os.path.abspath(os.path.join(project_root, "config", "walk_forward_policy.py"))
 
 
 def _coerce_int(data: dict, key: str, minimum: int) -> int:
@@ -53,15 +54,34 @@ def _coerce_optional_int(data: dict, key: str, minimum: int) -> int | None:
     return value
 
 
-def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, str]] = None) -> dict:
-    path = _resolve_policy_path(project_root, environ=environ)
-    payload = {}
-    if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as handle:
+def _load_policy_payload(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    _, ext = os.path.splitext(path)
+    ext = ext.lower()
+    if ext == ".json":
+        with open(path, "r", encoding="utf-8") as handle:
             loaded = json.load(handle)
         if not isinstance(loaded, dict):
-            raise ValueError("walk-forward policy 檔案必須是 JSON object")
-        payload = dict(loaded)
+            raise ValueError("walk-forward policy JSON 檔案必須是 object")
+        return dict(loaded)
+    if ext == ".py":
+        module_name = f"_v16_walk_forward_policy_{abs(hash(os.path.abspath(path)))}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"walk-forward policy 無法載入 Python 設定檔: {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        loaded = getattr(module, "WALK_FORWARD_POLICY", None)
+        if not isinstance(loaded, dict):
+            raise ValueError("walk-forward policy Python 設定檔必須定義 WALK_FORWARD_POLICY dict")
+        return dict(loaded)
+    raise ValueError(f"walk-forward policy 只支援 .py 或 .json，收到: {path}")
+
+
+def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, str]] = None) -> dict:
+    path = _resolve_policy_path(project_root, environ=environ)
+    payload = _load_policy_payload(path)
     merged = dict(DEFAULT_WALK_FORWARD_POLICY)
     merged.update(payload)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
