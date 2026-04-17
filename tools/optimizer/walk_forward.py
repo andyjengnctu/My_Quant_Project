@@ -646,10 +646,10 @@ def build_compare_assessment(
         _build_gate_check(
             name="median_window_score_vs_champion",
             actual=_safe_float(challenger_summary.get("median_window_score", 0.0)),
-            threshold=f">= {_safe_float(champion_summary.get('median_window_score', 0.0)):.3f}",
-            passed=_safe_float(challenger_summary.get("median_window_score", 0.0)) >= _safe_float(champion_summary.get("median_window_score", 0.0)),
+            threshold=f"> {_safe_float(champion_summary.get('median_window_score', 0.0)):.3f}",
+            passed=_safe_float(challenger_summary.get("median_window_score", 0.0)) > _safe_float(champion_summary.get("median_window_score", 0.0)),
             severity="quality",
-            note="候選版整體 OOS 典型視窗分數不得低於現役版。",
+            note="候選版整體 OOS 典型視窗分數必須優於現役版。",
         ),
         _build_gate_check(
             name="flat_median_score_vs_champion",
