@@ -405,6 +405,12 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: st
             f"promote: {'ON' if auto_promote_enabled else 'OFF'} ({promote_source}){C_RESET}"
         )
         print(f"{compare_color}   升版比較(MVP): {compare_status} | {compare_assessment.get('recommendation', 'N/A')}{C_RESET}")
+        challenger_upgrade_gate = dict(compare_assessment.get("challenger_upgrade_gate") or {})
+        if challenger_upgrade_gate:
+            print(
+                f"{C_GRAY}   候選版自身 upgrade gate: {str(challenger_upgrade_gate.get('status', 'fail')).upper()} | "
+                f"{challenger_upgrade_gate.get('recommendation', 'N/A')}{C_RESET}"
+            )
         if promote_result is not None:
             if bool(promote_result.get("performed")):
                 print(f"{C_GREEN}   已升級 Champion | 封存: {promote_result.get('archive_path') or 'N/A'}{C_RESET}")
@@ -422,7 +428,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--promote]")
-        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，才會實際升級 Champion。")
+        print("說明: 預設資料集為完整；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.json；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -585,8 +591,15 @@ def main(argv=None, environ=None):
     )
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
-    print(f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']}{C_RESET}")
-    print(f"{C_GRAY}🧱 WF gate policy: median>{float(walk_forward_policy['gate_min_median_score']):.3f} | worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.1f}% | flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f} | compare worst tol={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.1f}% | compare mdd tol={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.1f}%{C_RESET}")
+    print(
+        f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.json')} | "
+        f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
+        f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
+        f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "
+        f"flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f}) | "
+        f"compare_tol(ret={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.2f}%, mdd={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.2f}%)"
+        f"{C_RESET}"
+    )
     print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
 
     try:

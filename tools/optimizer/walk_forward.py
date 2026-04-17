@@ -21,8 +21,6 @@ WF_MIN_WINDOW_BARS = 20
 WF_GATE_MIN_MEDIAN_SCORE = 0.0
 WF_GATE_MIN_WORST_RET_PCT = -8.0
 WF_GATE_MIN_FLAT_MEDIAN_SCORE = 0.0
-WF_COMPARE_WORST_RET_TOLERANCE_PCT = 1.0
-WF_COMPARE_MAX_MDD_TOLERANCE_PCT = 2.0
 
 
 def _safe_median(values: Iterable[float]) -> float:
@@ -241,8 +239,8 @@ def evaluate_walk_forward(
 
     summary = {
         "window_count": int(len(rows)),
-        "min_train_years": int(min_train_years),
         "train_start_year": None if train_start_year is None else int(train_start_year),
+        "min_train_years": int(min_train_years),
         "test_window_months": int(test_window_months),
         "min_window_bars": int(min_window_bars),
         "regime_up_threshold_pct": float(regime_up_threshold_pct),
@@ -294,27 +292,27 @@ def build_upgrade_gate_assessment(
     gate_min_worst_ret_pct: float = WF_GATE_MIN_WORST_RET_PCT,
     gate_min_flat_median_score: float = WF_GATE_MIN_FLAT_MEDIAN_SCORE,
 ) -> dict:
-    median_window_score = float(summary.get("median_window_score", 0.0) or 0.0)
-    worst_ret_pct = float(summary.get("worst_ret_pct", 0.0) or 0.0)
-    flat_row = dict(regime_summary.get("flat") or {})
-    down_row = dict(regime_summary.get("down") or {})
-    flat_window_count = int(flat_row.get("window_count", 0) or 0)
-    flat_median_score = float(flat_row.get("median_score", 0.0) or 0.0)
-    down_window_count = int(down_row.get("window_count", 0) or 0)
+    median_window_score = float(summary.get("median_window_score", 0.0))
+    worst_ret_pct = float(summary.get("worst_ret_pct", 0.0))
+    flat_payload = dict((regime_summary or {}).get("flat") or {})
+    down_payload = dict((regime_summary or {}).get("down") or {})
+    flat_median_score = float(flat_payload.get("median_score", 0.0))
+    flat_window_count = int(flat_payload.get("window_count", 0) or 0)
+    down_window_count = int(down_payload.get("window_count", 0) or 0)
 
     quality_checks = [
         _build_gate_check(
             name="median_window_score",
             actual=median_window_score,
-            threshold=f"> {float(gate_min_median_score):.3f}",
-            passed=median_window_score > float(gate_min_median_score),
+            threshold=f">= {float(gate_min_median_score):.3f}",
+            passed=median_window_score >= float(gate_min_median_score),
             severity="quality",
-            note="整體 OOS 典型視窗需為正分。",
+            note="典型 OOS 視窗不可長期為負分。",
         ),
         _build_gate_check(
             name="worst_ret_pct",
             actual=worst_ret_pct,
-            threshold=f">= {float(gate_min_worst_ret_pct):.1f}%",
+            threshold=f">= {float(gate_min_worst_ret_pct):.2f}%",
             passed=worst_ret_pct >= float(gate_min_worst_ret_pct),
             severity="quality",
             note="避免單一 OOS 視窗災難性失真。",
@@ -363,11 +361,33 @@ def build_upgrade_gate_assessment(
         "recommendation": recommendation,
     }
 
+
+def _resolve_report_upgrade_gate(report: dict) -> dict:
+    report_payload = dict(report or {})
+    summary = dict(report_payload.get("summary") or {})
+    regime_summary = dict(report_payload.get("regime_summary") or {})
+    return dict(
+        report_payload.get("upgrade_gate")
+        or build_upgrade_gate_assessment(
+            summary=summary,
+            regime_summary=regime_summary,
+            gate_min_median_score=float(summary.get("gate_min_median_score", WF_GATE_MIN_MEDIAN_SCORE)),
+            gate_min_worst_ret_pct=float(summary.get("gate_min_worst_ret_pct", WF_GATE_MIN_WORST_RET_PCT)),
+            gate_min_flat_median_score=float(summary.get("gate_min_flat_median_score", WF_GATE_MIN_FLAT_MEDIAN_SCORE)),
+        )
+    )
+
+
 def _format_pct(value: float) -> str:
     return f"{float(value):.2f}%"
 
 
 def _format_gate_actual(name: str, actual) -> str:
+    if name in (
+        "challenger_upgrade_quality_gate",
+        "challenger_upgrade_coverage_gate",
+    ):
+        return "PASS" if bool(actual) else "FAIL"
     if name in ("down_regime_coverage", "down_regime_coverage_vs_champion"):
         return str(int(actual))
     if "score" in name:
@@ -433,7 +453,20 @@ def write_walk_forward_report(
         f"- 最佳 trial：{payload['meta']['best_trial_number'] if payload['meta']['best_trial_number'] is not None else 'N/A'}",
         f"- 記憶庫：`{source_db_path}`",
         f"- 產生時間：{resolved_session_ts}",
-        f"- WF 視窗設定：start={summary.get('train_start_year', 'N/A')} | min_years={int(summary.get('min_train_years', 0) or 0)} | test_months={int(summary.get('test_window_months', 0) or 0)} | min_bars={int(summary.get('min_window_bars', 0) or 0)}",
+        "",
+        "## Policy",
+        "",
+        "| 項目 | 數值 |",
+        "|---|---:|",
+        f"| train_start_year | {summary.get('train_start_year', 'N/A')} |",
+        f"| min_train_years | {int(summary.get('min_train_years', 0))} |",
+        f"| test_window_months | {int(summary.get('test_window_months', 0))} |",
+        f"| min_window_bars | {int(summary.get('min_window_bars', 0))} |",
+        f"| regime_up_threshold_pct | {_format_pct(summary.get('regime_up_threshold_pct', 0.0))} |",
+        f"| regime_down_threshold_pct | {_format_pct(summary.get('regime_down_threshold_pct', 0.0))} |",
+        f"| gate_min_median_score | {float(summary.get('gate_min_median_score', 0.0)):.3f} |",
+        f"| gate_min_worst_ret_pct | {_format_pct(summary.get('gate_min_worst_ret_pct', 0.0))} |",
+        f"| gate_min_flat_median_score | {float(summary.get('gate_min_flat_median_score', 0.0)):.3f} |",
         "",
         "## Summary",
         "",
@@ -452,7 +485,6 @@ def write_walk_forward_report(
         f"- 狀態：`{upgrade_gate.get('status', 'fail')}`",
         f"- 建議：{upgrade_gate.get('recommendation', 'N/A')}",
         f"- 可宣稱跨盤勢穩健：{'是' if upgrade_gate.get('cross_regime_claim_allowed', False) else '否'}",
-        f"- Gate 門檻：median>{float(summary.get('gate_min_median_score', 0.0) or 0.0):.3f} | worst>={float(summary.get('gate_min_worst_ret_pct', 0.0) or 0.0):.1f}% | flat>={float(summary.get('gate_min_flat_median_score', 0.0) or 0.0):.3f}",
         "",
         "| Gate | 檢查項目 | 實際值 | 門檻 | 結果 | 說明 |",
         "|---|---|---:|---:|---|---|",
@@ -581,55 +613,83 @@ def _window_row_by_label(rows: list[dict]) -> dict[str, dict]:
 
 
 
-def _build_compare_assessment_from_summary_compare(
+def build_compare_assessment(
     *,
-    summary_compare: dict,
-    compare_worst_ret_tolerance_pct: float = WF_COMPARE_WORST_RET_TOLERANCE_PCT,
-    compare_max_mdd_tolerance_pct: float = WF_COMPARE_MAX_MDD_TOLERANCE_PCT,
+    champion_report: dict,
+    challenger_report: dict,
+    compare_worst_ret_tolerance_pct: float = 1.0,
+    compare_max_mdd_tolerance_pct: float = 2.0,
 ) -> dict:
-    worst_ret_tolerance = float(compare_worst_ret_tolerance_pct)
-    max_mdd_tolerance = float(compare_max_mdd_tolerance_pct)
+    champion_summary = dict((champion_report or {}).get("summary") or {})
+    challenger_summary = dict((challenger_report or {}).get("summary") or {})
+    champion_regime = dict((champion_report or {}).get("regime_summary") or {})
+    challenger_regime = dict((challenger_report or {}).get("regime_summary") or {})
+    challenger_upgrade_gate = _resolve_report_upgrade_gate(challenger_report)
+
+    champion_flat_score = _safe_float((champion_regime.get("flat") or {}).get("median_score", 0.0))
+    challenger_flat_score = _safe_float((challenger_regime.get("flat") or {}).get("median_score", 0.0))
+    champion_down_count = int((champion_regime.get("down") or {}).get("window_count", 0) or 0)
+    challenger_down_count = int((challenger_regime.get("down") or {}).get("window_count", 0) or 0)
+
+    challenger_quality_pass = str(((challenger_upgrade_gate.get("quality_gate") or {}).get("status") or "fail")).lower() == "pass"
+    challenger_coverage_pass = str(((challenger_upgrade_gate.get("coverage_gate") or {}).get("status") or "watch")).lower() == "pass"
 
     quality_checks = [
         _build_gate_check(
+            name="challenger_upgrade_quality_gate",
+            actual=challenger_quality_pass,
+            threshold="PASS",
+            passed=challenger_quality_pass,
+            severity="quality",
+            note="候選版自身 OOS 品質 gate 必須先通過，才可進入升版比較。",
+        ),
+        _build_gate_check(
             name="median_window_score_vs_champion",
-            actual=float(summary_compare["median_window_score"]["challenger"]),
-            threshold=f">= {float(summary_compare['median_window_score']['champion']):.3f}",
-            passed=float(summary_compare["median_window_score"]["challenger"]) >= float(summary_compare["median_window_score"]["champion"]),
+            actual=_safe_float(challenger_summary.get("median_window_score", 0.0)),
+            threshold=f">= {_safe_float(champion_summary.get('median_window_score', 0.0)):.3f}",
+            passed=_safe_float(challenger_summary.get("median_window_score", 0.0)) >= _safe_float(champion_summary.get("median_window_score", 0.0)),
             severity="quality",
             note="候選版整體 OOS 典型視窗分數不得低於現役版。",
         ),
         _build_gate_check(
             name="flat_median_score_vs_champion",
-            actual=float(summary_compare["flat_median_score"]["challenger"]),
-            threshold=f">= {float(summary_compare['flat_median_score']['champion']):.3f}",
-            passed=float(summary_compare["flat_median_score"]["challenger"]) >= float(summary_compare["flat_median_score"]["champion"]),
+            actual=challenger_flat_score,
+            threshold=f">= {champion_flat_score:.3f}",
+            passed=challenger_flat_score >= champion_flat_score,
             severity="quality",
             note="候選版盤整期中位分數不得低於現役版。",
         ),
         _build_gate_check(
             name="worst_ret_pct_vs_champion",
-            actual=float(summary_compare["worst_ret_pct"]["challenger"]),
-            threshold=f">= {float(summary_compare['worst_ret_pct']['champion']) - worst_ret_tolerance:.2f}%",
-            passed=float(summary_compare["worst_ret_pct"]["challenger"]) >= (float(summary_compare["worst_ret_pct"]["champion"]) - worst_ret_tolerance),
+            actual=_safe_float(challenger_summary.get("worst_ret_pct", 0.0)),
+            threshold=f">= {(_safe_float(champion_summary.get('worst_ret_pct', 0.0)) - float(compare_worst_ret_tolerance_pct)):.2f}%",
+            passed=_safe_float(challenger_summary.get("worst_ret_pct", 0.0)) >= (_safe_float(champion_summary.get("worst_ret_pct", 0.0)) - float(compare_worst_ret_tolerance_pct)),
             severity="quality",
-            note=f"候選版最差視窗報酬不可比現役版惡化超過 {worst_ret_tolerance:.1f}%。",
+            note=f"候選版最差視窗報酬不可比現役版惡化超過 {float(compare_worst_ret_tolerance_pct):.2f}%。",
         ),
         _build_gate_check(
             name="max_mdd_vs_champion",
-            actual=float(summary_compare["max_mdd"]["challenger"]),
-            threshold=f"<= {float(summary_compare['max_mdd']['champion']) + max_mdd_tolerance:.2f}%",
-            passed=float(summary_compare["max_mdd"]["challenger"]) <= (float(summary_compare["max_mdd"]["champion"]) + max_mdd_tolerance),
+            actual=_safe_float(challenger_summary.get("max_mdd", 0.0)),
+            threshold=f"<= {(_safe_float(champion_summary.get('max_mdd', 0.0)) + float(compare_max_mdd_tolerance_pct)):.2f}%",
+            passed=_safe_float(challenger_summary.get("max_mdd", 0.0)) <= (_safe_float(champion_summary.get("max_mdd", 0.0)) + float(compare_max_mdd_tolerance_pct)),
             severity="quality",
-            note=f"候選版最大視窗 MDD 不可比現役版惡化超過 {max_mdd_tolerance:.1f}%。",
+            note=f"候選版最大視窗 MDD 不可比現役版惡化超過 {float(compare_max_mdd_tolerance_pct):.2f}%。",
         ),
     ]
     coverage_checks = [
         _build_gate_check(
+            name="challenger_upgrade_coverage_gate",
+            actual=challenger_coverage_pass,
+            threshold="PASS",
+            passed=challenger_coverage_pass,
+            severity="coverage",
+            note="候選版自身 OOS regime 覆蓋需達標，才可宣稱跨盤勢升版。",
+        ),
+        _build_gate_check(
             name="down_regime_coverage_vs_champion",
-            actual=int(summary_compare["down_window_count"]["challenger"]),
-            threshold=f">= {int(summary_compare['down_window_count']['champion'])}",
-            passed=int(summary_compare["down_window_count"]["challenger"]) >= int(summary_compare["down_window_count"]["champion"]),
+            actual=challenger_down_count,
+            threshold=f">= {champion_down_count}",
+            passed=challenger_down_count >= champion_down_count,
             severity="coverage",
             note="候選版 down 視窗覆蓋不可少於現役版。",
         ),
@@ -638,54 +698,32 @@ def _build_compare_assessment_from_summary_compare(
     coverage_pass = all(bool(check["passed"]) for check in coverage_checks)
     quality_status = "pass" if quality_pass else "fail"
     coverage_status = "pass" if coverage_pass else "watch"
-    status = "pass" if (quality_pass and coverage_pass) else ("watch" if quality_pass else "fail")
+    if quality_pass and coverage_pass:
+        status = "pass"
+    elif quality_pass:
+        status = "watch"
+    else:
+        status = "fail"
+
     recommendation = {
-        "pass": "候選版整體優於現役版，可列為升版候選。",
-        "watch": "候選版品質優於現役版，但 regime 覆蓋證據仍有限，建議審慎升版。",
-        "fail": "候選版尚未穩定優於現役版，暫不建議升版。",
+        "pass": "候選版自身 OOS 品質達標，且相對現役版具穩定升級優勢，可列為升版候選。",
+        "watch": "候選版品質已達升版比較門檻，但 regime 覆蓋證據仍有限，建議審慎升版。",
+        "fail": "候選版尚未同時滿足自身 OOS 門檻與相對現役版優勢，暫不建議升版。",
     }[status]
+
     return {
         "status": status,
         "recommended_for_promotion": bool(quality_pass and coverage_pass),
         "quality_gate": {"status": quality_status, "checks": quality_checks},
         "coverage_gate": {"status": coverage_status, "checks": coverage_checks},
         "checks": quality_checks + coverage_checks,
+        "challenger_upgrade_gate": challenger_upgrade_gate,
+        "compare_tolerances": {
+            "worst_ret_pct": float(compare_worst_ret_tolerance_pct),
+            "max_mdd": float(compare_max_mdd_tolerance_pct),
+        },
         "recommendation": recommendation,
     }
-
-
-
-def build_compare_assessment(
-    *,
-    champion_report: dict,
-    challenger_report: dict,
-    compare_worst_ret_tolerance_pct: float = WF_COMPARE_WORST_RET_TOLERANCE_PCT,
-    compare_max_mdd_tolerance_pct: float = WF_COMPARE_MAX_MDD_TOLERANCE_PCT,
-) -> dict:
-    champion_summary = dict(champion_report.get("summary") or {})
-    challenger_summary = dict(challenger_report.get("summary") or {})
-    champion_regime = dict(champion_report.get("regime_summary") or {})
-    challenger_regime = dict(challenger_report.get("regime_summary") or {})
-    summary_compare = {
-        "median_window_score": _metric_triplet(champion=champion_summary.get("median_window_score", 0.0), challenger=challenger_summary.get("median_window_score", 0.0)),
-        "worst_ret_pct": _metric_triplet(champion=champion_summary.get("worst_ret_pct", 0.0), challenger=challenger_summary.get("worst_ret_pct", 0.0)),
-        "max_mdd": _metric_triplet(champion=champion_summary.get("max_mdd", 0.0), challenger=challenger_summary.get("max_mdd", 0.0)),
-        "flat_median_score": _metric_triplet(
-            champion=(champion_regime.get("flat") or {}).get("median_score", 0.0),
-            challenger=(challenger_regime.get("flat") or {}).get("median_score", 0.0),
-        ),
-        "down_window_count": {
-            "champion": int((champion_regime.get("down") or {}).get("window_count", 0) or 0),
-            "challenger": int((challenger_regime.get("down") or {}).get("window_count", 0) or 0),
-            "delta": int((challenger_regime.get("down") or {}).get("window_count", 0) or 0) - int((champion_regime.get("down") or {}).get("window_count", 0) or 0),
-        },
-    }
-    return _build_compare_assessment_from_summary_compare(
-        summary_compare=summary_compare,
-        compare_worst_ret_tolerance_pct=compare_worst_ret_tolerance_pct,
-        compare_max_mdd_tolerance_pct=compare_max_mdd_tolerance_pct,
-    )
-
 
 
 def _link_total_return_pct(rows: list[dict]) -> float:
@@ -732,7 +770,18 @@ def _metric_triplet(*, champion, challenger, benchmark=None) -> dict:
     return payload
 
 
-def build_walk_forward_compare_payload(*, champion_payload: dict, champion_report: dict, challenger_payload: dict, challenger_report: dict, dataset_label: str, source_db_path: str, session_ts: str | None = None, compare_worst_ret_tolerance_pct: float = WF_COMPARE_WORST_RET_TOLERANCE_PCT, compare_max_mdd_tolerance_pct: float = WF_COMPARE_MAX_MDD_TOLERANCE_PCT) -> dict:
+def build_walk_forward_compare_payload(
+    *,
+    champion_payload: dict,
+    champion_report: dict,
+    challenger_payload: dict,
+    challenger_report: dict,
+    dataset_label: str,
+    source_db_path: str,
+    session_ts: str | None = None,
+    compare_worst_ret_tolerance_pct: float = 1.0,
+    compare_max_mdd_tolerance_pct: float = 2.0,
+) -> dict:
     champion_windows = list((champion_report or {}).get("windows") or [])
     challenger_windows = list((challenger_report or {}).get("windows") or [])
     champion_summary = dict((champion_report or {}).get("summary") or {})
@@ -802,33 +851,22 @@ def build_walk_forward_compare_payload(*, champion_payload: dict, champion_repor
     labels_with_dates = [row for row in window_compare_rows if row.get("oos_start") and row.get("oos_end")]
     start_date = labels_with_dates[0]["oos_start"] if labels_with_dates else ""
     end_date = labels_with_dates[-1]["oos_end"] if labels_with_dates else ""
-    champion_linked = _link_total_return_pct(champion_windows)
-    challenger_linked = _link_total_return_pct(challenger_windows)
-    benchmark_linked = _link_total_return_pct([{"ret_pct": row.get("benchmark_return_pct", 0.0)} for row in challenger_windows])
+    champion_total = build_oos_total_performance(champion_windows, ret_key="ret_pct")
+    challenger_total = build_oos_total_performance(challenger_windows, ret_key="ret_pct")
+    benchmark_total = build_oos_total_performance(challenger_windows, ret_key="benchmark_return_pct")
     oos_total_compare = {
         "oos_range": {"start": start_date, "end": end_date},
         "metrics": {
-            "linked_total_return_pct": _metric_triplet(champion=champion_linked, challenger=challenger_linked, benchmark=benchmark_linked),
-            "annualized_return_pct": _metric_triplet(
-                champion=_annualized_return_pct(linked_total_return_pct=champion_linked, start_date=start_date, end_date=end_date),
-                challenger=_annualized_return_pct(linked_total_return_pct=challenger_linked, start_date=start_date, end_date=end_date),
-                benchmark=_annualized_return_pct(linked_total_return_pct=benchmark_linked, start_date=start_date, end_date=end_date),
-            ),
-            "max_drawdown_pct": _metric_triplet(
-                champion=_safe_max(float(r.get("mdd", 0.0) or 0.0) for r in champion_windows),
-                challenger=_safe_max(float(r.get("mdd", 0.0) or 0.0) for r in challenger_windows),
-                benchmark=_safe_max(float(r.get("benchmark_mdd", 0.0) or 0.0) for r in challenger_windows),
-            ),
-            "positive_window_rate": _metric_triplet(
-                champion=_positive_window_rate(champion_windows, "ret_pct"),
-                challenger=_positive_window_rate(challenger_windows, "ret_pct"),
-                benchmark=_positive_window_rate(challenger_windows, "benchmark_return_pct"),
-            ),
+            "linked_total_return_pct": _metric_triplet(champion=champion_total["linked_total_return_pct"], challenger=challenger_total["linked_total_return_pct"], benchmark=benchmark_total["linked_total_return_pct"]),
+            "annualized_return_pct": _metric_triplet(champion=champion_total["annualized_return_pct"], challenger=challenger_total["annualized_return_pct"], benchmark=benchmark_total["annualized_return_pct"]),
+            "max_drawdown_pct": _metric_triplet(champion=champion_total["max_drawdown_pct"], challenger=challenger_total["max_drawdown_pct"], benchmark=benchmark_total["max_drawdown_pct"]),
+            "positive_window_rate": _metric_triplet(champion=champion_total["positive_window_rate"], challenger=challenger_total["positive_window_rate"], benchmark=benchmark_total["positive_window_rate"]),
         },
     }
 
-    compare_assessment = _build_compare_assessment_from_summary_compare(
-        summary_compare=summary_compare,
+    compare_assessment = build_compare_assessment(
+        champion_report=champion_report,
+        challenger_report=challenger_report,
         compare_worst_ret_tolerance_pct=compare_worst_ret_tolerance_pct,
         compare_max_mdd_tolerance_pct=compare_max_mdd_tolerance_pct,
     )
@@ -851,6 +889,7 @@ def build_walk_forward_compare_payload(*, champion_payload: dict, champion_repor
         "window_compare_rows": window_compare_rows,
         "compare_assessment": compare_assessment,
     }
+
 
 def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict):
     os.makedirs(output_dir, exist_ok=True)
@@ -889,7 +928,8 @@ def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict)
         f"- 現役正式版：`{(compare_payload.get('meta') or {}).get('champion_params_path', 'models/champion_params.json')}`",
         f"- 本輪最佳：`{(compare_payload.get('meta') or {}).get('challenger_run_best_params_path', 'models/run_best_params.json')}`",
         f"- 產生時間：{session_ts}",
-        f"- Compare tolerance：worst_ret <= {float((compare_payload.get('meta') or {}).get('compare_worst_ret_tolerance_pct', 0.0) or 0.0):.1f}% 惡化容忍 | max_mdd <= {float((compare_payload.get('meta') or {}).get('compare_max_mdd_tolerance_pct', 0.0) or 0.0):.1f}% 惡化容忍",
+        f"- compare worst_ret tolerance：{float(((compare_payload.get('meta') or {}).get('compare_worst_ret_tolerance_pct', 0.0))):.2f}%",
+        f"- compare max_mdd tolerance：{float(((compare_payload.get('meta') or {}).get('compare_max_mdd_tolerance_pct', 0.0))):.2f}%",
         "",
         "## 升版比較結論",
         "",
@@ -897,6 +937,7 @@ def write_walk_forward_compare_report(*, output_dir: str, compare_payload: dict)
         f"- 建議：{assessment.get('recommendation', 'N/A')}",
         f"- 品質 gate：`{(assessment.get('quality_gate') or {}).get('status', 'fail')}`",
         f"- 覆蓋 gate：`{(assessment.get('coverage_gate') or {}).get('status', 'watch')}`",
+        f"- 候選版自身 upgrade gate：`{(assessment.get('challenger_upgrade_gate') or {}).get('status', 'fail')}`",
         "",
         "| 指標 | Champion | Challenger | Delta |",
         "|---|---:|---:|---:|",

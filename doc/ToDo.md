@@ -4,7 +4,8 @@
 - UI設計: 
     - 比較 Selected json (defual: Run_best) vs Champion vs. 0050
     - 用非console介面，一眼看情楚 為哪項fail，哪項勝出/符合、
-    - 設定區間
+    - 連結參數與策略
+    - 設定區間與參數
  
 ## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議

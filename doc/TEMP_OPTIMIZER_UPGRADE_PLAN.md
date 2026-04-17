@@ -49,7 +49,7 @@
   - worst_ret_pct >= -8%
   - flat median_score >= 0（若 flat 視窗存在）
   - down 視窗數 >= 1 否則只可視為 regime 覆蓋不足
-- [ ] 下一階段再考慮是否將門檻接入正式升版流程
+- [x] 已接入正式升版流程：候選版自身 upgrade gate + compare gate 共同決定是否可 promote
 
 ## 2. 本輪 MVP 實作項目
 - [x] 新增暫時規劃檔（本檔）。
@@ -60,7 +60,7 @@
 
 ## 3. 下一階段候選
 1. 把 walk-forward summary 指標納入 study callback 顯示。
-2. 把 median / worst-window 指標納入升版門檻。
+2. [x] 已完成：median / worst-window 指標正式納入升版門檻（經由 challenger upgrade gate + compare gate）。
 3. 再評估是否要把 objective 從純 in-sample 改為 in-sample + OOS 混合分數。
 
 
@@ -68,7 +68,7 @@
 - [x] Walk-Forward 主設定：2012 + 8（train_start_year=2012, min_train_years=8）。
 - [x] 單版報表：輸出 challenger 的 WF 報表與 gate。
 - [x] 升級 MVP：輸出 Champion / Challenger 比較報表（先不自動升版）。
-- [x] Compare gate 已接入 promote 決策；僅 `--promote` / `V16_OPTIMIZER_AUTO_PROMOTE=1` 且 compare 建議升版時才會實際覆寫 Champion。
+- [x] compare gate 已接成正式升版阻擋規則，且 challenger 自身 upgrade gate 也必須先過。
 
 
 ### 命名收斂（最新）
@@ -84,5 +84,6 @@
 - [x] Walk-forward 設定外部化到 `config/walk_forward_policy.json`。
 - [x] Compare gate 拆成 `quality_gate` / `coverage_gate`。
 - [x] Compare 報表升為正式升版主入口，console 優先印 compare 結論。
-- [x] WF 視窗 / gate / compare tolerance 已全部收斂到 `config/walk_forward_policy.json`，避免閾值分叉。
-- [x] Compare assessment 已回收為單一邏輯來源，不再在報表組裝處重複實作。
+
+- [x] Compare assessment 收斂為單一真理來源，避免 compare payload / report / promote 判斷分叉。
+- [x] Compare tolerance 外部化到 `config/walk_forward_policy.json`。
