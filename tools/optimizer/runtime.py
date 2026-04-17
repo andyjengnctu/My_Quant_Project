@@ -186,14 +186,18 @@ def resolve_training_session_export_policy(*, requested_n_trials, completed_sess
     return False, "target_not_reached"
 
 
-def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
+def resolve_run_request_or_exit(*, environ, resolve_optimizer_run_request, colors):
     try:
-        session.n_trials, trial_source = resolve_optimizer_trial_count(environ)
+        return None, resolve_optimizer_run_request(environ)
     except ValueError as exc:
         print(f"{colors['red']}❌ {exc}{colors['reset']}", file=sys.stderr)
         return 1, None
-    return None, trial_source
 
 
-def print_resolved_trial_count(session, *, trial_source, colors):
-    print(f"{colors['gray']}🎯 訓練次數: {session.n_trials} | 來源: {trial_source}{colors['reset']}")
+def print_resolved_run_request(*, n_trials, action, source, colors):
+    action_labels = {
+        "train": f"訓練 {int(n_trials)} 次",
+        "export_best": "寫入 best run",
+        "promote_champion": "promotion to Champion",
+    }
+    print(f"{colors['gray']}🎯 Optimizer 動作: {action_labels.get(str(action), str(action))} | 來源: {source}{colors['reset']}")

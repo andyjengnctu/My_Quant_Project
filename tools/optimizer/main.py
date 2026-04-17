@@ -85,7 +85,10 @@ def _normalize_optimizer_model_choice(raw_value: str | None):
 
 
 def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_WF) -> tuple[str, str]:
-    choice = safe_prompt_choice(
+    # 防止互動選單路徑因上層 import 未同步而出現 NameError。
+    from core.runtime_utils import safe_prompt_choice as _safe_prompt_choice
+
+    choice = _safe_prompt_choice(
         "👉 請選擇 optimizer 模式 [1] WF 穩定性主導  [2] 原本模式(全資料到最新日) (預設 1): ",
         "1" if str(default_choice) == MODEL_CHOICE_WF else "2",
         ("1", "2"),

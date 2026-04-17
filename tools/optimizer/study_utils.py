@@ -9,7 +9,7 @@ from core.dataset_profiles import (
     normalize_dataset_profile_key,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.runtime_utils import is_interactive_stdin, parse_int_strict, safe_prompt_int
+from core.runtime_utils import is_interactive_stdin, parse_int_strict
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 
 OPTIMIZER_TRIALS_ENV_VAR = "V16_OPTIMIZER_TRIALS"
@@ -21,6 +21,55 @@ MIN_QUALIFIED_TRIAL_VALUE = -9000.0
 OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
 OBJECTIVE_MODE_LEGACY_BASE_SCORE = "legacy_base_score"
 OBJECTIVE_MODE_WF_GATE_MEDIAN = "wf_gate_median"
+
+
+
+OPTIMIZER_MENU_ACTION_TRAIN = "train"
+OPTIMIZER_MENU_ACTION_EXPORT_BEST = "export_best"
+OPTIMIZER_MENU_ACTION_PROMOTE_CHAMPION = "promote_champion"
+
+
+def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
+    normalized = str(raw_value or "").strip()
+    if normalized == "":
+        return {
+            "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
+            "action": OPTIMIZER_MENU_ACTION_TRAIN,
+            "source": source_label,
+        }
+    if normalized.lower() == "p":
+        return {
+            "n_trials": 0,
+            "action": OPTIMIZER_MENU_ACTION_PROMOTE_CHAMPION,
+            "source": source_label,
+        }
+    trial_count = parse_int_strict(normalized, "訓練次數", min_value=0)
+    return {
+        "n_trials": int(trial_count),
+        "action": OPTIMIZER_MENU_ACTION_EXPORT_BEST if int(trial_count) == 0 else OPTIMIZER_MENU_ACTION_TRAIN,
+        "source": source_label,
+    }
+
+
+def resolve_optimizer_run_request(environ):
+    env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
+    if env_value != "":
+        return _parse_optimizer_run_request_raw(env_value, source_label=f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}")
+
+    if is_interactive_stdin():
+        prompt = (
+            f"👉 Optimizer 選單（預設 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE}）："
+            f"直接 Enter=訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE} 次，"
+            "輸入數字=訓練指定次數，0=寫入 best run，P=promotion to Champion: "
+        )
+        raw_input = input(prompt)
+        return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")
+
+    return {
+        "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE),
+        "action": OPTIMIZER_MENU_ACTION_EXPORT_BEST,
+        "source": "DEFAULT/NON_INTERACTIVE",
+    }
 
 
 def _resolve_decimal_places_from_step(step_value):
@@ -62,19 +111,8 @@ def is_qualified_trial_value(value):
 
 
 def resolve_optimizer_trial_count(environ):
-    env_value = str(environ.get(OPTIMIZER_TRIALS_ENV_VAR, "")).strip()
-    if env_value != "":
-        return parse_int_strict(env_value, f"環境變數 {OPTIMIZER_TRIALS_ENV_VAR}", min_value=0), f"ENV:{OPTIMIZER_TRIALS_ENV_VAR}"
-
-    default_trials = DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE if is_interactive_stdin() else DEFAULT_OPTIMIZER_TRIALS_NON_INTERACTIVE
-    prompt_default = str(default_trials)
-    user_input = safe_prompt_int(
-        f"👉 請輸入訓練次數 (預設 {prompt_default}，輸入 0 則直接提取匯出參數): ",
-        prompt_default,
-        "訓練次數",
-        min_value=0,
-    )
-    return user_input, "UI/DEFAULT"
+    request = resolve_optimizer_run_request(environ)
+    return int(request["n_trials"]), str(request["source"])
 
 
 def resolve_optimizer_seed(environ):
