@@ -23,6 +23,7 @@ from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
+    OBJECTIVE_MODE_LEGACY_BASE_SCORE,
     OPTIMIZER_TP_PERCENT_SEARCH_SPEC,
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
@@ -119,6 +120,8 @@ class _FakeOptimizerSession:
         self.master_dates = set()
         self.sorted_master_dates = []
         self.train_start_year = 2020
+        self.search_train_end_year = 2025
+        self.objective_mode = OBJECTIVE_MODE_LEGACY_BASE_SCORE
         self.train_max_positions = 3
         self.train_enable_rotation = False
         self.optimizer_high_len_min = 20
