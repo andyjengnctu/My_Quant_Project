@@ -710,6 +710,12 @@ def main(argv=None, environ=None):
         return 1
 
     try:
+        session.load_raw_data(
+            selected_data_dir,
+            load_all_raw_data=load_all_raw_data,
+            required_min_rows=optimizer_required_min_rows,
+        )
+
         maybe_print_history_best(
             study,
             fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
@@ -717,12 +723,7 @@ def main(argv=None, environ=None):
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
             best_trial_resolver=best_trial_resolver,
-        )
-
-        session.load_raw_data(
-            selected_data_dir,
-            load_all_raw_data=load_all_raw_data,
-            required_min_rows=optimizer_required_min_rows,
+            session=session,
         )
 
         session.profile_recorder.init_output_files()

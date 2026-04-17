@@ -6,6 +6,7 @@ import sys
 from core.log_utils import format_exception_summary
 
 from core.display import print_strategy_dashboard
+from tools.optimizer.callbacks import print_optimizer_trial_milestone_dashboard
 from core.runtime_utils import safe_prompt_choice
 from tools.optimizer.study_utils import (
     build_best_params_payload_from_trial,
@@ -127,7 +128,7 @@ def print_best_trial_dashboard(trial, *, fixed_tp_percent, train_enable_rotation
     )
 
 
-def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, train_max_positions, colors, best_trial_resolver=None):
+def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, train_max_positions, colors, best_trial_resolver=None, session=None):
     if len(study.trials) <= 0:
         return
     print(f"\n{colors['green']}✅ 已累積 {len(study.trials)} 次經驗。{colors['reset']}")
@@ -139,6 +140,14 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
     if not is_qualified_trial_value(best_trial.value):
         return
     print(f"\n{colors['cyan']}📜 【歷史突破紀錄還原】{colors['reset']}")
+    if session is not None:
+        print_optimizer_trial_milestone_dashboard(
+            session,
+            best_trial,
+            title="績效與風險對比表",
+            milestone_title=f"🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試)",
+        )
+        return
     print(f"{colors['red']}🏆 目前記憶庫的最強參數！ (來自累積第 {best_trial.number + 1} 次測試){colors['reset']}")
     print_best_trial_dashboard(
         best_trial,

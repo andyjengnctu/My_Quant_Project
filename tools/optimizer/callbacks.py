@@ -382,6 +382,84 @@ def _get_champion_console_cache(session):
     return cache
 
 
+def _build_optimizer_trial_dashboard_payload(session, trial):
+    attrs = trial.user_attrs
+    params = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    mode_display = "關閉明牌（穩定鎖倉）" if not session.train_enable_rotation else "啟用 (汰弱換強)"
+    model_mode = _resolve_model_mode(session.objective_mode)
+    search_train_dates = _build_search_train_dates_for_session(session)
+    latest_data_end = _latest_data_end_text(session)
+    if model_mode == "wf":
+        wf_range_text = f"2020-01-01 ~ {latest_data_end}（6 個月 × {_safe_int(attrs.get('wf_window_count', 0))} 窗）"
+        system_score_display = f"{_safe_float(attrs.get('wf_median_window_score', 0.0)):.3f}（WF中位分數）"
+    else:
+        wf_range_text = "未啟用"
+        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
+    candidate_metrics = {
+        "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
+        "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
+        "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
+        "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
+        "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
+        "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
+        "win_rate": _safe_float(attrs.get("win_rate", 0.0)),
+        "pf_payoff": _safe_float(attrs.get("pf_payoff", 0.0)),
+        "pf_ev": _safe_float(attrs.get("pf_ev", 0.0)),
+        "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
+        "annual_trades": _safe_float(attrs.get("annual_trades", 0.0)),
+        "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
+        "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
+        "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
+        "bm_return": _safe_float(attrs.get("bm_return", 0.0)),
+        "bm_annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
+        "bm_min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
+        "bm_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
+        "bm_r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
+        "bm_m_win_rate": _safe_float(attrs.get("bm_m_win_rate", 0.0)),
+        "initial_capital": _safe_float(get_p(params, "initial_capital", 0.0)),
+    }
+    candidate_metrics["pf_romd"] = _calc_romd(candidate_metrics["pf_return"], candidate_metrics["pf_mdd"])
+    champion_cache = _get_champion_console_cache(session)
+    return {
+        "mode_display": mode_display,
+        "model_mode": model_mode,
+        "search_train_dates": search_train_dates,
+        "latest_data_end": latest_data_end,
+        "system_score_display": system_score_display,
+        "wf_range_text": wf_range_text,
+        "params": params,
+        "first_zone_rows": _build_first_zone_rows(candidate_metrics=candidate_metrics, champion_metrics=champion_cache),
+        "upgrade_rows": _build_upgrade_rows(trial=trial, policy=session.walk_forward_policy) if model_mode == "wf" else None,
+        "compare_rows": _build_compare_rows(trial=trial, champion_cache=champion_cache, policy=session.walk_forward_policy) if model_mode == "wf" else None,
+        "base_score": _safe_float(attrs.get("base_score", 0.0)),
+    }
+
+
+def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title: str, title: str = "績效與風險對比表"):
+    payload = _build_optimizer_trial_dashboard_payload(session, trial)
+    print_optimizer_trial_console_dashboard(
+        title=title,
+        milestone_title=milestone_title,
+        global_strategy_text=_build_global_strategy_text(),
+        mode_display=payload["mode_display"],
+        max_pos=session.train_max_positions,
+        model_mode=payload["model_mode"],
+        search_train_range_text=_range_text_from_dates(payload["search_train_dates"]),
+        wf_range_text=payload["wf_range_text"],
+        data_end_text=payload["latest_data_end"],
+        objective_mode=str(session.objective_mode),
+        score_calc_method=SCORE_CALC_METHOD,
+        score_numerator_method=SCORE_NUMERATOR_METHOD,
+        base_score=payload["base_score"],
+        system_score_display=payload["system_score_display"],
+        first_zone_rows=payload["first_zone_rows"],
+        upgrade_rows=payload["upgrade_rows"],
+        compare_rows=payload["compare_rows"],
+        params_lines=_build_training_param_lines(payload["params"]),
+        hard_gate_lines=_build_hard_gate_lines(),
+    )
+
+
 def run_optimizer_monitoring_callback(session, study, trial):
     session.current_session_trial += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
@@ -412,66 +490,9 @@ def run_optimizer_monitoring_callback(session, study, trial):
         and is_qualified_trial_value(trial.value)
     ):
         print()
-        attrs = trial.user_attrs
-        params = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
-        mode_display = "關閉明牌（穩定鎖倉)" if not session.train_enable_rotation else "啟用 (汰弱換強)"
-        if not session.train_enable_rotation:
-            mode_display = "關閉明牌（穩定鎖倉）"
-        model_mode = _resolve_model_mode(session.objective_mode)
-        search_train_dates = _build_search_train_dates_for_session(session)
-        latest_data_end = _latest_data_end_text(session)
-        if model_mode == "wf":
-            wf_range_text = f"2020-01-01 ~ {latest_data_end}（6 個月 × {_safe_int(attrs.get('wf_window_count', 0))} 窗）"
-            system_score_display = f"{_safe_float(attrs.get('wf_median_window_score', 0.0)):.3f}（WF中位分數）"
-        else:
-            wf_range_text = "未啟用"
-            system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
-        candidate_metrics = {
-            "pf_return": _safe_float(attrs.get("pf_return", 0.0)),
-            "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
-            "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
-            "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
-            "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
-            "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
-            "win_rate": _safe_float(attrs.get("win_rate", 0.0)),
-            "pf_payoff": _safe_float(attrs.get("pf_payoff", 0.0)),
-            "pf_ev": _safe_float(attrs.get("pf_ev", 0.0)),
-            "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
-            "annual_trades": _safe_float(attrs.get("annual_trades", 0.0)),
-            "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
-            "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
-            "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
-            "bm_return": _safe_float(attrs.get("bm_return", 0.0)),
-            "bm_annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
-            "bm_min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
-            "bm_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
-            "bm_r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
-            "bm_m_win_rate": _safe_float(attrs.get("bm_m_win_rate", 0.0)),
-            "initial_capital": _safe_float(get_p(params, "initial_capital", 0.0)),
-        }
-        candidate_metrics["pf_romd"] = _calc_romd(candidate_metrics["pf_return"], candidate_metrics["pf_mdd"])
-        champion_cache = _get_champion_console_cache(session)
-        first_zone_rows = _build_first_zone_rows(candidate_metrics=candidate_metrics, champion_metrics=champion_cache)
-        upgrade_rows = _build_upgrade_rows(trial=trial, policy=session.walk_forward_policy) if model_mode == "wf" else None
-        compare_rows = _build_compare_rows(trial=trial, champion_cache=champion_cache, policy=session.walk_forward_policy) if model_mode == "wf" else None
-        print_optimizer_trial_console_dashboard(
+        print_optimizer_trial_milestone_dashboard(
+            session,
+            trial,
             title="績效與風險對比表",
             milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
-            global_strategy_text=_build_global_strategy_text(),
-            mode_display=mode_display,
-            max_pos=session.train_max_positions,
-            model_mode=model_mode,
-            search_train_range_text=_range_text_from_dates(search_train_dates),
-            wf_range_text=wf_range_text,
-            data_end_text=latest_data_end,
-            objective_mode=str(session.objective_mode),
-            score_calc_method=SCORE_CALC_METHOD,
-            score_numerator_method=SCORE_NUMERATOR_METHOD,
-            base_score=_safe_float(attrs.get("base_score", 0.0)),
-            system_score_display=system_score_display,
-            first_zone_rows=first_zone_rows,
-            upgrade_rows=upgrade_rows,
-            compare_rows=compare_rows,
-            params_lines=_build_training_param_lines(params),
-            hard_gate_lines=_build_hard_gate_lines(),
         )

@@ -262,6 +262,44 @@ def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=19, w3=24, w4=24):
     )
 
 
+def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
+    metric_name = str(metric_name or "")
+    value_text = str(value or "")
+    if value_text.strip() in {"-", ""}:
+        return ""
+    if "最大回撤" in metric_name:
+        return C_YELLOW
+    if any(token in metric_name for token in ("報酬", "勝率", "期望值", "最終資產", "成交率", "平滑度", "報酬回撤比", "RoMD", "盈虧因子")):
+        stripped = value_text.strip()
+        if "少跌" in stripped or stripped.startswith("(+") or stripped.startswith("+"):
+            return C_GREEN
+        if "多跌" in stripped or stripped.startswith("(-") or stripped.startswith("-"):
+            return C_RED
+        return C_CYAN
+    if any(token in metric_name for token in ("總交易次數", "年化交易次數", "平均資金水位")):
+        return C_CYAN
+    return ""
+
+
+def _optimizer_dashboard_status_color(status_text: str) -> str:
+    normalized = str(status_text or "").strip().lower()
+    if normalized in {"pass", "ok", "true", "升版", "接班", "通過"}:
+        return C_GREEN
+    if normalized in {"watch", "warn", "warning", "觀察"}:
+        return C_YELLOW
+    if normalized in {"fail", "false", "不升版", "不接班", "淘汰", "未通過"}:
+        return C_RED
+    return ""
+
+
+def _wrap_optimizer_dashboard_cell(text: str, color: str) -> str:
+    if not color:
+        return str(text)
+    return f"{color}{text}{C_RESET}"
+
+
+# 新版 optimizer console 版型；配色沿用舊 dashboard 的語意：
+# 正向績效 / 勝率 / EV 走綠色，風險項走黃色，警示 / 失敗走紅色，標題與系統資訊維持青色。
 def print_optimizer_trial_console_dashboard(*,
     title: str,
     milestone_title: str,
@@ -283,31 +321,66 @@ def print_optimizer_trial_console_dashboard(*,
     params_lines: list[str],
     hard_gate_lines: list[str],
 ):
-    print(f"{C_GRAY}------------------------------------------------------------------------------------------------------------------------{C_RESET}")
+    separator = "------------------------------------------------------------------------------------------------------------------------"
+    print(f"{C_GRAY}{separator}{C_RESET}")
     print(f"{C_CYAN}{title}{C_RESET}")
     print(f"{C_RED}{milestone_title}{C_RESET}")
-    print(f"全域戰略：{global_strategy_text} | 模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{model_mode.upper()}")
+    print(
+        f"全域戰略：{C_YELLOW}{global_strategy_text}{C_RESET} | "
+        f"模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{C_YELLOW}{model_mode.upper()}{C_RESET}"
+    )
     print(f"【區間設定】 主搜尋訓練：{search_train_range_text} | OOS / WF驗證：{wf_range_text} | 本輪資料終點：{data_end_text}")
-    print(f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{score_calc_method}] | 評分分子：[{score_numerator_method}] | base_score：{float(base_score):.2f} | 系統得分：{system_score_display}")
-    print("------------------------------------------------------------------------------------------------------------------------")
+    print(
+        f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
+        f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | base_score：{float(base_score):.2f} | "
+        f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
+    )
+    print(separator)
     print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤 (差異)"))
     for row in first_zone_rows:
-        print(_table_row4_compact(row["name"], row["candidate"], row["champion"], row["benchmark"]))
+        name = row["name"]
+        print(
+            _table_row4_compact(
+                name,
+                _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(name, row["candidate"])),
+                _wrap_optimizer_dashboard_cell(row["champion"], _optimizer_dashboard_metric_color(name, row["champion"])),
+                _wrap_optimizer_dashboard_cell(row["benchmark"], _optimizer_dashboard_metric_color(name, row["benchmark"])),
+            )
+        )
     if upgrade_rows:
-        print("------------------------------------------------------------------------------------------------------------------------")
+        print(separator)
         print(_table_row4_compact("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態", w1=20, w2=19, w3=24, w4=8))
         for row in upgrade_rows:
-            print(_table_row4_compact(row["name"], row["candidate"], row["threshold"], row["status"], w1=20, w2=19, w3=24, w4=8))
+            print(
+                _table_row4_compact(
+                    row["name"],
+                    _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(row["name"], row["candidate"])),
+                    row["threshold"],
+                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
+                    w1=20,
+                    w2=19,
+                    w3=24,
+                    w4=8,
+                )
+            )
     if compare_rows:
-        print("------------------------------------------------------------------------------------------------------------------------")
+        print(separator)
         print(_table_row5("接班判斷項目", "本輪候選", "Champion (差異)", "門檻 / 基準", "狀態"))
         for row in compare_rows:
-            print(_table_row5(row["name"], row["candidate"], row["champion"], row["threshold"], row["status"]))
-    print("------------------------------------------------------------------------------------------------------------------------")
+            print(
+                _table_row5(
+                    row["name"],
+                    _wrap_optimizer_dashboard_cell(row["candidate"], _optimizer_dashboard_metric_color(row["name"], row["candidate"])),
+                    _wrap_optimizer_dashboard_cell(row["champion"], _optimizer_dashboard_metric_color(row["name"], row["champion"])),
+                    row["threshold"],
+                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
+                )
+            )
+    print(separator)
     for idx, line in enumerate(params_lines):
-        prefix = "【訓練參數】 " if idx == 0 else "　　　　     "
+        prefix = f"{C_CYAN}【訓練參數】{C_RESET} " if idx == 0 else "　　　　     "
         print(f"{prefix}{line}")
     for idx, line in enumerate(hard_gate_lines):
-        prefix = "【共用硬門檻】 " if idx == 0 else "　　　　　     "
+        prefix = f"{C_CYAN}【共用硬門檻】{C_RESET} " if idx == 0 else "　　　　　     "
         print(f"{prefix}{line}")
     print(f"{C_CYAN}========================================================================================================================{C_RESET}\n")
