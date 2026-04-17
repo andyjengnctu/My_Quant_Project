@@ -269,8 +269,8 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
     if value_text in {"-", ""}:
         return ""
     if any(token in metric_name for token in ("報酬回撤比", "RoMD")):
-        return C_BLUE
-    if metric_name in {"總資產報酬率", "年度最差報酬"}:
+        return C_CYAN
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬"}:
         if value_text.startswith("+"):
             return C_GREEN
         return C_RED
@@ -280,7 +280,13 @@ def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
         except ValueError:
             return ""
         return C_GREEN if numeric >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
-    if "最大回撤" in metric_name:
+    if metric_name == "月度獲利勝率":
+        try:
+            numeric = float(value_text.replace('%', '').replace('R', '').replace(',', '').strip())
+        except ValueError:
+            return ""
+        return C_GREEN if numeric >= float(MIN_MONTHLY_WIN_RATE) else C_RED
+    if "最大回撤" in metric_name or "最大視窗 MDD" in metric_name:
         try:
             numeric = abs(float(value_text.replace('少跌', '').replace('多跌', '').replace('%', '').replace('(', '').replace(')', '').replace('-', '').replace(',', '').strip()))
         except ValueError:
@@ -351,7 +357,7 @@ def print_optimizer_trial_console_dashboard(*,
     print(
         f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
         f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | base_score：{float(base_score):.2f} | "
-        f"系統得分：{C_BLUE}{system_score_display}{C_RESET}"
+        f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
     print(separator)
     print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤 (差異)"))

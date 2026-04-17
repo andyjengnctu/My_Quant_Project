@@ -5,10 +5,11 @@ from core.config import (
     BUY_SORT_METHOD,
     MAX_PORTFOLIO_MDD_PCT,
     MIN_EQUITY_CURVE_R_SQUARED,
+    MIN_MONTHLY_WIN_RATE,
     SCORE_CALC_METHOD,
     SCORE_NUMERATOR_METHOD,
 )
-from core.display_common import C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
+from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.model_paths import resolve_champion_params_path
 from core.params_io import load_params_from_json
 from core.portfolio_engine import run_portfolio_timeline
@@ -138,7 +139,7 @@ def _delta_color(value: float) -> str:
         return C_GREEN
     if value < 0:
         return C_RED
-    return C_YELLOW
+    return ""
 
 
 def _pass_color(passed: bool, *, pass_color: str = C_GREEN, fail_color: str = C_RED) -> str:
@@ -152,10 +153,12 @@ def _pass_with_positive_color(passed: bool, numeric_value: float) -> str:
 
 
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
-    if metric_name in {"總資產報酬率", "年度最差報酬"}:
+    if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬"}:
         return C_GREEN if float(numeric_value) > 0 else C_RED
     if metric_name == "平滑度 (Log R²)":
         return C_GREEN if float(numeric_value) >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
+    if metric_name == "月度獲利勝率":
+        return C_GREEN if float(numeric_value) >= float(MIN_MONTHLY_WIN_RATE) else C_RED
     if metric_name == "最大回撤 (MDD)":
         return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
     return ""
@@ -163,7 +166,7 @@ def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
 
 def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: float, *, delta_text: str = "", delta_value: float | None = None, use_blue: bool = False) -> str:
     if use_blue:
-        rendered = _colorize(base_text, "\033[94m")
+        rendered = _colorize(base_text, C_CYAN)
     else:
         rendered = _colorize(base_text, _first_zone_base_color(metric_name, numeric_value))
     if delta_text in {"", "-", None} or delta_value is None:
@@ -285,6 +288,13 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     return rows
 
 
+def _compose_compare_champion_cell(metric_name: str, champion_text: str, diff_text: str, diff_value: float | None) -> str:
+    rendered = str(champion_text)
+    if diff_text in {"", "-", None} or diff_value is None:
+        return rendered
+    return f"{rendered} {_colorize(diff_text, _delta_color(diff_value))}"
+
+
 def _build_upgrade_rows(*, trial, policy):
     median_score = _safe_float(trial.user_attrs.get("wf_median_window_score", 0.0))
     worst_ret = _safe_float(trial.user_attrs.get("wf_worst_ret_pct", 0.0))
@@ -338,11 +348,15 @@ def _build_compare_rows(*, trial, champion_cache, policy):
     mdd_tol = _safe_float(policy.get("compare_max_mdd_tolerance_pct", 2.0))
 
     checks = {str(item.get("name")): str("PASS" if item.get("passed") else "FAIL") for item in assessment.get("checks") or []}
+    median_diff = candidate_median - champion_median
+    worst_diff = candidate_worst - champion_worst
+    flat_diff = candidate_flat - champion_flat
+    mdd_diff = champion_mdd - candidate_mdd
     rows = [
-        {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _format_value_with_delta(f"{champion_median:.3f}", _format_float_diff(candidate_median - champion_median, 3)), "threshold": "差異 >= 0", "status": checks.get("median_window_score_vs_champion", "FAIL"), "candidate_numeric": candidate_median},
-        {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _format_value_with_delta(f"{champion_worst:.2f}%", _format_pct_diff(candidate_worst - champion_worst)), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL"), "candidate_numeric": candidate_worst},
-        {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _format_value_with_delta(f"{champion_flat:.3f}", _format_float_diff(candidate_flat - champion_flat, 3)), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL"), "candidate_numeric": candidate_flat},
-        {"name": "最大視窗 MDD", "candidate": f"{candidate_mdd:.2f}%", "champion": _format_value_with_delta(f"{champion_mdd:.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd)), "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
+        {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _compose_compare_champion_cell("視窗分數中位數", f"{champion_median:.3f}", _format_float_diff(median_diff, 3), median_diff), "threshold": "差異 >= 0", "status": checks.get("median_window_score_vs_champion", "FAIL"), "candidate_numeric": candidate_median},
+        {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _compose_compare_champion_cell("最差視窗報酬", f"{champion_worst:.2f}%", _format_pct_diff(worst_diff), worst_diff), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL"), "candidate_numeric": candidate_worst},
+        {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _compose_compare_champion_cell("flat 視窗中位分數", f"{champion_flat:.3f}", _format_float_diff(flat_diff, 3), flat_diff), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL"), "candidate_numeric": candidate_flat},
+        {"name": "最大視窗 MDD", "candidate": f"-{abs(candidate_mdd):.2f}%", "champion": _compose_compare_champion_cell("最大視窗 MDD", f"-{abs(champion_mdd):.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd), mdd_diff), "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
         {"name": "compare_gate", "candidate": str(assessment.get("status", "fail")).upper(), "champion": "-", "threshold": "必須 PASS", "status": str(assessment.get("status", "fail")).upper(), "candidate_numeric": None},
     ]
     for row in rows:
