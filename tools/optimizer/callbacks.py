@@ -167,6 +167,18 @@ def _delta_color(value: float) -> str:
     return ""
 
 
+def _format_metric_pair(left_value: float, right_value: float, *, left_digits: int = 2, right_digits: int = 3, right_unit: str = "R") -> str:
+    return f"{float(left_value):.{left_digits}f}: {float(right_value):.{right_digits}f}{right_unit}"
+
+
+def _format_metric_pair_diff(left_value: float, right_value: float, *, left_digits: int = 2, right_digits: int = 3, right_unit: str = "R") -> str:
+    return f"({float(left_value):+.{left_digits}f}: {float(right_value):+.{right_digits}f}{right_unit})"
+
+
+def _format_split_bucket(total: int, left_label: str, left_value: int, right_label: str, right_value: int, *, separator: str = "｜") -> str:
+    return f"{int(total)} ({left_label}: {int(left_value)}{separator}{right_label}: {int(right_value)})"
+
+
 def _pass_color(passed: bool, *, pass_color: str = C_GREEN, fail_color: str = C_RED) -> str:
     return pass_color if bool(passed) else fail_color
 
@@ -254,13 +266,37 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
             bench_delta_text = _format_float_diff(bench_delta_value, digits, candidate_unit) if bench_delta_value is not None else ""
             champ_delta_text = _format_float_diff(champ_delta_value, digits, candidate_unit) if champ_delta_value is not None else ""
         elif kind == "count_split":
-            cand_plain = f"{int(candidate_metrics.get('pf_trades', 0))}(正常:{int(candidate_metrics.get('normal_trades', 0))}｜延續:{int(candidate_metrics.get('extended_trades', 0))})"
-            champ_plain = f"{int(champion_metrics.get('pf_trades', 0))}(正常:{int(champion_metrics.get('normal_trades', 0))}｜延續:{int(champion_metrics.get('extended_trades', 0))})" if champion_metrics else "-"
+            cand_plain = _format_split_bucket(
+                candidate_metrics.get('pf_trades', 0),
+                '正常',
+                candidate_metrics.get('normal_trades', 0),
+                '延續',
+                candidate_metrics.get('extended_trades', 0),
+            )
+            champ_plain = _format_split_bucket(
+                champion_metrics.get('pf_trades', 0),
+                '正常',
+                champion_metrics.get('normal_trades', 0),
+                '延續',
+                champion_metrics.get('extended_trades', 0),
+            ) if champion_metrics else "-"
             _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "missed_split":
-            cand_plain = f"{int(candidate_metrics.get('missed_total', 0))}(買:{int(candidate_metrics.get('missed_buys', 0))}｜賣:{int(candidate_metrics.get('missed_sells', 0))})"
-            champ_plain = f"{int(champion_metrics.get('missed_total', 0))}(買:{int(champion_metrics.get('missed_buys', 0))}｜賣:{int(champion_metrics.get('missed_sells', 0))})" if champion_metrics else "-"
+            cand_plain = _format_split_bucket(
+                candidate_metrics.get('missed_total', 0),
+                '買',
+                candidate_metrics.get('missed_buys', 0),
+                '賣',
+                candidate_metrics.get('missed_sells', 0),
+            )
+            champ_plain = _format_split_bucket(
+                champion_metrics.get('missed_total', 0),
+                '買',
+                champion_metrics.get('missed_buys', 0),
+                '賣',
+                champion_metrics.get('missed_sells', 0),
+            ) if champion_metrics else "-"
             _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "float2_nodiff":
@@ -316,14 +352,14 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     benchmark_payoff = bench_value("pf_payoff")
     benchmark_ev = bench_value("pf_ev")
 
-    candidate_combo = f"{candidate_payoff:.2f}:{candidate_ev:.3f}R"
+    candidate_combo = _format_metric_pair(candidate_payoff, candidate_ev)
     if champion_payoff is not None and champion_ev is not None:
         champion_payoff = float(champion_payoff)
         champion_ev = float(champion_ev)
         payoff_diff = candidate_payoff - champion_payoff
         ev_diff = candidate_ev - champion_ev
-        diff_text = f"({payoff_diff:+.2f}:{ev_diff:+.3f}R)"
-        champion_combo = f"{champion_payoff:.2f}:{champion_ev:.3f}R {_colorize(diff_text, _delta_color(ev_diff))}"
+        diff_text = _format_metric_pair_diff(payoff_diff, ev_diff)
+        champion_combo = f"{_format_metric_pair(champion_payoff, champion_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         champion_combo = "-"
     if benchmark_payoff is not None and benchmark_ev is not None:
@@ -331,8 +367,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
         benchmark_ev = float(benchmark_ev)
         payoff_diff = candidate_payoff - benchmark_payoff
         ev_diff = candidate_ev - benchmark_ev
-        diff_text = f"({payoff_diff:+.2f}:{ev_diff:+.3f}R)"
-        benchmark_combo = f"{benchmark_payoff:.2f}:{benchmark_ev:.3f}R {_colorize(diff_text, _delta_color(ev_diff))}"
+        diff_text = _format_metric_pair_diff(payoff_diff, ev_diff)
+        benchmark_combo = f"{_format_metric_pair(benchmark_payoff, benchmark_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         benchmark_combo = "-"
     _append_row("風報比: 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
