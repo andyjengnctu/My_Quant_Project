@@ -60,7 +60,6 @@ MODEL_TO_OBJECTIVE_MODE = {
 OBJECTIVE_MODE_TO_MODEL = {
     "split_test_romd": MODEL_CHOICE_SPLIT,
     "legacy_base_score": MODEL_CHOICE_LEGACY,
-    "wf_gate_median": MODEL_CHOICE_WF,
 }
 
 
@@ -216,13 +215,6 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         benchmark_ticker="0050",
         train_start_year=int(walk_forward_policy["train_start_year"]),
         min_train_years=int(walk_forward_policy["min_train_years"]),
-        test_window_months=int(walk_forward_policy["test_window_months"]),
-        regime_up_threshold_pct=float(walk_forward_policy["regime_up_threshold_pct"]),
-        regime_down_threshold_pct=float(walk_forward_policy["regime_down_threshold_pct"]),
-        min_window_bars=int(walk_forward_policy["min_window_bars"]),
-        gate_min_median_score=float(walk_forward_policy["gate_min_median_score"]),
-        gate_min_worst_ret_pct=float(walk_forward_policy["gate_min_worst_ret_pct"]),
-        gate_min_flat_median_score=float(walk_forward_policy["gate_min_flat_median_score"]),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
@@ -664,8 +656,8 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         dataset_label=dataset_label,
         source_db_path=db_file,
         session_ts=session.session_ts,
-        compare_worst_ret_tolerance_pct=float(walk_forward_policy["compare_worst_ret_tolerance_pct"]),
-        compare_max_mdd_tolerance_pct=float(walk_forward_policy["compare_max_mdd_tolerance_pct"]),
+        compare_worst_ret_tolerance_pct=float(walk_forward_policy.get("compare_worst_ret_tolerance_pct", 1.0)),
+        compare_max_mdd_tolerance_pct=float(walk_forward_policy.get("compare_max_mdd_tolerance_pct", 2.0)),
     )
     compare_paths = write_walk_forward_compare_report(
         output_dir=session.output_dir,
@@ -829,7 +821,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy（wf 仍可作為 split 別名）或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用 test RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
+        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy（wf 仍可作為 split 別名）或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用 test RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；train/test 切分設定來自 config/training_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -987,24 +979,19 @@ def main(argv=None, environ=None):
     selected_model = walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_SPLIT))
     if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
         print(
-            f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
+            f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
             f"model={selected_model} | 來源: {model_source} | objective={walk_forward_policy['objective_mode']} | "
             f"train={walk_forward_policy['train_start_year']}~{search_train_end_text} | "
-            f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest | "
-            f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']}"
+            f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest"
             f"{C_RESET}"
         )
         print(f"{C_GRAY}🏆 Champion 規則: 測試期間最終 RoMD 較高者保留；測試分數不回灌同次訓練。{C_RESET}")
     else:
         print(
-            f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
+            f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
             f"model={selected_model} | 來源: {model_source} | "
             f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
-            f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
-            f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
-            f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "
-            f"flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f}) | "
-            f"compare_tol(ret={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.2f}%, mdd={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.2f}%)"
+            f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']}"
             f"{C_RESET}"
         )
         print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
