@@ -579,7 +579,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         font_spec = ttk.Style(self).lookup("Workbench.TCombobox", "font") or ("Microsoft JhengHei", 11)
         try:
             self._workbench_combobox_font = tkfont.Font(font=font_spec)
-        except tk.TclError:
+        except tk.TclError as exc:
+            _ = exc
             self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
         return self._workbench_combobox_font
 
@@ -590,7 +591,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         text_candidates.append(str(current_text or ""))
         try:
             live_text = combo.get()
-        except tk.TclError:
+        except tk.TclError as exc:
+            _ = exc
             live_text = ""
         text_candidates.append(str(live_text or ""))
         longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
@@ -893,7 +895,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         elif kind == "extended":
             kind_label = "延續候選"
         else:
-            kind_label = "歷績符合"
+            kind_label = ""
         probe_text = build_scanner_sort_probe_text(
             ev=float(item.get("expected_value") or 0.0),
             win_rate=float(item.get("win_rate") or 0.0),
@@ -901,7 +903,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             asset_growth_pct=float(item.get("asset_growth") or 0.0),
             sort_value=float(item.get("sort_value") or 0.0),
         )
-        return f"{ticker} | {kind_label} | {probe_text}"
+        if kind_label:
+            return f"{ticker} | {kind_label} | {probe_text}"
+        return f"{ticker} | {probe_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
         mapping.clear()
