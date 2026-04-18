@@ -1228,7 +1228,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
 
     project_root = Path(__file__).resolve().parents[2]
     default_policy = load_walk_forward_policy(str(project_root), environ={})
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_python_config", True, str(default_policy.get("policy_path", "")).endswith("config/walk_forward_policy.py"))
+    default_policy_path = str(default_policy.get("policy_path", "")).replace("\\", "/")
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_python_config", True, default_policy_path.endswith("config/walk_forward_policy.py"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_auto_derives_search_train_end_year", 2019, int(default_policy.get("search_train_end_year", 0)))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_wf_gate_median", "wf_gate_median", str(default_policy.get("objective_mode", "")))
 
