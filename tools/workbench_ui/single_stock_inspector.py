@@ -66,6 +66,8 @@ PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 本輪最佳": "run_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "champion | 正式現役"
+WORKBENCH_SIDEBAR_CANVAS_WIDTH = 252
+WORKBENCH_SIDEBAR_TEXT_WRAP = 224
 
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
@@ -472,7 +474,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             variable=self._show_volume_var,
             command=self._rerender_current_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=1, column=1, pady=(4, 0), sticky="e")
+        ).grid(row=0, column=2, padx=(10, 0), sticky="e")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -506,7 +508,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         sidebar_outer.grid_columnconfigure(0, weight=1)
         self._sidebar_canvas = tk.Canvas(
             sidebar_outer,
-            width=282,
+            width=WORKBENCH_SIDEBAR_CANVAS_WIDTH,
             bg="#05090e",
             highlightthickness=0,
             bd=0,
@@ -532,7 +534,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 17, "bold"), padx=8, pady=6, anchor="center")
         self._history_chip.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=236).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=WORKBENCH_SIDEBAR_TEXT_WRAP).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
