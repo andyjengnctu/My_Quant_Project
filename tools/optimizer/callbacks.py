@@ -253,8 +253,6 @@ def _pass_with_positive_color(passed: bool, numeric_value: float) -> str:
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
     if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬"}:
         return C_GREEN if float(numeric_value) > 0 else C_RED
-    if "平滑度" in metric_name:
-        return C_GREEN if float(numeric_value) >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
     if metric_name == "最大回撤 (MDD)":
         return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
     return ""
@@ -402,8 +400,35 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
     add_row("月度獲利勝率", "m_win_rate", kind="pct")
     add_row("系統實戰勝率", "win_rate", kind="pct")
-    add_row("盈虧風報比", "pf_payoff", kind="float2")
-    add_row("實戰期望值 (EV)", "pf_ev", kind="float3")
+
+    candidate_payoff = float(candidate_metrics.get("pf_payoff", 0.0))
+    candidate_ev = float(candidate_metrics.get("pf_ev", 0.0))
+    champion_payoff = champ_value("pf_payoff")
+    champion_ev = champ_value("pf_ev")
+    benchmark_payoff = bench_value("pf_payoff")
+    benchmark_ev = bench_value("pf_ev")
+
+    candidate_combo = f"{candidate_payoff:.2f} : {candidate_ev:.3f} R"
+    if champion_payoff is not None and champion_ev is not None:
+        champion_payoff = float(champion_payoff)
+        champion_ev = float(champion_ev)
+        payoff_diff = candidate_payoff - champion_payoff
+        ev_diff = candidate_ev - champion_ev
+        diff_text = f"({payoff_diff:+.2f} : {ev_diff:+.3f} R)"
+        champion_combo = f"{champion_payoff:.2f} : {champion_ev:.3f} R {_colorize(diff_text, _delta_color(ev_diff))}"
+    else:
+        champion_combo = "-"
+    if benchmark_payoff is not None and benchmark_ev is not None:
+        benchmark_payoff = float(benchmark_payoff)
+        benchmark_ev = float(benchmark_ev)
+        payoff_diff = candidate_payoff - benchmark_payoff
+        ev_diff = candidate_ev - benchmark_ev
+        diff_text = f"({payoff_diff:+.2f} : {ev_diff:+.3f} R)"
+        benchmark_combo = f"{benchmark_payoff:.2f} : {benchmark_ev:.3f} R {_colorize(diff_text, _delta_color(ev_diff))}"
+    else:
+        benchmark_combo = "-"
+    _append_row("風報比 : 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
+
     add_row("總交易次數", "pf_trades", kind="count_split")
     add_row("錯失交易次數", "missed_total", kind="missed_split")
     add_row("年化交易次數", "annual_trades", kind="float2_nodiff")
