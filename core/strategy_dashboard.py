@@ -254,7 +254,7 @@ def _table_row5(c1, c2, c3, c4, c5, w1=20, w2=19, w3=24, w4=18, w5=6):
     )
 
 
-def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=19, w3=24, w4=24):
+def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=28, w3=30, w4=30):
     return (
         f"| {_pad_display(c1, w1)} "
         f"| {_pad_display(c2, w2)} "
@@ -336,7 +336,6 @@ def print_optimizer_trial_console_dashboard(*,
     objective_mode: str,
     score_calc_method: str,
     score_numerator_method: str,
-    base_score: float,
     system_score_display: str,
     training_title: str,
     training_rows: list[dict],
@@ -357,7 +356,7 @@ def print_optimizer_trial_console_dashboard(*,
     )
     print(
         f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
-        f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | base_score：{float(base_score):.2f} | "
+        f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | "
         f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
     print(separator)

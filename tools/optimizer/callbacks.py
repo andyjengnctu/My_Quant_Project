@@ -142,8 +142,18 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="ret_pct")),
         "pf_mdd": float(total.get("max_drawdown_pct", 0.0)),
         "pf_romd": _calc_romd(total.get("linked_total_return_pct", 0.0), total.get("max_drawdown_pct", 0.0)),
+        "r_squared": float(_weighted_average_from_rows(windows, value_key="r_squared", weight_key="trade_count")),
+        "m_win_rate": float(_weighted_average_from_rows(windows, value_key="monthly_win_rate", weight_key="trade_count")),
         "win_rate": float(_weighted_average_from_rows(windows, value_key="win_rate", weight_key="trade_count")),
+        "pf_payoff": float(_weighted_average_from_rows(windows, value_key="pf_payoff", weight_key="trade_count")),
+        "pf_ev": float(_weighted_average_from_rows(windows, value_key="pf_ev", weight_key="trade_count")),
         "pf_trades": int(sum(_safe_int(row.get("trade_count", 0)) for row in windows)),
+        "normal_trades": int(sum(_safe_int(row.get("normal_trades", 0)) for row in windows)),
+        "extended_trades": int(sum(_safe_int(row.get("extended_trades", 0)) for row in windows)),
+        "missed_buys": int(sum(_safe_int(row.get("missed_buys", 0)) for row in windows)),
+        "missed_sells": int(sum(_safe_int(row.get("missed_sells", 0)) for row in windows)),
+        "missed_total": int(sum(_safe_int(row.get("missed_buys", 0)) + _safe_int(row.get("missed_sells", 0)) for row in windows)),
+        "annual_trades": float(_weighted_average_from_rows(windows, value_key="annual_trades", weight_key="trade_count")),
         "reserved_buy_fill_rate": float(_weighted_average_from_rows(windows, value_key="reserved_buy_fill_rate", weight_key="trade_count")),
         "avg_exposure": float(_weighted_average_from_rows(windows, value_key="avg_exposure", weight_key="trade_count")),
         "final_equity": float(initial_capital) * float(total.get("ending_equity_factor", 1.0)),
@@ -153,6 +163,8 @@ def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: floa
         "annual_return_pct": float(benchmark_total.get("annualized_return_pct", 0.0)),
         "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="benchmark_return_pct")),
         "pf_mdd": float(benchmark_total.get("max_drawdown_pct", 0.0)),
+        "r_squared": float(_weighted_average_from_rows(windows, value_key="benchmark_r_squared", weight_key="trade_count")),
+        "m_win_rate": float(_weighted_average_from_rows(windows, value_key="benchmark_monthly_win_rate", weight_key="trade_count")),
         "pf_romd": _calc_romd(benchmark_total.get("linked_total_return_pct", 0.0), benchmark_total.get("max_drawdown_pct", 0.0)),
         "final_equity": float(initial_capital) * float(benchmark_total.get("ending_equity_factor", 1.0)),
     }
@@ -241,7 +253,7 @@ def _pass_with_positive_color(passed: bool, numeric_value: float) -> str:
 def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
     if metric_name in {"總資產報酬率", "年化報酬率", "年度最差報酬"}:
         return C_GREEN if float(numeric_value) > 0 else C_RED
-    if metric_name == "平滑度 (Log R²)":
+    if "平滑度" in metric_name:
         return C_GREEN if float(numeric_value) >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
     if metric_name == "月度獲利勝率":
         return C_GREEN if float(numeric_value) >= float(MIN_MONTHLY_WIN_RATE) else C_RED
@@ -291,7 +303,22 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
 
     rows = []
 
-    def add_row(name, key, *, kind="pct", candidate_unit=""):
+    def _append_row(name, candidate_text, candidate_numeric, *, champion_text="-", champion_numeric=None, champion_delta_text="", champion_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None):
+        row = {
+            "name": name,
+            "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue) if candidate_numeric is not None else str(candidate_text),
+            "candidate_precolored": candidate_numeric is not None,
+            "champion": _compose_first_zone_cell(name, champion_text, float(champion_numeric), delta_text=champion_delta_text, delta_value=champion_delta_value, use_blue=use_blue) if champion_numeric is not None else str(champion_text),
+            "champion_precolored": champion_numeric is not None,
+            "benchmark": _compose_first_zone_cell(name, benchmark_text, float(benchmark_numeric), delta_text=benchmark_delta_text, delta_value=benchmark_delta_value, use_blue=use_blue) if benchmark_numeric is not None else str(benchmark_text),
+            "benchmark_precolored": benchmark_numeric is not None,
+        }
+        if candidate_color_override is not None:
+            row["candidate"] = _colorize(str(candidate_text), candidate_color_override)
+            row["candidate_precolored"] = True
+        rows.append(row)
+
+    def add_row(name, key, *, kind="pct", candidate_unit="", digits=2):
         candidate_value = candidate_metrics.get(key, 0.0)
         champion_value_raw = champ_value(key)
         benchmark_value_raw = bench_value(key)
@@ -313,22 +340,30 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
             champ_delta_value = float(champion_value_raw) - float(candidate_value) if champion_value_raw is not None else None
             bench_delta_text = _format_mdd_diff(candidate_value, benchmark_value_raw) if benchmark_value_raw is not None else ""
             champ_delta_text = _format_mdd_diff(candidate_value, champion_value_raw) if champion_value_raw is not None else ""
-        elif kind == "float2":
-            cand_plain = f"{float(candidate_value):.2f}{candidate_unit}"
-            bench_plain = f"{float(benchmark_value_raw):.2f}{candidate_unit}" if benchmark_value_raw is not None else "-"
-            champ_plain = f"{float(champion_value_raw):.2f}{candidate_unit}" if champion_value_raw is not None else "-"
+        elif kind in {"float2", "float3"}:
+            digits = 2 if kind == "float2" else 3
+            cand_plain = f"{float(candidate_value):.{digits}f}{candidate_unit}"
+            bench_plain = f"{float(benchmark_value_raw):.{digits}f}{candidate_unit}" if benchmark_value_raw is not None else "-"
+            champ_plain = f"{float(champion_value_raw):.{digits}f}{candidate_unit}" if champion_value_raw is not None else "-"
             bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
             champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
-            bench_delta_text = _format_float_diff(bench_delta_value, 2, candidate_unit) if bench_delta_value is not None else ""
-            champ_delta_text = _format_float_diff(champ_delta_value, 2, candidate_unit) if champ_delta_value is not None else ""
-        elif kind == "count":
-            cand_plain = str(int(candidate_value))
-            bench_plain = "-"
-            champ_plain = str(int(champion_value_raw)) if champion_value_raw is not None else "-"
-            bench_delta_value = None
-            champ_delta_value = int(candidate_value) - int(champion_value_raw) if champion_value_raw is not None else None
-            bench_delta_text = ""
-            champ_delta_text = f"({int(candidate_value) - int(champion_value_raw):+d})" if champion_value_raw is not None else ""
+            bench_delta_text = _format_float_diff(bench_delta_value, digits, candidate_unit) if bench_delta_value is not None else ""
+            champ_delta_text = _format_float_diff(champ_delta_value, digits, candidate_unit) if champ_delta_value is not None else ""
+        elif kind == "count_split":
+            cand_plain = f"{int(candidate_metrics.get('pf_trades', 0))} (正常:{int(candidate_metrics.get('normal_trades', 0))} | 延續:{int(candidate_metrics.get('extended_trades', 0))})"
+            champ_plain = f"{int(champion_metrics.get('pf_trades', 0))} (正常:{int(champion_metrics.get('normal_trades', 0))} | 延續:{int(champion_metrics.get('extended_trades', 0))})" if champion_metrics else "-"
+            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
+        elif kind == "missed_split":
+            cand_plain = f"{int(candidate_metrics.get('missed_total', 0))} (買:{int(candidate_metrics.get('missed_buys', 0))} | 賣:{int(candidate_metrics.get('missed_sells', 0))})"
+            champ_plain = f"{int(champion_metrics.get('missed_total', 0))} (買:{int(champion_metrics.get('missed_buys', 0))} | 賣:{int(champion_metrics.get('missed_sells', 0))})" if champion_metrics else "-"
+            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
+        elif kind == "float2_nodiff":
+            cand_plain = f"{float(candidate_value):.2f}{candidate_unit}"
+            champ_plain = f"{float(champion_value_raw):.2f}{candidate_unit}" if champion_value_raw is not None else "-"
+            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            return
         elif kind == "money":
             cand_plain = _format_money(candidate_value)
             bench_plain = _format_money(benchmark_value_raw) if benchmark_value_raw is not None else "-"
@@ -347,27 +382,37 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
             champ_delta_text = ""
 
         use_blue = name == "報酬回撤比 (RoMD)"
-        rows.append(
-            {
-                "name": name,
-                "candidate": _compose_first_zone_cell(name, cand_plain, float(candidate_value), use_blue=use_blue),
-                "candidate_precolored": True,
-                "champion": _compose_first_zone_cell(name, champ_plain, float(champion_value_raw), delta_text=champ_delta_text, delta_value=champ_delta_value, use_blue=use_blue) if champion_value_raw is not None else "-",
-                "champion_precolored": True,
-                "benchmark": _compose_first_zone_cell(name, bench_plain, float(benchmark_value_raw), delta_text=bench_delta_text, delta_value=bench_delta_value, use_blue=use_blue) if benchmark_value_raw is not None else "-",
-                "benchmark_precolored": True,
-            }
+        _append_row(
+            name,
+            cand_plain,
+            candidate_value,
+            champion_text=champ_plain,
+            champion_numeric=champion_value_raw,
+            champion_delta_text=champ_delta_text,
+            champion_delta_value=champ_delta_value,
+            benchmark_text=bench_plain,
+            benchmark_numeric=benchmark_value_raw,
+            benchmark_delta_text=bench_delta_text,
+            benchmark_delta_value=bench_delta_value,
+            use_blue=use_blue,
         )
 
     add_row("總資產報酬率", "pf_return", kind="pct")
     add_row("年化報酬率", "annual_return_pct", kind="pct")
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
-    add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
     add_row("報酬回撤比 (RoMD)", "pf_romd", kind="float2")
-    add_row("系統實際勝率", "win_rate", kind="pct")
-    add_row("總交易次數", "pf_trades", kind="count")
+    add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
+    add_row("平滑度 (Log R2)", "r_squared", kind="float2")
+    add_row("月度獲利勝率", "m_win_rate", kind="pct")
+    add_row("系統實戰勝率", "win_rate", kind="pct")
+    add_row("盈虧風報比", "pf_payoff", kind="float2")
+    add_row("實戰期望值 (EV)", "pf_ev", kind="float3")
+    add_row("總交易次數", "pf_trades", kind="count_split")
+    add_row("錯失交易次數", "missed_total", kind="missed_split")
+    add_row("年化交易次數", "annual_trades", kind="float2_nodiff")
     add_row("保留後買進成交率", "reserved_buy_fill_rate", kind="pct")
     add_row("平均資金水位", "avg_exposure", kind="pct")
+    add_row("最終資產", "final_equity", kind="money")
     return rows
 
 
@@ -456,10 +501,12 @@ def _build_compare_rows(*, trial, champion_cache, policy):
 def _build_training_param_lines(params):
     bb_str = f"布林(BB) 啟用（長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x）" if get_p(params, 'use_bb', False) else "布林(BB) 關閉"
     kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
-    vol_str = "均量 啟用" if get_p(params, 'use_vol', False) else "均量 關閉"
+    vol_str = f"均量 啟用（短{get_p(params, 'vol_short_len', 5)} > 長{get_p(params, 'vol_long_len', 19)}）" if get_p(params, 'use_vol', False) else "均量 關閉"
     return [
-        f"核心：突破 {get_p(params, 'high_len', 201)} 日新高｜ATR {get_p(params, 'atr_len', 14)} 日｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%  風控：掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR",
-        f"濾網：{bb_str}｜{kc_str}｜{vol_str}  歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
+        f"核心：突破 {get_p(params, 'high_len', 201)} 日新高｜ATR {get_p(params, 'atr_len', 14)} 日｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%",
+        f"風控：掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR",
+        f"濾網：{bb_str}｜{kc_str}｜{vol_str}",
+        f"歷史門檻：交易 >= {get_p(params, 'min_history_trades', 0)} 次｜勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:.1f}%｜EV >= {get_p(params, 'min_history_ev', 0.0):.2f} R",
     ]
 
 
@@ -508,14 +555,14 @@ def _compute_champion_console_cache(session):
         win_rate,
         pf_ev,
         pf_payoff,
-        _missed_b,
-        _missed_s,
+        missed_buys,
+        missed_sells,
         r_sq,
         m_win_rate,
         bm_r_sq,
         bm_m_win_rate,
-        _normal_trades,
-        _extended_trades,
+        normal_trades,
+        extended_trades,
         annual_trades,
         reserved_buy_fill_rate,
         annual_return_pct,
@@ -545,6 +592,11 @@ def _compute_champion_console_cache(session):
         "win_rate": win_rate,
         "pf_ev": pf_ev,
         "pf_payoff": pf_payoff,
+        "missed_buys": int(missed_buys),
+        "missed_sells": int(missed_sells),
+        "missed_total": int(missed_buys) + int(missed_sells),
+        "normal_trades": int(normal_trades),
+        "extended_trades": int(extended_trades),
         "annual_trades": annual_trades,
         "reserved_buy_fill_rate": reserved_buy_fill_rate,
         "avg_exposure": avg_exp,
@@ -614,8 +666,18 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         "annual_return_pct": _safe_float(attrs.get("annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("min_full_year_return_pct", 0.0)),
         "pf_mdd": _safe_float(attrs.get("pf_mdd", 0.0)),
+        "r_squared": _safe_float(attrs.get("r_squared", 0.0)),
+        "m_win_rate": _safe_float(attrs.get("m_win_rate", 0.0)),
         "win_rate": _safe_float(attrs.get("win_rate", 0.0)),
+        "pf_payoff": _safe_float(attrs.get("pf_payoff", 0.0)),
+        "pf_ev": _safe_float(attrs.get("pf_ev", 0.0)),
         "pf_trades": _safe_int(attrs.get("pf_trades", 0)),
+        "normal_trades": _safe_int(attrs.get("normal_trades", attrs.get("pf_trades", 0))),
+        "extended_trades": _safe_int(attrs.get("extended_trades", 0)),
+        "missed_buys": _safe_int(attrs.get("missed_buys", 0)),
+        "missed_sells": _safe_int(attrs.get("missed_sells", 0)),
+        "missed_total": _safe_int(attrs.get("missed_buys", 0)) + _safe_int(attrs.get("missed_sells", 0)),
+        "annual_trades": _safe_float(attrs.get("annual_trades", 0.0)),
         "reserved_buy_fill_rate": _safe_float(attrs.get("reserved_buy_fill_rate", 0.0)),
         "avg_exposure": _safe_float(attrs.get("avg_exposure", 0.0)),
         "final_equity": _safe_float(attrs.get("final_equity", 0.0)),
@@ -626,6 +688,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         "annual_return_pct": _safe_float(attrs.get("bm_annual_return_pct", 0.0)),
         "min_full_year_return_pct": _safe_float(attrs.get("bm_min_full_year_return_pct", 0.0)),
         "pf_mdd": _safe_float(attrs.get("bm_mdd", 0.0)),
+        "r_squared": _safe_float(attrs.get("bm_r_squared", 0.0)),
+        "m_win_rate": _safe_float(attrs.get("bm_m_win_rate", 0.0)),
         "pf_romd": _calc_romd(_safe_float(attrs.get("bm_return", 0.0)), _safe_float(attrs.get("bm_mdd", 0.0))),
         "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),
     }
@@ -711,7 +775,6 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         objective_mode=str(session.objective_mode),
         score_calc_method=SCORE_CALC_METHOD,
         score_numerator_method=SCORE_NUMERATOR_METHOD,
-        base_score=payload["base_score"],
         system_score_display=payload["system_score_display"],
         training_title=payload["training_title"],
         training_rows=payload["train_rows"],
