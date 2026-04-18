@@ -94,7 +94,7 @@ def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> 
     from core.runtime_utils import safe_prompt_choice as _safe_prompt_choice
 
     choice = _safe_prompt_choice(
-        "👉 請選擇 Optimizer 模式：[1] Split（Train/Test 分離）  [2] Legacy（全資料訓練到最新日）（預設 1）: ",
+        "👉 Optimizer 模式：[1] Split（Train/Test 分離）  [2] Legacy（全資料訓練到最新日）: ",
         "1" if str(default_choice) == MODEL_CHOICE_SPLIT else "2",
         ("1", "2"),
         "optimizer 模式",
@@ -455,7 +455,7 @@ def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_para
 
 def _prompt_promote_choice(default: bool = False) -> tuple[bool, str]:
     default_text = "N" if not default else "Y"
-    raw = input(f"👉 完成後若 Compare PASS，是否自動升版 Champion？ (y/N，預設 {default_text}): ").strip().lower()
+    raw = input(f"👉 自動升版 Champion：[Y] 是  [N] 否（預設 {default_text}）: ").strip().lower()
     if raw == "":
         return default, "prompt_default"
     if raw in {"y", "yes", "1", "true", "on"}:

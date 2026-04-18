@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.model_paths import resolve_named_params_path
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, validate_cli_args
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
@@ -28,10 +28,20 @@ def main(argv=None, env=None):
         print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源預設 champion；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的測試起始日期。")
         return 0
 
-    from core.data_utils import discover_unique_csv_inputs
-    from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-    from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
-    from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER, resolve_default_portfolio_start_year
+    from core.data_utils import normalize_ticker_from_csv_filename
+    from core.walk_forward_policy import load_walk_forward_policy
+
+    def _has_any_csv_input(data_dir: str) -> bool:
+        try:
+            with os.scandir(data_dir) as entries:
+                for entry in entries:
+                    if not entry.is_file():
+                        continue
+                    if normalize_ticker_from_csv_filename(entry.name):
+                        return True
+        except OSError:
+            return False
+        return False
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -42,14 +52,13 @@ def main(argv=None, env=None):
         selected_data_dir = get_dataset_dir(PROJECT_ROOT, dataset_profile_key)
         if not os.path.isdir(selected_data_dir):
             raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
-        csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
-        if not csv_inputs:
+        if not _has_any_csv_input(selected_data_dir):
             raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
     except (ValueError, FileNotFoundError) as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
-    default_start_year = resolve_default_portfolio_start_year(selected_data_dir)
+    default_start_year_hint = int(load_walk_forward_policy(PROJECT_ROOT)["train_start_year"])
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
@@ -61,35 +70,45 @@ def main(argv=None, env=None):
 
     try:
         param_source_choice = safe_prompt_choice(
-            "👉 1. 參數來源 (C=champion / R=run_best, 預設 C): ",
+            "👉 參數來源：[C] champion  [R] run_best: ",
             "C",
             ("C", "R"),
             "參數來源",
         )
         param_source = "champion" if param_source_choice == "C" else "run_best"
         rotation_choice = safe_prompt_choice(
-            "👉 2. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
+            "👉 汰弱換股：[Y] 啟用  [N] 關閉: ",
             "N",
             ("Y", "N"),
             "汰弱換股選項",
         )
         user_rotation = rotation_choice == 'Y'
         user_max_pos = safe_prompt_int(
-            "👉 3. 最大持倉數量 (預設 10): ",
+            "👉 最大持倉數量：[數字] 輸入，預設 10: ",
             10,
             "最大持倉數量",
             min_value=1,
         )
-        user_start_year = safe_prompt_int(
-            f"👉 4. 開始回測年份 (預設 {default_start_year}): ",
-            default_start_year,
-            "開始回測年份",
-            min_value=1900,
-        )
-        user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+        raw_start_year = safe_prompt(
+            f"👉 開始回測年份：[Enter] 使用測試起始年  [數字] 指定年份（提示 {default_start_year_hint}）: ",
+            "",
+        ).strip()
+        if raw_start_year == "":
+            from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER, resolve_default_portfolio_start_year
+
+            user_start_year = int(resolve_default_portfolio_start_year(selected_data_dir))
+            user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+        else:
+            user_start_year = parse_int_strict(raw_start_year, "開始回測年份", min_value=1900)
+            from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+
+            user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
+
+    from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
+    from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
     try:
         params_path = resolve_named_params_path(PROJECT_ROOT, param_source)

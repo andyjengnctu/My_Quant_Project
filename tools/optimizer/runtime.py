@@ -21,7 +21,7 @@ def prompt_existing_db_policy(db_file, colors):
     if not os.path.exists(db_file):
         return
     choice = safe_prompt_choice(
-        "\n👉 發現舊有 Portfolio 記憶庫！ [1] 接續訓練  [2] 刪除重來 (預設 1): ",
+        "\n👉 Portfolio 記憶庫：[1] 接續訓練  [2] 刪除重來: ",
         "1",
         ("1", "2"),
         "記憶庫操作選項",
