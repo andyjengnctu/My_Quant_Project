@@ -14,6 +14,7 @@ import tkinter as tk
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from html import unescape
+from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -66,6 +67,12 @@ PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 本輪最佳": "run_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "champion | 正式現役"
+COMBOBOX_WIDTH_RULES = {
+    "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
+    "candidate": {"min_chars": 18, "max_chars": 28, "extra_px": 36},
+    "history": {"min_chars": 28, "max_chars": 52, "extra_px": 40},
+    "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
+}
 
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
@@ -441,16 +448,19 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
         _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
         self._reduced_stock_combo = ttk.Combobox(controls_bar, state="readonly", width=18, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
+        self._autosize_combobox(self._reduced_stock_combo, values=reduced_display_values, current_text=self._reduced_stock_display_var.get(), rule_key="reduced")
         self._reduced_stock_combo.grid(row=0, column=3, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
         ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
         self._candidate_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
+        self._autosize_combobox(self._candidate_combo, values=[], current_text=self._candidate_display_var.get(), rule_key="candidate")
         self._candidate_combo.grid(row=0, column=5, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
         ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
         self._history_combo = ttk.Combobox(controls_bar, state="readonly", width=30, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._autosize_combobox(self._history_combo, values=[], current_text=self._history_display_var.get(), rule_key="history")
         self._history_combo.grid(row=0, column=7, padx=(0, 14), pady=uniform_pady, sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
@@ -463,6 +473,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             style="Workbench.TCombobox",
             values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
         )
+        self._autosize_combobox(self._param_source_combo, values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()), current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
         ttk.Checkbutton(
@@ -562,6 +573,36 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._notebook.select(chart_tab)
         self.after_idle(self._refresh_reduced_stock_company_names_if_needed)
 
+    def _get_workbench_combobox_font(self):
+        if hasattr(self, "_workbench_combobox_font"):
+            return self._workbench_combobox_font
+        font_spec = ttk.Style(self).lookup("Workbench.TCombobox", "font") or ("Microsoft JhengHei", 11)
+        try:
+            self._workbench_combobox_font = tkfont.Font(font=font_spec)
+        except tk.TclError:
+            self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
+        return self._workbench_combobox_font
+
+    def _autosize_combobox(self, combo, *, values, current_text, rule_key):
+        rule = COMBOBOX_WIDTH_RULES[rule_key]
+        font_obj = self._get_workbench_combobox_font()
+        text_candidates = [str(value or "") for value in list(values or [])]
+        text_candidates.append(str(current_text or ""))
+        try:
+            live_text = combo.get()
+        except tk.TclError:
+            live_text = ""
+        text_candidates.append(str(live_text or ""))
+        longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
+        average_char_px = max(font_obj.measure("0"), 1)
+        text_px = font_obj.measure(longest_text) + int(rule.get("extra_px") or 0)
+        width_chars = max(
+            int(rule.get("min_chars") or 0),
+            (text_px + average_char_px - 1) // average_char_px,
+        )
+        width_chars = min(width_chars, int(rule.get("max_chars") or width_chars))
+        combo.configure(width=width_chars)
+
     def _build_initial_reduced_stock_company_name_map(self):
         name_map = dict(FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP)
         cache_payload = _load_reduced_stock_company_name_cache()
@@ -580,6 +621,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                     selected_display = display_label
                     break
         self._reduced_stock_display_var.set(selected_display)
+        self._autosize_combobox(self._reduced_stock_combo, values=display_values, current_text=selected_display or current_ticker, rule_key="reduced")
 
     def _append_reduced_stock_lookup_message(self, message):
         normalized_message = str(message or "").strip()
@@ -861,15 +903,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         return f"{ticker} | {kind_label} | {probe_text}"
 
-    def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values):
+    def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
         mapping.clear()
         combo.configure(values=display_values)
         if display_values:
             value_var.set(display_values[0])
             mapping.update({label: label.split(" | ", 1)[0].strip() for label in display_values})
             self._ticker_var.set(mapping[display_values[0]])
+            self._autosize_combobox(combo, values=display_values, current_text=display_values[0], rule_key=rule_key)
             return
         value_var.set("")
+        self._autosize_combobox(combo, values=[], current_text="", rule_key=rule_key)
 
     def _run_scanner_worker(self, mode, params_path, request_token):
         try:
@@ -929,6 +973,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 value_var=self._candidate_display_var,
                 mapping=self._candidate_map,
                 display_values=display_values,
+                rule_key="candidate",
             )
             self._status_var.set(f"掃描完成：候選股 {len(display_values)} 檔")
             return
@@ -941,6 +986,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             value_var=self._history_display_var,
             mapping=self._history_map,
             display_values=display_values,
+            rule_key="history",
         )
         self._status_var.set(f"掃描完成：歷史績效股 {len(display_values)} 檔")
 
