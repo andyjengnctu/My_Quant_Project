@@ -348,14 +348,13 @@ def print_optimizer_trial_console_dashboard(*,
 ):
     separator = "------------------------------------------------------------------------------------------------------------------------"
     print(f"{C_GRAY}{separator}{C_RESET}")
-    print(f"{C_CYAN}{title}{C_RESET}")
     print(f"{C_RED}{milestone_title}{C_RESET}")
     print(
-        f"全域戰略：{C_YELLOW}{global_strategy_text}{C_RESET} | "
+        f"{C_CYAN}【全域戰略】{C_RESET} {C_YELLOW}{global_strategy_text}{C_RESET} | "
         f"模式：{mode_display} | 最大持股：{max_pos} 檔 | model_mode：{C_YELLOW}{model_mode.upper()}{C_RESET}"
     )
     print(
-        f"【評分模式】 objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
+        f"{C_CYAN}【評分模式】{C_RESET} objective_mode：{objective_mode} | 評分模型：[{C_YELLOW}{score_calc_method}{C_RESET}] | "
         f"評分分子：[{C_YELLOW}{score_numerator_method}{C_RESET}] | "
         f"系統得分：{C_CYAN}{system_score_display}{C_RESET}"
     )
@@ -373,7 +372,6 @@ def print_optimizer_trial_console_dashboard(*,
             )
         )
     if testing_title and testing_rows:
-        print()
         print(testing_title)
         print(separator)
         print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)"))

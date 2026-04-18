@@ -255,8 +255,6 @@ def _first_zone_base_color(metric_name: str, numeric_value: float) -> str:
         return C_GREEN if float(numeric_value) > 0 else C_RED
     if "平滑度" in metric_name:
         return C_GREEN if float(numeric_value) >= float(MIN_EQUITY_CURVE_R_SQUARED) else C_RED
-    if metric_name == "月度獲利勝率":
-        return C_GREEN if float(numeric_value) >= float(MIN_MONTHLY_WIN_RATE) else C_RED
     if metric_name == "最大回撤 (MDD)":
         return C_YELLOW if abs(float(numeric_value)) <= float(MAX_PORTFOLIO_MDD_PCT) else C_RED
     return ""
@@ -402,7 +400,6 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     add_row("年度最差報酬", "min_full_year_return_pct", kind="pct")
     add_row("報酬回撤比 (RoMD)", "pf_romd", kind="float2")
     add_row("最大回撤 (MDD)", "pf_mdd", kind="mdd")
-    add_row("平滑度 (Log R2)", "r_squared", kind="float2")
     add_row("月度獲利勝率", "m_win_rate", kind="pct")
     add_row("系統實戰勝率", "win_rate", kind="pct")
     add_row("盈虧風報比", "pf_payoff", kind="float2")

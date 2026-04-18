@@ -1231,7 +1231,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     default_policy_path = str(default_policy.get("policy_path", "")).replace("\\", "/")
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_python_config", True, default_policy_path.endswith("config/walk_forward_policy.py"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_auto_derives_search_train_end_year", 2019, int(default_policy.get("search_train_end_year", 0)))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_wf_gate_median", "wf_gate_median", str(default_policy.get("objective_mode", "")))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_split_test_romd", "split_test_romd", str(default_policy.get("objective_mode", "")))
 
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"

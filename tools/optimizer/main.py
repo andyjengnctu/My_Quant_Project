@@ -399,8 +399,8 @@ def promote_run_best_to_champion_by_test_score(*, session, compare_result, compa
                 if _json_file_equal(CHAMPION_PARAMS_PATH, RUN_BEST_PARAMS_PATH):
                     result["reason"] = "same_as_champion"
                     return result
-            except Exception:
-                pass
+            except Exception as exc:
+                result["same_as_champion_probe_error"] = str(exc)
         return result
 
     archive_dir = os.path.join(MODELS_DIR, "champion_archive")
