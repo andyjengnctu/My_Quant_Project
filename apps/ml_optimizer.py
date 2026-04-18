@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整、模型模式預設為 split；可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 完全分離：訓練只看 train RoMD、測試只看單一連續 test holdout RoMD，Champion 永遠保留目前測試 RoMD 最好的策略+參數，不會把測試分數自動回灌到同一次訓練；互動式 Optimizer 選單預設訓練 50000 次，輸入 0 可寫入 best run 並重新測試目前記憶庫最佳；非互動模式預設訓練次數為 0；可用環境變數 V16_OPTIMIZER_TRIALS 指定 trial 數、V16_OPTIMIZER_SEED 指定固定 seed；train/test 切分設定來自 config/training_policy.py；正式現役版固定使用 champion_params.json。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整、模式預設為 split。可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換。split 只用 train 區搜尋，並以單一連續 test holdout 產出測試報表；只有明確指定 P 或 --promote 時，才會重測 run_best 並在測試 RoMD 嚴格高於現役 Champion 時更新 champion_params.json。輸入 0 只會匯出 run_best 與測試報表，不會比較或更新 Champion。非互動模式預設 trial 數為 0；切分設定來自 config/training_policy.py。"
 
 
 def main(argv=None, environ=None):

@@ -58,9 +58,9 @@ def resolve_optimizer_run_request(environ):
 
     if is_interactive_stdin():
         prompt = (
-            f"👉 Optimizer 選單（預設 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE}）："
+            f"👉 Optimizer 動作（預設 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE} 次訓練）："
             f"直接 Enter=訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE} 次，"
-            "輸入數字=訓練指定次數，0=寫入 best run，P=重新測試目前最佳並更新 Champion: "
+            "輸入數字=訓練指定次數，0=只匯出 run_best 與測試報表，P=重測 run_best 並在測試 RoMD 嚴格勝出時更新 Champion: "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")

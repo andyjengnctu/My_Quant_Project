@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整；縮減資料集路徑為 <repo>/data/tw_stock_data_vip_reduced。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整；若要掃描縮減資料集，可用 --dataset reduced，路徑為 <repo>/data/tw_stock_data_vip_reduced。"
 LAZY_EXPORTS = {
     "ensure_runtime_dirs",
     "is_insufficient_data_error",

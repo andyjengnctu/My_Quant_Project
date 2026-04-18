@@ -94,7 +94,7 @@ def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> 
     from core.runtime_utils import safe_prompt_choice as _safe_prompt_choice
 
     choice = _safe_prompt_choice(
-        "👉 請選擇 optimizer 模式 [1] Train/Test 分離 RoMD  [2] 原本模式(全資料到最新日) (預設 1): ",
+        "👉 請選擇 Optimizer 模式：[1] Split（Train/Test 分離）  [2] Legacy（全資料訓練到最新日）（預設 1）: ",
         "1" if str(default_choice) == MODEL_CHOICE_SPLIT else "2",
         ("1", "2"),
         "optimizer 模式",
@@ -737,6 +737,9 @@ def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_
     print_walk_forward_outputs(report=report, report_paths=report_paths, objective_mode=str(session.objective_mode))
 
     if str(session.objective_mode) == "split_test_romd":
+        if not auto_promote_enabled:
+            print(f"{C_GRAY}ℹ️ 本次未啟用 Champion 挑戰；已保留 run_best 與測試報表，現役 Champion 不變。{C_RESET}")
+            return 0
         compare_result, compare_paths = generate_split_test_compare_report(
             session=session,
             dataset_label=dataset_label,
@@ -795,7 +798,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用單一連續 test holdout RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；train/test 切分設定來自 config/training_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
+        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換。split 只用 train 區搜尋，並以單一連續 test holdout 產出測試報表；只有明確指定 P 或 --promote 時，才會重測 run_best 並在測試 RoMD 嚴格高於現役 Champion 時更新 champion_params.json。輸入 0 只會匯出 run_best 與測試報表，不會比較或更新 Champion。legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設 trial 數為 0；切分設定來自 config/training_policy.py。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -861,9 +864,6 @@ def main(argv=None, environ=None):
         requested_n_trials=session.n_trials,
         requested_action=str(getattr(session, "run_action", "train")),
     )
-    if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
-        auto_promote_enabled = True
-        promote_source = "split_test_score_auto"
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -959,7 +959,11 @@ def main(argv=None, environ=None):
             f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest"
             f"{C_RESET}"
         )
-        print(f"{C_GRAY}🏆 Champion 規則: 測試期間最終 RoMD 較高者保留；測試分數不回灌同次訓練。{C_RESET}")
+        print(f"{C_GRAY}🏆 Champion 規則: 只有明確指定 P 或 --promote 時，才會以測試 RoMD 嚴格勝出為條件更新 Champion。{C_RESET}")
+        if auto_promote_enabled:
+            print(f"{C_GRAY}⬆️ 本次動作: 會重測 run_best、比較現役 Champion，且僅在測試 RoMD 嚴格較高時升版。{C_RESET}")
+        else:
+            print(f"{C_GRAY}📦 本次動作: 只輸出 run_best 與測試報表；不比較、不更新 Champion。{C_RESET}")
     else:
         print(
             f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
