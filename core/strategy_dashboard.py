@@ -254,7 +254,7 @@ def _table_row5(c1, c2, c3, c4, c5, w1=20, w2=19, w3=24, w4=18, w5=6):
     )
 
 
-def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=28, w3=30, w4=30):
+def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=28, w3=32, w4=32):
     return (
         f"| {_pad_display(c1, w1)} "
         f"| {_pad_display(c2, w2)} "

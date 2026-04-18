@@ -408,14 +408,14 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     benchmark_payoff = bench_value("pf_payoff")
     benchmark_ev = bench_value("pf_ev")
 
-    candidate_combo = f"{candidate_payoff:.2f} : {candidate_ev:.3f} R"
+    candidate_combo = f"{candidate_payoff:.2f}:{candidate_ev:.3f}R"
     if champion_payoff is not None and champion_ev is not None:
         champion_payoff = float(champion_payoff)
         champion_ev = float(champion_ev)
         payoff_diff = candidate_payoff - champion_payoff
         ev_diff = candidate_ev - champion_ev
-        diff_text = f"({payoff_diff:+.2f} : {ev_diff:+.3f} R)"
-        champion_combo = f"{champion_payoff:.2f} : {champion_ev:.3f} R {_colorize(diff_text, _delta_color(ev_diff))}"
+        diff_text = f"({payoff_diff:+.2f}:{ev_diff:+.3f}R)"
+        champion_combo = f"{champion_payoff:.2f}:{champion_ev:.3f}R {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         champion_combo = "-"
     if benchmark_payoff is not None and benchmark_ev is not None:
@@ -423,8 +423,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
         benchmark_ev = float(benchmark_ev)
         payoff_diff = candidate_payoff - benchmark_payoff
         ev_diff = candidate_ev - benchmark_ev
-        diff_text = f"({payoff_diff:+.2f} : {ev_diff:+.3f} R)"
-        benchmark_combo = f"{benchmark_payoff:.2f} : {benchmark_ev:.3f} R {_colorize(diff_text, _delta_color(ev_diff))}"
+        diff_text = f"({payoff_diff:+.2f}:{ev_diff:+.3f}R)"
+        benchmark_combo = f"{benchmark_payoff:.2f}:{benchmark_ev:.3f}R {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         benchmark_combo = "-"
     _append_row("風報比 : 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
