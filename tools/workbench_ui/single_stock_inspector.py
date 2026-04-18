@@ -411,7 +411,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._console_stream_mode = "line"
         self._console_live_progress_start = None
         self._analysis_thread = None
-        self._analysis_pending_ticker = ""
+        self._analysis_pending_request = None
         self._analysis_active_token = 0
         self._scanner_thread = None
         self._scanner_active_token = 0
@@ -425,44 +425,54 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _build_ui(self):
         controls = ttk.Frame(self, padding=(8, 2, 8, 2), style="Workbench.TFrame")
         controls.pack(fill="x", pady=(0, 4))
-        controls.columnconfigure(11, weight=1)
 
-        ttk.Label(controls, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, sticky="w")
-        ticker_entry = ttk.Entry(controls, textvariable=self._ticker_var, width=18, style="Workbench.TEntry")
+        controls_left = ttk.Frame(controls, style="Workbench.TFrame")
+        controls_left.pack(side="left", fill="x", expand=True)
+        controls_right = ttk.Frame(controls, style="Workbench.TFrame")
+        controls_right.pack(side="right", anchor="ne")
+
+        ttk.Label(controls_left, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, sticky="w")
+        ticker_entry = ttk.Entry(controls_left, textvariable=self._ticker_var, width=12, style="Workbench.TEntry")
         ticker_entry.grid(row=0, column=1, padx=(6, 8), sticky="w")
         ticker_entry.focus_set()
 
         ticker_entry.bind("<Return>", self._on_ticker_enter)
 
-        ttk.Label(controls, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, sticky="w")
+        ttk.Label(controls_left, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, sticky="w")
         self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
         _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
-        self._reduced_stock_combo = ttk.Combobox(controls, state="readonly", width=28, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
-        self._reduced_stock_combo.grid(row=0, column=3, padx=(6, 8), sticky="w")
+        self._reduced_stock_combo = ttk.Combobox(controls_left, state="readonly", width=18, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
+        self._reduced_stock_combo.grid(row=0, column=3, padx=(6, 12), sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
-        ttk.Label(controls, text="參數", style="Workbench.TLabel").grid(row=0, column=4, sticky="w")
+        ttk.Button(controls_left, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
+        self._candidate_combo = ttk.Combobox(controls_left, state="readonly", width=24, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
+        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
+        self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
+
+        ttk.Button(controls_left, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
+        self._history_combo = ttk.Combobox(controls_left, state="readonly", width=34, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._history_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
+        self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
+
+        ttk.Label(controls_right, text="參數", style="Workbench.TLabel").grid(row=0, column=0, sticky="e")
         self._param_source_combo = ttk.Combobox(
-            controls,
+            controls_right,
             state="readonly",
-            width=22,
+            width=20,
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
             values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
         )
-        self._param_source_combo.grid(row=0, column=5, padx=(6, 8), sticky="w")
-
-        ttk.Button(controls, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
-        self._candidate_combo = ttk.Combobox(controls, state="readonly", width=34, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
-        self._candidate_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
-        self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
-
-        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=8, padx=(0, 8), sticky="w")
-        self._history_combo = ttk.Combobox(controls, state="readonly", width=58, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
-        self._history_combo.grid(row=0, column=9, padx=(0, 12), sticky="w")
-        self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
-
-        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=10, padx=(0, 12), sticky="w")
+        self._param_source_combo.grid(row=0, column=1, padx=(6, 0), sticky="e")
+        self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
+        ttk.Checkbutton(
+            controls_right,
+            text="顯示成交量",
+            variable=self._show_volume_var,
+            command=self._rerender_current_chart,
+            style="Workbench.TCheckbutton",
+        ).grid(row=1, column=1, pady=(4, 0), sticky="e")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -490,16 +500,39 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        sidebar = ttk.Frame(chart_tab, padding=(10, 6), style="Workbench.TFrame")
-        sidebar.grid(row=0, column=1, sticky="ns")
-        sidebar.configure(width=320)
+        sidebar_outer = ttk.Frame(chart_tab, padding=(6, 6, 4, 6), style="Workbench.TFrame")
+        sidebar_outer.grid(row=0, column=1, sticky="ns")
+        sidebar_outer.grid_rowconfigure(0, weight=1)
+        sidebar_outer.grid_columnconfigure(0, weight=1)
+        self._sidebar_canvas = tk.Canvas(
+            sidebar_outer,
+            width=282,
+            bg="#05090e",
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
+        self._sidebar_canvas.grid(row=0, column=0, sticky="ns")
+        self._sidebar_scrollbar = ttk.Scrollbar(
+            sidebar_outer,
+            orient="vertical",
+            command=self._sidebar_canvas.yview,
+            style="Workbench.Vertical.TScrollbar",
+        )
+        self._sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._sidebar_canvas.configure(yscrollcommand=self._sidebar_scrollbar.set)
+
+        sidebar = ttk.Frame(self._sidebar_canvas, padding=(8, 4), style="Workbench.TFrame")
+        self._sidebar_inner_window = self._sidebar_canvas.create_window((0, 0), window=sidebar, anchor="nw")
+        self._sidebar_canvas.bind("<Configure>", self._on_sidebar_canvas_configure)
+        sidebar.bind("<Configure>", self._on_sidebar_frame_configure)
         sidebar.columnconfigure(1, weight=1)
-        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 19, "bold"), padx=8, pady=7, anchor="center")
-        self._signal_chip.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 19, "bold"), padx=8, pady=7, anchor="center")
-        self._history_chip.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 17, "bold"), padx=8, pady=6, anchor="center")
+        self._signal_chip.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 17, "bold"), padx=8, pady=6, anchor="center")
+        self._history_chip.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=270).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 14))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=236).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
@@ -807,8 +840,25 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._ticker_var.set(ticker)
             self.after_idle(self._run_analysis)
 
+    def _on_param_source_selected(self, _event=None):
+        ticker = self._ticker_var.get().strip()
+        if not ticker:
+            self._status_var.set(f"參數已切換：{self._get_selected_param_source_label()}")
+            return
+        self.after_idle(self._run_analysis)
+
     def _on_ticker_enter(self, _event=None):
         self._run_analysis()
+
+    def _on_sidebar_canvas_configure(self, event=None):
+        if event is None or not hasattr(self, "_sidebar_canvas"):
+            return
+        canvas_width = max(int(event.width), 1)
+        self._sidebar_canvas.itemconfigure(self._sidebar_inner_window, width=canvas_width)
+
+    def _on_sidebar_frame_configure(self, _event=None):
+        if hasattr(self, "_sidebar_canvas"):
+            self._sidebar_canvas.configure(scrollregion=self._sidebar_canvas.bbox("all"))
 
     def _format_history_display_label(self, item):
         ticker = str(item.get("ticker") or "").strip()
@@ -838,10 +888,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
         value_var.set("")
 
-    def _run_scanner_worker(self, mode, request_token):
+    def _run_scanner_worker(self, mode, params_path, request_token):
         try:
             data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
-            params = self._get_selected_params()
+            params = load_params(params_path, verbose=False)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 if mode == "candidate":
                     scan_result = run_daily_scanner(data_dir, params)
@@ -860,6 +910,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
         self._scanner_active_token += 1
         request_token = self._scanner_active_token
+        params_path = self._get_selected_params_path()
         self._clear_console()
         self._notebook.select(2)
         param_source = self._get_selected_param_source_label()
@@ -872,7 +923,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._append_console_text(f"[scanner] {status_text}\n")
         scanner_thread = threading.Thread(
             target=self._run_scanner_worker,
-            args=(mode, request_token),
+            args=(mode, params_path, request_token),
             name=f"workbench-scanner-{mode}",
             daemon=True,
         )
@@ -923,45 +974,53 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _run_history_scanner(self):
         self._start_scanner("history")
 
-    def _run_analysis_worker(self, ticker, request_token):
+    def _run_analysis_worker(self, ticker, params_path, request_token):
         try:
             result = run_ticker_analysis(
                 ticker,
                 dataset_profile_key=DEFAULT_DATASET_PROFILE,
-                params=self._get_selected_params(),
+                params=load_params(params_path, verbose=False),
                 export_excel=True,
                 export_chart=False,
                 return_chart_payload=True,
                 verbose=False,
             )
         except Exception as exc:
-            self.after(0, self._finish_analysis_error, ticker, request_token, exc)
+            self.after(0, self._finish_analysis_error, ticker, params_path, request_token, exc)
             return
-        self.after(0, self._finish_analysis_success, ticker, request_token, result)
+        self.after(0, self._finish_analysis_success, ticker, params_path, request_token, result)
 
-    def _start_analysis(self, ticker):
+    def _start_analysis(self, ticker, *, params_path=None):
         ticker = str(ticker or "").strip()
         if not ticker:
             return
+        resolved_params_path = str(params_path or self._get_selected_params_path())
         self._analysis_active_token += 1
         request_token = self._analysis_active_token
         self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
         analysis_thread = threading.Thread(
             target=self._run_analysis_worker,
-            args=(ticker, request_token),
+            args=(ticker, resolved_params_path, request_token),
             name=f"workbench-analysis-{ticker}",
             daemon=True,
         )
         self._analysis_thread = analysis_thread
         analysis_thread.start()
 
-    def _consume_pending_analysis_request(self, completed_ticker):
-        pending_ticker = str(self._analysis_pending_ticker or "").strip()
-        self._analysis_pending_ticker = ""
-        if pending_ticker and pending_ticker != str(completed_ticker or "").strip():
-            self.after_idle(lambda ticker=pending_ticker: self._start_analysis(ticker))
+    def _consume_pending_analysis_request(self, completed_ticker, completed_params_path):
+        pending_request = self._analysis_pending_request
+        self._analysis_pending_request = None
+        if not pending_request:
+            return
+        pending_ticker, pending_params_path = pending_request
+        if (
+            str(pending_ticker or "").strip() == str(completed_ticker or "").strip()
+            and str(pending_params_path or "").strip() == str(completed_params_path or "").strip()
+        ):
+            return
+        self.after_idle(lambda ticker=pending_ticker, path=pending_params_path: self._start_analysis(ticker, params_path=path))
 
-    def _finish_analysis_success(self, ticker, request_token, result):
+    def _finish_analysis_success(self, ticker, params_path, request_token, result):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
@@ -969,14 +1028,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         render_error_text = self._render_result(result)
         if not render_error_text:
             self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
-        self._consume_pending_analysis_request(ticker)
+        self._consume_pending_analysis_request(ticker, params_path)
 
-    def _finish_analysis_error(self, ticker, request_token, exc):
+    def _finish_analysis_error(self, ticker, params_path, request_token, exc):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
         self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
-        self._consume_pending_analysis_request(ticker)
+        self._consume_pending_analysis_request(ticker, params_path)
 
     def _run_analysis(self):
         ticker = self._ticker_var.get().strip()
@@ -984,15 +1043,16 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             messagebox.showerror("股票工具工作台", "請先輸入股票代號。")
             return
 
+        params_path = self._get_selected_params_path()
         if self._analysis_thread is not None and self._analysis_thread.is_alive():
-            self._analysis_pending_ticker = ticker
+            self._analysis_pending_request = (ticker, params_path)
             self._status_var.set(
                 f"查股進行中，已排入最新請求：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}"
             )
             return
 
-        self._analysis_pending_ticker = ""
-        self._start_analysis(ticker)
+        self._analysis_pending_request = None
+        self._start_analysis(ticker, params_path=params_path)
 
     def _render_result(self, result):
         trade_logs_df = result.get("trade_logs_df")

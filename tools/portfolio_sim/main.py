@@ -50,19 +50,6 @@ def main(argv=None, env=None):
         return 1
 
     default_start_year = resolve_default_portfolio_start_year()
-    try:
-        param_source_choice = safe_prompt_choice(
-            "👉 1. 參數來源 (C=champion / R=run_best, 預設 C): ",
-            "C",
-            ("C", "R"),
-            "參數來源",
-        )
-        param_source = "champion" if param_source_choice == "C" else "run_best"
-        params_path = resolve_named_params_path(PROJECT_ROOT, param_source)
-        params = load_strict_params(params_path)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
@@ -71,11 +58,17 @@ def main(argv=None, env=None):
         f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(dataset_profile_key)} | "
         f"來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}"
     )
-    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     try:
+        param_source_choice = safe_prompt_choice(
+            "👉 1. 參數來源 (C=champion / R=run_best, 預設 C): ",
+            "C",
+            ("C", "R"),
+            "參數來源",
+        )
+        param_source = "champion" if param_source_choice == "C" else "run_best"
         rotation_choice = safe_prompt_choice(
-            "👉 1. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
+            "👉 2. 啟用「汰弱換股」？ (Y/N, 預設 N): ",
             "N",
             ("Y", "N"),
             "汰弱換股選項",
@@ -97,6 +90,15 @@ def main(argv=None, env=None):
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
+
+    try:
+        params_path = resolve_named_params_path(PROJECT_ROOT, param_source)
+        params = load_strict_params(params_path)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
+    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
 
     ensure_runtime_dirs()
     try:
