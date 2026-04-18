@@ -108,6 +108,14 @@ def configure_workbench_theme(root):
     style.map(WORKBENCH_CHECK_STYLE, foreground=[("active", WORKBENCH_TEXT)])
     style.configure(WORKBENCH_ENTRY_STYLE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, insertcolor=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
     style.configure(WORKBENCH_COMBO_STYLE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, arrowcolor=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
+    style.map(
+        WORKBENCH_COMBO_STYLE,
+        fieldbackground=[("readonly", WORKBENCH_SURFACE), ("disabled", WORKBENCH_SURFACE_ALT)],
+        foreground=[("readonly", WORKBENCH_TEXT), ("disabled", WORKBENCH_MUTED)],
+        selectbackground=[("readonly", WORKBENCH_SURFACE)],
+        selectforeground=[("readonly", WORKBENCH_TEXT)],
+        arrowcolor=[("readonly", WORKBENCH_TEXT), ("disabled", WORKBENCH_MUTED)],
+    )
     style.configure(WORKBENCH_NOTEBOOK_STYLE, background=WORKBENCH_BG, borderwidth=0)
     style.configure(f"{WORKBENCH_NOTEBOOK_STYLE}.Tab", background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, padding=(10, 5), font=WORKBENCH_NOTEBOOK_FONT)
     style.map(f"{WORKBENCH_NOTEBOOK_STYLE}.Tab", background=[("selected", WORKBENCH_ACCENT)], foreground=[("selected", WORKBENCH_TEXT)])
