@@ -8,6 +8,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
+from core.model_paths import resolve_named_params_path
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, validate_cli_args
 
@@ -24,12 +25,13 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；實際路徑會優先使用 /data/tw_stock_data_vip，否則回退 <repo>/data/tw_stock_data_vip。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源預設 champion；大盤比較固定使用 0050；開始回測年份預設取自 config/walk_forward_policy.py。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
     from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
-    from tools.portfolio_sim.runtime import CHAMPION_PARAMS_PATH, ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER, resolve_default_portfolio_start_year
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(
@@ -47,8 +49,17 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
+    default_start_year = resolve_default_portfolio_start_year()
     try:
-        params = load_strict_params(CHAMPION_PARAMS_PATH)
+        param_source_choice = safe_prompt_choice(
+            "👉 1. 參數來源 (C=champion / R=run_best, 預設 C): ",
+            "C",
+            ("C", "R"),
+            "參數來源",
+        )
+        param_source = "champion" if param_source_choice == "C" else "run_best"
+        params_path = resolve_named_params_path(PROJECT_ROOT, param_source)
+        params = load_strict_params(params_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
@@ -71,18 +82,18 @@ def main(argv=None, env=None):
         )
         user_rotation = rotation_choice == 'Y'
         user_max_pos = safe_prompt_int(
-            "👉 2. 最大持倉數量 (預設 10): ",
+            "👉 3. 最大持倉數量 (預設 10): ",
             10,
             "最大持倉數量",
             min_value=1,
         )
         user_start_year = safe_prompt_int(
-            "👉 3. 開始回測年份 (預設 2015): ",
-            2015,
+            f"👉 4. 開始回測年份 (預設 {default_start_year}): ",
+            default_start_year,
             "開始回測年份",
             min_value=1900,
         )
-        user_benchmark = safe_prompt("👉 4. 大盤比較標的 (預設 0050): ", "0050")
+        user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1

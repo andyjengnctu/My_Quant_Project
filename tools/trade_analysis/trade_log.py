@@ -20,6 +20,7 @@ from core.capital_policy import resolve_scanner_live_capital
 from core.params_io import load_params_from_json
 from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from core.output_paths import build_output_dir
+from core.model_paths import resolve_named_params_path
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
 warnings.simplefilter("default")
@@ -43,10 +44,11 @@ DATA_DIR = get_dataset_dir(BASE_DIR, DEFAULT_DATASET_PROFILE)
 OUTPUT_DIR = build_output_dir(BASE_DIR, "debug_trade_log")
 
 
-def load_params(json_file=os.path.join(BASE_DIR, "models", "champion_params.json"), *, verbose=True):
-    params = load_params_from_json(json_file)
+def load_params(json_file=None, *, verbose=True):
+    resolved_json_file = resolve_named_params_path(BASE_DIR, "champion") if json_file is None else os.path.abspath(str(json_file))
+    params = load_params_from_json(resolved_json_file)
     if verbose:
-        print(f"{C_GREEN}✅ 成功載入參數大腦: {json_file}{C_RESET}")
+        print(f"{C_GREEN}✅ 成功載入參數大腦: {resolved_json_file}{C_RESET}")
     return params
 
 
@@ -100,11 +102,11 @@ def resolve_debug_file_path(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFI
     return file_path, resolved_data_dir, "DATASET"
 
 
-def load_trade_analysis_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
-    return load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
+def load_trade_analysis_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None, params=None):
+    return load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir, params=params)
 
 
-def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None):
+def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFILE, data_dir=None, params=None):
     from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
     import pandas as pd
 
@@ -115,12 +117,12 @@ def load_debug_price_frame(ticker, *, dataset_profile_key=DEFAULT_DATASET_PROFIL
         data_dir=data_dir,
     )
     raw_df = pd.read_csv(file_path)
-    params = load_params(verbose=False)
-    min_rows_needed = get_required_min_rows(params)
+    resolved_params = load_params(verbose=False) if params is None else params
+    min_rows_needed = get_required_min_rows(resolved_params)
     clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=min_rows_needed)
     return {
         "ticker": ticker,
-        "params": params,
+        "params": resolved_params,
         "file_path": file_path,
         "data_dir": resolved_data_dir,
         "source": source,
@@ -222,7 +224,7 @@ def run_ticker_analysis(
     verbose=False,
     output_dir=None,
 ):
-    load_result = load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir)
+    load_result = load_debug_price_frame(ticker, dataset_profile_key=dataset_profile_key, data_dir=data_dir, params=params)
     resolved_params = load_result["params"] if params is None else params
     debug_params = build_debug_view_params(resolved_params)
     analysis_result = run_trade_analysis(

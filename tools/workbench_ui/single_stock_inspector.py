@@ -24,6 +24,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.scanner_display import build_scanner_sort_probe_text
+from core.model_paths import resolve_named_params_path
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
@@ -60,6 +61,12 @@ SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
+PARAM_SOURCE_LABEL_TO_KEY = {
+    "champion | 正式現役": "champion",
+    "run_best | 本輪最佳": "run_best",
+}
+DEFAULT_PARAM_SOURCE_LABEL = "champion | 正式現役"
+
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
         "kind": "csv",
@@ -373,6 +380,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._status_var = tk.StringVar(value="尚未執行")
         self._ticker_var = tk.StringVar()
         self._reduced_stock_display_var = tk.StringVar()
+        self._param_source_display_var = tk.StringVar(value=DEFAULT_PARAM_SOURCE_LABEL)
         self._reduced_stock_map = {}
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
@@ -433,19 +441,28 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._reduced_stock_combo.grid(row=0, column=3, padx=(6, 8), sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
-        ttk.Button(controls, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
+        ttk.Label(controls, text="參數", style="Workbench.TLabel").grid(row=0, column=4, sticky="w")
+        self._param_source_combo = ttk.Combobox(
+            controls,
+            state="readonly",
+            width=22,
+            textvariable=self._param_source_display_var,
+            style="Workbench.TCombobox",
+            values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
+        )
+        self._param_source_combo.grid(row=0, column=5, padx=(6, 8), sticky="w")
+
+        ttk.Button(controls, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
         self._candidate_combo = ttk.Combobox(controls, state="readonly", width=34, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
-        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
+        self._candidate_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
+        ttk.Button(controls, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=8, padx=(0, 8), sticky="w")
         self._history_combo = ttk.Combobox(controls, state="readonly", width=58, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
-        self._history_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
+        self._history_combo.grid(row=0, column=9, padx=(0, 12), sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
-        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=8, padx=(0, 12), sticky="w")
-        ttk.Button(controls, text="開啟 Excel", command=self._open_excel, style="Workbench.TButton").grid(row=0, column=9, padx=(0, 8), sticky="w")
-        ttk.Button(controls, text="開啟輸出資料夾", command=self._open_output_dir, style="Workbench.TButton").grid(row=0, column=10, sticky="w")
+        ttk.Checkbutton(controls, text="顯示成交量", variable=self._show_volume_var, command=self._rerender_current_chart, style="Workbench.TCheckbutton").grid(row=0, column=10, padx=(0, 12), sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -756,6 +773,19 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             messagebox.showerror("股票工具工作台", error_text)
         return error_text
 
+    def _get_selected_param_source(self):
+        selected_label = self._param_source_display_var.get().strip()
+        return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "champion")
+
+    def _get_selected_params_path(self):
+        return resolve_named_params_path(WORKBENCH_PROJECT_ROOT, self._get_selected_param_source())
+
+    def _get_selected_params(self):
+        return load_params(self._get_selected_params_path(), verbose=False)
+
+    def _get_selected_param_source_label(self):
+        return self._get_selected_param_source()
+
     def _on_reduced_stock_selected(self, _event=None):
         selected = self._reduced_stock_display_var.get().strip()
         ticker = self._reduced_stock_map.get(selected)
@@ -811,7 +841,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _run_scanner_worker(self, mode, request_token):
         try:
             data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
-            params = load_params(verbose=False)
+            params = self._get_selected_params()
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 if mode == "candidate":
                     scan_result = run_daily_scanner(data_dir, params)
@@ -832,7 +862,12 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         request_token = self._scanner_active_token
         self._clear_console()
         self._notebook.select(2)
-        status_text = "執行中：掃描候選股" if mode == "candidate" else "執行中：掃描歷史績效股"
+        param_source = self._get_selected_param_source_label()
+        status_text = (
+            f"執行中：掃描候選股 ({param_source})"
+            if mode == "candidate"
+            else f"執行中：掃描歷史績效股 ({param_source})"
+        )
         self._status_var.set(status_text)
         self._append_console_text(f"[scanner] {status_text}\n")
         scanner_thread = threading.Thread(
@@ -893,6 +928,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             result = run_ticker_analysis(
                 ticker,
                 dataset_profile_key=DEFAULT_DATASET_PROFILE,
+                params=self._get_selected_params(),
                 export_excel=True,
                 export_chart=False,
                 return_chart_payload=True,
