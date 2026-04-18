@@ -105,7 +105,7 @@ def _resolve_oos_window_year(row) -> int | None:
         try:
             return int(pd.Timestamp(str(start_raw)).year)
         except (TypeError, ValueError):
-            pass
+            start_raw = None
     label = str(row.get("label") or "").strip()
     if len(label) >= 4 and label[:4].isdigit():
         return int(label[:4])

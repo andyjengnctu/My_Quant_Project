@@ -349,7 +349,7 @@ def build_coverage_summary(
         else:
             import coverage
 
-            cov = coverage.Coverage(data_file=str(data_file), branch=True)
+            cov = coverage.Coverage(data_file=str(data_file), branch=True, source=[str(PROJECT_ROOT)])
             try:
                 base_params = load_params_from_json(PROJECT_ROOT / "models" / "champion_params.json")
                 cov.start()

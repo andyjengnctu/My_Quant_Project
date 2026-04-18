@@ -113,7 +113,7 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
     json_file = os.path.join(coverage_dir, "coverage_synthetic.json")
     run_info_file = os.path.join(coverage_dir, "coverage_run_info.json")
 
-    cov = coverage.Coverage(data_file=data_file, branch=True)
+    cov = coverage.Coverage(data_file=data_file, branch=True, source=[PROJECT_ROOT])
     results = []
     summaries = []
     synthetic_fail_count = 0
