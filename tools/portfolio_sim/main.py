@@ -25,7 +25,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源預設 champion；大盤比較固定使用 0050；開始回測年份預設取自 config/walk_forward_policy.py。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源預設 champion；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的測試起始日期。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -49,7 +49,7 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
-    default_start_year = resolve_default_portfolio_start_year()
+    default_start_year = resolve_default_portfolio_start_year(selected_data_dir)
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")

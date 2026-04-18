@@ -12,14 +12,45 @@ from core.log_utils import format_exception_summary, write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_and_trades
+from tools.optimizer.walk_forward import build_walk_forward_windows
 from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensure_runtime_dirs, is_insufficient_data_error
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
 
 
-def resolve_default_portfolio_start_year() -> int:
+def _collect_dataset_market_dates(data_dir: str):
+    csv_inputs, _ = discover_unique_csv_inputs(data_dir)
+    market_dates = set()
+    for _, file_path in csv_inputs:
+        try:
+            date_series = pd.read_csv(file_path, usecols=["Date"])["Date"]
+        except (ValueError, KeyError, pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
+            continue
+        parsed_dates = pd.to_datetime(date_series, errors="coerce")
+        market_dates.update(ts.normalize().to_pydatetime() for ts in parsed_dates.dropna())
+    return sorted(market_dates)
+
+
+def resolve_default_portfolio_start_year(data_dir: str | None = None) -> int:
     policy = load_walk_forward_policy(PROJECT_ROOT)
-    return int(policy["train_start_year"])
+    fallback_year = int(policy["train_start_year"])
+    if not data_dir or not os.path.isdir(data_dir):
+        return fallback_year
+
+    sorted_dates = _collect_dataset_market_dates(data_dir)
+    if not sorted_dates:
+        return fallback_year
+
+    windows = build_walk_forward_windows(
+        sorted_dates,
+        min_train_years=int(policy["min_train_years"]),
+        test_window_months=int(policy["test_window_months"]),
+        min_window_bars=int(policy["min_window_bars"]),
+        train_start_year=int(policy["train_start_year"]),
+    )
+    if windows:
+        return int(pd.Timestamp(windows[0]["oos_start"]).year)
+    return fallback_year
 
 
 def load_portfolio_market_context(data_dir, params, *, verbose=True):
