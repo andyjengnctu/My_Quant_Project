@@ -12,8 +12,10 @@ from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inp
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
+    OBJECTIVE_MODE_WF_GATE_MEDIAN,
     OBJECTIVE_MODE_SPLIT_TEST_ROMD,
 )
+from tools.optimizer.walk_forward import evaluate_walk_forward
 
 
 def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
@@ -216,7 +218,77 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
 
     final_score = float(base_score)
-    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
+    if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
+        wf_policy = dict(session.walk_forward_policy)
+        wf_start = time.perf_counter()
+        wf_report = evaluate_walk_forward(
+            all_dfs_fast=all_dfs_fast,
+            all_trade_logs=all_trade_logs,
+            sorted_dates=sorted_dates,
+            params=ai_params,
+            max_positions=session.train_max_positions,
+            enable_rotation=session.train_enable_rotation,
+            benchmark_ticker="0050",
+            train_start_year=int(wf_policy["train_start_year"]),
+            min_train_years=int(wf_policy["min_train_years"]),
+            test_window_months=int(wf_policy["test_window_months"]),
+            regime_up_threshold_pct=float(wf_policy["regime_up_threshold_pct"]),
+            regime_down_threshold_pct=float(wf_policy["regime_down_threshold_pct"]),
+            min_window_bars=int(wf_policy["min_window_bars"]),
+            gate_min_median_score=float(wf_policy["gate_min_median_score"]),
+            gate_min_worst_ret_pct=float(wf_policy["gate_min_worst_ret_pct"]),
+            gate_min_flat_median_score=float(wf_policy["gate_min_flat_median_score"]),
+        )
+        profile_row["wf_eval_sec"] = time.perf_counter() - wf_start
+        summary = dict(wf_report.get("summary") or {})
+        regime_summary = dict(wf_report.get("regime_summary") or {})
+        upgrade_gate = dict(wf_report.get("upgrade_gate") or {})
+        flat_summary = dict(regime_summary.get("flat") or {})
+        wf_median_window_score = float(summary.get("median_window_score", INVALID_TRIAL_VALUE))
+        wf_worst_ret_pct = float(summary.get("worst_ret_pct", INVALID_TRIAL_VALUE))
+        wf_flat_median_score = float(flat_summary.get("median_score", 0.0))
+        wf_max_mdd = float(summary.get("max_mdd", 0.0))
+        wf_window_count = int(summary.get("window_count", 0))
+        wf_upgrade_status = str(upgrade_gate.get("status", "fail"))
+        wf_quality_gate_status = str(dict(upgrade_gate.get("quality_gate") or {}).get("status", "fail"))
+        wf_coverage_gate_status = str(dict(upgrade_gate.get("coverage_gate") or {}).get("status", "watch"))
+        wf_down_window_count = int((dict(regime_summary.get("down") or {})).get("window_count", 0) or 0)
+
+        trial.set_user_attr("wf_window_count", wf_window_count)
+        trial.set_user_attr("wf_median_window_score", wf_median_window_score)
+        trial.set_user_attr("wf_worst_ret_pct", wf_worst_ret_pct)
+        trial.set_user_attr("wf_flat_median_score", wf_flat_median_score)
+        trial.set_user_attr("wf_max_mdd", wf_max_mdd)
+        trial.set_user_attr("wf_median_annual_trades", float(summary.get("median_annual_trades", 0.0)))
+        trial.set_user_attr("wf_median_fill_rate", float(summary.get("median_fill_rate", 0.0)))
+        trial.set_user_attr("wf_upgrade_status", wf_upgrade_status)
+        trial.set_user_attr("wf_quality_gate_status", wf_quality_gate_status)
+        trial.set_user_attr("wf_coverage_gate_status", wf_coverage_gate_status)
+        trial.set_user_attr("wf_down_window_count", wf_down_window_count)
+
+        profile_row["wf_window_count"] = wf_window_count
+        profile_row["wf_median_window_score"] = wf_median_window_score
+        profile_row["wf_worst_ret_pct"] = wf_worst_ret_pct
+        profile_row["wf_flat_median_score"] = wf_flat_median_score
+        profile_row["wf_max_mdd"] = wf_max_mdd
+        profile_row["wf_upgrade_status"] = wf_upgrade_status
+        profile_row["wf_quality_gate_status"] = wf_quality_gate_status
+        profile_row["wf_coverage_gate_status"] = wf_coverage_gate_status
+        profile_row["wf_down_window_count"] = wf_down_window_count
+
+        if wf_quality_gate_status != "pass":
+            return _append_invalid_profile_row(
+                session=session,
+                trial=trial,
+                profile_row=profile_row,
+                fail_reason=(
+                    f"WF quality gate 未通過 | median={wf_median_window_score:.3f}, "
+                    f"worst={wf_worst_ret_pct:.2f}%, flat={wf_flat_median_score:.3f}"
+                ),
+                objective_start=objective_start,
+            )
+        final_score = wf_median_window_score
+    elif mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
         return _append_invalid_profile_row(
             session=session,
             trial=trial,

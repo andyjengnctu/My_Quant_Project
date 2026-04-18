@@ -1229,14 +1229,14 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     project_root = Path(__file__).resolve().parents[2]
     default_policy = load_walk_forward_policy(str(project_root), environ={})
     default_policy_path = str(default_policy.get("policy_path", "")).replace("\\", "/")
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_training_policy", True, default_policy_path.endswith("config/training_policy.py"))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_python_config", True, default_policy_path.endswith("config/walk_forward_policy.py"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_auto_derives_search_train_end_year", 2019, int(default_policy.get("search_train_end_year", 0)))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_split_test_romd", "split_test_romd", str(default_policy.get("objective_mode", "")))
 
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"
         tmp_path.write_text(
-            'TRAINING_SPLIT_POLICY = {"train_start_year": 2008, "min_train_years": 7}\n',
+            'WALK_FORWARD_POLICY = {"train_start_year": 2008, "min_train_years": 7, "search_train_end_year": None, "objective_mode": "wf_gate_median"}\n',
             encoding="utf-8",
         )
         override_policy = load_walk_forward_policy(
@@ -1248,7 +1248,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.json"
         tmp_path.write_text(
-            json.dumps({"train_start_year": 2005, "min_train_years": 6}, ensure_ascii=False),
+            json.dumps({"train_start_year": 2005, "min_train_years": 6, "search_train_end_year": None, "objective_mode": "wf_gate_median"}, ensure_ascii=False),
             encoding="utf-8",
         )
         json_override_policy = load_walk_forward_policy(
@@ -1257,6 +1257,15 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         )
     add_check(results, "strategy_contract", case_id, "json_override_policy_still_supported", 2010, int(json_override_policy.get("search_train_end_year", 0)))
 
+    with TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "wf_invalid.py"
+        tmp_path.write_text('WALK_FORWARD_POLICY = {"compare_worst_ret_tolerance_pct": -1}\n', encoding="utf-8")
+        try:
+            load_walk_forward_policy(str(project_root), environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)})
+            invalid_compare_rejected = False
+        except ValueError as exc:
+            invalid_compare_rejected = "compare_worst_ret_tolerance_pct" in str(exc)
+    add_check(results, "strategy_contract", case_id, "invalid_compare_tolerance_rejected", True, invalid_compare_rejected)
 
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_invalid.py"

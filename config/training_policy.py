@@ -29,15 +29,6 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響
 # 其他數值 = 固定停利比例
 OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
-# Optimizer train/test 切分設定
-# split 模式：train 只用 train 區間，test 固定從第一個 test 起始日一路到最新日。
-OPTIMIZER_TRAIN_START_YEAR = 1995
-OPTIMIZER_MIN_TRAIN_YEARS = 25
-TRAINING_SPLIT_POLICY = {
-    "train_start_year": OPTIMIZER_TRAIN_START_YEAR,
-    "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,
-}
-
 # 共用硬門檻 (投組期未績效門檻)
 # 交易頻率
 MIN_ANNUAL_TRADES = 5.0  # 最小年化交易次數門檻
@@ -83,7 +74,3 @@ def build_training_score_policy_snapshot():
 
 def build_selection_policy_snapshot():
     return {field_name: spec["default"] for field_name, spec in SELECTION_POLICY_PARAM_SPECS.items()}
-
-
-def build_optimizer_train_test_policy_snapshot():
-    return dict(TRAINING_SPLIT_POLICY)
