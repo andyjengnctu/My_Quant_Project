@@ -6,6 +6,7 @@ from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_portfolio_score
 from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.objective_filters import apply_filter_rules
+from core.walk_forward_policy import filter_search_train_dates
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
 from tools.optimizer.study_utils import (
@@ -14,15 +15,6 @@ from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_WF_GATE_MEDIAN,
 )
 from tools.optimizer.walk_forward import evaluate_walk_forward
-
-
-def _filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int):
-    filtered = []
-    for raw_date in sorted_dates:
-        year = int(pd.Timestamp(raw_date).year)
-        if int(train_start_year) <= year <= int(search_train_end_year):
-            filtered.append(raw_date)
-    return filtered
 
 
 def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str, objective_start: float):
@@ -76,7 +68,7 @@ def run_optimizer_objective(session, trial):
         search_train_dates = list(sorted_dates)
         effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
     else:
-        search_train_dates = _filter_search_train_dates(
+        search_train_dates = filter_search_train_dates(
             sorted_dates=sorted_dates,
             train_start_year=int(session.train_start_year),
             search_train_end_year=int(session.search_train_end_year),

@@ -1,5 +1,7 @@
 import os
 
+import pandas as pd
+
 from core.buy_sort import get_buy_sort_title
 from core.config import (
     BUY_SORT_METHOD,
@@ -11,6 +13,7 @@ from core.config import (
 )
 from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.model_paths import resolve_champion_params_path
+from core.walk_forward_policy import filter_search_train_dates
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_engine import run_portfolio_timeline
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
@@ -49,15 +52,6 @@ def _safe_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return int(default)
-
-
-def _filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int):
-    filtered = []
-    for raw_date in sorted_dates:
-        year = int(getattr(raw_date, 'year', 0) or 0)
-        if int(train_start_year) <= year <= int(search_train_end_year):
-            filtered.append(raw_date)
-    return filtered
 
 
 def _resolve_model_mode(objective_mode: str) -> str:
@@ -105,20 +99,25 @@ def _weighted_average_from_rows(rows, *, value_key: str, weight_key: str) -> flo
     return sum(fallback_values) / len(fallback_values) if fallback_values else 0.0
 
 
+def _resolve_oos_window_year(row) -> int | None:
+    start_raw = row.get("oos_start")
+    if start_raw not in {None, ""}:
+        try:
+            return int(pd.Timestamp(str(start_raw)).year)
+        except (TypeError, ValueError):
+            pass
+    label = str(row.get("label") or "").strip()
+    if len(label) >= 4 and label[:4].isdigit():
+        return int(label[:4])
+    return None
+
+
 def _worst_full_year_return_from_oos_windows(rows, *, ret_key: str) -> float:
     yearly_growth = {}
     for row in list(rows or []):
-        start_raw = row.get("oos_start") or ""
-        try:
-            year = pd.Timestamp(str(start_raw)).year
-        except Exception as exc:
-            _ = exc
-            label = str(row.get("label") or "")
-            try:
-                year = int(label[:4])
-            except Exception as exc:
-                _ = exc
-                continue
+        year = _resolve_oos_window_year(row)
+        if year is None:
+            continue
         yearly_growth.setdefault(int(year), 1.0)
         yearly_growth[int(year)] *= 1.0 + (_safe_float(row.get(ret_key, 0.0)) / 100.0)
     if not yearly_growth:
@@ -164,7 +163,7 @@ def _build_search_train_dates_for_session(session):
     sorted_dates = list(session.sorted_master_dates or [])
     if _resolve_model_mode(session.objective_mode) == "legacy":
         return sorted_dates
-    return _filter_search_train_dates(
+    return filter_search_train_dates(
         sorted_dates=sorted_dates,
         train_start_year=int(session.train_start_year),
         search_train_end_year=int(session.search_train_end_year),
@@ -450,7 +449,7 @@ def _build_compare_rows(*, trial, champion_cache, policy):
 
 def _build_training_param_lines(params):
     bb_str = f"布林(BB) 啟用（長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x）" if get_p(params, 'use_bb', False) else "布林(BB) 關閉"
-    kc_str = f"阿唐那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿唐那(KC) 關閉"
+    kc_str = f"阿肯那(KC) 啟用（長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x）" if get_p(params, 'use_kc', False) else "阿肯那(KC) 關閉"
     vol_str = "均量 啟用" if get_p(params, 'use_vol', False) else "均量 關閉"
     return [
         f"核心：突破 {get_p(params, 'high_len', 201)} 日新高｜ATR {get_p(params, 'atr_len', 14)} 日｜半倉停利 {get_p(params, 'tp_percent', 0.0) * 100:.1f}%  風控：掛單 +{get_p(params, 'atr_buy_tol', 1.5):.1f} ATR｜停損 -{get_p(params, 'atr_times_init', 2.0):.1f} ATR｜追蹤 -{get_p(params, 'atr_times_trail', 3.5):.1f} ATR",

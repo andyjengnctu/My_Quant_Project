@@ -15,10 +15,12 @@ import pandas as pd
 
 from core.buy_sort import calc_buy_sort_value
 from core.strategy_dashboard import print_strategy_dashboard
+from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams
 from core.params_io import params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
+from tools.optimizer import callbacks as optimizer_callbacks
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.study_utils import (
@@ -1214,6 +1216,79 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_stderr_empty", "", stderr_text)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_optimizer_walk_forward_policy_contract_case(_base_params):
+    case_id = "OPTIMIZER_WALK_FORWARD_POLICY_CONTRACT"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    project_root = Path(__file__).resolve().parents[2]
+    default_policy = load_walk_forward_policy(str(project_root))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_python_config", True, str(default_policy.get("policy_path", "")).endswith("config/walk_forward_policy.py"))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_auto_derives_search_train_end_year", 2019, int(default_policy.get("search_train_end_year", 0)))
+    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_wf_gate_median", "wf_gate_median", str(default_policy.get("objective_mode", "")))
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "wf_override.py"
+        tmp_path.write_text(
+            'WALK_FORWARD_POLICY = {"train_start_year": 2008, "min_train_years": 7, "search_train_end_year": None, "objective_mode": "wf_gate_median"}\n',
+            encoding="utf-8",
+        )
+        override_policy = load_walk_forward_policy(
+            str(project_root),
+            environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)},
+        )
+    add_check(results, "strategy_contract", case_id, "python_override_policy_auto_derives_search_train_end_year", 2014, int(override_policy.get("search_train_end_year", 0)))
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "wf_override.json"
+        tmp_path.write_text(
+            json.dumps({"train_start_year": 2005, "min_train_years": 6, "search_train_end_year": None, "objective_mode": "wf_gate_median"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        json_override_policy = load_walk_forward_policy(
+            str(project_root),
+            environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)},
+        )
+    add_check(results, "strategy_contract", case_id, "json_override_policy_still_supported", 2010, int(json_override_policy.get("search_train_end_year", 0)))
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "wf_invalid.py"
+        tmp_path.write_text('WALK_FORWARD_POLICY = {"compare_worst_ret_tolerance_pct": -1}\n', encoding="utf-8")
+        try:
+            load_walk_forward_policy(str(project_root), environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)})
+            invalid_compare_rejected = False
+        except ValueError as exc:
+            invalid_compare_rejected = "compare_worst_ret_tolerance_pct" in str(exc)
+    add_check(results, "strategy_contract", case_id, "invalid_compare_tolerance_rejected", True, invalid_compare_rejected)
+
+    with TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "wf_invalid.py"
+        tmp_path.write_text('WALK_FORWARD_POLICY = {"objective_mode": "bad_mode"}\n', encoding="utf-8")
+        try:
+            load_walk_forward_policy(str(project_root), environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)})
+            invalid_objective_rejected = False
+        except ValueError as exc:
+            invalid_objective_rejected = "objective_mode" in str(exc)
+    add_check(results, "strategy_contract", case_id, "invalid_objective_mode_rejected", True, invalid_objective_rejected)
+
+    callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
+    objective_runner_source = (project_root / "tools" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
+    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
+    add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
+    add_check(results, "strategy_contract", case_id, "search_train_date_filter_reuses_core_single_source_in_objective_runner", True, "from core.walk_forward_policy import filter_search_train_dates" in objective_runner_source and "def _filter_search_train_dates" not in objective_runner_source)
+
+    params = V16StrategyParams()
+    params.use_kc = True
+    params.kc_len = 34
+    params.kc_mult = 1.8
+    training_lines = optimizer_callbacks._build_training_param_lines(params)
+    rendered_training_text = "\n".join(training_lines)
+    add_check(results, "strategy_contract", case_id, "optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
 
     summary["checks"] = len(results)
     return results, summary

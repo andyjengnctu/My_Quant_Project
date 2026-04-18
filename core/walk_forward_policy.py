@@ -112,3 +112,20 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
         raise ValueError("walk-forward policy: compare_max_mdd_tolerance_pct 不可 < 0")
     merged['policy_path'] = path
     return merged
+
+def filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int):
+    filtered = []
+    start_year = int(train_start_year)
+    end_year = int(search_train_end_year)
+    for raw_date in list(sorted_dates or []):
+        year = int(getattr(raw_date, "year", 0) or 0)
+        if year == 0:
+            raw_text = str(raw_date or "").strip()
+            try:
+                year = int(raw_text[:4])
+            except (TypeError, ValueError):
+                continue
+        if start_year <= year <= end_year:
+            filtered.append(raw_date)
+    return filtered
+

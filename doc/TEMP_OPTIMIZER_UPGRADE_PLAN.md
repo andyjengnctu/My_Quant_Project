@@ -28,13 +28,13 @@
 
 ### 1) 訓練 / 測試取樣方式
 - [x] MVP 已採 expanding walk-forward。
-- [x] 已有主設定：`train_start_year = 2012`、`min_train_years = 8`、`test_window_months = 6`。
+- [x] 已有主設定：`train_start_year = 2010`、`min_train_years = 10`、`test_window_months = 6`。
 - [x] **P0：把主搜尋資料從目前的全吃改成明確 train 區間。**
   - `wf` 模式：
-    - search train：`2012 ~ search_train_end_year`
+    - search train：`2010 ~ search_train_end_year`
     - WF/OOS：`wf_start ~ wf_end`
   - 目前預設口徑：
-    - search train：`2012 ~ 2019`
+    - search train：`2010 ~ 2019`
     - WF/OOS：`2020 ~ 最新已納入驗證區間`
   - `legacy` 模式保留原本行為：主搜尋吃到最新可得日期。
 - [x] 本輪主線**不做** rolling walk-forward；若未來改成「每 K 天重訓 / spec 穩定性」再另案評估 expanding vs rolling。
