@@ -1280,5 +1280,66 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     rendered_training_text = "\n".join(training_lines)
     add_check(results, "strategy_contract", case_id, "optimizer_callbacks_kc_label_matches_dashboard_wording", True, "阿肯那(KC)" in rendered_training_text and "阿唐那(KC)" not in rendered_training_text)
 
+    sample_rows = optimizer_callbacks._build_first_zone_rows(
+        candidate_metrics={
+            "pf_return": 12.34,
+            "annual_return_pct": 10.0,
+            "min_full_year_return_pct": -3.21,
+            "pf_romd": 1.23,
+            "pf_mdd": 8.76,
+            "m_win_rate": 55.0,
+            "win_rate": 60.0,
+            "pf_payoff": 1.5,
+            "pf_ev": 0.25,
+            "pf_trades": 11,
+            "normal_trades": 8,
+            "extended_trades": 3,
+            "missed_total": 2,
+            "missed_buys": 1,
+            "missed_sells": 1,
+            "annual_trades": 4.5,
+            "reserved_buy_fill_rate": 83.0,
+            "avg_exposure": 62.0,
+            "final_equity": 1234567.0,
+        },
+        champion_metrics={
+            "pf_return": 10.0,
+            "annual_return_pct": 9.0,
+            "min_full_year_return_pct": -5.0,
+            "pf_romd": 1.0,
+            "pf_mdd": 10.0,
+            "m_win_rate": 52.0,
+            "win_rate": 58.0,
+            "pf_payoff": 1.4,
+            "pf_ev": 0.2,
+            "pf_trades": 10,
+            "normal_trades": 7,
+            "extended_trades": 3,
+            "missed_total": 3,
+            "missed_buys": 2,
+            "missed_sells": 1,
+            "annual_trades": 4.0,
+            "reserved_buy_fill_rate": 80.0,
+            "avg_exposure": 58.0,
+            "final_equity": 1200000.0,
+        },
+        benchmark_metrics={
+            "pf_return": 8.0,
+            "annual_return_pct": 7.5,
+            "min_full_year_return_pct": -6.0,
+            "pf_romd": 0.8,
+            "pf_mdd": 12.0,
+            "m_win_rate": 49.0,
+            "final_equity": 1180000.0,
+        },
+    )
+    row_names = [str(row.get("name", "")) for row in sample_rows]
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_keeps_final_equity_row", True, "最終資產" in row_names)
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_combines_payoff_and_ev_label_without_extra_spaces", True, "風報比: 期望值" in row_names and "風報比 : 期望值" not in row_names)
+
+    optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
+    train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]
+    add_check(results, "strategy_contract", case_id, "optimizer_start_banner_omits_raw_objective_mode_token", True, bool(train_test_policy_lines) and all("objective=" not in line for line in train_test_policy_lines))
+
     summary["checks"] = len(results)
     return results, summary

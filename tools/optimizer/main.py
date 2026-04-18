@@ -929,7 +929,7 @@ def main(argv=None, environ=None):
     if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
         print(
             f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
-            f"model={selected_model} | 來源: {model_source} | objective={walk_forward_policy['objective_mode']} | "
+            f"model={selected_model} | 來源: {model_source} | "
             f"train={walk_forward_policy['train_start_year']}~{search_train_end_text} | "
             f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest"
             f"{C_RESET}"
@@ -943,7 +943,7 @@ def main(argv=None, environ=None):
         print(
             f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
             f"model={selected_model} | 來源: {model_source} | "
-            f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
+            f"search_train_end={search_train_end_text} | "
             f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']}"
             f"{C_RESET}"
         )

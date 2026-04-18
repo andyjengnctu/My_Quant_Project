@@ -335,7 +335,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
         benchmark_combo = f"{benchmark_payoff:.2f}:{benchmark_ev:.3f}R {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         benchmark_combo = "-"
-    _append_row("風報比 : 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
+    _append_row("風報比: 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
 
     add_row("總交易次數", "pf_trades", kind="count_split")
     add_row("錯失交易次數", "missed_total", kind="missed_split")
