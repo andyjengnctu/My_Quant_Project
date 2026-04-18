@@ -58,8 +58,8 @@ def resolve_optimizer_run_request(environ):
 
     if is_interactive_stdin():
         prompt = (
-            f"👉 Optimizer 動作（預設 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE}）："
-            f"Enter=訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE} 次，"
+            "👉 Optimizer 動作："
+            f"Enter=訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次，"
             "數字=訓練指定次數，0=匯出 run_best，P=挑戰 Champion: "
         )
         raw_input = input(prompt)

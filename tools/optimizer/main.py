@@ -267,21 +267,16 @@ def _write_split_test_compare_report(*, output_dir: str, payload: dict, session_
     challenger = dict(payload.get("challenger") or {})
     champion = dict(payload.get("champion") or {})
     lines = [
-        "# 測試期間分數比較",
+        "# Champion 比較",
         "",
         f"- 資料集：{payload.get('dataset_label', '')}",
         f"- 測試區間：{challenger.get('oos_start', '')} ~ {challenger.get('oos_end', '')}",
         f"- 狀態：`{payload.get('status', '')}`",
-        f"- 建議：{payload.get('recommendation', '')}",
+        f"- 結論：{payload.get('recommendation', '')}",
         "",
-        "| 指標 | Champion | Challenger | 0050 |",
-        "|---|---:|---:|---:|",
-        f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} | {float(benchmark.get('benchmark_score_romd', benchmark.get('test_score_romd', 0.0))):.3f} |",
-        f"| 測試總報酬率 | {float(champion.get('total_return_pct', 0.0)):.2f}% | {float(challenger.get('total_return_pct', 0.0)):.2f}% | {float(benchmark.get('total_return_pct', 0.0)):.2f}% |",
-        f"| 年化報酬率 | {float(champion.get('annualized_return_pct', 0.0)):.2f}% | {float(challenger.get('annualized_return_pct', 0.0)):.2f}% | {float(benchmark.get('annualized_return_pct', 0.0)):.2f}% |",
-        f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% | {float(benchmark.get('max_drawdown_pct', 0.0)):.2f}% |",
-        f"| 完整年度最差報酬 | {float(champion.get('min_full_year_return_pct', 0.0)):.2f}% | {float(challenger.get('min_full_year_return_pct', 0.0)):.2f}% | {float(benchmark.get('min_full_year_return_pct', 0.0)):.2f}% |",
-        f"| 年化交易次數 | {float(champion.get('annual_trades', 0.0)):.2f} | {float(challenger.get('annual_trades', 0.0)):.2f} | - |",
+        "| 指標 | 現役 | 本次 |",
+        "|---|---:|---:|",
+        f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} |",
     ]
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -407,9 +402,6 @@ def promote_run_best_to_champion_by_test_score(*, session, compare_result, compa
         "| 指標 | 舊 Champion | 新 Champion |",
         "|---|---:|---:|",
         f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} |",
-        f"| 測試總報酬率 | {float(champion.get('total_return_pct', 0.0)):.2f}% | {float(challenger.get('total_return_pct', 0.0)):.2f}% |",
-        f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% |",
-        f"| 完整年度最差報酬 | {float(champion.get('min_full_year_return_pct', 0.0)):.2f}% | {float(challenger.get('min_full_year_return_pct', 0.0)):.2f}% |",
     ]
     with open(record_md_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
