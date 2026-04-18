@@ -30,11 +30,10 @@ from core.strategy_dashboard import (
 )
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
-    OBJECTIVE_MODE_WF_GATE_MEDIAN,
     OBJECTIVE_MODE_SPLIT_TEST_ROMD,
     is_qualified_trial_value,
 )
-from tools.optimizer.walk_forward import build_compare_assessment, build_oos_total_performance, evaluate_walk_forward
+from tools.optimizer.walk_forward import build_oos_total_performance, evaluate_walk_forward
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,8 +56,6 @@ def _safe_int(value, default=0):
 
 def _resolve_model_mode(objective_mode: str) -> str:
     mode = str(objective_mode)
-    if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
-        return "wf"
     if mode == OBJECTIVE_MODE_SPLIT_TEST_ROMD:
         return "split"
     return "legacy"
@@ -632,7 +629,7 @@ def _compute_champion_console_cache(session):
         "bm_m_win_rate": bm_m_win_rate,
         "pf_romd": _calc_romd(ret_pct, mdd),
     }
-    if _resolve_model_mode(session.objective_mode) in {"wf", "split"}:
+    if _resolve_model_mode(session.objective_mode) == "split":
         wf_policy = dict(session.walk_forward_policy)
         wf_report = evaluate_walk_forward(
             all_dfs_fast=prep_result["all_dfs_fast"],
@@ -644,13 +641,6 @@ def _compute_champion_console_cache(session):
             benchmark_ticker="0050",
             train_start_year=int(wf_policy["train_start_year"]),
             min_train_years=int(wf_policy["min_train_years"]),
-            test_window_months=int(wf_policy["test_window_months"]),
-            regime_up_threshold_pct=float(wf_policy["regime_up_threshold_pct"]),
-            regime_down_threshold_pct=float(wf_policy["regime_down_threshold_pct"]),
-            min_window_bars=int(wf_policy["min_window_bars"]),
-            gate_min_median_score=float(wf_policy["gate_min_median_score"]),
-            gate_min_worst_ret_pct=float(wf_policy["gate_min_worst_ret_pct"]),
-            gate_min_flat_median_score=float(wf_policy["gate_min_flat_median_score"]),
         )
         cache["wf_report"] = wf_report
     else:
@@ -676,9 +666,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
     model_mode = _resolve_model_mode(session.objective_mode)
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
-    if model_mode == "wf":
-        system_score_display = f"{_safe_float(attrs.get('wf_median_window_score', 0.0)):.3f}（WF中位分數）"
-    elif model_mode == "split":
+    if model_mode == "split":
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（Train RoMD）"
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
@@ -725,7 +713,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
 
     test_title = None
     test_rows = None
-    if model_mode in {"wf", "split"}:
+    if model_mode == "split":
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
@@ -745,13 +733,6 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
             benchmark_ticker="0050",
             train_start_year=int(session.walk_forward_policy["train_start_year"]),
             min_train_years=int(session.walk_forward_policy["min_train_years"]),
-            test_window_months=int(session.walk_forward_policy["test_window_months"]),
-            regime_up_threshold_pct=float(session.walk_forward_policy["regime_up_threshold_pct"]),
-            regime_down_threshold_pct=float(session.walk_forward_policy["regime_down_threshold_pct"]),
-            min_window_bars=int(session.walk_forward_policy["min_window_bars"]),
-            gate_min_median_score=float(session.walk_forward_policy["gate_min_median_score"]),
-            gate_min_worst_ret_pct=float(session.walk_forward_policy["gate_min_worst_ret_pct"]),
-            gate_min_flat_median_score=float(session.walk_forward_policy["gate_min_flat_median_score"]),
         )
         candidate_test_metrics, benchmark_test_metrics, oos_range_text = _build_oos_metrics_from_report(
             report=candidate_wf_report,
@@ -779,8 +760,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         "train_rows": train_rows,
         "test_title": test_title,
         "test_rows": test_rows,
-        "upgrade_rows": _build_upgrade_rows(trial=trial, policy=session.walk_forward_policy) if model_mode == "wf" else None,
-        "compare_rows": _build_compare_rows(trial=trial, champion_cache=champion_cache, policy=session.walk_forward_policy) if model_mode == "wf" else None,
+        "upgrade_rows": None,
+        "compare_rows": None,
         "base_score": _safe_float(attrs.get("base_score", 0.0)),
     }
 
