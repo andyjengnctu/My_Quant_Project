@@ -4,6 +4,8 @@ import importlib
 import io
 import json
 import math
+import re
+import unicodedata
 from decimal import Decimal
 from pathlib import Path
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
@@ -14,7 +16,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.buy_sort import calc_buy_sort_value
-from core.strategy_dashboard import print_strategy_dashboard
+from core.strategy_dashboard import print_optimizer_trial_console_dashboard, print_strategy_dashboard
 from core.walk_forward_policy import load_walk_forward_policy
 from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyParams
 from core.params_io import params_to_json_dict
@@ -1340,6 +1342,75 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("champion", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("champion", "")))
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 3)" and row_map.get("總交易次數", {}).get("champion") == "10 (正常: 7｜延續: 3)")
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("champion") == "3 (買: 2｜賣: 1)")
+
+    long_training_rows = [
+        {
+            "name": "風報比: 期望值",
+            "candidate": "4.23: 0.607R",
+            "candidate_precolored": False,
+            "champion": "3.38: 0.505R (+0.85: +0.102R)",
+            "champion_precolored": False,
+            "benchmark": "-",
+            "benchmark_precolored": False,
+        },
+        {
+            "name": "總交易次數",
+            "candidate": "649 (正常: 346｜延續: 303)",
+            "candidate_precolored": False,
+            "champion": "510 (正常: 425｜延續: 85)",
+            "champion_precolored": False,
+            "benchmark": "-",
+            "benchmark_precolored": False,
+        },
+        {
+            "name": "錯失交易次數",
+            "candidate": "88 (買: 87｜賣: 1)",
+            "candidate_precolored": False,
+            "champion": "52 (買: 52｜賣: 0)",
+            "champion_precolored": False,
+            "benchmark": "-",
+            "benchmark_precolored": False,
+        },
+    ]
+    dashboard_buffer = io.StringIO()
+    with redirect_stdout(dashboard_buffer):
+        print_optimizer_trial_console_dashboard(
+            title="",
+            milestone_title="🏆 破紀錄！",
+            global_strategy_text="買入排序 [按資產成長由大到小排序]",
+            mode_display="關閉明牌（穩定鎖倉）",
+            max_pos=10,
+            model_mode="split",
+            objective_mode="split_test_romd",
+            score_calc_method=SCORE_CALC_METHOD,
+            score_numerator_method=SCORE_NUMERATOR_METHOD,
+            system_score_display="1.234",
+            training_title="【訓練期間績效對比｜1995-01-05 ~ 2019-12-31】",
+            training_rows=long_training_rows,
+            testing_title="【測試期間績效對比｜2020-01-01 ~ 2026-03-02｜資料終點：2026-03-02】",
+            testing_rows=long_training_rows,
+            upgrade_rows=None,
+            compare_rows=None,
+            params_lines=["核心：測試"],
+            hard_gate_lines=["交易頻率：測試"],
+        )
+    ansi_re = re.compile(r"\[[0-9;]*m")
+    dashboard_lines = [ansi_re.sub("", line) for line in dashboard_buffer.getvalue().splitlines()]
+    table_lines = [line for line in dashboard_lines if line.startswith("| ") and any(token in line for token in ("風報比: 期望值", "總交易次數", "錯失交易次數"))]
+
+    def _pipe_display_positions(text: str) -> tuple[int, ...]:
+        positions = []
+        display_offset = 0
+        for ch in text:
+            if ch == "|":
+                positions.append(display_offset)
+            if unicodedata.combining(ch):
+                continue
+            display_offset += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        return tuple(positions)
+
+    pipe_positions = [_pipe_display_positions(line) for line in table_lines]
+    add_check(results, "strategy_contract", case_id, "optimizer_console_table_keeps_pipe_alignment_for_long_first_zone_rows", True, len(pipe_positions) == 6 and len(set(pipe_positions)) == 1)
 
     optimizer_main_source = (project_root / "tools" / "optimizer" / "main.py").read_text(encoding="utf-8")
     train_test_policy_lines = [line for line in optimizer_main_source.splitlines() if "Train/Test policy:" in line]

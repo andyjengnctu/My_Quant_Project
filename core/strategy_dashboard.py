@@ -21,6 +21,7 @@ from core.display_common import (
     C_RED,
     C_RESET,
     C_YELLOW,
+    _display_width,
     _pad_display,
     _table_row,
     get_p,
@@ -263,6 +264,22 @@ def _table_row4_compact(c1, c2, c3, c4, w1=20, w2=24, w3=31, w4=32):
     )
 
 
+def _build_table4_compact_widths(rows: list[tuple[str, str, str, str]], *, min_widths: tuple[int, int, int, int] = (20, 24, 31, 32)) -> tuple[int, int, int, int]:
+    widths = [int(v) for v in min_widths]
+    for row in rows:
+        for idx, cell in enumerate(row[:4]):
+            widths[idx] = max(widths[idx], _display_width(cell))
+    return tuple(widths)
+
+
+def _build_table5_widths(rows: list[tuple[str, str, str, str, str]], *, min_widths: tuple[int, int, int, int, int] = (20, 19, 24, 18, 6)) -> tuple[int, int, int, int, int]:
+    widths = [int(v) for v in min_widths]
+    for row in rows:
+        for idx, cell in enumerate(row[:5]):
+            widths[idx] = max(widths[idx], _display_width(cell))
+    return tuple(widths)
+
+
 def _optimizer_dashboard_metric_color(metric_name: str, value: str) -> str:
     metric_name = str(metric_name or "")
     value_text = str(value or "").strip()
@@ -346,7 +363,74 @@ def print_optimizer_trial_console_dashboard(*,
     params_lines: list[str],
     hard_gate_lines: list[str],
 ):
-    separator = "------------------------------------------------------------------------------------------------------------------------"
+    training_header = ("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)")
+    training_table_rows = [training_header]
+    for row in training_rows:
+        training_table_rows.append(
+            (
+                row["name"],
+                _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+            )
+        )
+    if testing_title and testing_rows:
+        for row in testing_rows:
+            training_table_rows.append(
+                (
+                    row["name"],
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
+                )
+            )
+    training_widths = _build_table4_compact_widths(training_table_rows)
+    training_header_line = _table_row4_compact(*training_header, *training_widths)
+
+    upgrade_header = ("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態")
+    upgrade_widths = None
+    upgrade_header_line = ""
+    upgrade_render_rows = []
+    if upgrade_rows:
+        upgrade_render_rows = [upgrade_header]
+        for row in upgrade_rows:
+            upgrade_render_rows.append(
+                (
+                    row["name"],
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                    row["threshold"],
+                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
+                )
+            )
+        upgrade_widths = _build_table4_compact_widths(upgrade_render_rows, min_widths=(20, 19, 24, 8))
+        upgrade_header_line = _table_row4_compact(*upgrade_header, *upgrade_widths)
+
+    compare_header = ("接班判斷項目", "本輪候選", "Champion (差異)", "門檻 / 基準", "狀態")
+    compare_widths = None
+    compare_header_line = ""
+    compare_render_rows = []
+    if compare_rows:
+        compare_render_rows = [compare_header]
+        for row in compare_rows:
+            compare_render_rows.append(
+                (
+                    row["name"],
+                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                    row["threshold"],
+                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
+                )
+            )
+        compare_widths = _build_table5_widths(compare_render_rows)
+        compare_header_line = _table_row5(*compare_header, *compare_widths)
+
+    separator_width = max(
+        120,
+        _display_width(training_header_line),
+        _display_width(upgrade_header_line) if upgrade_header_line else 0,
+        _display_width(compare_header_line) if compare_header_line else 0,
+    )
+    separator = "-" * separator_width
     print(f"{C_GRAY}{separator}{C_RESET}")
     print(f"{C_RED}{milestone_title}{C_RESET}")
     print(
@@ -361,59 +445,27 @@ def print_optimizer_trial_console_dashboard(*,
     print(separator)
     print(training_title)
     print(separator)
-    print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)"))
-    for row in training_rows:
-        print(
-            _table_row4_compact(
-                row["name"],
-                _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                _render_optimizer_dashboard_cell(row, "champion", row["name"]),
-                _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
-            )
-        )
+    print(training_header_line)
+    for rendered_row in training_table_rows[1:len(training_rows) + 1]:
+        print(_table_row4_compact(*rendered_row, *training_widths))
     if testing_title and testing_rows:
         print(separator)
         print(testing_title)
         print(separator)
-        print(_table_row4_compact("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)"))
-        for row in testing_rows:
-            print(
-                _table_row4_compact(
-                    row["name"],
-                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
-                )
-            )
-    if upgrade_rows:
+        print(training_header_line)
+        testing_render_rows = training_table_rows[len(training_rows) + 1:]
+        for rendered_row in testing_render_rows:
+            print(_table_row4_compact(*rendered_row, *training_widths))
+    if upgrade_rows and upgrade_widths is not None:
         print(separator)
-        print(_table_row4_compact("升版判斷項目", "本輪候選", "門檻 / 基準", "狀態", w1=20, w2=19, w3=24, w4=8))
-        for row in upgrade_rows:
-            print(
-                _table_row4_compact(
-                    row["name"],
-                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    row["threshold"],
-                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
-                    w1=20,
-                    w2=19,
-                    w3=24,
-                    w4=8,
-                )
-            )
-    if compare_rows:
+        print(upgrade_header_line)
+        for rendered_row in upgrade_render_rows[1:]:
+            print(_table_row4_compact(*rendered_row, *upgrade_widths))
+    if compare_rows and compare_widths is not None:
         print(separator)
-        print(_table_row5("接班判斷項目", "本輪候選", "Champion (差異)", "門檻 / 基準", "狀態"))
-        for row in compare_rows:
-            print(
-                _table_row5(
-                    row["name"],
-                    _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
-                    row["threshold"],
-                    _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
-                )
-            )
+        print(compare_header_line)
+        for rendered_row in compare_render_rows[1:]:
+            print(_table_row5(*rendered_row, *compare_widths))
     print(separator)
     for idx, line in enumerate(params_lines):
         prefix = f"{C_CYAN}【訓練參數】{C_RESET} " if idx == 0 else "　　　　     "

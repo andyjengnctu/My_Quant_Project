@@ -1,24 +1,18 @@
 ## Going
 
-- 訓練/測試樣本分離 
-- UI設計: 
-    - 比較 Selected json (defual: Run_best) vs Champion vs. 0050
-    - 用非console介面，一眼看情楚 為哪項fail，哪項勝出/符合、
-    - 連結參數與策略
-    - 設定區間與參數
- 
-## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
     - 加入大盤過濾
-    - 加入低點買入 + 盤整期策略
+    - 加入低點買入 
+    - 加入盤整期策略
+ 
+## To do
 
-- 如何精準公式算出停利%，讓先停利後停損絕對不會是負的?
+- DRL-based learning
+- LLM-based learning
 - ajd/raw整合交易策略 
 - 快速檢視不同獎勵函式結果 (排行）
 - 改為線上自動交易模擬 (依當天資產決定持有股數、沒買到下一檔(現在就是))
 - online虛擬交易 (小時交易)
-- LLM-based learning
-- 自動壓力測試角本，驗證長時間運作穩定性
 
 ## Pending (useless)
 - 考慮資投入資金效率、持有天數 
