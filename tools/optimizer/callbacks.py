@@ -346,13 +346,13 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
             bench_delta_text = _format_float_diff(bench_delta_value, digits, candidate_unit) if bench_delta_value is not None else ""
             champ_delta_text = _format_float_diff(champ_delta_value, digits, candidate_unit) if champ_delta_value is not None else ""
         elif kind == "count_split":
-            cand_plain = f"{int(candidate_metrics.get('pf_trades', 0))} (正常:{int(candidate_metrics.get('normal_trades', 0))} | 延續:{int(candidate_metrics.get('extended_trades', 0))})"
-            champ_plain = f"{int(champion_metrics.get('pf_trades', 0))} (正常:{int(champion_metrics.get('normal_trades', 0))} | 延續:{int(champion_metrics.get('extended_trades', 0))})" if champion_metrics else "-"
+            cand_plain = f"{int(candidate_metrics.get('pf_trades', 0))}(正常:{int(candidate_metrics.get('normal_trades', 0))}｜延續:{int(candidate_metrics.get('extended_trades', 0))})"
+            champ_plain = f"{int(champion_metrics.get('pf_trades', 0))}(正常:{int(champion_metrics.get('normal_trades', 0))}｜延續:{int(champion_metrics.get('extended_trades', 0))})" if champion_metrics else "-"
             _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "missed_split":
-            cand_plain = f"{int(candidate_metrics.get('missed_total', 0))} (買:{int(candidate_metrics.get('missed_buys', 0))} | 賣:{int(candidate_metrics.get('missed_sells', 0))})"
-            champ_plain = f"{int(champion_metrics.get('missed_total', 0))} (買:{int(champion_metrics.get('missed_buys', 0))} | 賣:{int(champion_metrics.get('missed_sells', 0))})" if champion_metrics else "-"
+            cand_plain = f"{int(candidate_metrics.get('missed_total', 0))}(買:{int(candidate_metrics.get('missed_buys', 0))}｜賣:{int(candidate_metrics.get('missed_sells', 0))})"
+            champ_plain = f"{int(champion_metrics.get('missed_total', 0))}(買:{int(champion_metrics.get('missed_buys', 0))}｜賣:{int(champion_metrics.get('missed_sells', 0))})" if champion_metrics else "-"
             _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "float2_nodiff":
