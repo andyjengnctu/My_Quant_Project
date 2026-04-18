@@ -18,8 +18,12 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_engine import run_portfolio_timeline
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
+    _format_float_diff,
+    _format_mdd_diff,
     _format_mdd_plain,
     _format_money,
+    _format_money_diff,
+    _format_pct_diff,
     _format_pct_plain,
     _format_value_with_delta,
     print_optimizer_trial_console_dashboard,
