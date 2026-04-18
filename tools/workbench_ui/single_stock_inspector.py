@@ -66,8 +66,6 @@ PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 本輪最佳": "run_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "champion | 正式現役"
-WORKBENCH_SIDEBAR_CANVAS_WIDTH = 252
-WORKBENCH_SIDEBAR_TEXT_WRAP = 224
 
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
@@ -428,53 +426,52 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         controls = ttk.Frame(self, padding=(8, 2, 8, 2), style="Workbench.TFrame")
         controls.pack(fill="x", pady=(0, 4))
 
-        controls_left = ttk.Frame(controls, style="Workbench.TFrame")
-        controls_left.pack(side="left", fill="x", expand=True)
-        controls_right = ttk.Frame(controls, style="Workbench.TFrame")
-        controls_right.pack(side="right", anchor="ne")
+        controls_bar = ttk.Frame(controls, style="Workbench.TFrame")
+        controls_bar.pack(side="left", anchor="w")
+        uniform_pady = (2, 2)
 
-        ttk.Label(controls_left, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, sticky="w")
-        ticker_entry = ttk.Entry(controls_left, textvariable=self._ticker_var, width=12, style="Workbench.TEntry")
-        ticker_entry.grid(row=0, column=1, padx=(6, 8), sticky="w")
+        ttk.Label(controls_bar, text="股票代號", style="Workbench.TLabel").grid(row=0, column=0, padx=(0, 6), pady=uniform_pady, sticky="w")
+        ticker_entry = ttk.Entry(controls_bar, textvariable=self._ticker_var, width=12, style="Workbench.TEntry")
+        ticker_entry.grid(row=0, column=1, padx=(0, 10), pady=uniform_pady, sticky="w")
         ticker_entry.focus_set()
 
         ticker_entry.bind("<Return>", self._on_ticker_enter)
 
-        ttk.Label(controls_left, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, sticky="w")
+        ttk.Label(controls_bar, text="常用股票", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=uniform_pady, sticky="w")
         self._reduced_stock_company_name_map = self._build_initial_reduced_stock_company_name_map()
         _, reduced_display_values, self._reduced_stock_map = _build_reduced_stock_dropdown_options(company_name_map=self._reduced_stock_company_name_map)
-        self._reduced_stock_combo = ttk.Combobox(controls_left, state="readonly", width=18, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
-        self._reduced_stock_combo.grid(row=0, column=3, padx=(6, 12), sticky="w")
+        self._reduced_stock_combo = ttk.Combobox(controls_bar, state="readonly", width=18, textvariable=self._reduced_stock_display_var, style="Workbench.TCombobox", values=reduced_display_values)
+        self._reduced_stock_combo.grid(row=0, column=3, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._reduced_stock_combo.bind("<<ComboboxSelected>>", self._on_reduced_stock_selected)
 
-        ttk.Button(controls_left, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), sticky="w")
-        self._candidate_combo = ttk.Combobox(controls_left, state="readonly", width=24, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
-        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), sticky="w")
+        ttk.Button(controls_bar, text="計算候選股", command=self._run_scanner, style="Workbench.TButton").grid(row=0, column=4, padx=(0, 8), pady=uniform_pady, sticky="w")
+        self._candidate_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._candidate_display_var, style="Workbench.TCombobox", values=[])
+        self._candidate_combo.grid(row=0, column=5, padx=(0, 12), pady=uniform_pady, sticky="w")
         self._candidate_combo.bind("<<ComboboxSelected>>", self._on_candidate_selected)
 
-        ttk.Button(controls_left, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), sticky="w")
-        self._history_combo = ttk.Combobox(controls_left, state="readonly", width=34, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
-        self._history_combo.grid(row=0, column=7, padx=(0, 12), sticky="w")
+        ttk.Button(controls_bar, text="計算歷史績效股", command=self._run_history_scanner, style="Workbench.TButton").grid(row=0, column=6, padx=(0, 8), pady=uniform_pady, sticky="w")
+        self._history_combo = ttk.Combobox(controls_bar, state="readonly", width=30, textvariable=self._history_display_var, style="Workbench.TCombobox", values=[])
+        self._history_combo.grid(row=0, column=7, padx=(0, 14), pady=uniform_pady, sticky="w")
         self._history_combo.bind("<<ComboboxSelected>>", self._on_history_selected)
 
-        ttk.Label(controls_right, text="參數", style="Workbench.TLabel").grid(row=0, column=0, sticky="e")
+        ttk.Label(controls_bar, text="參數", style="Workbench.TLabel").grid(row=0, column=8, padx=(0, 6), pady=uniform_pady, sticky="w")
         self._param_source_combo = ttk.Combobox(
-            controls_right,
+            controls_bar,
             state="readonly",
             width=20,
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
             values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
         )
-        self._param_source_combo.grid(row=0, column=1, padx=(6, 0), sticky="e")
+        self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
         ttk.Checkbutton(
-            controls_right,
+            controls_bar,
             text="顯示成交量",
             variable=self._show_volume_var,
             command=self._rerender_current_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=0, column=2, padx=(10, 0), sticky="e")
+        ).grid(row=0, column=10, padx=(0, 0), pady=uniform_pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -508,7 +505,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         sidebar_outer.grid_columnconfigure(0, weight=1)
         self._sidebar_canvas = tk.Canvas(
             sidebar_outer,
-            width=WORKBENCH_SIDEBAR_CANVAS_WIDTH,
+            width=246,
             bg="#05090e",
             highlightthickness=0,
             bd=0,
@@ -524,17 +521,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
         self._sidebar_canvas.configure(yscrollcommand=self._sidebar_scrollbar.set)
 
-        sidebar = ttk.Frame(self._sidebar_canvas, padding=(8, 4), style="Workbench.TFrame")
+        sidebar = ttk.Frame(self._sidebar_canvas, padding=(6, 4), style="Workbench.TFrame")
         self._sidebar_inner_window = self._sidebar_canvas.create_window((0, 0), window=sidebar, anchor="nw")
         self._sidebar_canvas.bind("<Configure>", self._on_sidebar_canvas_configure)
         sidebar.bind("<Configure>", self._on_sidebar_frame_configure)
         sidebar.columnconfigure(1, weight=1)
-        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 17, "bold"), padx=8, pady=6, anchor="center")
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=8, pady=6, anchor="center")
         self._signal_chip.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 17, "bold"), padx=8, pady=6, anchor="center")
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=8, pady=6, anchor="center")
         self._history_chip.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=WORKBENCH_SIDEBAR_TEXT_WRAP).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=204).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
