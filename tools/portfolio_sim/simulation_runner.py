@@ -12,7 +12,7 @@ from core.log_utils import format_exception_summary, write_issue_log
 from core.walk_forward_policy import load_walk_forward_policy
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import pack_prepared_stock_data, prep_stock_data_and_trades
-from tools.optimizer.walk_forward import build_walk_forward_windows
+from tools.optimizer.walk_forward import resolve_first_walk_forward_test_boundary
 from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensure_runtime_dirs, is_insufficient_data_error
 
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
@@ -41,15 +41,13 @@ def resolve_default_portfolio_start_year(data_dir: str | None = None) -> int:
     if not sorted_dates:
         return fallback_year
 
-    windows = build_walk_forward_windows(
+    first_test_boundary = resolve_first_walk_forward_test_boundary(
         sorted_dates,
         min_train_years=int(policy["min_train_years"]),
-        test_window_months=int(policy["test_window_months"]),
-        min_window_bars=int(policy["min_window_bars"]),
         train_start_year=int(policy["train_start_year"]),
     )
-    if windows:
-        return int(pd.Timestamp(windows[0]["oos_start"]).year)
+    if first_test_boundary is not None:
+        return int(first_test_boundary.year)
     return fallback_year
 
 

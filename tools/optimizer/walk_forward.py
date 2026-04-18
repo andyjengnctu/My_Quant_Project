@@ -54,6 +54,25 @@ def _build_window_label(start_ts: pd.Timestamp) -> str:
     return f"{int(start_ts.year)}H{half}"
 
 
+def resolve_first_walk_forward_test_boundary(
+    sorted_dates,
+    *,
+    min_train_years: int = WF_MIN_TRAIN_YEARS,
+    train_start_year: int | None = None,
+) -> pd.Timestamp | None:
+    if not sorted_dates:
+        return None
+
+    sorted_timestamps = [pd.Timestamp(dt).normalize() for dt in sorted_dates]
+    first_market_date = sorted_timestamps[0]
+    if train_start_year is None:
+        first_train_date = first_market_date
+    else:
+        requested_start = pd.Timestamp(year=int(train_start_year), month=1, day=1)
+        first_train_date = max(first_market_date, requested_start)
+    return _align_to_half_year_boundary(first_train_date + pd.DateOffset(years=int(min_train_years)))
+
+
 def build_walk_forward_windows(
     sorted_dates,
     *,
@@ -65,6 +84,14 @@ def build_walk_forward_windows(
     if not sorted_dates:
         return []
 
+    first_oos_candidate = resolve_first_walk_forward_test_boundary(
+        sorted_dates,
+        min_train_years=min_train_years,
+        train_start_year=train_start_year,
+    )
+    if first_oos_candidate is None:
+        return []
+
     sorted_timestamps = [pd.Timestamp(dt).normalize() for dt in sorted_dates]
     first_market_date = sorted_timestamps[0]
     last_date = sorted_timestamps[-1]
@@ -73,7 +100,6 @@ def build_walk_forward_windows(
     else:
         requested_start = pd.Timestamp(year=int(train_start_year), month=1, day=1)
         first_date = max(first_market_date, requested_start)
-    first_oos_candidate = _align_to_half_year_boundary(first_date + pd.DateOffset(years=int(min_train_years)))
 
     windows = []
     oos_start = first_oos_candidate
