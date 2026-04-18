@@ -499,53 +499,37 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        sidebar_outer = ttk.Frame(chart_tab, padding=(6, 6, 4, 6), style="Workbench.TFrame")
+        sidebar_outer = ttk.Frame(chart_tab, padding=(4, 4, 2, 4), width=188, style="Workbench.TFrame")
         sidebar_outer.grid(row=0, column=1, sticky="ns")
-        sidebar_outer.grid_rowconfigure(0, weight=1)
-        sidebar_outer.grid_columnconfigure(0, weight=1)
-        self._sidebar_canvas = tk.Canvas(
-            sidebar_outer,
-            width=246,
-            bg="#05090e",
-            highlightthickness=0,
-            bd=0,
-            relief="flat",
-        )
-        self._sidebar_canvas.grid(row=0, column=0, sticky="ns")
-        self._sidebar_scrollbar = ttk.Scrollbar(
-            sidebar_outer,
-            orient="vertical",
-            command=self._sidebar_canvas.yview,
-            style="Workbench.Vertical.TScrollbar",
-        )
-        self._sidebar_scrollbar.grid(row=0, column=1, sticky="ns")
-        self._sidebar_canvas.configure(yscrollcommand=self._sidebar_scrollbar.set)
+        sidebar_outer.grid_propagate(False)
+        chart_tab.grid_columnconfigure(1, minsize=188)
 
-        sidebar = ttk.Frame(self._sidebar_canvas, padding=(6, 4), style="Workbench.TFrame")
-        self._sidebar_inner_window = self._sidebar_canvas.create_window((0, 0), window=sidebar, anchor="nw")
-        self._sidebar_canvas.bind("<Configure>", self._on_sidebar_canvas_configure)
-        sidebar.bind("<Configure>", self._on_sidebar_frame_configure)
-        sidebar.columnconfigure(1, weight=1)
-        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=8, pady=6, anchor="center")
-        self._signal_chip.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=("Microsoft JhengHei", 16, "bold"), padx=8, pady=6, anchor="center")
-        self._history_chip.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", justify="left", anchor="nw", wraplength=204).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 12))
-        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=6, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=7, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=8, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=9, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel").grid(row=11, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=12, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=13, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=14, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=15, column=0, columnspan=2, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", justify="left").grid(row=16, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        sidebar = ttk.Frame(sidebar_outer, padding=(2, 2), style="Workbench.TFrame")
+        sidebar.pack(fill="both", expand=True)
+        sidebar.columnconfigure(0, weight=1)
+        sidebar_chip_font = ("Microsoft JhengHei", 13, "bold")
+        sidebar_header_font = ("Microsoft JhengHei", 13, "bold")
+        sidebar_body_font = ("Microsoft JhengHei", 12)
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=168).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=7, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
         sidebar.rowconfigure(18, weight=1)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")

@@ -5,8 +5,8 @@
 # train_start_year + min_train_years - 1，避免日常使用同時維護兩個年限旋鈕。
 
 WALK_FORWARD_POLICY = {
-    "train_start_year": 2005,  # 主搜尋訓練資料的起始年；早於此年的資料不納入 wf 主訓練區間。
-    "min_train_years": 15,  # walk-forward 每個 OOS 視窗開始前，至少要先累積的訓練年數。
+    "train_start_year": 1998,  # 主搜尋訓練資料的起始年；早於此年的資料不納入 wf 主訓練區間。
+    "min_train_years": 22,  # walk-forward 每個 OOS 視窗開始前，至少要先累積的訓練年數。
     "test_window_months": 6,  # 每個 walk-forward OOS / test 視窗的月數；目前以半年度為一窗。
     "search_train_end_year": None,  # 主搜尋訓練資料的結束年；None 代表自動用 train_start_year + min_train_years - 1。
     "objective_mode": "wf_gate_median",  # optimizer 評分模式；legacy_base_score=舊版單次分數，wf_gate_median=walk-forward gate 中位數。
