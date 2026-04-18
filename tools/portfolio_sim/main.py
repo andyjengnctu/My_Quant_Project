@@ -58,7 +58,8 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
-    default_start_year_hint = int(load_walk_forward_policy(PROJECT_ROOT)["train_start_year"])
+    policy = load_walk_forward_policy(PROJECT_ROOT)
+    default_start_year_hint = int(policy["search_train_end_year"]) + 1
 
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
@@ -70,38 +71,36 @@ def main(argv=None, env=None):
 
     try:
         param_source_choice = safe_prompt_choice(
-            "👉 參數來源：[C] champion  [R] run_best: ",
+            "👉 參數來源：[C] champion (預設)  [R] run_best: ",
             "C",
             ("C", "R"),
             "參數來源",
         )
         param_source = "champion" if param_source_choice == "C" else "run_best"
         rotation_choice = safe_prompt_choice(
-            "👉 汰弱換股：[Y] 啟用  [N] 關閉: ",
+            "👉 汰弱換股：[N] 關閉 (預設)  [Y] 啟用 :  ",
             "N",
-            ("Y", "N"),
+            ("N", "Y"),
             "汰弱換股選項",
         )
         user_rotation = rotation_choice == 'Y'
         user_max_pos = safe_prompt_int(
-            "👉 最大持倉數量：[數字] 輸入，預設 10: ",
+            "👉 最大持倉數量：[ Enter] 10  [數字] 指定數量，:  ",
             10,
             "最大持倉數量",
             min_value=1,
         )
         raw_start_year = safe_prompt(
-            f"👉 開始回測年份：[Enter] 使用測試起始年  [數字] 指定年份（提示 {default_start_year_hint}）: ",
+            f"👉 開始回測年份：[Enter] 測試起始年{default_start_year_hint}  [數字] 指定年份: ",
             "",
         ).strip()
-        if raw_start_year == "":
-            from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER, resolve_default_portfolio_start_year
+        from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
 
-            user_start_year = int(resolve_default_portfolio_start_year(selected_data_dir))
+        if raw_start_year == "":
+            user_start_year = int(default_start_year_hint)
             user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
         else:
             user_start_year = parse_int_strict(raw_start_year, "開始回測年份", min_value=1900)
-            from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
-
             user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)

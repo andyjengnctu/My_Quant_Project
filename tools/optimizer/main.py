@@ -94,7 +94,7 @@ def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> 
     from core.runtime_utils import safe_prompt_choice as _safe_prompt_choice
 
     choice = _safe_prompt_choice(
-        "👉 Optimizer 模式：[1] Split（Train/Test 分離）  [2] Legacy（全資料訓練到最新日）: ",
+        "👉 Optimizer 模式：[1] Split（Train/Test 分離)  [2] Legacy（全資料訓練到最新日）:  ",
         "1" if str(default_choice) == MODEL_CHOICE_SPLIT else "2",
         ("1", "2"),
         "optimizer 模式",
