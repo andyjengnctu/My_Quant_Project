@@ -50,11 +50,9 @@ PROFILE_PRINT_EVERY_N_TRIALS = 1
 
 OPTIMIZER_MODEL_ENV_VAR = "V16_OPTIMIZER_MODEL"
 MODEL_CHOICE_SPLIT = "split"
-MODEL_CHOICE_WF = "wf"  # 相容舊輸入；內部會視為 split。
 MODEL_CHOICE_LEGACY = "legacy"
 MODEL_TO_OBJECTIVE_MODE = {
     MODEL_CHOICE_SPLIT: "split_test_romd",
-    MODEL_CHOICE_WF: "split_test_romd",
     MODEL_CHOICE_LEGACY: "legacy_base_score",
 }
 OBJECTIVE_MODE_TO_MODEL = {
@@ -82,14 +80,14 @@ def _extract_cli_option_value(argv, option_name: str):
 
 def _normalize_optimizer_model_choice(raw_value: str | None):
     normalized = str(raw_value or "").strip().lower()
-    if normalized in {MODEL_CHOICE_SPLIT, MODEL_CHOICE_WF}:
+    if normalized == MODEL_CHOICE_SPLIT:
         return MODEL_CHOICE_SPLIT
     if normalized == MODEL_CHOICE_LEGACY:
         return MODEL_CHOICE_LEGACY
     if normalized in OBJECTIVE_MODE_TO_MODEL:
         mapped = OBJECTIVE_MODE_TO_MODEL[normalized]
         return MODEL_CHOICE_SPLIT if mapped == "split_test_romd" else mapped
-    raise ValueError(f"optimizer model 只接受 split 或 legacy（wf 仍可作為 split 別名），收到: {raw_value}")
+    raise ValueError(f"optimizer model 只接受 split 或 legacy，收到: {raw_value}")
 
 
 def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> tuple[str, str]:
@@ -97,7 +95,7 @@ def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> 
 
     choice = _safe_prompt_choice(
         "👉 請選擇 optimizer 模式 [1] Train/Test 分離 RoMD  [2] 原本模式(全資料到最新日) (預設 1): ",
-        "1" if str(default_choice) in {MODEL_CHOICE_SPLIT, MODEL_CHOICE_WF} else "2",
+        "1" if str(default_choice) == MODEL_CHOICE_SPLIT else "2",
         ("1", "2"),
         "optimizer 模式",
     )
@@ -251,28 +249,9 @@ def _calc_romd_score(ret_pct: float, mdd_pct: float) -> float:
 
 
 def build_test_period_total_metrics(report: dict | None) -> dict:
-    from tools.optimizer.walk_forward import build_oos_total_performance
+    from tools.optimizer.walk_forward import build_test_period_metrics
 
-    windows = list((report or {}).get("windows") or [])
-    summary = dict((report or {}).get("summary") or {})
-    total = build_oos_total_performance(windows, ret_key="ret_pct")
-    benchmark_total = build_oos_total_performance(windows, ret_key="benchmark_return_pct")
-    return {
-        "window_count": int(total.get("window_count", 0)),
-        "oos_start": str(total.get("oos_start") or ""),
-        "oos_end": str(total.get("oos_end") or ""),
-        "linked_total_return_pct": float(total.get("linked_total_return_pct", 0.0)),
-        "annualized_return_pct": float(total.get("annualized_return_pct", 0.0)),
-        "max_drawdown_pct": float(total.get("max_drawdown_pct", 0.0)),
-        "test_score_romd": _calc_romd_score(total.get("linked_total_return_pct", 0.0), total.get("max_drawdown_pct", 0.0)),
-        "median_window_romd": float(summary.get("median_window_score", 0.0)),
-        "positive_window_rate": float(total.get("positive_window_rate", 0.0)),
-        "benchmark_linked_total_return_pct": float(benchmark_total.get("linked_total_return_pct", 0.0)),
-        "benchmark_annualized_return_pct": float(benchmark_total.get("annualized_return_pct", 0.0)),
-        "benchmark_max_drawdown_pct": float(benchmark_total.get("max_drawdown_pct", 0.0)),
-        "benchmark_score_romd": _calc_romd_score(benchmark_total.get("linked_total_return_pct", 0.0), benchmark_total.get("max_drawdown_pct", 0.0)),
-        "benchmark_positive_window_rate": float(benchmark_total.get("positive_window_rate", 0.0)),
-    }
+    return dict(build_test_period_metrics(report))
 
 
 def _write_split_test_compare_report(*, output_dir: str, payload: dict, session_ts: str) -> dict:
@@ -299,11 +278,11 @@ def _write_split_test_compare_report(*, output_dir: str, payload: dict, session_
         "| 指標 | Champion | Challenger | 0050 |",
         "|---|---:|---:|---:|",
         f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} | {float(benchmark.get('benchmark_score_romd', benchmark.get('test_score_romd', 0.0))):.3f} |",
-        f"| 串接總報酬率 | {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% | {float(benchmark.get('linked_total_return_pct', 0.0)):.2f}% |",
+        f"| 測試總報酬率 | {float(champion.get('total_return_pct', 0.0)):.2f}% | {float(challenger.get('total_return_pct', 0.0)):.2f}% | {float(benchmark.get('total_return_pct', 0.0)):.2f}% |",
         f"| 年化報酬率 | {float(champion.get('annualized_return_pct', 0.0)):.2f}% | {float(challenger.get('annualized_return_pct', 0.0)):.2f}% | {float(benchmark.get('annualized_return_pct', 0.0)):.2f}% |",
         f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% | {float(benchmark.get('max_drawdown_pct', 0.0)):.2f}% |",
-        f"| 視窗中位 RoMD | {float(champion.get('median_window_romd', 0.0)):.3f} | {float(challenger.get('median_window_romd', 0.0)):.3f} | - |",
-        f"| 正報酬視窗率 | {float(champion.get('positive_window_rate', 0.0)):.2f}% | {float(challenger.get('positive_window_rate', 0.0)):.2f}% | {float(benchmark.get('positive_window_rate', 0.0)):.2f}% |",
+        f"| 完整年度最差報酬 | {float(champion.get('min_full_year_return_pct', 0.0)):.2f}% | {float(challenger.get('min_full_year_return_pct', 0.0)):.2f}% | {float(benchmark.get('min_full_year_return_pct', 0.0)):.2f}% |",
+        f"| 年化交易次數 | {float(champion.get('annual_trades', 0.0)):.2f} | {float(challenger.get('annual_trades', 0.0)):.2f} | - |",
     ]
     with open(md_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -315,19 +294,19 @@ def generate_split_test_compare_report(*, session, dataset_label, db_file, chall
 
     challenger_total = build_test_period_total_metrics(challenger_report)
     benchmark_total = {
-        "linked_total_return_pct": float(challenger_total.get("benchmark_linked_total_return_pct", 0.0)),
+        "total_return_pct": float(challenger_total.get("benchmark_total_return_pct", 0.0)),
         "annualized_return_pct": float(challenger_total.get("benchmark_annualized_return_pct", 0.0)),
+        "min_full_year_return_pct": float(challenger_total.get("benchmark_min_full_year_return_pct", 0.0)),
         "max_drawdown_pct": float(challenger_total.get("benchmark_max_drawdown_pct", 0.0)),
         "test_score_romd": float(challenger_total.get("benchmark_score_romd", 0.0)),
-        "positive_window_rate": float(challenger_total.get("benchmark_positive_window_rate", 0.0)),
     }
     champion_report = None
     champion_report_paths = None
     champion_payload = {}
     champion_total = {
-        "window_count": 0, "oos_start": challenger_total.get("oos_start", ""), "oos_end": challenger_total.get("oos_end", ""),
-        "linked_total_return_pct": 0.0, "annualized_return_pct": 0.0, "max_drawdown_pct": 0.0, "test_score_romd": float("-inf"),
-        "median_window_romd": 0.0, "positive_window_rate": 0.0,
+        "period_count": 0, "oos_start": challenger_total.get("oos_start", ""), "oos_end": challenger_total.get("oos_end", ""),
+        "total_return_pct": 0.0, "annualized_return_pct": 0.0, "min_full_year_return_pct": 0.0, "max_drawdown_pct": 0.0, "test_score_romd": float("-inf"),
+        "annual_trades": 0.0,
     }
     champion_missing = True
     if os.path.exists(CHAMPION_PARAMS_PATH):
@@ -429,9 +408,9 @@ def promote_run_best_to_champion_by_test_score(*, session, compare_result, compa
         "| 指標 | 舊 Champion | 新 Champion |",
         "|---|---:|---:|",
         f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} |",
-        f"| 串接總報酬率 | {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% |",
+        f"| 測試總報酬率 | {float(champion.get('total_return_pct', 0.0)):.2f}% | {float(challenger.get('total_return_pct', 0.0)):.2f}% |",
         f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% |",
-        f"| 視窗中位 RoMD | {float(champion.get('median_window_romd', 0.0)):.3f} | {float(challenger.get('median_window_romd', 0.0)):.3f} |",
+        f"| 完整年度最差報酬 | {float(champion.get('min_full_year_return_pct', 0.0)):.2f}% | {float(challenger.get('min_full_year_return_pct', 0.0)):.2f}% |",
     ]
     with open(record_md_path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -457,23 +436,23 @@ def print_split_compare_outputs(*, compare_result, compare_paths, promote_result
     status_color = C_GREEN if status == "new_champion" else C_YELLOW
     print(f"{C_GREEN}🆚 已輸出測試期間分數比較報表：{compare_paths['md_path']}{C_RESET}")
     print(
-        f"{C_GRAY}   測試區間: {challenger.get('oos_start', '')} ~ {challenger.get('oos_end', '')} | 視窗數: {int(challenger.get('window_count', 0))}{C_RESET}"
+        f"{C_GRAY}   測試區間: {challenger.get('oos_start', '')} ~ {challenger.get('oos_end', '')}{C_RESET}"
     )
     print(
         f"{C_GRAY}   測試 RoMD: Champion {float(champion.get('test_score_romd', 0.0)):.3f} | "
         f"Challenger {float(challenger.get('test_score_romd', 0.0)):.3f} | 0050 {float(benchmark.get('test_score_romd', 0.0)):.3f}{C_RESET}"
     )
     print(
-        f"{C_GRAY}   串接總報酬: Champion {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | "
-        f"Challenger {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('linked_total_return_pct', 0.0)):.2f}%{C_RESET}"
+        f"{C_GRAY}   測試總報酬: Champion {float(champion.get('total_return_pct', 0.0)):.2f}% | "
+        f"Challenger {float(challenger.get('total_return_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('total_return_pct', 0.0)):.2f}%{C_RESET}"
     )
     print(
         f"{C_GRAY}   最大回撤: Champion {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | "
         f"Challenger {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
     )
     print(
-        f"{C_GRAY}   視窗中位 RoMD(觀察): Champion {float(champion.get('median_window_romd', 0.0)):.3f} | "
-        f"Challenger {float(challenger.get('median_window_romd', 0.0)):.3f}{C_RESET}"
+        f"{C_GRAY}   完整年度最差報酬: Champion {float(champion.get('min_full_year_return_pct', 0.0)):.2f}% | "
+        f"Challenger {float(challenger.get('min_full_year_return_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('min_full_year_return_pct', 0.0)):.2f}%{C_RESET}"
     )
     print(f"{status_color}   結論: {payload.get('recommendation', '')}{C_RESET}")
     if promote_result is not None:
@@ -577,10 +556,10 @@ def promote_run_best_to_champion(*, session, compare_result, compare_paths, auto
     shutil.copy2(RUN_BEST_PARAMS_PATH, CHAMPION_PARAMS_PATH)
 
     compare_payload = dict((compare_result or {}).get("compare_payload") or {})
-    summary_compare = dict(compare_payload.get("summary_compare") or {})
+    test_metrics_compare = dict(compare_payload.get("test_metrics_compare") or {})
     key_metrics = {}
-    for key in ("median_window_score", "flat_median_score", "worst_ret_pct", "max_mdd", "median_annual_trades"):
-        metric = dict(summary_compare.get(key) or {})
+    for key in ("test_score_romd", "total_return_pct", "min_full_year_return_pct", "max_drawdown_pct", "annual_trades"):
+        metric = dict(test_metrics_compare.get(key) or {})
         key_metrics[key] = {
             "champion": metric.get("champion"),
             "challenger": metric.get("challenger"),
@@ -633,7 +612,7 @@ def promote_run_best_to_champion(*, session, compare_result, compare_paths, auto
 
 def generate_champion_challenger_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report, walk_forward_policy: dict):
     from core.params_io import load_params_from_json, params_to_json_dict
-    from tools.optimizer.walk_forward import build_walk_forward_compare_payload, write_walk_forward_compare_report
+    from tools.optimizer.walk_forward import build_test_period_compare_payload, write_test_period_compare_report
 
     if not os.path.exists(CHAMPION_PARAMS_PATH):
         return None, None
@@ -648,7 +627,7 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         best_trial_number=None,
         walk_forward_policy=walk_forward_policy,
     )
-    compare_payload = build_walk_forward_compare_payload(
+    compare_payload = build_test_period_compare_payload(
         champion_payload=champion_payload,
         champion_report=champion_report,
         challenger_payload=challenger_payload,
@@ -656,10 +635,8 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
         dataset_label=dataset_label,
         source_db_path=db_file,
         session_ts=session.session_ts,
-        compare_worst_ret_tolerance_pct=float(walk_forward_policy.get("compare_worst_ret_tolerance_pct", 1.0)),
-        compare_max_mdd_tolerance_pct=float(walk_forward_policy.get("compare_max_mdd_tolerance_pct", 2.0)),
     )
-    compare_paths = write_walk_forward_compare_report(
+    compare_paths = write_test_period_compare_report(
         output_dir=session.output_dir,
         compare_payload=compare_payload,
     )
@@ -675,19 +652,19 @@ def print_walk_forward_outputs(*, report, report_paths, objective_mode: str):
     total_metrics = build_test_period_total_metrics(report)
     if str(objective_mode) == "split_test_romd":
         print(
-            f"{C_GRAY}   測試區間: {total_metrics.get('oos_start', '')} ~ {total_metrics.get('oos_end', '')} | 視窗數: {int(total_metrics.get('window_count', 0))}{C_RESET}"
+            f"{C_GRAY}   測試區間: {total_metrics.get('oos_start', '')} ~ {total_metrics.get('oos_end', '')}{C_RESET}"
         )
         print(
-            f"{C_GRAY}   測試 RoMD: {float(total_metrics.get('test_score_romd', 0.0)):.3f} | 串接總報酬: {float(total_metrics.get('linked_total_return_pct', 0.0)):.2f}% | 最大回撤: {float(total_metrics.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
+            f"{C_GRAY}   測試 RoMD: {float(total_metrics.get('test_score_romd', 0.0)):.3f} | 測試總報酬: {float(total_metrics.get('total_return_pct', 0.0)):.2f}% | 最大回撤: {float(total_metrics.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
         )
         print(
-            f"{C_GRAY}   視窗中位 RoMD(觀察): {float(total_metrics.get('median_window_romd', 0.0)):.3f} | 0050 RoMD: {float(total_metrics.get('benchmark_score_romd', 0.0)):.3f}{C_RESET}"
+            f"{C_GRAY}   完整年度最差報酬: {float(total_metrics.get('min_full_year_return_pct', 0.0)):.2f}% | 0050 RoMD: {float(total_metrics.get('benchmark_score_romd', 0.0)):.3f}{C_RESET}"
         )
         return
     print(
-        f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
-        f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
-        f"最差視窗報酬: {float(report['summary'].get('worst_ret_pct', 0.0)):.2f}%{C_RESET}"
+        f"{C_GRAY}   測試區間: {report['summary'].get('oos_start', '')} ~ {report['summary'].get('oos_end', '')} | "
+        f"測試 RoMD: {float(report['summary'].get('test_score_romd', 0.0)):.3f} | "
+        f"最大回撤: {float(report['summary'].get('test_mdd', 0.0)):.2f}%{C_RESET}"
     )
     upgrade_gate = dict(report.get("upgrade_gate") or {})
     gate_status = str(upgrade_gate.get("status", "fail")).upper()
@@ -709,21 +686,18 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: st
         coverage_gate = dict(compare_assessment.get("coverage_gate") or {})
         compare_status = str(compare_assessment.get("status", "fail")).upper()
         compare_color = C_GREEN if compare_status == "PASS" else (C_YELLOW if compare_status == "WATCH" else C_RED)
-        summary_compare = dict(compare_payload.get("summary_compare") or {})
-        total_compare = dict(compare_payload.get("oos_total_compare") or {})
-        total_metrics = dict(total_compare.get("metrics") or {})
-        total_ret = dict(total_metrics.get("linked_total_return_pct") or {})
-        mws = dict(summary_compare.get("median_window_score") or {})
-        flat_metric = dict(summary_compare.get("flat_median_score") or {})
+        test_metrics = dict(compare_payload.get("test_metrics_compare") or {})
+        score_metric = dict(test_metrics.get("test_score_romd") or {})
+        ret_metric = dict(test_metrics.get("total_return_pct") or {})
+        mdd_metric = dict(test_metrics.get("max_drawdown_pct") or {})
         print(f"{C_GREEN}🆚 已輸出 Champion/Challenger 比較報表（正式升版主入口）：{compare_paths['md_path']}{C_RESET}")
         print(
-            f"{C_GRAY}   median_window_score: {float(mws.get('champion', 0.0)):.3f} -> {float(mws.get('challenger', 0.0)):.3f} "
-            f"({float(mws.get('delta', 0.0)):+.3f}) | flat_median_score: {float(flat_metric.get('champion', 0.0)):.3f} -> {float(flat_metric.get('challenger', 0.0)):.3f} "
-            f"({float(flat_metric.get('delta', 0.0)):+.3f}){C_RESET}"
+            f"{C_GRAY}   test_score_romd: {float(score_metric.get('champion', 0.0)):.3f} -> {float(score_metric.get('challenger', 0.0)):.3f} "
+            f"({float(score_metric.get('delta', 0.0)):+.3f}){C_RESET}"
         )
         print(
-            f"{C_GRAY}   OOS總報酬(串接): Champion {_format_pct_simple(total_ret.get('champion', 0.0))} | "
-            f"Challenger {_format_pct_simple(total_ret.get('challenger', 0.0))} | 0050 {_format_pct_simple(total_ret.get('benchmark', 0.0))}{C_RESET}"
+            f"{C_GRAY}   測試總報酬: Champion {_format_pct_simple(ret_metric.get('champion', 0.0))} | "
+            f"Challenger {_format_pct_simple(ret_metric.get('challenger', 0.0))} | 0050 {_format_pct_simple(ret_metric.get('benchmark', 0.0))}{C_RESET}"
         )
         print(
             f"{C_GRAY}   品質 gate: {str(quality_gate.get('status', 'fail')).upper()} | 覆蓋 gate: {str(coverage_gate.get('status', 'watch')).upper()} | "
@@ -821,7 +795,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy（wf 仍可作為 split 別名）或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用 test RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；train/test 切分設定來自 config/training_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
+        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用單一連續 test holdout RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；train/test 切分設定來自 config/training_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -850,7 +824,7 @@ def main(argv=None, environ=None):
     model_choice, model_source = resolve_optimizer_model_choice(
         argv,
         environ,
-        default_model=OBJECTIVE_MODE_TO_MODEL.get(str(loaded_walk_forward_policy["objective_mode"]), MODEL_CHOICE_SPLIT),
+        default_model=MODEL_CHOICE_SPLIT,
     )
     walk_forward_policy = apply_optimizer_model_choice(loaded_walk_forward_policy, model_choice=model_choice)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)

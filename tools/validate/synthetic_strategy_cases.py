@@ -1231,8 +1231,6 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     default_policy_path = str(default_policy.get("policy_path", "")).replace("\\", "/")
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_training_policy", True, default_policy_path.endswith("config/training_policy.py"))
     add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_auto_derives_search_train_end_year", 2019, int(default_policy.get("search_train_end_year", 0)))
-    add_check(results, "strategy_contract", case_id, "default_walk_forward_policy_uses_split_test_romd", "split_test_romd", str(default_policy.get("objective_mode", "")))
-
     with TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir) / "wf_override.py"
         tmp_path.write_text(
@@ -1263,10 +1261,10 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
         tmp_path.write_text('WALK_FORWARD_POLICY = {"objective_mode": "bad_mode"}\n', encoding="utf-8")
         try:
             load_walk_forward_policy(str(project_root), environ={"V16_WALK_FORWARD_POLICY_PATH": str(tmp_path)})
-            invalid_objective_rejected = False
+            invalid_legacy_symbol_rejected = False
         except ValueError as exc:
-            invalid_objective_rejected = "objective_mode" in str(exc)
-    add_check(results, "strategy_contract", case_id, "invalid_objective_mode_rejected", True, invalid_objective_rejected)
+            invalid_legacy_symbol_rejected = "TRAINING_SPLIT_POLICY" in str(exc)
+    add_check(results, "strategy_contract", case_id, "legacy_walk_forward_policy_symbol_rejected", True, invalid_legacy_symbol_rejected)
 
     callbacks_source = Path(optimizer_callbacks.__file__).read_text(encoding="utf-8")
     objective_runner_source = (project_root / "tools" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")

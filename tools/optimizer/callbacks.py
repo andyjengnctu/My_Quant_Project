@@ -18,12 +18,8 @@ from core.params_io import build_params_from_mapping, load_params_from_json, par
 from core.portfolio_engine import run_portfolio_timeline
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
-    _format_float_diff,
-    _format_mdd_diff,
     _format_mdd_plain,
     _format_money,
-    _format_money_diff,
-    _format_pct_diff,
     _format_pct_plain,
     _format_value_with_delta,
     print_optimizer_trial_console_dashboard,
@@ -33,7 +29,7 @@ from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TEST_ROMD,
     is_qualified_trial_value,
 )
-from tools.optimizer.walk_forward import build_oos_total_performance, evaluate_walk_forward
+from tools.optimizer.walk_forward import build_test_period_metrics, evaluate_walk_forward
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -83,94 +79,46 @@ def _build_trial_params_object(param_mapping: dict) -> V16StrategyParams:
 
 
 
-def _weighted_average_from_rows(rows, *, value_key: str, weight_key: str) -> float:
-    rows = list(rows or [])
-    if not rows:
-        return 0.0
-    weighted_total = 0.0
-    total_weight = 0.0
-    fallback_values = []
-    for row in rows:
-        value = _safe_float(row.get(value_key, 0.0))
-        weight = max(0.0, _safe_float(row.get(weight_key, 0.0)))
-        fallback_values.append(value)
-        if weight > 0.0:
-            weighted_total += value * weight
-            total_weight += weight
-    if total_weight > 0.0:
-        return weighted_total / total_weight
-    return sum(fallback_values) / len(fallback_values) if fallback_values else 0.0
-
-
-def _resolve_oos_window_year(row) -> int | None:
-    start_raw = row.get("oos_start")
-    if start_raw not in {None, ""}:
-        try:
-            return int(pd.Timestamp(str(start_raw)).year)
-        except (TypeError, ValueError):
-            start_raw = None
-    label = str(row.get("label") or "").strip()
-    if len(label) >= 4 and label[:4].isdigit():
-        return int(label[:4])
-    return None
-
-
-def _worst_full_year_return_from_oos_windows(rows, *, ret_key: str) -> float:
-    yearly_growth = {}
-    for row in list(rows or []):
-        year = _resolve_oos_window_year(row)
-        if year is None:
-            continue
-        yearly_growth.setdefault(int(year), 1.0)
-        yearly_growth[int(year)] *= 1.0 + (_safe_float(row.get(ret_key, 0.0)) / 100.0)
-    if not yearly_growth:
-        return 0.0
-    yearly_returns = [((growth - 1.0) * 100.0) for growth in yearly_growth.values()]
-    return min(yearly_returns) if yearly_returns else 0.0
-
-
 def _build_oos_metrics_from_report(*, report: dict | None, initial_capital: float) -> tuple[dict, dict, str]:
-    windows = list((report or {}).get("windows") or [])
-    total = build_oos_total_performance(windows, ret_key="ret_pct")
-    benchmark_total = build_oos_total_performance(windows, ret_key="benchmark_return_pct")
+    total = build_test_period_metrics(report)
+    period = dict((report or {}).get("period") or {})
+    missed_buys = int(period.get("missed_buys", 0) or 0)
+    missed_sells = int(period.get("missed_sells", 0) or 0)
     candidate_metrics = {
-        "pf_return": float(total.get("linked_total_return_pct", 0.0)),
+        "pf_return": float(total.get("total_return_pct", 0.0)),
         "annual_return_pct": float(total.get("annualized_return_pct", 0.0)),
-        "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="ret_pct")),
+        "min_full_year_return_pct": float(total.get("min_full_year_return_pct", 0.0)),
         "pf_mdd": float(total.get("max_drawdown_pct", 0.0)),
-        "pf_romd": _calc_romd(total.get("linked_total_return_pct", 0.0), total.get("max_drawdown_pct", 0.0)),
-        "r_squared": float(_weighted_average_from_rows(windows, value_key="r_squared", weight_key="trade_count")),
-        "m_win_rate": float(_weighted_average_from_rows(windows, value_key="monthly_win_rate", weight_key="trade_count")),
-        "win_rate": float(_weighted_average_from_rows(windows, value_key="win_rate", weight_key="trade_count")),
-        "pf_payoff": float(_weighted_average_from_rows(windows, value_key="pf_payoff", weight_key="trade_count")),
-        "pf_ev": float(_weighted_average_from_rows(windows, value_key="pf_ev", weight_key="trade_count")),
-        "pf_trades": int(sum(_safe_int(row.get("trade_count", 0)) for row in windows)),
-        "normal_trades": int(sum(_safe_int(row.get("normal_trades", 0)) for row in windows)),
-        "extended_trades": int(sum(_safe_int(row.get("extended_trades", 0)) for row in windows)),
-        "missed_buys": int(sum(_safe_int(row.get("missed_buys", 0)) for row in windows)),
-        "missed_sells": int(sum(_safe_int(row.get("missed_sells", 0)) for row in windows)),
-        "missed_total": int(sum(_safe_int(row.get("missed_buys", 0)) + _safe_int(row.get("missed_sells", 0)) for row in windows)),
-        "annual_trades": float(_weighted_average_from_rows(windows, value_key="annual_trades", weight_key="trade_count")),
-        "reserved_buy_fill_rate": float(_weighted_average_from_rows(windows, value_key="reserved_buy_fill_rate", weight_key="trade_count")),
-        "avg_exposure": float(_weighted_average_from_rows(windows, value_key="avg_exposure", weight_key="trade_count")),
-        "final_equity": float(initial_capital) * float(total.get("ending_equity_factor", 1.0)),
+        "pf_romd": float(total.get("test_score_romd", 0.0)),
+        "r_squared": float(total.get("r_squared", 0.0)),
+        "m_win_rate": float(total.get("monthly_win_rate", 0.0)),
+        "win_rate": float(total.get("win_rate", 0.0)),
+        "pf_payoff": float(total.get("payoff", 0.0)),
+        "pf_ev": float(total.get("ev", 0.0)),
+        "pf_trades": int(total.get("trade_count", 0)),
+        "normal_trades": int(total.get("normal_trades", 0)),
+        "extended_trades": int(total.get("extended_trades", 0)),
+        "missed_buys": missed_buys,
+        "missed_sells": missed_sells,
+        "missed_total": missed_buys + missed_sells,
+        "annual_trades": float(total.get("annual_trades", 0.0)),
+        "reserved_buy_fill_rate": float(total.get("fill_rate", 0.0)),
+        "avg_exposure": float(total.get("avg_exposure", 0.0)),
+        "final_equity": float(total.get("final_equity", 0.0)),
     }
     benchmark_metrics = {
-        "pf_return": float(benchmark_total.get("linked_total_return_pct", 0.0)),
-        "annual_return_pct": float(benchmark_total.get("annualized_return_pct", 0.0)),
-        "min_full_year_return_pct": float(_worst_full_year_return_from_oos_windows(windows, ret_key="benchmark_return_pct")),
-        "pf_mdd": float(benchmark_total.get("max_drawdown_pct", 0.0)),
-        "r_squared": float(_weighted_average_from_rows(windows, value_key="benchmark_r_squared", weight_key="trade_count")),
-        "m_win_rate": float(_weighted_average_from_rows(windows, value_key="benchmark_monthly_win_rate", weight_key="trade_count")),
-        "pf_romd": _calc_romd(benchmark_total.get("linked_total_return_pct", 0.0), benchmark_total.get("max_drawdown_pct", 0.0)),
-        "final_equity": float(initial_capital) * float(benchmark_total.get("ending_equity_factor", 1.0)),
+        "pf_return": float(total.get("benchmark_total_return_pct", 0.0)),
+        "annual_return_pct": float(total.get("benchmark_annualized_return_pct", 0.0)),
+        "min_full_year_return_pct": float(total.get("benchmark_min_full_year_return_pct", 0.0)),
+        "pf_mdd": float(total.get("benchmark_max_drawdown_pct", 0.0)),
+        "r_squared": float(total.get("benchmark_r_squared", 0.0)),
+        "m_win_rate": float(total.get("benchmark_monthly_win_rate", 0.0)),
+        "pf_romd": float(total.get("benchmark_score_romd", 0.0)),
+        "final_equity": _benchmark_final_equity(float(initial_capital), float(total.get("benchmark_total_return_pct", 0.0))),
     }
     range_start = str(total.get("oos_start") or "")
     range_end = str(total.get("oos_end") or "")
-    if range_start and range_end:
-        range_text = f"{range_start} ~ {range_end}"
-    else:
-        range_text = "-"
+    range_text = f"{range_start} ~ {range_end}" if range_start and range_end else "-"
     return candidate_metrics, benchmark_metrics, range_text
 
 
@@ -183,28 +131,6 @@ def _build_search_train_dates_for_session(session):
         train_start_year=int(session.train_start_year),
         search_train_end_year=int(session.search_train_end_year),
     )
-
-
-def _build_minimal_report_from_trial(trial):
-    quality_status = str(trial.user_attrs.get("wf_quality_gate_status", "fail")).lower()
-    coverage_status = str(trial.user_attrs.get("wf_coverage_gate_status", "watch")).lower()
-    upgrade_status = str(trial.user_attrs.get("wf_upgrade_status", "fail")).lower()
-    return {
-        "summary": {
-            "median_window_score": _safe_float(trial.user_attrs.get("wf_median_window_score", 0.0)),
-            "worst_ret_pct": _safe_float(trial.user_attrs.get("wf_worst_ret_pct", 0.0)),
-            "max_mdd": _safe_float(trial.user_attrs.get("wf_max_mdd", 0.0)),
-        },
-        "regime_summary": {
-            "flat": {"median_score": _safe_float(trial.user_attrs.get("wf_flat_median_score", 0.0))},
-            "down": {"window_count": _safe_int(trial.user_attrs.get("wf_down_window_count", 0))},
-        },
-        "upgrade_gate": {
-            "status": upgrade_status,
-            "quality_gate": {"status": quality_status},
-            "coverage_gate": {"status": coverage_status},
-        },
-    }
 
 
 def _build_global_strategy_text() -> str:
@@ -263,25 +189,6 @@ def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: fl
     if delta_text in {"", "-", None} or delta_value is None:
         return rendered
     return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
-
-
-def _metric_candidate_color_for_gate(metric_name: str, candidate_value: float, passed: bool) -> str:
-    if metric_name in {"最大視窗 MDD", "最大回撤 (MDD)"}:
-        return _pass_color(passed, pass_color=C_YELLOW, fail_color=C_RED)
-    if metric_name in {"視窗分數中位數", "flat 視窗中位分數"}:
-        return _delta_color(candidate_value)
-    return _pass_with_positive_color(passed, candidate_value)
-
-
-def _status_candidate_color(status_text: str) -> str:
-    normalized = str(status_text or "").strip().lower()
-    if normalized == "pass":
-        return C_GREEN
-    if normalized == "watch":
-        return C_YELLOW
-    return C_RED
-
-
 
 
 def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | None, benchmark_metrics: dict | None = None):
@@ -432,88 +339,6 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
     add_row("保留後買進成交率", "reserved_buy_fill_rate", kind="pct")
     add_row("平均資金水位", "avg_exposure", kind="pct")
     add_row("最終資產", "final_equity", kind="money")
-    return rows
-
-
-def _compose_compare_champion_cell(metric_name: str, champion_text: str, diff_text: str, diff_value: float | None) -> str:
-    rendered = str(champion_text)
-    if diff_text in {"", "-", None} or diff_value is None:
-        return rendered
-    return f"{rendered} {_colorize(diff_text, _delta_color(diff_value))}"
-
-
-def _build_upgrade_rows(*, trial, policy):
-    median_score = _safe_float(trial.user_attrs.get("wf_median_window_score", 0.0))
-    worst_ret = _safe_float(trial.user_attrs.get("wf_worst_ret_pct", 0.0))
-    flat_score = _safe_float(trial.user_attrs.get("wf_flat_median_score", 0.0))
-    down_count = _safe_int(trial.user_attrs.get("wf_down_window_count", 0))
-    quality_status = str(trial.user_attrs.get("wf_quality_gate_status", "fail")).upper()
-    coverage_status = str(trial.user_attrs.get("wf_coverage_gate_status", "watch")).upper()
-    gate_median = _safe_float(policy.get("gate_min_median_score", 0.0))
-    gate_worst = _safe_float(policy.get("gate_min_worst_ret_pct", 0.0))
-    gate_flat = _safe_float(policy.get("gate_min_flat_median_score", 0.0))
-    rows = [
-        {"name": "視窗分數中位數", "candidate": f"{median_score:.3f}", "threshold": f">= {gate_median:.3f}", "status": "PASS" if median_score >= gate_median else "FAIL", "candidate_numeric": median_score},
-        {"name": "最差視窗報酬", "candidate": f"{worst_ret:.2f}%", "threshold": f">= {gate_worst:.2f}%", "status": "PASS" if worst_ret >= gate_worst else "FAIL", "candidate_numeric": worst_ret},
-        {"name": "flat 視窗中位分數", "candidate": f"{flat_score:.3f}", "threshold": f">= {gate_flat:.3f}", "status": "PASS" if flat_score >= gate_flat else "FAIL", "candidate_numeric": flat_score},
-        {"name": "down_regime_coverage", "candidate": str(down_count), "threshold": ">= 1", "status": "PASS" if down_count >= 1 else "FAIL", "candidate_numeric": float(down_count)},
-        {"name": "quality_gate", "candidate": quality_status, "threshold": "必須 PASS", "status": quality_status, "candidate_numeric": None},
-        {"name": "coverage_gate", "candidate": coverage_status, "threshold": "PASS / WATCH 可接受", "status": coverage_status, "candidate_numeric": None},
-    ]
-    for row in rows:
-        status_norm = str(row["status"]).strip().upper()
-        if row["name"] in {"quality_gate", "coverage_gate"}:
-            row["candidate"] = _colorize(row["candidate"], _status_candidate_color(status_norm))
-        else:
-            row["candidate"] = _colorize(row["candidate"], _metric_candidate_color_for_gate(row["name"], row["candidate_numeric"], status_norm in {"PASS", "WATCH"}))
-        row["candidate_precolored"] = True
-    return rows
-
-
-def _build_compare_rows(*, trial, champion_cache, policy):
-    if not champion_cache or not champion_cache.get("wf_report"):
-        return None
-    champion_report = champion_cache["wf_report"]
-    challenger_report = _build_minimal_report_from_trial(trial)
-    assessment = build_compare_assessment(
-        champion_report=champion_report,
-        challenger_report=challenger_report,
-        compare_worst_ret_tolerance_pct=_safe_float(policy.get("compare_worst_ret_tolerance_pct", 1.0)),
-        compare_max_mdd_tolerance_pct=_safe_float(policy.get("compare_max_mdd_tolerance_pct", 2.0)),
-    )
-    champion_summary = dict((champion_report or {}).get("summary") or {})
-    champion_regime = dict((champion_report or {}).get("regime_summary") or {})
-    champion_flat = _safe_float((dict(champion_regime.get("flat") or {})).get("median_score", 0.0))
-    candidate_median = _safe_float(trial.user_attrs.get("wf_median_window_score", 0.0))
-    champion_median = _safe_float(champion_summary.get("median_window_score", 0.0))
-    candidate_worst = _safe_float(trial.user_attrs.get("wf_worst_ret_pct", 0.0))
-    champion_worst = _safe_float(champion_summary.get("worst_ret_pct", 0.0))
-    candidate_flat = _safe_float(trial.user_attrs.get("wf_flat_median_score", 0.0))
-    candidate_mdd = _safe_float(trial.user_attrs.get("wf_max_mdd", 0.0))
-    champion_mdd = _safe_float(champion_summary.get("max_mdd", 0.0))
-    worst_tol = _safe_float(policy.get("compare_worst_ret_tolerance_pct", 1.0))
-    mdd_tol = _safe_float(policy.get("compare_max_mdd_tolerance_pct", 2.0))
-
-    checks = {str(item.get("name")): str("PASS" if item.get("passed") else "FAIL") for item in assessment.get("checks") or []}
-    median_diff = candidate_median - champion_median
-    worst_diff = candidate_worst - champion_worst
-    flat_diff = candidate_flat - champion_flat
-    mdd_diff = champion_mdd - candidate_mdd
-    rows = [
-        {"name": "視窗分數中位數", "candidate": f"{candidate_median:.3f}", "champion": _compose_compare_champion_cell("視窗分數中位數", f"{champion_median:.3f}", _format_float_diff(median_diff, 3), median_diff), "threshold": "差異 > 0", "status": checks.get("median_window_score_vs_champion", "FAIL"), "candidate_numeric": candidate_median},
-        {"name": "最差視窗報酬", "candidate": f"{candidate_worst:.2f}%", "champion": _compose_compare_champion_cell("最差視窗報酬", f"{champion_worst:.2f}%", _format_pct_diff(worst_diff), worst_diff), "threshold": f"差異 >= -{worst_tol:.1f}%", "status": checks.get("worst_ret_pct_vs_champion", "FAIL"), "candidate_numeric": candidate_worst},
-        {"name": "flat 視窗中位分數", "candidate": f"{candidate_flat:.3f}", "champion": _compose_compare_champion_cell("flat 視窗中位分數", f"{champion_flat:.3f}", _format_float_diff(flat_diff, 3), flat_diff), "threshold": "差異 >= 0", "status": checks.get("flat_median_score_vs_champion", "FAIL"), "candidate_numeric": candidate_flat},
-        {"name": "最大視窗 MDD", "candidate": f"-{abs(candidate_mdd):.2f}%", "champion": _compose_compare_champion_cell("最大視窗 MDD", f"-{abs(champion_mdd):.2f}%", _format_mdd_diff(candidate_mdd, champion_mdd), mdd_diff), "champion_precolored": True, "threshold": f"差異 >= -{mdd_tol:.1f}%", "status": checks.get("max_mdd_vs_champion", "FAIL"), "candidate_numeric": candidate_mdd},
-        {"name": "compare_gate", "candidate": str(assessment.get("status", "fail")).upper(), "champion": "-", "threshold": "必須 PASS", "status": str(assessment.get("status", "fail")).upper(), "candidate_numeric": None},
-    ]
-    for row in rows:
-        status_norm = str(row["status"]).strip().upper()
-        if row["name"] == "compare_gate":
-            row["candidate"] = _colorize(row["candidate"], _status_candidate_color(status_norm))
-        else:
-            row["candidate"] = _colorize(row["candidate"], _metric_candidate_color_for_gate(row["name"], row["candidate_numeric"], status_norm == "PASS"))
-        row["candidate_precolored"] = True
-        row["champion_precolored"] = True
     return rows
 
 
