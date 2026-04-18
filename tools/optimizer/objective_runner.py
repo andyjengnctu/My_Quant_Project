@@ -13,6 +13,7 @@ from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
     OBJECTIVE_MODE_WF_GATE_MEDIAN,
+    OBJECTIVE_MODE_SPLIT_TEST_ROMD,
 )
 from tools.optimizer.walk_forward import evaluate_walk_forward
 
@@ -63,7 +64,8 @@ def run_optimizer_objective(session, trial):
     sort_start = time.perf_counter()
     sorted_dates = sorted(master_dates)
     profile_row["sort_dates_sec"] = time.perf_counter() - sort_start
-    use_full_history_search = str(session.objective_mode) == OBJECTIVE_MODE_LEGACY_BASE_SCORE
+    mode = str(session.objective_mode)
+    use_full_history_search = mode == OBJECTIVE_MODE_LEGACY_BASE_SCORE
     if use_full_history_search:
         search_train_dates = list(sorted_dates)
         effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
@@ -216,7 +218,7 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
 
     final_score = float(base_score)
-    if str(session.objective_mode) == OBJECTIVE_MODE_WF_GATE_MEDIAN:
+    if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
         wf_policy = dict(session.walk_forward_policy)
         wf_start = time.perf_counter()
         wf_report = evaluate_walk_forward(
@@ -286,7 +288,7 @@ def run_optimizer_objective(session, trial):
                 objective_start=objective_start,
             )
         final_score = wf_median_window_score
-    elif str(session.objective_mode) != OBJECTIVE_MODE_LEGACY_BASE_SCORE:
+    elif mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
         return _append_invalid_profile_row(
             session=session,
             trial=trial,

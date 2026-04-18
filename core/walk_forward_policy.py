@@ -4,14 +4,14 @@ import os
 from typing import Mapping, Optional
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
-VALID_OBJECTIVE_MODES = {"legacy_base_score", "wf_gate_median"}
+VALID_OBJECTIVE_MODES = {"legacy_base_score", "wf_gate_median", "split_test_romd"}
 
 DEFAULT_WALK_FORWARD_POLICY = {
     "train_start_year": 2012,
     "min_train_years": 8,
     "test_window_months": 6,
     "search_train_end_year": None,
-    "objective_mode": "legacy_base_score",
+    "objective_mode": "split_test_romd",
     "regime_up_threshold_pct": 8.0,
     "regime_down_threshold_pct": -8.0,
     "min_window_bars": 20,

@@ -417,6 +417,10 @@ def write_walk_forward_report(
     summary = dict(report.get("summary") or {})
     regime_summary = dict(report.get("regime_summary") or {})
     upgrade_gate = dict(report.get("upgrade_gate") or build_upgrade_gate_assessment(summary=summary, regime_summary=regime_summary))
+    oos_total = build_oos_total_performance(list(report.get("windows") or []), ret_key="ret_pct")
+    benchmark_oos_total = build_oos_total_performance(list(report.get("windows") or []), ret_key="benchmark_return_pct")
+    oos_total["score_romd"] = (float(oos_total.get("linked_total_return_pct", 0.0)) / (abs(float(oos_total.get("max_drawdown_pct", 0.0))) + 0.0001))
+    benchmark_oos_total["score_romd"] = (float(benchmark_oos_total.get("linked_total_return_pct", 0.0)) / (abs(float(benchmark_oos_total.get("max_drawdown_pct", 0.0))) + 0.0001))
     payload = {
         "meta": {
             "dataset_label": str(dataset_label),
@@ -428,6 +432,8 @@ def write_walk_forward_report(
         "summary": summary,
         "regime_summary": regime_summary,
         "upgrade_gate": upgrade_gate,
+        "oos_total": oos_total,
+        "benchmark_oos_total": benchmark_oos_total,
         "windows": list(report.get("windows") or []),
     }
 

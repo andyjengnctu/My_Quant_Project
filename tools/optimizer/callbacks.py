@@ -31,6 +31,7 @@ from core.strategy_dashboard import (
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_WF_GATE_MEDIAN,
+    OBJECTIVE_MODE_SPLIT_TEST_ROMD,
     is_qualified_trial_value,
 )
 from tools.optimizer.walk_forward import build_compare_assessment, build_oos_total_performance, evaluate_walk_forward
@@ -55,7 +56,12 @@ def _safe_int(value, default=0):
 
 
 def _resolve_model_mode(objective_mode: str) -> str:
-    return "wf" if str(objective_mode) == OBJECTIVE_MODE_WF_GATE_MEDIAN else "legacy"
+    mode = str(objective_mode)
+    if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
+        return "wf"
+    if mode == OBJECTIVE_MODE_SPLIT_TEST_ROMD:
+        return "split"
+    return "legacy"
 
 
 def _range_text_from_dates(dates) -> str:
@@ -552,7 +558,7 @@ def _compute_champion_console_cache(session):
         "bm_m_win_rate": bm_m_win_rate,
         "pf_romd": _calc_romd(ret_pct, mdd),
     }
-    if _resolve_model_mode(session.objective_mode) == "wf":
+    if _resolve_model_mode(session.objective_mode) in {"wf", "split"}:
         wf_policy = dict(session.walk_forward_policy)
         wf_report = evaluate_walk_forward(
             all_dfs_fast=prep_result["all_dfs_fast"],
@@ -598,6 +604,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
     latest_data_end = _latest_data_end_text(session)
     if model_mode == "wf":
         system_score_display = f"{_safe_float(attrs.get('wf_median_window_score', 0.0)):.3f}（WF中位分數）"
+    elif model_mode == "split":
+        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（Train RoMD）"
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
     initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))
@@ -631,7 +639,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
 
     test_title = None
     test_rows = None
-    if model_mode == "wf":
+    if model_mode in {"wf", "split"}:
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,

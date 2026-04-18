@@ -21,6 +21,7 @@ MIN_QUALIFIED_TRIAL_VALUE = -9000.0
 OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
 OBJECTIVE_MODE_LEGACY_BASE_SCORE = "legacy_base_score"
 OBJECTIVE_MODE_WF_GATE_MEDIAN = "wf_gate_median"
+OBJECTIVE_MODE_SPLIT_TEST_ROMD = "split_test_romd"
 
 
 
@@ -60,7 +61,7 @@ def resolve_optimizer_run_request(environ):
         prompt = (
             f"👉 Optimizer 選單（預設 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE}）："
             f"直接 Enter=訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE} 次，"
-            "輸入數字=訓練指定次數，0=寫入 best run，P=promotion to Champion: "
+            "輸入數字=訓練指定次數，0=寫入 best run，P=重新測試目前最佳並更新 Champion: "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")
@@ -182,6 +183,15 @@ def list_completed_study_trials(study):
     return [trial for trial in study.trials if trial.value is not None]
 
 
+
+
+def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
+    expected = str(objective_mode or "").strip()
+    actual = str(trial.user_attrs.get("objective_mode", "")).strip()
+    if actual:
+        return actual == expected
+    return expected == OBJECTIVE_MODE_LEGACY_BASE_SCORE
+
 def _wf_attr_float(trial, key: str, default: float = float("-inf")) -> float:
     value = trial.user_attrs.get(key, default)
     try:
@@ -190,17 +200,19 @@ def _wf_attr_float(trial, key: str, default: float = float("-inf")) -> float:
         return float(default)
 
 
-def _resolve_legacy_best_trial_or_none(study):
-    completed_trials = [trial for trial in list_completed_study_trials(study) if is_qualified_trial_value(trial.value)]
+def _resolve_legacy_best_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE):
+    completed_trials = [trial for trial in list_completed_study_trials(study) if is_qualified_trial_value(trial.value) and _trial_matches_objective_mode(trial, objective_mode)]
     if not completed_trials:
         return None
     return max(completed_trials, key=lambda trial: (float(trial.value), -int(trial.number)))
 
 
-def _resolve_wf_best_trial_or_none(study):
+def _resolve_wf_best_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_WF_GATE_MEDIAN):
     completed_trials = []
     for trial in list_completed_study_trials(study):
         if not is_qualified_trial_value(trial.value):
+            continue
+        if not _trial_matches_objective_mode(trial, objective_mode):
             continue
         if str(trial.user_attrs.get("wf_quality_gate_status", "")).strip().lower() != "pass":
             continue
@@ -223,8 +235,8 @@ def _resolve_wf_best_trial_or_none(study):
 def resolve_best_completed_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE):
     mode = str(objective_mode or OBJECTIVE_MODE_LEGACY_BASE_SCORE).strip()
     if mode == OBJECTIVE_MODE_WF_GATE_MEDIAN:
-        return _resolve_wf_best_trial_or_none(study)
-    return _resolve_legacy_best_trial_or_none(study)
+        return _resolve_wf_best_trial_or_none(study, objective_mode=mode)
+    return _resolve_legacy_best_trial_or_none(study, objective_mode=mode)
 
 
 def build_best_completed_trial_resolver(objective_mode: str) -> Callable:

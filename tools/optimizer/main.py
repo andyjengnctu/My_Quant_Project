@@ -49,13 +49,19 @@ PROFILE_PRINT_EVERY_N_TRIALS = 1
 
 
 OPTIMIZER_MODEL_ENV_VAR = "V16_OPTIMIZER_MODEL"
-MODEL_CHOICE_WF = "wf"
+MODEL_CHOICE_SPLIT = "split"
+MODEL_CHOICE_WF = "wf"  # 相容舊輸入；內部會視為 split。
 MODEL_CHOICE_LEGACY = "legacy"
 MODEL_TO_OBJECTIVE_MODE = {
-    MODEL_CHOICE_WF: "wf_gate_median",
+    MODEL_CHOICE_SPLIT: "split_test_romd",
+    MODEL_CHOICE_WF: "split_test_romd",
     MODEL_CHOICE_LEGACY: "legacy_base_score",
 }
-OBJECTIVE_MODE_TO_MODEL = {value: key for key, value in MODEL_TO_OBJECTIVE_MODE.items()}
+OBJECTIVE_MODE_TO_MODEL = {
+    "split_test_romd": MODEL_CHOICE_SPLIT,
+    "legacy_base_score": MODEL_CHOICE_LEGACY,
+    "wf_gate_median": MODEL_CHOICE_WF,
+}
 
 
 def _extract_cli_option_value(argv, option_name: str):
@@ -77,27 +83,29 @@ def _extract_cli_option_value(argv, option_name: str):
 
 def _normalize_optimizer_model_choice(raw_value: str | None):
     normalized = str(raw_value or "").strip().lower()
-    if normalized in {MODEL_CHOICE_WF, MODEL_CHOICE_LEGACY}:
-        return normalized
+    if normalized in {MODEL_CHOICE_SPLIT, MODEL_CHOICE_WF}:
+        return MODEL_CHOICE_SPLIT
+    if normalized == MODEL_CHOICE_LEGACY:
+        return MODEL_CHOICE_LEGACY
     if normalized in OBJECTIVE_MODE_TO_MODEL:
-        return OBJECTIVE_MODE_TO_MODEL[normalized]
-    raise ValueError(f"optimizer model 只接受 wf 或 legacy，收到: {raw_value}")
+        mapped = OBJECTIVE_MODE_TO_MODEL[normalized]
+        return MODEL_CHOICE_SPLIT if mapped == "split_test_romd" else mapped
+    raise ValueError(f"optimizer model 只接受 split 或 legacy（wf 仍可作為 split 別名），收到: {raw_value}")
 
 
-def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_WF) -> tuple[str, str]:
-    # 防止互動選單路徑因上層 import 未同步而出現 NameError。
+def _prompt_optimizer_model_choice(default_choice: str = MODEL_CHOICE_SPLIT) -> tuple[str, str]:
     from core.runtime_utils import safe_prompt_choice as _safe_prompt_choice
 
     choice = _safe_prompt_choice(
-        "👉 請選擇 optimizer 模式 [1] WF 穩定性主導  [2] 原本模式(全資料到最新日) (預設 1): ",
-        "1" if str(default_choice) == MODEL_CHOICE_WF else "2",
+        "👉 請選擇 optimizer 模式 [1] Train/Test 分離 RoMD  [2] 原本模式(全資料到最新日) (預設 1): ",
+        "1" if str(default_choice) in {MODEL_CHOICE_SPLIT, MODEL_CHOICE_WF} else "2",
         ("1", "2"),
         "optimizer 模式",
     )
-    return (MODEL_CHOICE_WF, "prompt_menu") if choice == "1" else (MODEL_CHOICE_LEGACY, "prompt_menu")
+    return (MODEL_CHOICE_SPLIT, "prompt_menu") if choice == "1" else (MODEL_CHOICE_LEGACY, "prompt_menu")
 
 
-def resolve_optimizer_model_choice(argv, environ, *, default_model: str = MODEL_CHOICE_WF) -> tuple[str, str]:
+def resolve_optimizer_model_choice(argv, environ, *, default_model: str = MODEL_CHOICE_SPLIT) -> tuple[str, str]:
     cli_value = _extract_cli_option_value(argv, "--model")
     if cli_value is not None:
         return _normalize_optimizer_model_choice(cli_value), "cli_flag"
@@ -245,6 +253,243 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
     )
     return report, report_paths, params_payload
 
+
+def _calc_romd_score(ret_pct: float, mdd_pct: float) -> float:
+    return float(ret_pct) / (abs(float(mdd_pct)) + 0.0001)
+
+
+def build_test_period_total_metrics(report: dict | None) -> dict:
+    from tools.optimizer.walk_forward import build_oos_total_performance
+
+    windows = list((report or {}).get("windows") or [])
+    summary = dict((report or {}).get("summary") or {})
+    total = build_oos_total_performance(windows, ret_key="ret_pct")
+    benchmark_total = build_oos_total_performance(windows, ret_key="benchmark_return_pct")
+    return {
+        "window_count": int(total.get("window_count", 0)),
+        "oos_start": str(total.get("oos_start") or ""),
+        "oos_end": str(total.get("oos_end") or ""),
+        "linked_total_return_pct": float(total.get("linked_total_return_pct", 0.0)),
+        "annualized_return_pct": float(total.get("annualized_return_pct", 0.0)),
+        "max_drawdown_pct": float(total.get("max_drawdown_pct", 0.0)),
+        "test_score_romd": _calc_romd_score(total.get("linked_total_return_pct", 0.0), total.get("max_drawdown_pct", 0.0)),
+        "median_window_romd": float(summary.get("median_window_score", 0.0)),
+        "positive_window_rate": float(total.get("positive_window_rate", 0.0)),
+        "benchmark_linked_total_return_pct": float(benchmark_total.get("linked_total_return_pct", 0.0)),
+        "benchmark_annualized_return_pct": float(benchmark_total.get("annualized_return_pct", 0.0)),
+        "benchmark_max_drawdown_pct": float(benchmark_total.get("max_drawdown_pct", 0.0)),
+        "benchmark_score_romd": _calc_romd_score(benchmark_total.get("linked_total_return_pct", 0.0), benchmark_total.get("max_drawdown_pct", 0.0)),
+        "benchmark_positive_window_rate": float(benchmark_total.get("positive_window_rate", 0.0)),
+    }
+
+
+def _write_split_test_compare_report(*, output_dir: str, payload: dict, session_ts: str) -> dict:
+    import json
+
+    os.makedirs(output_dir, exist_ok=True)
+    base_name = f"test_score_compare_{session_ts}"
+    json_path = os.path.join(output_dir, f"{base_name}.json")
+    md_path = os.path.join(output_dir, f"{base_name}.md")
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
+
+    challenger = dict(payload.get("challenger") or {})
+    champion = dict(payload.get("champion") or {})
+    benchmark = dict(payload.get("benchmark") or {})
+    lines = [
+        "# 測試期間分數比較",
+        "",
+        f"- 資料集：{payload.get('dataset_label', '')}",
+        f"- 測試區間：{challenger.get('oos_start', '')} ~ {challenger.get('oos_end', '')}",
+        f"- 狀態：`{payload.get('status', '')}`",
+        f"- 建議：{payload.get('recommendation', '')}",
+        "",
+        "| 指標 | Champion | Challenger | 0050 |",
+        "|---|---:|---:|---:|",
+        f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} | {float(benchmark.get('benchmark_score_romd', benchmark.get('test_score_romd', 0.0))):.3f} |",
+        f"| 串接總報酬率 | {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% | {float(benchmark.get('linked_total_return_pct', 0.0)):.2f}% |",
+        f"| 年化報酬率 | {float(champion.get('annualized_return_pct', 0.0)):.2f}% | {float(challenger.get('annualized_return_pct', 0.0)):.2f}% | {float(benchmark.get('annualized_return_pct', 0.0)):.2f}% |",
+        f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% | {float(benchmark.get('max_drawdown_pct', 0.0)):.2f}% |",
+        f"| 視窗中位 RoMD | {float(champion.get('median_window_romd', 0.0)):.3f} | {float(challenger.get('median_window_romd', 0.0)):.3f} | - |",
+        f"| 正報酬視窗率 | {float(champion.get('positive_window_rate', 0.0)):.2f}% | {float(challenger.get('positive_window_rate', 0.0)):.2f}% | {float(benchmark.get('positive_window_rate', 0.0)):.2f}% |",
+    ]
+    with open(md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return {"json_path": json_path, "md_path": md_path}
+
+
+def generate_split_test_compare_report(*, session, dataset_label, db_file, challenger_payload, challenger_report, walk_forward_policy: dict):
+    from core.params_io import load_params_from_json, params_to_json_dict
+
+    challenger_total = build_test_period_total_metrics(challenger_report)
+    benchmark_total = {
+        "linked_total_return_pct": float(challenger_total.get("benchmark_linked_total_return_pct", 0.0)),
+        "annualized_return_pct": float(challenger_total.get("benchmark_annualized_return_pct", 0.0)),
+        "max_drawdown_pct": float(challenger_total.get("benchmark_max_drawdown_pct", 0.0)),
+        "test_score_romd": float(challenger_total.get("benchmark_score_romd", 0.0)),
+        "positive_window_rate": float(challenger_total.get("benchmark_positive_window_rate", 0.0)),
+    }
+    champion_report = None
+    champion_report_paths = None
+    champion_payload = {}
+    champion_total = {
+        "window_count": 0, "oos_start": challenger_total.get("oos_start", ""), "oos_end": challenger_total.get("oos_end", ""),
+        "linked_total_return_pct": 0.0, "annualized_return_pct": 0.0, "max_drawdown_pct": 0.0, "test_score_romd": float("-inf"),
+        "median_window_romd": 0.0, "positive_window_rate": 0.0,
+    }
+    champion_missing = True
+    if os.path.exists(CHAMPION_PARAMS_PATH):
+        champion_missing = False
+        champion_params = load_params_from_json(CHAMPION_PARAMS_PATH)
+        champion_payload = params_to_json_dict(champion_params)
+        champion_report, champion_report_paths = generate_walk_forward_report_from_payload(
+            session=session,
+            params_payload=champion_payload,
+            dataset_label=f"{dataset_label}-champion",
+            db_file=db_file,
+            best_trial_number=None,
+            walk_forward_policy=walk_forward_policy,
+        )
+        champion_total = build_test_period_total_metrics(champion_report)
+
+    challenger_score = float(challenger_total.get("test_score_romd", float("-inf")))
+    champion_score = float(champion_total.get("test_score_romd", float("-inf")))
+    better_than_champion = champion_missing or (challenger_score > champion_score)
+    payload = {
+        "dataset_label": str(dataset_label),
+        "source_db_path": str(db_file),
+        "session_ts": str(session.session_ts),
+        "status": "new_champion" if better_than_champion else "keep_champion",
+        "recommendation": "候選版測試 RoMD 較高，應更新 Champion" if better_than_champion else "候選版測試 RoMD 未超越現役 Champion，維持現況",
+        "champion_missing": bool(champion_missing),
+        "challenger": challenger_total,
+        "champion": champion_total,
+        "benchmark": benchmark_total,
+        "challenger_params": dict(challenger_payload or {}),
+        "champion_params": dict(champion_payload or {}),
+        "better_than_champion": bool(better_than_champion),
+    }
+    compare_paths = _write_split_test_compare_report(output_dir=session.output_dir, payload=payload, session_ts=session.session_ts)
+    return {
+        "champion_report": champion_report,
+        "champion_report_paths": champion_report_paths,
+        "compare_payload": payload,
+    }, compare_paths
+
+
+def promote_run_best_to_champion_by_test_score(*, session, compare_result, compare_paths):
+    import json
+    import shutil
+
+    payload = dict((compare_result or {}).get("compare_payload") or {})
+    result = {
+        "attempted": True,
+        "performed": False,
+        "reason": "not_better",
+        "archive_path": None,
+        "record_md_path": None,
+        "record_json_path": None,
+    }
+    if not os.path.exists(RUN_BEST_PARAMS_PATH):
+        result["reason"] = "missing_run_best"
+        return result
+    if not bool(payload.get("better_than_champion", False)):
+        if os.path.exists(CHAMPION_PARAMS_PATH) and os.path.exists(RUN_BEST_PARAMS_PATH):
+            try:
+                if _json_file_equal(CHAMPION_PARAMS_PATH, RUN_BEST_PARAMS_PATH):
+                    result["reason"] = "same_as_champion"
+                    return result
+            except Exception:
+                pass
+        return result
+
+    archive_dir = os.path.join(MODELS_DIR, "champion_archive")
+    records_dir = os.path.join(session.output_dir, "upgrade_records")
+    os.makedirs(archive_dir, exist_ok=True)
+    os.makedirs(records_dir, exist_ok=True)
+    archive_path = None
+    if os.path.exists(CHAMPION_PARAMS_PATH):
+        archive_path = os.path.join(archive_dir, f"champion_{session.session_ts}.json")
+        shutil.copy2(CHAMPION_PARAMS_PATH, archive_path)
+    shutil.copy2(RUN_BEST_PARAMS_PATH, CHAMPION_PARAMS_PATH)
+
+    record_payload = {
+        "session_ts": str(session.session_ts),
+        "archive_path": archive_path,
+        "champion_params_path": CHAMPION_PARAMS_PATH,
+        "run_best_params_path": RUN_BEST_PARAMS_PATH,
+        "compare_md_path": None if compare_paths is None else compare_paths.get("md_path"),
+        "compare_json_path": None if compare_paths is None else compare_paths.get("json_path"),
+        "compare_payload": payload,
+    }
+    record_json_path = os.path.join(records_dir, f"upgrade_record_{session.session_ts}.json")
+    record_md_path = os.path.join(records_dir, f"upgrade_record_{session.session_ts}.md")
+    with open(record_json_path, "w", encoding="utf-8") as handle:
+        json.dump(record_payload, handle, indent=2, ensure_ascii=False)
+    challenger = dict(payload.get("challenger") or {})
+    champion = dict(payload.get("champion") or {})
+    lines = [
+        "# Champion 升級紀錄",
+        "",
+        f"- 時間：{session.session_ts}",
+        f"- 舊 Champion 封存：`{archive_path or ''}`",
+        "",
+        "| 指標 | 舊 Champion | 新 Champion |",
+        "|---|---:|---:|",
+        f"| 測試 RoMD | {float(champion.get('test_score_romd', 0.0)):.3f} | {float(challenger.get('test_score_romd', 0.0)):.3f} |",
+        f"| 串接總報酬率 | {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% |",
+        f"| 最大回撤 | {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% |",
+        f"| 視窗中位 RoMD | {float(champion.get('median_window_romd', 0.0)):.3f} | {float(challenger.get('median_window_romd', 0.0)):.3f} |",
+    ]
+    with open(record_md_path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+
+    result.update({
+        "performed": True,
+        "reason": "promoted",
+        "archive_path": archive_path,
+        "record_md_path": record_md_path,
+        "record_json_path": record_json_path,
+    })
+    return result
+
+
+def print_split_compare_outputs(*, compare_result, compare_paths, promote_result: dict | None = None):
+    if compare_result is None or compare_paths is None:
+        return
+    payload = dict((compare_result.get("compare_payload") or {}))
+    challenger = dict(payload.get("challenger") or {})
+    champion = dict(payload.get("champion") or {})
+    benchmark = dict(payload.get("benchmark") or {})
+    status = str(payload.get("status", "keep_champion"))
+    status_color = C_GREEN if status == "new_champion" else C_YELLOW
+    print(f"{C_GREEN}🆚 已輸出測試期間分數比較報表：{compare_paths['md_path']}{C_RESET}")
+    print(
+        f"{C_GRAY}   測試區間: {challenger.get('oos_start', '')} ~ {challenger.get('oos_end', '')} | 視窗數: {int(challenger.get('window_count', 0))}{C_RESET}"
+    )
+    print(
+        f"{C_GRAY}   測試 RoMD: Champion {float(champion.get('test_score_romd', 0.0)):.3f} | "
+        f"Challenger {float(challenger.get('test_score_romd', 0.0)):.3f} | 0050 {float(benchmark.get('test_score_romd', 0.0)):.3f}{C_RESET}"
+    )
+    print(
+        f"{C_GRAY}   串接總報酬: Champion {float(champion.get('linked_total_return_pct', 0.0)):.2f}% | "
+        f"Challenger {float(challenger.get('linked_total_return_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('linked_total_return_pct', 0.0)):.2f}%{C_RESET}"
+    )
+    print(
+        f"{C_GRAY}   最大回撤: Champion {float(champion.get('max_drawdown_pct', 0.0)):.2f}% | "
+        f"Challenger {float(challenger.get('max_drawdown_pct', 0.0)):.2f}% | 0050 {float(benchmark.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
+    )
+    print(
+        f"{C_GRAY}   視窗中位 RoMD(觀察): Champion {float(champion.get('median_window_romd', 0.0)):.3f} | "
+        f"Challenger {float(challenger.get('median_window_romd', 0.0)):.3f}{C_RESET}"
+    )
+    print(f"{status_color}   結論: {payload.get('recommendation', '')}{C_RESET}")
+    if promote_result is not None:
+        if bool(promote_result.get("performed")):
+            print(f"{C_GREEN}   已更新 Champion | 封存: {promote_result.get('archive_path') or 'N/A'}{C_RESET}")
+            print(f"{C_GREEN}   升版紀錄: {promote_result.get('record_md_path') or 'N/A'}{C_RESET}")
+        else:
+            print(f"{C_YELLOW}   未更新 Champion：{promote_result.get('reason', 'N/A')}{C_RESET}")
 
 
 def ensure_champion_params_bootstrap(*, champion_params_path: str, run_best_params_path: str):
@@ -433,8 +678,20 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
     }, compare_paths
 
 
-def print_walk_forward_outputs(*, report, report_paths):
-    print(f"{C_GREEN}🧭 已輸出 Walk-Forward 驗證報表：{report_paths['md_path']}{C_RESET}")
+def print_walk_forward_outputs(*, report, report_paths, objective_mode: str):
+    print(f"{C_GREEN}🧭 已輸出測試期間報表：{report_paths['md_path']}{C_RESET}")
+    total_metrics = build_test_period_total_metrics(report)
+    if str(objective_mode) == "split_test_romd":
+        print(
+            f"{C_GRAY}   測試區間: {total_metrics.get('oos_start', '')} ~ {total_metrics.get('oos_end', '')} | 視窗數: {int(total_metrics.get('window_count', 0))}{C_RESET}"
+        )
+        print(
+            f"{C_GRAY}   測試 RoMD: {float(total_metrics.get('test_score_romd', 0.0)):.3f} | 串接總報酬: {float(total_metrics.get('linked_total_return_pct', 0.0)):.2f}% | 最大回撤: {float(total_metrics.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
+        )
+        print(
+            f"{C_GRAY}   視窗中位 RoMD(觀察): {float(total_metrics.get('median_window_romd', 0.0)):.3f} | 0050 RoMD: {float(total_metrics.get('benchmark_score_romd', 0.0)):.3f}{C_RESET}"
+        )
+        return
     print(
         f"{C_GRAY}   視窗數: {report['summary'].get('window_count', 0)} | "
         f"分數中位數: {float(report['summary'].get('median_window_score', 0.0)):.3f} | "
@@ -496,6 +753,74 @@ def print_compare_outputs(*, compare_result, compare_paths, bootstrap_source: st
     elif bootstrap_source == "run_best":
         print(f"{C_YELLOW}ℹ️ 已由本輪最佳 run_best_params.json 建立初始現役版：{CHAMPION_PARAMS_PATH}{C_RESET}")
 
+
+def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_label: str, db_file: str, walk_forward_policy: dict, auto_promote_enabled: bool, promote_source: str):
+    from tools.optimizer.study_utils import is_qualified_trial_value
+
+    best_trial = best_trial_resolver(study)
+    if best_trial is None or not is_qualified_trial_value(best_trial.value):
+        return 0
+
+    report, report_paths, challenger_payload = generate_best_trial_walk_forward_report(
+        session=session,
+        best_trial=best_trial,
+        dataset_label=dataset_label,
+        db_file=db_file,
+        walk_forward_policy=walk_forward_policy,
+    )
+    print_walk_forward_outputs(report=report, report_paths=report_paths, objective_mode=str(session.objective_mode))
+
+    if str(session.objective_mode) == "split_test_romd":
+        compare_result, compare_paths = generate_split_test_compare_report(
+            session=session,
+            dataset_label=dataset_label,
+            db_file=db_file,
+            challenger_payload=challenger_payload,
+            challenger_report=report,
+            walk_forward_policy=walk_forward_policy,
+        )
+        promote_result = promote_run_best_to_champion_by_test_score(
+            session=session,
+            compare_result=compare_result,
+            compare_paths=compare_paths,
+        )
+        print_split_compare_outputs(
+            compare_result=compare_result,
+            compare_paths=compare_paths,
+            promote_result=promote_result,
+        )
+        return 0
+
+    bootstrap_source = ensure_champion_params_bootstrap(
+        champion_params_path=CHAMPION_PARAMS_PATH,
+        run_best_params_path=RUN_BEST_PARAMS_PATH,
+    )
+    compare_result, compare_paths = generate_champion_challenger_compare_report(
+        session=session,
+        dataset_label=dataset_label,
+        db_file=db_file,
+        challenger_payload=challenger_payload,
+        challenger_report=report,
+        walk_forward_policy=walk_forward_policy,
+    )
+    promote_result = promote_run_best_to_champion(
+        session=session,
+        compare_result=compare_result,
+        compare_paths=compare_paths,
+        auto_promote_enabled=auto_promote_enabled,
+        promote_source=promote_source,
+    )
+    print_compare_outputs(
+        compare_result=compare_result,
+        compare_paths=compare_paths,
+        bootstrap_source=bootstrap_source,
+        promote_result=promote_result,
+        auto_promote_enabled=auto_promote_enabled,
+        promote_source=promote_source,
+    )
+    return 0
+
+
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
@@ -503,8 +828,8 @@ def main(argv=None, environ=None):
     validate_cli_args(argv, value_options=("--dataset", "--model"), flag_options=("--promote",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model wf|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 wf；可用 --model wf|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json；現役正式版固定使用 champion_params.json；只有指定 --promote 或 V16_OPTIMIZER_AUTO_PROMOTE=1，且非 trial=0，且候選版自身 upgrade gate 與 compare gate 同時通過，才會實際升級 Champion。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
+        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy（wf 仍可作為 split 別名）或環境變數 V16_OPTIMIZER_MODEL 切換；split 模式採 train/test 分離：訓練只用 train RoMD 搜尋，測試只用 test RoMD 驗證並決定 Champion，程式不會把測試分數自動回灌到同一次訓練；legacy 會回到原本 base_score 模式，且主搜尋會使用全資料直到最新日期；非互動模式預設訓練次數為 0；walk-forward 設定來自 config/walk_forward_policy.py；完成指定訓練次數或輸入 0 匯出時，會更新本輪最佳 run_best_params.json，若測試 RoMD 超越現役 Champion，會自動更新 champion_params.json。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -533,7 +858,7 @@ def main(argv=None, environ=None):
     model_choice, model_source = resolve_optimizer_model_choice(
         argv,
         environ,
-        default_model=OBJECTIVE_MODE_TO_MODEL.get(str(loaded_walk_forward_policy["objective_mode"]), MODEL_CHOICE_WF),
+        default_model=OBJECTIVE_MODE_TO_MODEL.get(str(loaded_walk_forward_policy["objective_mode"]), MODEL_CHOICE_SPLIT),
     )
     walk_forward_policy = apply_optimizer_model_choice(loaded_walk_forward_policy, model_choice=model_choice)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
@@ -570,6 +895,9 @@ def main(argv=None, environ=None):
         requested_n_trials=session.n_trials,
         requested_action=str(getattr(session, "run_action", "train")),
     )
+    if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
+        auto_promote_enabled = True
+        promote_source = "split_test_score_auto"
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -592,10 +920,6 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
-            _bootstrap_source_pre = ensure_champion_params_bootstrap(
-                champion_params_path=CHAMPION_PARAMS_PATH,
-                run_best_params_path=RUN_BEST_PARAMS_PATH,
-            )
             export_status = export_best_params_if_requested(
                 study,
                 best_params_path=RUN_BEST_PARAMS_PATH,
@@ -610,49 +934,21 @@ def main(argv=None, environ=None):
             csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
             if not csv_inputs:
                 raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
-            best_trial = best_trial_resolver(study)
-            if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                session.load_raw_data(
-                    selected_data_dir,
-                    load_all_raw_data=load_all_raw_data,
-                    required_min_rows=optimizer_required_min_rows,
-                )
-                report, report_paths, challenger_payload = generate_best_trial_walk_forward_report(
-                    session=session,
-                    best_trial=best_trial,
-                    dataset_label=dataset_label,
-                    db_file=db_file,
-                    walk_forward_policy=walk_forward_policy,
-                )
-                print_walk_forward_outputs(report=report, report_paths=report_paths)
-                bootstrap_source = ensure_champion_params_bootstrap(
-                    champion_params_path=CHAMPION_PARAMS_PATH,
-                    run_best_params_path=RUN_BEST_PARAMS_PATH,
-                )
-                compare_result, compare_paths = generate_champion_challenger_compare_report(
-                    session=session,
-                    dataset_label=dataset_label,
-                    db_file=db_file,
-                    challenger_payload=challenger_payload,
-                    challenger_report=report,
-                    walk_forward_policy=walk_forward_policy,
-                )
-                promote_result = promote_run_best_to_champion(
-                    session=session,
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    auto_promote_enabled=auto_promote_enabled,
-                    promote_source=promote_source,
-                )
-                print_compare_outputs(
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    bootstrap_source=bootstrap_source,
-                    promote_result=promote_result,
-                    auto_promote_enabled=auto_promote_enabled,
-                    promote_source=promote_source,
-                )
-            return 0
+            session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data,
+                required_min_rows=optimizer_required_min_rows,
+            )
+            return finalize_best_trial_outputs(
+                session=session,
+                study=study,
+                best_trial_resolver=best_trial_resolver,
+                dataset_label=dataset_label,
+                db_file=db_file,
+                walk_forward_policy=walk_forward_policy,
+                auto_promote_enabled=auto_promote_enabled,
+                promote_source=promote_source,
+            )
         finally:
             session.close_trial_prep_executor()
             close_study_storage(study)
@@ -688,18 +984,30 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
     search_train_end_text = "latest" if str(walk_forward_policy["objective_mode"]) == "legacy_base_score" else str(int(walk_forward_policy["search_train_end_year"]))
-    print(
-        f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
-        f"model={walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_WF))} | 來源: {model_source} | "
-        f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
-        f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
-        f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
-        f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "
-        f"flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f}) | "
-        f"compare_tol(ret={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.2f}%, mdd={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.2f}%)"
-        f"{C_RESET}"
-    )
-    print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
+    selected_model = walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_SPLIT))
+    if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
+        print(
+            f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
+            f"model={selected_model} | 來源: {model_source} | objective={walk_forward_policy['objective_mode']} | "
+            f"train={walk_forward_policy['train_start_year']}~{search_train_end_text} | "
+            f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest | "
+            f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']}"
+            f"{C_RESET}"
+        )
+        print(f"{C_GRAY}🏆 Champion 規則: 測試期間最終 RoMD 較高者保留；測試分數不回灌同次訓練。{C_RESET}")
+    else:
+        print(
+            f"{C_GRAY}🧭 Walk-forward policy: {walk_forward_policy.get('policy_path', 'config/walk_forward_policy.py')} | "
+            f"model={selected_model} | 來源: {model_source} | "
+            f"objective={walk_forward_policy['objective_mode']} | search_train_end={search_train_end_text} | "
+            f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']} | "
+            f"test_months={walk_forward_policy['test_window_months']} | min_bars={walk_forward_policy['min_window_bars']} | "
+            f"gate(score>={float(walk_forward_policy['gate_min_median_score']):.3f}, worst>={float(walk_forward_policy['gate_min_worst_ret_pct']):.2f}%, "
+            f"flat>={float(walk_forward_policy['gate_min_flat_median_score']):.3f}) | "
+            f"compare_tol(ret={float(walk_forward_policy['compare_worst_ret_tolerance_pct']):.2f}%, mdd={float(walk_forward_policy['compare_max_mdd_tolerance_pct']):.2f}%)"
+            f"{C_RESET}"
+        )
+        print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
 
     try:
         prompt_existing_db_policy(db_file, COLORS)
@@ -750,10 +1058,6 @@ def main(argv=None, environ=None):
         if should_export:
             best_trial = best_trial_resolver(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                _bootstrap_source_pre = ensure_champion_params_bootstrap(
-                    champion_params_path=CHAMPION_PARAMS_PATH,
-                    run_best_params_path=RUN_BEST_PARAMS_PATH,
-                )
                 export_status = export_best_params_if_requested(
                     study,
                     best_params_path=RUN_BEST_PARAMS_PATH,
@@ -763,38 +1067,13 @@ def main(argv=None, environ=None):
                 )
                 if export_status != 0:
                     return 1
-                report, report_paths, challenger_payload = generate_best_trial_walk_forward_report(
+                finalize_best_trial_outputs(
                     session=session,
-                    best_trial=best_trial,
+                    study=study,
+                    best_trial_resolver=best_trial_resolver,
                     dataset_label=dataset_label,
                     db_file=db_file,
                     walk_forward_policy=walk_forward_policy,
-                )
-                print_walk_forward_outputs(report=report, report_paths=report_paths)
-                bootstrap_source = ensure_champion_params_bootstrap(
-                    champion_params_path=CHAMPION_PARAMS_PATH,
-                    run_best_params_path=RUN_BEST_PARAMS_PATH,
-                )
-                compare_result, compare_paths = generate_champion_challenger_compare_report(
-                    session=session,
-                    dataset_label=dataset_label,
-                    db_file=db_file,
-                    challenger_payload=challenger_payload,
-                    challenger_report=report,
-                    walk_forward_policy=walk_forward_policy,
-                )
-                promote_result = promote_run_best_to_champion(
-                    session=session,
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    auto_promote_enabled=auto_promote_enabled,
-                    promote_source=promote_source,
-                )
-                print_compare_outputs(
-                    compare_result=compare_result,
-                    compare_paths=compare_paths,
-                    bootstrap_source=bootstrap_source,
-                    promote_result=promote_result,
                     auto_promote_enabled=auto_promote_enabled,
                     promote_source=promote_source,
                 )
