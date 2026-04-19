@@ -430,6 +430,12 @@ def validate_architecture_models_reference_params_file_tree_sync_case(_base_para
 
 
 
+
+
+def validate_architecture_models_champion_params_file_tree_sync_case(_base_params):
+    return validate_architecture_models_reference_params_file_tree_sync_case(_base_params)
+
+
 def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):
     case_id = "META_ARCHITECTURE_LOCAL_REGRESSION_META_QUALITY_FILE_TREE_SYNC"
     results = []

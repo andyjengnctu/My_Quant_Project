@@ -387,6 +387,7 @@ def main(argv=None, environ=None):
         f"{C_GRAY}🧭 訓練模式: {selected_model_mode} | 來源: {model_mode_source} | "
         f"設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | {scope_text}{C_RESET}"
     )
+    print(f"{C_GRAY}Train/Test policy: {scope_text}{C_RESET}")
 
     try:
         prompt_existing_db_policy(db_file, COLORS)

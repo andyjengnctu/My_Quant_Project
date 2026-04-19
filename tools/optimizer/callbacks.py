@@ -503,7 +503,8 @@ def _compute_reference_console_cache(session):
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
             )
         return cache
-    except Exception:
+    except Exception as exc:
+        setattr(session, "_optimizer_console_reference_cache_error", repr(exc))
         return None
 
 

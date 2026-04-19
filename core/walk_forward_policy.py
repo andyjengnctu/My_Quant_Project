@@ -82,6 +82,10 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     payload = _load_policy_payload(path)
     merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
     merged.update(payload)
+    default_policy_path = os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
+    is_external_override = os.path.abspath(path) != default_policy_path
+    if is_external_override and "oos_start_year" not in payload and "search_train_end_year" not in payload:
+        merged["oos_start_year"] = None
     merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
