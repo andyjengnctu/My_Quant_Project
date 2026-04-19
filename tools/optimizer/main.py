@@ -414,8 +414,8 @@ def main(argv=None, environ=None):
             train_enable_rotation=TRAIN_ENABLE_ROTATION,
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
-            best_trial_resolver=session.get_best_completed_trial_or_none,
-            session=session,
+            best_trial_resolver=None,
+            session=None,
         )
 
         session.profile_recorder.init_output_files()
