@@ -12,7 +12,6 @@ from core.config import (
     SCORE_NUMERATOR_METHOD,
 )
 from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
-from core.model_paths import resolve_champion_params_path
 from core.walk_forward_policy import filter_search_train_dates
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_engine import run_portfolio_timeline
@@ -37,7 +36,6 @@ from tools.optimizer.walk_forward import build_test_period_metrics, evaluate_wal
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CHAMPION_PARAMS_PATH = resolve_champion_params_path(PROJECT_ROOT)
 
 
 def _safe_float(value, default=0.0):
@@ -207,25 +205,25 @@ def _compose_first_zone_cell(metric_name: str, base_text: str, numeric_value: fl
     return f"{rendered} {_colorize(delta_text, _delta_color(delta_value))}"
 
 
-def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | None, benchmark_metrics: dict | None = None):
-    champion_metrics = dict(champion_metrics or {})
+def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict | None, benchmark_metrics: dict | None = None):
+    reference_metrics = dict(reference_metrics or {})
     benchmark_metrics = dict(benchmark_metrics or {})
 
     def champ_value(key, default=None):
-        return champion_metrics.get(key, default)
+        return reference_metrics.get(key, default)
 
     def bench_value(key, default=None):
         return benchmark_metrics.get(key, default)
 
     rows = []
 
-    def _append_row(name, candidate_text, candidate_numeric, *, champion_text="-", champion_numeric=None, champion_delta_text="", champion_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None):
+    def _append_row(name, candidate_text, candidate_numeric, *, reference_text="-", reference_numeric=None, reference_delta_text="", reference_delta_value=None, benchmark_text="-", benchmark_numeric=None, benchmark_delta_text="", benchmark_delta_value=None, use_blue=False, candidate_color_override=None):
         row = {
             "name": name,
             "candidate": _compose_first_zone_cell(name, candidate_text, float(candidate_numeric), use_blue=use_blue) if candidate_numeric is not None else str(candidate_text),
             "candidate_precolored": candidate_numeric is not None,
-            "champion": _compose_first_zone_cell(name, champion_text, float(champion_numeric), delta_text=champion_delta_text, delta_value=champion_delta_value, use_blue=use_blue) if champion_numeric is not None else str(champion_text),
-            "champion_precolored": champion_numeric is not None,
+            "reference": _compose_first_zone_cell(name, reference_text, float(reference_numeric), delta_text=reference_delta_text, delta_value=reference_delta_value, use_blue=use_blue) if reference_numeric is not None else str(reference_text),
+            "reference_precolored": reference_numeric is not None,
             "benchmark": _compose_first_zone_cell(name, benchmark_text, float(benchmark_numeric), delta_text=benchmark_delta_text, delta_value=benchmark_delta_value, use_blue=use_blue) if benchmark_numeric is not None else str(benchmark_text),
             "benchmark_precolored": benchmark_numeric is not None,
         }
@@ -236,35 +234,35 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
 
     def add_row(name, key, *, kind="pct", candidate_unit="", digits=2):
         candidate_value = candidate_metrics.get(key, 0.0)
-        champion_value_raw = champ_value(key)
+        reference_value_raw = champ_value(key)
         benchmark_value_raw = bench_value(key)
         if benchmark_value_raw is None and key.startswith("bm_"):
             benchmark_value_raw = candidate_metrics.get(key)
         if kind == "pct":
             cand_plain = _format_pct_plain(candidate_value)
             bench_plain = _format_pct_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
-            champ_plain = _format_pct_plain(champion_value_raw) if champion_value_raw is not None else "-"
+            reference_plain = _format_pct_plain(reference_value_raw) if reference_value_raw is not None else "-"
             bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
-            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
             bench_delta_text = _format_pct_diff(bench_delta_value) if bench_delta_value is not None else ""
-            champ_delta_text = _format_pct_diff(champ_delta_value) if champ_delta_value is not None else ""
+            reference_delta_text = _format_pct_diff(reference_delta_value) if reference_delta_value is not None else ""
         elif kind == "mdd":
             cand_plain = _format_mdd_plain(candidate_value)
             bench_plain = _format_mdd_plain(benchmark_value_raw) if benchmark_value_raw is not None else "-"
-            champ_plain = _format_mdd_plain(champion_value_raw) if champion_value_raw is not None else "-"
+            reference_plain = _format_mdd_plain(reference_value_raw) if reference_value_raw is not None else "-"
             bench_delta_value = float(benchmark_value_raw) - float(candidate_value) if benchmark_value_raw is not None else None
-            champ_delta_value = float(champion_value_raw) - float(candidate_value) if champion_value_raw is not None else None
+            reference_delta_value = float(reference_value_raw) - float(candidate_value) if reference_value_raw is not None else None
             bench_delta_text = _format_mdd_diff(candidate_value, benchmark_value_raw) if benchmark_value_raw is not None else ""
-            champ_delta_text = _format_mdd_diff(candidate_value, champion_value_raw) if champion_value_raw is not None else ""
+            reference_delta_text = _format_mdd_diff(candidate_value, reference_value_raw) if reference_value_raw is not None else ""
         elif kind in {"float2", "float3"}:
             digits = 2 if kind == "float2" else 3
             cand_plain = f"{float(candidate_value):.{digits}f}{candidate_unit}"
             bench_plain = f"{float(benchmark_value_raw):.{digits}f}{candidate_unit}" if benchmark_value_raw is not None else "-"
-            champ_plain = f"{float(champion_value_raw):.{digits}f}{candidate_unit}" if champion_value_raw is not None else "-"
+            reference_plain = f"{float(reference_value_raw):.{digits}f}{candidate_unit}" if reference_value_raw is not None else "-"
             bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
-            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
             bench_delta_text = _format_float_diff(bench_delta_value, digits, candidate_unit) if bench_delta_value is not None else ""
-            champ_delta_text = _format_float_diff(champ_delta_value, digits, candidate_unit) if champ_delta_value is not None else ""
+            reference_delta_text = _format_float_diff(reference_delta_value, digits, candidate_unit) if reference_delta_value is not None else ""
         elif kind == "count_split":
             cand_plain = _format_split_bucket(
                 candidate_metrics.get('pf_trades', 0),
@@ -273,14 +271,14 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
                 '延續',
                 candidate_metrics.get('extended_trades', 0),
             )
-            champ_plain = _format_split_bucket(
-                champion_metrics.get('pf_trades', 0),
+            reference_plain = _format_split_bucket(
+                reference_metrics.get('pf_trades', 0),
                 '正常',
-                champion_metrics.get('normal_trades', 0),
+                reference_metrics.get('normal_trades', 0),
                 '延續',
-                champion_metrics.get('extended_trades', 0),
-            ) if champion_metrics else "-"
-            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+                reference_metrics.get('extended_trades', 0),
+            ) if reference_metrics else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "missed_split":
             cand_plain = _format_split_bucket(
@@ -290,46 +288,46 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
                 '賣',
                 candidate_metrics.get('missed_sells', 0),
             )
-            champ_plain = _format_split_bucket(
-                champion_metrics.get('missed_total', 0),
+            reference_plain = _format_split_bucket(
+                reference_metrics.get('missed_total', 0),
                 '買',
-                champion_metrics.get('missed_buys', 0),
+                reference_metrics.get('missed_buys', 0),
                 '賣',
-                champion_metrics.get('missed_sells', 0),
-            ) if champion_metrics else "-"
-            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+                reference_metrics.get('missed_sells', 0),
+            ) if reference_metrics else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "float2_nodiff":
             cand_plain = f"{float(candidate_value):.2f}{candidate_unit}"
-            champ_plain = f"{float(champion_value_raw):.2f}{candidate_unit}" if champion_value_raw is not None else "-"
-            _append_row(name, cand_plain, None, champion_text=champ_plain, champion_numeric=None, benchmark_text="-", benchmark_numeric=None)
+            reference_plain = f"{float(reference_value_raw):.2f}{candidate_unit}" if reference_value_raw is not None else "-"
+            _append_row(name, cand_plain, None, reference_text=reference_plain, reference_numeric=None, benchmark_text="-", benchmark_numeric=None)
             return
         elif kind == "money":
             cand_plain = _format_money(candidate_value)
             bench_plain = _format_money(benchmark_value_raw) if benchmark_value_raw is not None else "-"
-            champ_plain = _format_money(champion_value_raw) if champion_value_raw is not None else "-"
+            reference_plain = _format_money(reference_value_raw) if reference_value_raw is not None else "-"
             bench_delta_value = float(candidate_value) - float(benchmark_value_raw) if benchmark_value_raw is not None else None
-            champ_delta_value = float(candidate_value) - float(champion_value_raw) if champion_value_raw is not None else None
+            reference_delta_value = float(candidate_value) - float(reference_value_raw) if reference_value_raw is not None else None
             bench_delta_text = _format_money_diff(bench_delta_value) if bench_delta_value is not None else ""
-            champ_delta_text = _format_money_diff(champ_delta_value) if champ_delta_value is not None else ""
+            reference_delta_text = _format_money_diff(reference_delta_value) if reference_delta_value is not None else ""
         else:
             cand_plain = str(candidate_value)
             bench_plain = str(benchmark_value_raw) if benchmark_value_raw is not None else "-"
-            champ_plain = str(champion_value_raw) if champion_value_raw is not None else "-"
+            reference_plain = str(reference_value_raw) if reference_value_raw is not None else "-"
             bench_delta_value = None
-            champ_delta_value = None
+            reference_delta_value = None
             bench_delta_text = ""
-            champ_delta_text = ""
+            reference_delta_text = ""
 
         use_blue = name == "報酬回撤比 (RoMD)"
         _append_row(
             name,
             cand_plain,
             candidate_value,
-            champion_text=champ_plain,
-            champion_numeric=champion_value_raw,
-            champion_delta_text=champ_delta_text,
-            champion_delta_value=champ_delta_value,
+            reference_text=reference_plain,
+            reference_numeric=reference_value_raw,
+            reference_delta_text=reference_delta_text,
+            reference_delta_value=reference_delta_value,
             benchmark_text=bench_plain,
             benchmark_numeric=benchmark_value_raw,
             benchmark_delta_text=bench_delta_text,
@@ -347,21 +345,21 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
 
     candidate_payoff = float(candidate_metrics.get("pf_payoff", 0.0))
     candidate_ev = float(candidate_metrics.get("pf_ev", 0.0))
-    champion_payoff = champ_value("pf_payoff")
-    champion_ev = champ_value("pf_ev")
+    reference_payoff = champ_value("pf_payoff")
+    reference_ev = champ_value("pf_ev")
     benchmark_payoff = bench_value("pf_payoff")
     benchmark_ev = bench_value("pf_ev")
 
     candidate_combo = _format_metric_pair(candidate_payoff, candidate_ev)
-    if champion_payoff is not None and champion_ev is not None:
-        champion_payoff = float(champion_payoff)
-        champion_ev = float(champion_ev)
-        payoff_diff = candidate_payoff - champion_payoff
-        ev_diff = candidate_ev - champion_ev
+    if reference_payoff is not None and reference_ev is not None:
+        reference_payoff = float(reference_payoff)
+        reference_ev = float(reference_ev)
+        payoff_diff = candidate_payoff - reference_payoff
+        ev_diff = candidate_ev - reference_ev
         diff_text = _format_metric_pair_diff(payoff_diff, ev_diff)
-        champion_combo = f"{_format_metric_pair(champion_payoff, champion_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
+        reference_combo = f"{_format_metric_pair(reference_payoff, reference_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
-        champion_combo = "-"
+        reference_combo = "-"
     if benchmark_payoff is not None and benchmark_ev is not None:
         benchmark_payoff = float(benchmark_payoff)
         benchmark_ev = float(benchmark_ev)
@@ -371,7 +369,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, champion_metrics: dict | 
         benchmark_combo = f"{_format_metric_pair(benchmark_payoff, benchmark_ev)} {_colorize(diff_text, _delta_color(ev_diff))}"
     else:
         benchmark_combo = "-"
-    _append_row("風報比: 期望值", candidate_combo, None, champion_text=champion_combo, champion_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
+    _append_row("風報比: 期望值", candidate_combo, None, reference_text=reference_combo, reference_numeric=None, benchmark_text=benchmark_combo, benchmark_numeric=None)
 
     add_row("總交易次數", "pf_trades", kind="count_split")
     add_row("錯失交易次數", "missed_total", kind="missed_split")
@@ -410,117 +408,18 @@ def _build_hard_gate_lines():
     ]
 
 
-def _compute_champion_console_cache(session):
-    if not os.path.exists(CHAMPION_PARAMS_PATH):
-        return None
-    champion_params = load_params_from_json(CHAMPION_PARAMS_PATH)
-    prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(champion_params, "optimizer_max_workers"))
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=champion_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-    )
-    sorted_dates = sorted(prep_result["master_dates"])
-    search_train_dates = _build_search_train_dates_for_session(session)
-    benchmark_data = prep_result["all_dfs_fast"].get("0050")
-    pf_profile = {}
-    (
-        ret_pct,
-        mdd,
-        trade_count,
-        final_eq,
-        avg_exp,
-        _max_exp,
-        bm_ret,
-        bm_mdd,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        missed_buys,
-        missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate,
-        normal_trades,
-        extended_trades,
-        annual_trades,
-        reserved_buy_fill_rate,
-        annual_return_pct,
-        bm_annual_return_pct,
-    ) = run_portfolio_timeline(
-        prep_result["all_dfs_fast"],
-        prep_result["all_trade_logs"],
-        search_train_dates,
-        session.train_start_year,
-        champion_params,
-        session.train_max_positions,
-        session.train_enable_rotation,
-        benchmark_ticker="0050",
-        benchmark_data=benchmark_data,
-        is_training=True,
-        profile_stats=pf_profile,
-        verbose=False,
-    )
-    cache = {
-        "pf_return": ret_pct,
-        "pf_mdd": mdd,
-        "pf_trades": trade_count,
-        "final_equity": final_eq,
-        "avg_exposure": avg_exp,
-        "bm_return": bm_ret,
-        "bm_mdd": bm_mdd,
-        "win_rate": win_rate,
-        "pf_ev": pf_ev,
-        "pf_payoff": pf_payoff,
-        "missed_buys": int(missed_buys),
-        "missed_sells": int(missed_sells),
-        "missed_total": int(missed_buys) + int(missed_sells),
-        "normal_trades": int(normal_trades),
-        "extended_trades": int(extended_trades),
-        "annual_trades": annual_trades,
-        "reserved_buy_fill_rate": reserved_buy_fill_rate,
-        "avg_exposure": avg_exp,
-        "annual_return_pct": annual_return_pct,
-        "bm_annual_return_pct": bm_annual_return_pct,
-        "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
-        "bm_min_full_year_return_pct": float(pf_profile.get("bm_min_full_year_return_pct", 0.0)),
-        "r_squared": r_sq,
-        "m_win_rate": m_win_rate,
-        "bm_r_squared": bm_r_sq,
-        "bm_m_win_rate": bm_m_win_rate,
-        "pf_romd": _calc_romd(ret_pct, mdd),
-    }
-    if _resolve_model_mode(session.objective_mode) == "split":
-        wf_policy = dict(session.walk_forward_policy)
-        wf_report = evaluate_walk_forward(
-            all_dfs_fast=prep_result["all_dfs_fast"],
-            all_trade_logs=prep_result["all_trade_logs"],
-            sorted_dates=sorted_dates,
-            params=champion_params,
-            max_positions=session.train_max_positions,
-            enable_rotation=session.train_enable_rotation,
-            benchmark_ticker="0050",
-            train_start_year=int(wf_policy["train_start_year"]),
-            min_train_years=int(wf_policy["min_train_years"]),
-            oos_start_year=wf_policy.get("oos_start_year"),
-        )
-        cache["wf_report"] = wf_report
-    else:
-        cache["wf_report"] = None
-    return cache
+def _compute_reference_console_cache(session):
+    _ = session
+    return None
 
 
-def _get_champion_console_cache(session):
-    if bool(getattr(session, "walk_forward_policy", {}).get("disable_promotion_flow", False)):
+def _get_reference_console_cache(session):
+    if bool(getattr(session, "walk_forward_policy", {}).get("promotion_flow_enabled", False) is False):
         return None
-    cache = getattr(session, "_optimizer_console_champion_cache", None)
+    cache = getattr(session, "_optimizer_console_reference_cache", None)
     if cache is None:
-        cache = _compute_champion_console_cache(session)
-        setattr(session, "_optimizer_console_champion_cache", cache)
+        cache = _compute_reference_console_cache(session)
+        setattr(session, "_optimizer_console_reference_cache", cache)
     return cache
 
 
@@ -571,11 +470,11 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         "pf_romd": _calc_romd(_safe_float(attrs.get("bm_return", 0.0)), _safe_float(attrs.get("bm_mdd", 0.0))),
         "final_equity": _benchmark_final_equity(initial_capital, _safe_float(attrs.get("bm_return", 0.0))),
     }
-    champion_cache = _get_champion_console_cache(session)
+    reference_cache = _get_reference_console_cache(session)
     training_title = f"【訓練期間績效對比｜{_range_text_from_dates(search_train_dates)}】"
     train_rows = _build_first_zone_rows(
         candidate_metrics=candidate_train_metrics,
-        champion_metrics=champion_cache,
+        reference_metrics=reference_cache,
         benchmark_metrics=benchmark_train_metrics,
     )
 
@@ -607,16 +506,16 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
             report=candidate_wf_report,
             initial_capital=initial_capital,
         )
-        champion_test_metrics = None
-        if champion_cache and champion_cache.get("wf_report"):
-            champion_test_metrics, _unused_bm, _unused_range = _build_oos_metrics_from_report(
-                report=champion_cache.get("wf_report"),
+        reference_test_metrics = None
+        if reference_cache and reference_cache.get("wf_report"):
+            reference_test_metrics, _unused_bm, _unused_range = _build_oos_metrics_from_report(
+                report=reference_cache.get("wf_report"),
                 initial_capital=initial_capital,
             )
-        test_title = f"【OOS 驗證績效對比｜{oos_range_text}｜資料終點：{latest_data_end}】"
+        test_title = f"【OOS 驗證績效摘要｜{oos_range_text}｜資料終點：{latest_data_end}】"
         test_rows = _build_first_zone_rows(
             candidate_metrics=candidate_test_metrics,
-            champion_metrics=champion_test_metrics,
+            reference_metrics=reference_test_metrics,
             benchmark_metrics=benchmark_test_metrics,
         )
 

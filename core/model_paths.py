@@ -3,8 +3,8 @@ from typing import Mapping, Optional
 
 MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
 CHAMPION_PARAMS_PATH_ENV_VAR = "V16_CHAMPION_PARAMS_PATH"
-DEFAULT_PARAM_SOURCE = "champion"
-VALID_PARAM_SOURCES = ("champion", "run_best")
+DEFAULT_PARAM_SOURCE = "run_best"
+VALID_PARAM_SOURCES = ("run_best", "champion")
 
 def _resolve_override_path(project_root: str, raw_value: str) -> str:
     resolved = str(raw_value).strip()
@@ -34,6 +34,10 @@ def resolve_champion_params_path(project_root: str, environ: Optional[Mapping[st
 def resolve_run_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
     env = os.environ if environ is None else environ
     return os.path.join(resolve_models_dir(project_root, environ=env), "run_best_params.json")
+
+
+def resolve_active_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
+    return resolve_run_best_params_path(project_root, environ=environ)
 
 
 def normalize_param_source(param_source: str | None, *, default: str = DEFAULT_PARAM_SOURCE) -> str:

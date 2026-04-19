@@ -45,7 +45,7 @@ OUTPUT_DIR = build_output_dir(BASE_DIR, "debug_trade_log")
 
 
 def load_params(json_file=None, *, verbose=True):
-    resolved_json_file = resolve_named_params_path(BASE_DIR, "champion") if json_file is None else os.path.abspath(str(json_file))
+    resolved_json_file = resolve_named_params_path(BASE_DIR, "run_best") if json_file is None else os.path.abspath(str(json_file))
     params = load_params_from_json(resolved_json_file)
     if verbose:
         print(f"{C_GREEN}✅ 成功載入參數大腦: {resolved_json_file}{C_RESET}")
@@ -324,7 +324,7 @@ def main(argv=None, environ=None):
     sanitize_stats = analysis_result["sanitize_stats"]
 
     print(f"📥 讀取 {analysis_result['file_path']}...")
-    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'champion_params.json')}{C_RESET}")
+    print(f"{C_GREEN}✅ 成功載入參數大腦: {os.path.join(BASE_DIR, 'models', 'run_best_params.json')}{C_RESET}")
 
     dropped_row_count = sanitize_stats['dropped_row_count']
     invalid_row_count = sanitize_stats['invalid_row_count']

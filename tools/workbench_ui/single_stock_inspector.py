@@ -68,10 +68,9 @@ WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__),
 WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
 PARAM_SOURCE_LABEL_TO_KEY = {
-    "champion | 正式現役": "champion",
-    "run_best | 本輪最佳": "run_best",
+    "run_best | 目前參數": "run_best",
 }
-DEFAULT_PARAM_SOURCE_LABEL = "champion | 正式現役"
+DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
     "candidate": {"min_chars": 18, "max_chars": 28, "extra_px": 36},
@@ -840,7 +839,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
     def _get_selected_param_source(self):
         selected_label = self._param_source_display_var.get().strip()
-        return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "champion")
+        return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "run_best")
 
     def _get_selected_params_path(self):
         return resolve_named_params_path(WORKBENCH_PROJECT_ROOT, self._get_selected_param_source())

@@ -223,7 +223,6 @@ def print_resolved_run_request(*, n_trials, action, source, colors):
     action_labels = {
         "train": f"訓練 {int(n_trials)} 次",
         "export_best": "匯出 run_best",
-        "promote_champion": "挑戰 Champion",
     }
     print(f"{colors['gray']}🎯 Optimizer 動作: {action_labels.get(str(action), str(action))} | 來源: {source}{colors['reset']}")
 

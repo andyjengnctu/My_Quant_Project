@@ -363,14 +363,14 @@ def print_optimizer_trial_console_dashboard(*,
     params_lines: list[str],
     hard_gate_lines: list[str],
 ):
-    training_header = ("指標項目", "本輪候選", "Champion (差異)", "同期大盤0050 (差異)")
+    training_header = ("指標項目", "本輪候選", "參考基準 (差異)", "同期大盤0050 (差異)")
     training_table_rows = [training_header]
     for row in training_rows:
         training_table_rows.append(
             (
                 row["name"],
                 _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                _render_optimizer_dashboard_cell(row, "reference", row["name"]),
                 _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
             )
         )
@@ -380,7 +380,7 @@ def print_optimizer_trial_console_dashboard(*,
                 (
                     row["name"],
                     _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "reference", row["name"]),
                     _render_optimizer_dashboard_cell(row, "benchmark", row["name"]),
                 )
             )
@@ -405,7 +405,7 @@ def print_optimizer_trial_console_dashboard(*,
         upgrade_widths = _build_table4_compact_widths(upgrade_render_rows, min_widths=(20, 19, 24, 8))
         upgrade_header_line = _table_row4_compact(*upgrade_header, *upgrade_widths)
 
-    compare_header = ("接班判斷項目", "本輪候選", "Champion (差異)", "門檻 / 基準", "狀態")
+    compare_header = ("比較判斷項目", "本輪候選", "參考基準 (差異)", "門檻 / 基準", "狀態")
     compare_widths = None
     compare_header_line = ""
     compare_render_rows = []
@@ -416,7 +416,7 @@ def print_optimizer_trial_console_dashboard(*,
                 (
                     row["name"],
                     _render_optimizer_dashboard_cell(row, "candidate", row["name"]),
-                    _render_optimizer_dashboard_cell(row, "champion", row["name"]),
+                    _render_optimizer_dashboard_cell(row, "reference", row["name"]),
                     row["threshold"],
                     _wrap_optimizer_dashboard_cell(row["status"], _optimizer_dashboard_status_color(row["status"])),
                 )

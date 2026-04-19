@@ -25,7 +25,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源預設 champion；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的測試起始日期。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源固定為 run_best；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
         return 0
 
     from core.data_utils import normalize_ticker_from_csv_filename
@@ -70,13 +70,8 @@ def main(argv=None, env=None):
     )
 
     try:
-        param_source_choice = safe_prompt_choice(
-            "👉 參數來源：[C] champion (預設)  [R] run_best: ",
-            "C",
-            ("C", "R"),
-            "參數來源",
-        )
-        param_source = "champion" if param_source_choice == "C" else "run_best"
+        param_source = "run_best"
+        print(f"{C_GRAY}ℹ️ 參數來源固定為 run_best（目前正式開發口徑）。{C_RESET}")
         rotation_choice = safe_prompt_choice(
             "👉 汰弱換股：[N] 關閉 (預設)  [Y] 啟用 :  ",
             "N",

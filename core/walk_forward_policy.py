@@ -9,12 +9,14 @@ WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 
 DEFAULT_TRAINING_SPLIT_POLICY = {
     "architecture_mode": str(TRAINING_SPLIT_POLICY.get("architecture_mode", "fixed_predeploy_oos")),
-    "disable_legacy_model": bool(TRAINING_SPLIT_POLICY.get("disable_legacy_model", True)),
-    "disable_promotion_flow": bool(TRAINING_SPLIT_POLICY.get("disable_promotion_flow", True)),
+    "legacy_model_enabled": bool(TRAINING_SPLIT_POLICY.get("legacy_model_enabled", False)),
+    "promotion_flow_enabled": bool(TRAINING_SPLIT_POLICY.get("promotion_flow_enabled", False)),
+    "selection_start_year": int(TRAINING_SPLIT_POLICY.get("selection_start_year", TRAINING_SPLIT_POLICY["train_start_year"])),
     "train_start_year": int(TRAINING_SPLIT_POLICY["train_start_year"]),
     "min_train_years": int(TRAINING_SPLIT_POLICY["min_train_years"]),
     "search_train_end_year": None,
     "oos_start_year": TRAINING_SPLIT_POLICY.get("oos_start_year", None),
+    "objective_mode": str(TRAINING_SPLIT_POLICY.get("objective_mode", "split_test_romd")),
 }
 
 
@@ -84,8 +86,13 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
     merged.update(payload)
     merged['architecture_mode'] = str(merged.get('architecture_mode', DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])
-    merged['disable_legacy_model'] = bool(merged.get('disable_legacy_model', DEFAULT_TRAINING_SPLIT_POLICY['disable_legacy_model']))
-    merged['disable_promotion_flow'] = bool(merged.get('disable_promotion_flow', DEFAULT_TRAINING_SPLIT_POLICY['disable_promotion_flow']))
+    if 'disable_legacy_model' in merged and 'legacy_model_enabled' not in merged:
+        merged['legacy_model_enabled'] = not bool(merged.get('disable_legacy_model'))
+    if 'disable_promotion_flow' in merged and 'promotion_flow_enabled' not in merged:
+        merged['promotion_flow_enabled'] = not bool(merged.get('disable_promotion_flow'))
+    merged['legacy_model_enabled'] = bool(merged.get('legacy_model_enabled', DEFAULT_TRAINING_SPLIT_POLICY['legacy_model_enabled']))
+    merged['promotion_flow_enabled'] = bool(merged.get('promotion_flow_enabled', DEFAULT_TRAINING_SPLIT_POLICY['promotion_flow_enabled']))
+    merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
     merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900)
@@ -100,6 +107,9 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
         pass
     if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['train_start_year']):
         raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
+    merged['objective_mode'] = str(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])
+    merged['disable_legacy_model'] = not bool(merged['legacy_model_enabled'])
+    merged['disable_promotion_flow'] = not bool(merged['promotion_flow_enabled'])
     merged['policy_path'] = path
     return merged
 

@@ -7,15 +7,15 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整、模式預設為 split。可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換。split 會輸出單一連續 test 報表；只有 P 或 --promote 才會挑戰 Champion，且條件是測試 RoMD 嚴格較高。輸入 0 只匯出 run_best 與報表。非互動模式預設 trial 數為 0；切分設定來自 config/training_policy.py。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整。訓練區間與 OOS 驗證區間由 config/training_policy.py 決定；目前只輸出 run_best 與單一連續 OOS 報表。輸入 0 只匯出 run_best 與報表。"
 
 
 def main(argv=None, environ=None):
     argv = sys.argv if argv is None else argv
-    validate_cli_args(argv, value_options=("--dataset", "--model"), flag_options=("--promote",))
+    validate_cli_args(argv, value_options=("--dataset",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/ml_optimizer.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
+        print(f"用法: python {program_name} [--dataset reduced|full]")
         print(HELP_DESCRIPTION)
         return 0
 

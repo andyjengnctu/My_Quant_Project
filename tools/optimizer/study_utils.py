@@ -26,8 +26,6 @@ OBJECTIVE_MODE_SPLIT_TEST_ROMD = "split_test_romd"
 
 OPTIMIZER_MENU_ACTION_TRAIN = "train"
 OPTIMIZER_MENU_ACTION_EXPORT_BEST = "export_best"
-OPTIMIZER_MENU_ACTION_PROMOTE_CHAMPION = "promote_champion"
-
 
 def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
     normalized = str(raw_value or "").strip()
@@ -35,12 +33,6 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
         return {
             "n_trials": int(DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE),
             "action": OPTIMIZER_MENU_ACTION_TRAIN,
-            "source": source_label,
-        }
-    if normalized.lower() == "p":
-        return {
-            "n_trials": 0,
-            "action": OPTIMIZER_MENU_ACTION_PROMOTE_CHAMPION,
             "source": source_label,
         }
     trial_count = parse_int_strict(normalized, "訓練次數", min_value=0)
@@ -60,7 +52,7 @@ def resolve_optimizer_run_request(environ):
         prompt = (
             "👉 Optimizer 動作："
             f"[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  "
-            "[數字] 訓練指定次數  [0] 匯出 run_best  [P] 挑戰 champion: "
+            "[數字] 訓練指定次數  [0] 匯出 run_best: "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")
