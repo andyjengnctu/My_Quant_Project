@@ -1,12 +1,18 @@
 ## Going
 
+- anti-overfitting
+    
+    驗證架構: 縮短訓練區間(3年)/測試區間(1年)，檢視move forward的測試結效總合，但其結果不參與訓練，以驗證此策略經歷不用時段的適用性。
+    驗證指標: 追求高原區obj，而非單一obj極值。
+    進級門檻: 適用不同趨勢，champion不可依賴測試資料。
+    策略調整: (後續)
+
+
+## To do
 - 如何讓你依據投組結果，包含分析K線交易過程，提供我策略升級建議
     - 加入大盤過濾
     - 加入低點買入 
     - 加入盤整期策略
- 
-## To do
-
 - DRL-based learning
 - LLM-based learning
 - ajd/raw整合交易策略 
