@@ -172,7 +172,7 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
     resolver = get_best_completed_trial_or_none if best_trial_resolver is None else best_trial_resolver
     best_trial = resolver(study)
     if best_trial is None:
-        print(f"{colors['red']}❌ 目前記憶庫中尚無可提取的最佳 completed trial，無法匯出。{colors['reset']}", file=sys.stderr)
+        print(f"{colors['red']}❌ 目前記憶庫中尚無通過 local_min_score gate 的最佳 completed trial，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
     if is_qualified_trial_value(best_trial.value):
         best_params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=fixed_tp_percent)

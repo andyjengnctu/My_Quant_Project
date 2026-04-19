@@ -174,7 +174,10 @@ def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_
     from tools.optimizer.study_utils import is_qualified_trial_value
 
     best_trial = best_trial_resolver(study)
-    if best_trial is None or not is_qualified_trial_value(best_trial.value):
+    if best_trial is None:
+        print(f"{C_YELLOW}ℹ️ 目前尚無通過 local_min_score gate 的 winner，略過 OOS 報表輸出。{C_RESET}")
+        return 0
+    if not is_qualified_trial_value(best_trial.value):
         return 0
 
     report, report_paths = generate_best_trial_walk_forward_report(
@@ -256,9 +259,9 @@ def main(argv=None, environ=None):
         resolve_training_session_export_policy,
         resolve_trial_count_or_exit,
     )
+    from tools.optimizer.robustness import build_local_min_score_best_trial_resolver
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.study_utils import (
-        build_best_completed_trial_resolver,
         build_optimizer_db_file_path,
         is_qualified_trial_value,
         resolve_optimizer_seed,
@@ -274,8 +277,8 @@ def main(argv=None, environ=None):
     walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
-    best_trial_resolver = build_best_completed_trial_resolver(objective_mode)
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+    best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
 
     try:
         dataset_profile_key, dataset_source = resolve_dataset_profile_from_cli_env(argv, environ, default=DEFAULT_DATASET_PROFILE)
@@ -316,6 +319,12 @@ def main(argv=None, environ=None):
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
+            if not os.path.isdir(selected_data_dir):
+                raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
+            if not csv_inputs:
+                raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
+            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             export_status = export_best_params_if_requested(
                 study,
                 best_params_path=RUN_BEST_PARAMS_PATH,
@@ -325,12 +334,6 @@ def main(argv=None, environ=None):
             )
             if export_status != 0:
                 return export_status
-            if not os.path.isdir(selected_data_dir):
-                raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
-            csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
-            if not csv_inputs:
-                raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
-            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             if selected_model_mode == 'split':
                 return finalize_best_trial_outputs(
                     session=session,
@@ -407,7 +410,7 @@ def main(argv=None, environ=None):
             train_enable_rotation=TRAIN_ENABLE_ROTATION,
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
-            best_trial_resolver=best_trial_resolver,
+            best_trial_resolver=session.get_best_completed_trial_or_none,
             session=session,
         )
 
