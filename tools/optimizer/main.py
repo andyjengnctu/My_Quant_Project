@@ -410,7 +410,7 @@ def main(argv=None, environ=None):
             train_enable_rotation=TRAIN_ENABLE_ROTATION,
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
-            best_trial_resolver=session.get_best_completed_trial_or_none,
+            best_trial_resolver=best_trial_resolver,
             session=session,
         )
 
