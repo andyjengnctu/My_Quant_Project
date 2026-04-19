@@ -259,7 +259,11 @@ def main(argv=None, environ=None):
         resolve_training_session_export_policy,
         resolve_trial_count_or_exit,
     )
-    from tools.optimizer.robustness import build_local_min_score_best_trial_resolver
+    from tools.optimizer.robustness import (
+        build_local_min_score_best_trial_resolver,
+        print_local_min_score_finalist_review,
+        print_local_min_score_winner_summary,
+    )
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.study_utils import (
         build_optimizer_db_file_path,
@@ -437,6 +441,18 @@ def main(argv=None, environ=None):
         if should_export:
             best_trial = best_trial_resolver(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
+                print_local_min_score_finalist_review(
+                    study,
+                    session=session,
+                    objective_mode=objective_mode,
+                    colors=COLORS,
+                    winner_trial=best_trial,
+                )
+                print_local_min_score_winner_summary(
+                    winner_trial=best_trial,
+                    session=session,
+                    colors=COLORS,
+                )
                 export_status = export_best_params_if_requested(
                     study,
                     best_params_path=RUN_BEST_PARAMS_PATH,
@@ -457,6 +473,8 @@ def main(argv=None, environ=None):
                     )
                 else:
                     print(f"{C_GREEN}🧭 全資料模式僅匯出 run_best，不額外產出 OOS 報表。{C_RESET}")
+            else:
+                print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
         elif export_policy == "interrupted_before_target":
             print(f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，依規則不自動覆寫 {RUN_BEST_PARAMS_PATH}。{C_RESET}")
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
