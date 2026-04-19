@@ -45,7 +45,7 @@ def resolve_first_walk_forward_test_boundary(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
 ) -> pd.Timestamp | None:
-    if not sorted_dates:
+    if sorted_dates is None or len(sorted_dates) == 0:
         return None
 
     sorted_timestamps = [pd.Timestamp(dt).normalize() for dt in sorted_dates]
@@ -63,19 +63,23 @@ def build_test_holdout_period(
     *,
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
+    oos_start_year: int | None = None,
 ) -> dict | None:
-    if not sorted_dates:
+    if sorted_dates is None or len(sorted_dates) == 0:
         return None
 
     sorted_timestamps = [pd.Timestamp(dt).normalize() for dt in sorted_dates]
     first_market_date = sorted_timestamps[0]
     last_date = sorted_timestamps[-1]
     requested_start = first_market_date if train_start_year is None else max(first_market_date, pd.Timestamp(year=int(train_start_year), month=1, day=1))
-    first_test_start = resolve_first_walk_forward_test_boundary(
-        sorted_timestamps,
-        min_train_years=min_train_years,
-        train_start_year=train_start_year,
-    )
+    if oos_start_year is not None:
+        first_test_start = pd.Timestamp(year=int(oos_start_year), month=1, day=1)
+    else:
+        first_test_start = resolve_first_walk_forward_test_boundary(
+            sorted_timestamps,
+            min_train_years=min_train_years,
+            train_start_year=train_start_year,
+        )
     if first_test_start is None:
         return None
 
@@ -88,7 +92,7 @@ def build_test_holdout_period(
         return None
 
     return {
-        'label': 'TEST',
+        'label': 'OOS',
         'train_start': requested_start.strftime('%Y-%m-%d'),
         'train_end': train_end.strftime('%Y-%m-%d'),
         'oos_start': first_test_start.strftime('%Y-%m-%d'),
@@ -162,7 +166,7 @@ def _evaluate_single_holdout_period(
         annual_return_pct=annual_return_pct,
     )
     return {
-        'label': str(holdout_period.get('label') or 'TEST'),
+        'label': str(holdout_period.get('label') or 'OOS'),
         'train_start': str(holdout_period.get('train_start') or ''),
         'train_end': str(holdout_period.get('train_end') or ''),
         'oos_start': str(holdout_period.get('oos_start') or ''),
@@ -209,11 +213,13 @@ def evaluate_walk_forward(
     benchmark_ticker: str = '0050',
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
+    oos_start_year: int | None = None,
 ):
     holdout_period = build_test_holdout_period(
         sorted_dates,
         min_train_years=min_train_years,
         train_start_year=train_start_year,
+        oos_start_year=oos_start_year,
     )
     period_metrics = None
     if holdout_period is not None:
@@ -233,6 +239,7 @@ def evaluate_walk_forward(
         'min_train_years': int(min_train_years),
         'oos_start': '' if period_metrics is None else str(period_metrics.get('oos_start') or ''),
         'oos_end': '' if period_metrics is None else str(period_metrics.get('oos_end') or ''),
+        'oos_start_year': None if oos_start_year is None else int(oos_start_year),
         'test_score_romd': 0.0 if period_metrics is None else float(period_metrics.get('test_score_romd', 0.0)),
         'test_return_pct': 0.0 if period_metrics is None else float(period_metrics.get('ret_pct', 0.0)),
         'test_mdd': 0.0 if period_metrics is None else float(period_metrics.get('mdd', 0.0)),
@@ -261,7 +268,7 @@ def build_upgrade_gate_assessment(*, summary: dict) -> dict:
     ]
     quality_pass = all(bool(check['passed']) for check in quality_checks)
     status = 'pass' if quality_pass else 'fail'
-    recommendation = '已產生單一連續 test holdout 績效，可進入後續比較。' if quality_pass else '無法產生單一連續 test holdout 績效，暫不可比較。'
+    recommendation = '已產生單一連續 OOS 績效，可用於 Step 0/1 驗證。' if quality_pass else '無法產生單一連續 OOS 績效，暫不可驗證。'
     return {
         'status': status,
         'recommended_for_promotion': bool(quality_pass),
@@ -356,7 +363,7 @@ def _format_gate_actual(name: str, actual) -> str:
 def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_label: str, report: dict, best_trial_number: int | None, source_db_path: str, session_ts: str | None = None):
     os.makedirs(output_dir, exist_ok=True)
     resolved_session_ts = session_ts or get_taipei_now().strftime('%Y%m%d_%H%M%S_%f')
-    base_name = f'test_period_report_{resolved_session_ts}'
+    base_name = f'oos_period_report_{resolved_session_ts}'
     json_path = os.path.join(output_dir, f'{base_name}.json')
     csv_path = os.path.join(output_dir, f'{base_name}.csv')
     md_path = os.path.join(output_dir, f'{base_name}.md')
@@ -405,7 +412,7 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
             writer.writerow(['label', 'train_start', 'train_end', 'oos_start', 'oos_end', 'test_score_romd', 'ret_pct', 'mdd'])
 
     lines = [
-        '# 測試期間報表',
+        '# OOS 驗證報表',
         '',
         f'- 資料集：{dataset_label}',
         f"- 最佳 trial：{payload['meta']['best_trial_number'] if payload['meta']['best_trial_number'] is not None else 'N/A'}",
@@ -419,13 +426,13 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         f"| train_start_year | {summary.get('train_start_year', 'N/A')} |",
         f"| min_train_years | {int(summary.get('min_train_years', 0))} |",
         '',
-        '## Test Period Total',
+        '## OOS Period Total',
         '',
         '| 指標 | 策略 | 0050 |',
         '|---|---:|---:|',
-        f"| 測試區間 | {test_total.get('oos_start', '')} ~ {test_total.get('oos_end', '')} | {benchmark_test_total.get('oos_start', '')} ~ {benchmark_test_total.get('oos_end', '')} |",
-        f"| 測試 RoMD | {float(test_total.get('test_score_romd', 0.0)):.3f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.3f} |",
-        f"| 測試總報酬率 | {_format_pct(test_total.get('total_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('total_return_pct', 0.0))} |",
+        f"| OOS 區間 | {test_total.get('oos_start', '')} ~ {test_total.get('oos_end', '')} | {benchmark_test_total.get('oos_start', '')} ~ {benchmark_test_total.get('oos_end', '')} |",
+        f"| OOS RoMD | {float(test_total.get('test_score_romd', 0.0)):.3f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.3f} |",
+        f"| OOS 總報酬率 | {_format_pct(test_total.get('total_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('total_return_pct', 0.0))} |",
         f"| 年化報酬率 | {_format_pct(test_total.get('annualized_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('annualized_return_pct', 0.0))} |",
         f"| 完整年度最差報酬 | {_format_pct(test_total.get('min_full_year_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_full_year_return_pct', 0.0))} |",
         f"| 最大回撤 | {_format_pct(test_total.get('max_drawdown_pct', 0.0))} | {_format_pct(benchmark_test_total.get('max_drawdown_pct', 0.0))} |",
@@ -445,9 +452,9 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
             )
     lines.extend([
         '',
-        '## Test Period Detail',
+        '## OOS Period Detail',
         '',
-        '| 區間 | 訓練區間 | 測試區間 | 測試 RoMD | 總報酬率 | MDD | 年化交易次數 | 買進成交率 | 0050 報酬率 |',
+        '| 區間 | 訓練區間 | OOS 區間 | OOS RoMD | 總報酬率 | MDD | 年化交易次數 | 買進成交率 | 0050 報酬率 |',
         '|---|---|---|---:|---:|---:|---:|---:|---:|',
     ])
     if period:

@@ -213,6 +213,7 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         benchmark_ticker="0050",
         train_start_year=int(walk_forward_policy["train_start_year"]),
         min_train_years=int(walk_forward_policy["min_train_years"]),
+        oos_start_year=walk_forward_policy.get("oos_start_year"),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
@@ -626,7 +627,7 @@ def generate_champion_challenger_compare_report(*, session, dataset_label, db_fi
 
 
 def print_walk_forward_outputs(*, report, report_paths, objective_mode: str):
-    print(f"{C_GREEN}🧭 已輸出測試期間報表：{report_paths['md_path']}{C_RESET}")
+    print(f"{C_GREEN}🧭 已輸出OOS 期間報表：{report_paths['md_path']}{C_RESET}")
     total_metrics = build_test_period_total_metrics(report)
     if str(objective_mode) == "split_test_romd":
         print(
@@ -711,6 +712,10 @@ def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_
     )
     print_walk_forward_outputs(report=report, report_paths=report_paths, objective_mode=str(session.objective_mode))
 
+    if bool(walk_forward_policy.get("disable_promotion_flow", False)):
+        print(f"{C_GRAY}ℹ️ Step 0：已停用 final holdout / champion / promotion 主流程；本次僅輸出 run_best 與 OOS 驗證報表。{C_RESET}")
+        return 0
+
     if str(session.objective_mode) == "split_test_romd":
         if not auto_promote_enabled:
             print(f"{C_GRAY}ℹ️ 本次未挑戰 Champion；已保留 run_best 與報表。{C_RESET}")
@@ -773,7 +778,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|legacy] [--promote]")
-        print("說明: 預設資料集為完整、模式預設為 split；可用 --model split|legacy 或環境變數 V16_OPTIMIZER_MODEL 切換。split 會輸出單一連續 test 報表；只有 P 或 --promote 才會挑戰 Champion，且條件是測試 RoMD 嚴格較高。輸入 0 只匯出 run_best 與報表。legacy 會回到全資料模式；非互動模式預設 trial 數為 0；切分設定來自 config/training_policy.py。")
+        print("說明: Step 0 先固定單一路徑為 pre-deploy 選參 + OOS 驗證；legacy 模式、final holdout 與 champion/promotion 已停用，目前只輸出 run_best 與單一連續 OOS 報表。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -799,11 +804,14 @@ def main(argv=None, environ=None):
     )
 
     loaded_walk_forward_policy = load_walk_forward_policy(PROJECT_ROOT, environ=environ)
-    model_choice, model_source = resolve_optimizer_model_choice(
-        argv,
-        environ,
-        default_model=MODEL_CHOICE_SPLIT,
-    )
+    if bool(loaded_walk_forward_policy.get("disable_legacy_model", False)):
+        model_choice, model_source = MODEL_CHOICE_SPLIT, "step0_forced_split"
+    else:
+        model_choice, model_source = resolve_optimizer_model_choice(
+            argv,
+            environ,
+            default_model=MODEL_CHOICE_SPLIT,
+        )
     walk_forward_policy = apply_optimizer_model_choice(loaded_walk_forward_policy, model_choice=model_choice)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     best_trial_resolver = build_best_completed_trial_resolver(str(walk_forward_policy["objective_mode"]))
@@ -839,6 +847,9 @@ def main(argv=None, environ=None):
         requested_n_trials=session.n_trials,
         requested_action=str(getattr(session, "run_action", "train")),
     )
+    if bool(walk_forward_policy.get("disable_promotion_flow", False)):
+        auto_promote_enabled = False
+        promote_source = "step0_disabled"
 
     try:
         optimizer_seed, seed_source = resolve_optimizer_seed(environ)
@@ -926,27 +937,18 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
     search_train_end_text = "latest" if str(walk_forward_policy["objective_mode"]) == "legacy_base_score" else str(int(walk_forward_policy["search_train_end_year"]))
     selected_model = walk_forward_policy.get('selected_model', OBJECTIVE_MODE_TO_MODEL.get(str(walk_forward_policy['objective_mode']), MODEL_CHOICE_SPLIT))
-    if str(walk_forward_policy["objective_mode"]) == "split_test_romd":
-        print(
-            f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
-            f"model={selected_model} | 來源: {model_source} | "
-            f"train={walk_forward_policy['train_start_year']}~{search_train_end_text} | "
-            f"test={int(walk_forward_policy['search_train_end_year']) + 1}~latest"
-            f"{C_RESET}"
-        )
-        print(f"{C_GRAY}🏆 Champion 規則: 只有 P 或 --promote，且測試 RoMD 嚴格較高，才會更新 Champion。{C_RESET}")
-        if auto_promote_enabled:
-            print(f"{C_GRAY}⬆️ 本次動作: 重測 run_best，若測試 RoMD 嚴格較高就更新 Champion。{C_RESET}")
-        else:
-            print(f"{C_GRAY}📦 本次動作: 只匯出 run_best 與報表，不更新 Champion。{C_RESET}")
+    oos_start_year = walk_forward_policy.get('oos_start_year')
+    print(
+        f"{C_GRAY}🧭 Step 0 policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
+        f"architecture={walk_forward_policy.get('architecture_mode', 'fixed_predeploy_oos')} | "
+        f"model={selected_model} | 來源: {model_source} | "
+        f"pre-deploy={walk_forward_policy['train_start_year']}~{search_train_end_text} | "
+        f"oos={oos_start_year if oos_start_year is not None else int(walk_forward_policy['search_train_end_year']) + 1}~latest"
+        f"{C_RESET}"
+    )
+    if bool(walk_forward_policy.get('disable_promotion_flow', False)):
+        print(f"{C_GRAY}🧹 Step 0：已停用 legacy 模式、final holdout 與 champion/promotion；本次只驗證單一連續 OOS。{C_RESET}")
     else:
-        print(
-            f"{C_GRAY}🧭 Train/Test policy: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
-            f"model={selected_model} | 來源: {model_source} | "
-            f"search_train_end={search_train_end_text} | "
-            f"start={walk_forward_policy['train_start_year']} | min_years={walk_forward_policy['min_train_years']}"
-            f"{C_RESET}"
-        )
         print(f"{C_GRAY}⬆️ Auto promote: {'ON' if auto_promote_enabled else 'OFF'} | 來源: {promote_source}{C_RESET}")
 
     try:

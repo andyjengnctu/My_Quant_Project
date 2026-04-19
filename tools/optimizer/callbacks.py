@@ -506,6 +506,7 @@ def _compute_champion_console_cache(session):
             benchmark_ticker="0050",
             train_start_year=int(wf_policy["train_start_year"]),
             min_train_years=int(wf_policy["min_train_years"]),
+            oos_start_year=wf_policy.get("oos_start_year"),
         )
         cache["wf_report"] = wf_report
     else:
@@ -514,6 +515,8 @@ def _compute_champion_console_cache(session):
 
 
 def _get_champion_console_cache(session):
+    if bool(getattr(session, "walk_forward_policy", {}).get("disable_promotion_flow", False)):
+        return None
     cache = getattr(session, "_optimizer_console_champion_cache", None)
     if cache is None:
         cache = _compute_champion_console_cache(session)
@@ -598,6 +601,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
             benchmark_ticker="0050",
             train_start_year=int(session.walk_forward_policy["train_start_year"]),
             min_train_years=int(session.walk_forward_policy["min_train_years"]),
+            oos_start_year=session.walk_forward_policy.get("oos_start_year"),
         )
         candidate_test_metrics, benchmark_test_metrics, oos_range_text = _build_oos_metrics_from_report(
             report=candidate_wf_report,
@@ -609,7 +613,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
                 report=champion_cache.get("wf_report"),
                 initial_capital=initial_capital,
             )
-        test_title = f"【測試期間績效對比｜{oos_range_text}｜資料終點：{latest_data_end}】"
+        test_title = f"【OOS 驗證績效對比｜{oos_range_text}｜資料終點：{latest_data_end}】"
         test_rows = _build_first_zone_rows(
             candidate_metrics=candidate_test_metrics,
             champion_metrics=champion_test_metrics,

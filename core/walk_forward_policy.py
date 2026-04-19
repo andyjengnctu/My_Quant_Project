@@ -8,9 +8,13 @@ from config.training_policy import TRAINING_SPLIT_POLICY
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 
 DEFAULT_TRAINING_SPLIT_POLICY = {
+    "architecture_mode": str(TRAINING_SPLIT_POLICY.get("architecture_mode", "fixed_predeploy_oos")),
+    "disable_legacy_model": bool(TRAINING_SPLIT_POLICY.get("disable_legacy_model", True)),
+    "disable_promotion_flow": bool(TRAINING_SPLIT_POLICY.get("disable_promotion_flow", True)),
     "train_start_year": int(TRAINING_SPLIT_POLICY["train_start_year"]),
     "min_train_years": int(TRAINING_SPLIT_POLICY["min_train_years"]),
     "search_train_end_year": None,
+    "oos_start_year": TRAINING_SPLIT_POLICY.get("oos_start_year", None),
 }
 
 
@@ -79,13 +83,23 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     payload = _load_policy_payload(path)
     merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
     merged.update(payload)
+    merged['architecture_mode'] = str(merged.get('architecture_mode', DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])
+    merged['disable_legacy_model'] = bool(merged.get('disable_legacy_model', DEFAULT_TRAINING_SPLIT_POLICY['disable_legacy_model']))
+    merged['disable_promotion_flow'] = bool(merged.get('disable_promotion_flow', DEFAULT_TRAINING_SPLIT_POLICY['disable_promotion_flow']))
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
     merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900)
+    merged['oos_start_year'] = _coerce_optional_int(merged, 'oos_start_year', 1900)
+    if merged['oos_start_year'] is not None:
+        merged['search_train_end_year'] = int(merged['oos_start_year']) - 1
     if merged['search_train_end_year'] is None:
         merged['search_train_end_year'] = int(merged['train_start_year']) + int(merged['min_train_years']) - 1
     if merged['search_train_end_year'] < merged['train_start_year']:
         raise ValueError('training split policy: search_train_end_year 不可小於 train_start_year')
+    if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['search_train_end_year']):
+        pass
+    if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['train_start_year']):
+        raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
     merged['policy_path'] = path
     return merged
 
