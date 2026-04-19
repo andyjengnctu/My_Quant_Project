@@ -5,8 +5,7 @@ import sys
 from typing import Callable
 
 
-FINALIST_LOCAL_REVIEW_TOP_K = 3
-
+from config.training_policy import OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K
 from core.params_io import build_params_from_mapping
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
@@ -313,7 +312,7 @@ def _build_display_finalists(sorted_trials, *, top_k: int, include_trial=None):
     ]
 
 
-def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k: int = FINALIST_LOCAL_REVIEW_TOP_K, include_trial=None, show_progress: bool = False):
+def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K, include_trial=None, show_progress: bool = False):
     sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
     if not sorted_trials:
         return []
@@ -357,7 +356,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     return enriched_finalists
 
 
-def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k: int = FINALIST_LOCAL_REVIEW_TOP_K):
+def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K):
     finalists = list_local_min_score_finalists(
         study,
         session=session,
