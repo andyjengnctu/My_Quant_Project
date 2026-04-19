@@ -396,7 +396,7 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
     return results, summary
 
 
-def validate_architecture_models_reference_params_file_tree_sync_case(_base_params):
+def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     case_id = "META_ARCHITECTURE_MODELS_REFERENCE_PARAMS_FILE_TREE_SYNC"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
@@ -433,7 +433,7 @@ def validate_architecture_models_reference_params_file_tree_sync_case(_base_para
 
 
 def validate_architecture_models_champion_params_file_tree_sync_case(_base_params):
-    return validate_architecture_models_reference_params_file_tree_sync_case(_base_params)
+    return _validate_architecture_models_run_best_params_file_tree_sync(_base_params)
 
 
 def validate_architecture_local_regression_meta_quality_file_tree_sync_case(_base_params):
