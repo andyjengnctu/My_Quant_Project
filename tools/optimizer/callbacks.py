@@ -414,8 +414,7 @@ def _compute_reference_console_cache(session):
     if not os.path.exists(params_path):
         return None
     try:
-        params_payload = load_params_from_json(params_path)
-        params = _build_trial_params_object(params_payload)
+        params = load_params_from_json(params_path)
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,

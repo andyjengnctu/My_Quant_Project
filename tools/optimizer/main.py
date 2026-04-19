@@ -16,7 +16,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_models_dir, resolve_run_best_params_path
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_stdin, safe_prompt_choice
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from config.training_policy import DEFAULT_OPTIMIZER_MODEL_MODE, OPTIMIZER_FIXED_TP_PERCENT
@@ -199,6 +199,16 @@ def _extract_cli_value(argv, option_name: str):
     return ''
 
 
+def _prompt_optimizer_model_mode(default_model: str):
+    default_normalized = str(default_model).strip().lower() or 'split'
+    default_choice = '1' if default_normalized == 'split' else '2'
+    print(f"{C_CYAN}請選擇訓練模式：{C_RESET}")
+    print(f"{C_GRAY}[1] split  固定 pre-deploy 選參 + OOS 驗證{C_RESET}")
+    print(f"{C_GRAY}[2] full   全資料選參{C_RESET}")
+    choice = safe_prompt_choice('請輸入 1 或 2（預設 1）: ', default_choice, ('1', '2'), 'optimizer 模式')
+    return ('split', 'UI/MENU') if choice == '1' else ('full', 'UI/MENU')
+
+
 def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_OPTIMIZER_MODEL_MODE):
     cli_value = _extract_cli_value(argv, '--model')
     if cli_value:
@@ -209,6 +219,8 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
         if env_value:
             normalized = env_value.lower()
             source = 'ENV:V16_OPTIMIZER_MODEL'
+        elif is_interactive_stdin():
+            return _prompt_optimizer_model_mode(default_model)
         else:
             normalized = str(default_model).strip().lower() or 'split'
             source = 'DEFAULT'

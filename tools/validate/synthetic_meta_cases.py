@@ -396,8 +396,8 @@ def validate_architecture_workbench_entry_file_tree_sync_case(_base_params):
     return results, summary
 
 
-def validate_architecture_models_champion_params_file_tree_sync_case(_base_params):
-    case_id = "META_ARCHITECTURE_MODELS_CHAMPION_PARAMS_FILE_TREE_SYNC"
+def validate_architecture_models_reference_params_file_tree_sync_case(_base_params):
+    case_id = "META_ARCHITECTURE_MODELS_REFERENCE_PARAMS_FILE_TREE_SYNC"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
 
@@ -411,20 +411,19 @@ def validate_architecture_models_champion_params_file_tree_sync_case(_base_param
     stale_tree_fragments = [
         "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
         "│  ├─ all_best_params (RoMD).json    # 特定評分口徑下的最佳參數紀錄",
+        "models/champion_params.json",
     ]
 
     for idx, fragment in enumerate(required_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_best_params_{idx}", True, fragment in architecture_text)
+        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_lists_required_run_best_params_{idx}", True, fragment in architecture_text)
     for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
-        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_best_params_name_{stale_idx}", False, fragment in architecture_text)
+        add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_params_artifact_{stale_idx}", False, fragment in architecture_text)
 
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
-        "models/run_best_params.json",
         "models/run_best_params.json",
     ]
     return results, summary
