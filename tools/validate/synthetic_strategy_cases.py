@@ -1304,7 +1304,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "avg_exposure": 62.0,
             "final_equity": 1234567.0,
         },
-        champion_metrics={
+        reference_metrics={
             "pf_return": 10.0,
             "annual_return_pct": 9.0,
             "min_full_year_return_pct": -5.0,
