@@ -92,13 +92,14 @@ class _FinalistProgressBoard:
         )
         self._render()
 
-    def update_cache(self, idx: int, *, local_min_score: float):
+    def update_cache(self, idx: int, *, total_neighbors: int, local_min_score: float):
+        gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         self.lines[idx] = self._format_line(
             idx,
             prefix="ℹ️",
-            progress_text="快取",
+            progress_text=f"進度 {int(total_neighbors)}/{int(total_neighbors)}",
             local_text=f"{float(local_min_score):.3f}",
-            status_text="PASS" if float(local_min_score) > 0.0 else "FAIL",
+            status_text=f"{gate_status} | 快取",
         )
         self._render()
 
@@ -213,9 +214,14 @@ def compute_local_min_score(
     cache_key = int(trial.number)
     cached = cache.get(cache_key)
     if cached is not None:
-        cached_score = float(cached)
+        if isinstance(cached, dict):
+            cached_score = float(cached.get("score", INVALID_TRIAL_VALUE))
+            cached_total_neighbors = int(cached.get("total_neighbors", 0))
+        else:
+            cached_score = float(cached)
+            cached_total_neighbors = 0
         if on_cache_hit is not None:
-            on_cache_hit(float(cached_score))
+            on_cache_hit(float(cached_score), int(cached_total_neighbors))
         elif progress_label and show_cache_hit:
             _print_progress_line(session, f"ℹ️ {progress_label}: 使用快取 local_min_score={cached_score:.3f}")
         return cached_score
@@ -227,7 +233,7 @@ def compute_local_min_score(
             local_min_score = float(base_score)
         except (TypeError, ValueError):
             local_min_score = float(INVALID_TRIAL_VALUE)
-        cache[cache_key] = float(local_min_score)
+        cache[cache_key] = {"score": float(local_min_score), "total_neighbors": 0}
         if on_finish is not None:
             on_finish(0, float(local_min_score))
         elif progress_label:
@@ -268,7 +274,7 @@ def compute_local_min_score(
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
-    cache[cache_key] = float(local_min_score)
+    cache[cache_key] = {"score": float(local_min_score), "total_neighbors": len(neighbor_payloads)}
     if on_finish is not None:
         on_finish(len(neighbor_payloads), float(local_min_score))
     elif progress_label:
@@ -323,7 +329,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
             local_min_score = compute_local_min_score(
                 session,
                 trial,
-                on_cache_hit=lambda score, idx=finalist_idx: progress_board.update_cache(idx, local_min_score=score),
+                on_cache_hit=lambda score, total, idx=finalist_idx: progress_board.update_cache(idx, total_neighbors=total, local_min_score=score),
                 on_start=lambda total, idx=finalist_idx: progress_board.update_pending(idx, total_neighbors=total),
                 on_neighbor=lambda current, total, current_local_min, idx=finalist_idx: progress_board.update_neighbor(
                     idx,
