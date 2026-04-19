@@ -152,7 +152,14 @@ def compute_local_min_score(session, trial, *, progress_label: str | None = None
     local_min_score = float("inf")
     for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
         if progress_label:
-            _print_progress_line(session, f"   └─ {progress_label}: 鄰點 {neighbor_idx}/{len(neighbor_payloads)}")
+            if local_min_score == float("inf"):
+                current_min_text = "N/A"
+            else:
+                current_min_text = f"{float(local_min_score):.3f}"
+            _print_progress_line(
+                session,
+                f"   └─ {progress_label}: 鄰點 {neighbor_idx}/{len(neighbor_payloads)} | 目前 local_min_score={current_min_text}",
+            )
         ai_params = build_params_from_mapping(payload)
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
@@ -228,7 +235,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         objective_mode=objective_mode,
         top_k=top_k,
         include_trial=winner_trial,
-        show_progress=True,
+        show_progress=False,
     )
     if not finalists:
         return []
