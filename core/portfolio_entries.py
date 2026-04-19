@@ -64,9 +64,9 @@ def execute_reserved_entries_for_day(
                 if probe_entry_plan is None:
                     continue
 
-                probe_key = (probe_entry_plan['reserved_cost_milli'], probe_cand['ticker'])
-                if chosen_key is None or probe_key > chosen_key:
-                    chosen_key = probe_key
+                probe_reserved_cost_milli = probe_entry_plan['reserved_cost_milli']
+                if chosen_key is None or probe_reserved_cost_milli > chosen_key:
+                    chosen_key = probe_reserved_cost_milli
                     chosen_idx = cand_idx
                     chosen_entry_plan = probe_entry_plan
 

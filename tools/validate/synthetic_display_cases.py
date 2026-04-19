@@ -1,6 +1,7 @@
 import io
 from contextlib import redirect_stdout
 
+from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD
 from core.display_common import _strip_ansi
 from core import display as display_module
 from core.scanner_display import print_scanner_header
@@ -46,7 +47,8 @@ def validate_display_reporting_sanity_case(_base_params):
 
     scanner_text = _capture_output(lambda: print_scanner_header(params))
     add_check(results, "display_reporting", case_id, "scanner_contains_global_strategy_header", True, "全域戰略: 買入排序" in scanner_text)
-    add_check(results, "display_reporting", case_id, "scanner_score_header_separates_model_and_numerator", True, "評分模型 [RoMD] | 評分分子 [TOTAL_RETURN]" in scanner_text and "評分模型 [RoMD / 分子 TOTAL_RETURN]" not in scanner_text)
+    expected_scanner_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{SCORE_NUMERATOR_METHOD}]"
+    add_check(results, "display_reporting", case_id, "scanner_score_header_separates_model_and_numerator", True, expected_scanner_score_header in scanner_text and " / 分子 " not in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_training_params", True, "突破 123日 | ATR 17日 | 掛單 +1.2倍 | 初始 -2.3倍 | 追蹤 -3.4倍 | 半倉 45%" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_filter_params", True, "布林(BB) 啟用 (長21, 寬2.5x) | 阿肯那(KC) 啟用 (長34, 寬1.8x) | 均量 啟用 (短7>長21)" in scanner_text)
     add_check(results, "display_reporting", case_id, "scanner_contains_history_thresholds", True, "交易 >= 11 次 | 勝率 >= 56% | 期望值 >= 0.78R" in scanner_text)
@@ -120,7 +122,8 @@ def validate_display_reporting_sanity_case(_base_params):
     )
     add_check(results, "display_reporting", case_id, "core_display_reexports_expected_symbols", True, reexport_checks)
     add_check(results, "display_reporting", case_id, "dashboard_contains_title", True, "策略測試儀表板" in dashboard_text)
-    add_check(results, "display_reporting", case_id, "dashboard_score_header_separates_model_and_numerator", True, "評分模型 [RoMD] | 評分分子 [TOTAL_RETURN] | 系統得分:" in dashboard_text and "評分模型 [RoMD / 分子 TOTAL_RETURN]" not in dashboard_text)
+    expected_dashboard_score_header = f"評分模型 [{SCORE_CALC_METHOD}] | 評分分子 [{SCORE_NUMERATOR_METHOD}] | 系統得分:"
+    add_check(results, "display_reporting", case_id, "dashboard_score_header_separates_model_and_numerator", True, expected_dashboard_score_header in dashboard_text and " / 分子 " not in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_mode_and_positions", True, "模式: 投組模式 | 最大持股: 5 檔" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_trade_split", True, "總交易次數: 12 筆 (正常:9 | 延續:3) | 年化交易次數: 4.25 次/年" in dashboard_text)
     add_check(results, "display_reporting", case_id, "dashboard_contains_missed_counts_and_asset", True, "錯失次數: 買 3 | 賣 1 | 保留後買進成交率: 83.33% | 最終資產: 1,234,567 元" in dashboard_text)
