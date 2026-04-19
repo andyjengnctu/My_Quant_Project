@@ -33,7 +33,8 @@ project/
 │  ├─ ARCHITECTURE.md                 # 本檔
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
-│  └─ run_best_params.json           # 目前正式參數檔
+│  ├─ run_best_params.json           # 本輪訓練最佳參數檔
+│  └─ run_best_params.json           # 目前正式現役參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
    ├─ optimizer/                      # 參數最佳化子系統

@@ -16,7 +16,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_models_dir, resolve_run_best_params_path
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, safe_prompt_choice, is_interactive_stdin
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
 from config.training_policy import DEFAULT_OPTIMIZER_MODEL_MODE, OPTIMIZER_FIXED_TP_PERCENT
@@ -209,14 +209,6 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
         if env_value:
             normalized = env_value.lower()
             source = 'ENV:V16_OPTIMIZER_MODEL'
-        elif is_interactive_stdin():
-            prompt = (
-                "👉 Optimizer 資料模式：[1] split 固定 pre-deploy(2010~2019)+OOS(2020~latest，預設)  "
-                "[2] full 全資料選參: "
-            )
-            choice = safe_prompt_choice(prompt, '1', ('1', '2'), 'Optimizer 資料模式')
-            normalized = 'split' if choice == '1' else 'full'
-            source = 'UI/MENU'
         else:
             normalized = str(default_model).strip().lower() or 'split'
             source = 'DEFAULT'
@@ -436,17 +428,14 @@ def main(argv=None, environ=None):
                 if export_status != 0:
                     return 1
                 if selected_model_mode == 'split':
-                    if is_interactive_stdin():
-                        finalize_best_trial_outputs(
-                            session=session,
-                            study=study,
-                            best_trial_resolver=best_trial_resolver,
-                            dataset_label=dataset_label,
-                            db_file=db_file,
-                            walk_forward_policy=walk_forward_policy,
-                        )
-                    else:
-                        print(f"{C_GREEN}🧭 split 模式已匯出 run_best；非互動執行略過 OOS 報表重算。{C_RESET}")
+                    finalize_best_trial_outputs(
+                        session=session,
+                        study=study,
+                        best_trial_resolver=best_trial_resolver,
+                        dataset_label=dataset_label,
+                        db_file=db_file,
+                        walk_forward_policy=walk_forward_policy,
+                    )
                 else:
                     print(f"{C_GREEN}🧭 全資料模式僅匯出 run_best，不額外產出 OOS 報表。{C_RESET}")
         elif export_policy == "interrupted_before_target":

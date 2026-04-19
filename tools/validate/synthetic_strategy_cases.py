@@ -271,7 +271,7 @@ def validate_model_io_schema_case(base_params):
         results,
         "strategy_schema",
         case_id,
-        "repo_shipped_run_best_payload_keys_match_strategy_schema",
+        "repo_shipped_champion_payload_keys_match_strategy_schema",
         {path.name: sorted(default_payload.keys()) for path in shipped_best_params_paths},
         shipped_payload_keys,
     )
@@ -279,7 +279,7 @@ def validate_model_io_schema_case(base_params):
         results,
         "strategy_schema",
         case_id,
-        "repo_shipped_run_best_payload_types_match_strategy_schema",
+        "repo_shipped_champion_payload_types_match_strategy_schema",
         {path.name: [] for path in shipped_best_params_paths},
         shipped_payload_type_mismatches,
     )
@@ -1056,7 +1056,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "repo_shipped_run_best_artifacts_use_canonical_optimizer_decimal_repr",
+        "repo_shipped_champion_artifacts_use_canonical_optimizer_decimal_repr",
         expected_shipped_repr_map,
         shipped_repr_map,
     )
@@ -1187,7 +1187,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         with ExitStack() as stack:
             stack.enter_context(patch.object(optimizer_main, "OUTPUT_DIR", str(tmp_root / "outputs")))
             stack.enter_context(patch.object(optimizer_main, "MODELS_DIR", str(tmp_root / "models")))
-            stack.enter_context(patch.object(optimizer_main, "RUN_BEST_PARAMS_PATH", str(best_params_path)))
+            stack.enter_context(patch.object(optimizer_main, "CHAMPION_PARAMS_PATH", str(best_params_path)))
             stack.enter_context(patch.object(optimizer_main, "ensure_runtime_dirs", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "configure_optuna_logging", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "build_optimizer_session", side_effect=_fake_build_optimizer_session))
@@ -1304,7 +1304,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "avg_exposure": 62.0,
             "final_equity": 1234567.0,
         },
-        reference_metrics={
+        champion_metrics={
             "pf_return": 10.0,
             "annual_return_pct": 9.0,
             "min_full_year_return_pct": -5.0,
@@ -1339,17 +1339,17 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     row_map = {str(row.get("name", "")): row for row in sample_rows}
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_keeps_final_equity_row", True, "最終資產" in row_names)
     add_check(results, "strategy_contract", case_id, "optimizer_first_zone_combines_payoff_and_ev_label_without_extra_spaces", True, "風報比: 期望值" in row_names and "風報比 : 期望值" not in row_names)
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("reference", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("reference", "")))
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 3)" and row_map.get("總交易次數", {}).get("reference") == "10 (正常: 7｜延續: 3)")
-    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("reference") == "3 (買: 2｜賣: 1)")
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_payoff_ev_pair_with_consistent_spacing", True, row_map.get("風報比: 期望值", {}).get("candidate") == "1.50: 0.250R" and "1.40: 0.200R" in str(row_map.get("風報比: 期望值", {}).get("champion", "")) and "(+0.10: +0.050R)" in str(row_map.get("風報比: 期望值", {}).get("champion", "")))
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_trade_split_with_consistent_spacing", True, row_map.get("總交易次數", {}).get("candidate") == "11 (正常: 8｜延續: 3)" and row_map.get("總交易次數", {}).get("champion") == "10 (正常: 7｜延續: 3)")
+    add_check(results, "strategy_contract", case_id, "optimizer_first_zone_formats_missed_split_with_consistent_spacing", True, row_map.get("錯失交易次數", {}).get("candidate") == "2 (買: 1｜賣: 1)" and row_map.get("錯失交易次數", {}).get("champion") == "3 (買: 2｜賣: 1)")
 
     long_training_rows = [
         {
             "name": "風報比: 期望值",
             "candidate": "4.23: 0.607R",
             "candidate_precolored": False,
-            "reference": "3.38: 0.505R (+0.85: +0.102R)",
-            "reference_precolored": False,
+            "champion": "3.38: 0.505R (+0.85: +0.102R)",
+            "champion_precolored": False,
             "benchmark": "-",
             "benchmark_precolored": False,
         },
@@ -1357,8 +1357,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "name": "總交易次數",
             "candidate": "649 (正常: 346｜延續: 303)",
             "candidate_precolored": False,
-            "reference": "510 (正常: 425｜延續: 85)",
-            "reference_precolored": False,
+            "champion": "510 (正常: 425｜延續: 85)",
+            "champion_precolored": False,
             "benchmark": "-",
             "benchmark_precolored": False,
         },
@@ -1366,8 +1366,8 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             "name": "錯失交易次數",
             "candidate": "88 (買: 87｜賣: 1)",
             "candidate_precolored": False,
-            "reference": "52 (買: 52｜賣: 0)",
-            "reference_precolored": False,
+            "champion": "52 (買: 52｜賣: 0)",
+            "champion_precolored": False,
             "benchmark": "-",
             "benchmark_precolored": False,
         },

@@ -210,7 +210,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
     reference_metrics = dict(reference_metrics or {})
     benchmark_metrics = dict(benchmark_metrics or {})
 
-    def reference_value(key, default=None):
+    def champ_value(key, default=None):
         return reference_metrics.get(key, default)
 
     def bench_value(key, default=None):
@@ -235,7 +235,7 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
 
     def add_row(name, key, *, kind="pct", candidate_unit="", digits=2):
         candidate_value = candidate_metrics.get(key, 0.0)
-        reference_value_raw = reference_value(key)
+        reference_value_raw = champ_value(key)
         benchmark_value_raw = bench_value(key)
         if benchmark_value_raw is None and key.startswith("bm_"):
             benchmark_value_raw = candidate_metrics.get(key)
@@ -346,8 +346,8 @@ def _build_first_zone_rows(*, candidate_metrics: dict, reference_metrics: dict |
 
     candidate_payoff = float(candidate_metrics.get("pf_payoff", 0.0))
     candidate_ev = float(candidate_metrics.get("pf_ev", 0.0))
-    reference_payoff = reference_value("pf_payoff")
-    reference_ev = reference_value("pf_ev")
+    reference_payoff = champ_value("pf_payoff")
+    reference_ev = champ_value("pf_ev")
     benchmark_payoff = bench_value("pf_payoff")
     benchmark_ev = bench_value("pf_ev")
 
@@ -410,13 +410,12 @@ def _build_hard_gate_lines():
 
 
 def _compute_reference_console_cache(session):
-    if not is_interactive_stdin():
-        return None
     params_path = resolve_run_best_params_path(PROJECT_ROOT)
     if not os.path.exists(params_path):
         return None
     try:
-        params = load_params_from_json(params_path)
+        params_payload = load_params_from_json(params_path)
+        params = _build_trial_params_object(params_payload)
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
@@ -574,7 +573,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
 
     test_title = None
     test_rows = None
-    if model_mode == "split" and is_interactive_stdin():
+    if model_mode == "split":
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
