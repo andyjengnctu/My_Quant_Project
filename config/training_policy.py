@@ -9,19 +9,19 @@ EV_CALC_METHOD = 'A'
 # 'PROJ_COST' = 優先買入能消耗最多資金的標的 (資金效率極大化)
 # 'HIST_WIN_X_TRADES' = 優先買入歷史勝率 × 交易次數最高的標的 (穩定度 × 樣本數)
 # 'ASSET_GROWTH' = 優先買入歷史資產成長最高的標的 (歷史複利成長極大化)
-BUY_SORT_METHOD = 'ASSET_GROWTH'  
+BUY_SORT_METHOD = 'PROJ_COST'  
 
 # 系統評分 (Score) 算法切換
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
-SCORE_CALC_METHOD = 'RoMD'  
+SCORE_CALC_METHOD = 'LOG_R2'  
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
-SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
+SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'  
 
-SYSTEM_SCORE_DISPLAY_MULTIPLIER = 1000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
+SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
 # 停利比例固定開關
 # None = 由 optimizer 搜尋 tp_percent
@@ -31,8 +31,8 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 # Optimizer train/test 切分設定
 # split 模式：train 只用 train 區間，test 固定從第一個 test 起始日一路到最新日。
-OPTIMIZER_TRAIN_START_YEAR = 1995
-OPTIMIZER_MIN_TRAIN_YEARS = 25
+OPTIMIZER_TRAIN_START_YEAR = 2005
+OPTIMIZER_MIN_TRAIN_YEARS = 15
 TRAINING_SPLIT_POLICY = {
     "train_start_year": OPTIMIZER_TRAIN_START_YEAR,
     "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,
