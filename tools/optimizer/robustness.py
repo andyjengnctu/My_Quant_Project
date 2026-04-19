@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Callable
-import sys
 
 
 FINALIST_LOCAL_REVIEW_TOP_K = 3
@@ -46,17 +45,81 @@ def _build_best_trial_cache_key(study, objective_mode: str):
 
 
 def _print_progress_line(session, message: str):
-    print(message, flush=True)
+    print(message)
 
 
-def _render_overwrite_line(message: str):
-    sys.stdout.write("\r\x1b[2K" + message)
-    sys.stdout.flush()
+class _FinalistProgressBoard:
+    def __init__(self, session, finalists: list[dict]):
+        self.session = session
+        self.finalists = finalists
+        self.lines: list[str] = []
+        self.rendered = False
 
+    def _format_line(self, idx: int, *, prefix: str, progress_text: str, local_text: str, status_text: str):
+        finalist = self.finalists[idx]
+        trial = finalist["trial"]
+        base_score = float(finalist["base_score"])
+        return (
+            f"{prefix} finalist {idx + 1}/{len(self.finalists)} | trial #{int(trial.number) + 1} "
+            f"| base_score={base_score:.3f} | {progress_text} | local_min_score={local_text} | {status_text}"
+        )
 
-def _finalize_overwrite_line(message: str):
-    sys.stdout.write("\r\x1b[2K" + message + "\n")
-    sys.stdout.flush()
+    def initialize(self):
+        self.lines = [
+            self._format_line(idx, prefix="⏳", progress_text="進度 0/0", local_text="N/A", status_text="等待中")
+            for idx in range(len(self.finalists))
+        ]
+        self._render()
+
+    def update_pending(self, idx: int, *, total_neighbors: int):
+        self.lines[idx] = self._format_line(
+            idx,
+            prefix="⏳",
+            progress_text=f"進度 0/{int(total_neighbors)}",
+            local_text="N/A",
+            status_text="分析中",
+        )
+        self._render()
+
+    def update_neighbor(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min):
+        local_text = "N/A" if current_local_min is None else f"{float(current_local_min):.3f}"
+        self.lines[idx] = self._format_line(
+            idx,
+            prefix="⏳",
+            progress_text=f"進度 {int(current_neighbor)}/{int(total_neighbors)}",
+            local_text=local_text,
+            status_text="分析中",
+        )
+        self._render()
+
+    def update_cache(self, idx: int, *, local_min_score: float):
+        self.lines[idx] = self._format_line(
+            idx,
+            prefix="ℹ️",
+            progress_text="快取",
+            local_text=f"{float(local_min_score):.3f}",
+            status_text="PASS" if float(local_min_score) > 0.0 else "FAIL",
+        )
+        self._render()
+
+    def update_done(self, idx: int, *, total_neighbors: int, local_min_score: float):
+        gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
+        self.lines[idx] = self._format_line(
+            idx,
+            prefix="✅",
+            progress_text=f"進度 {int(total_neighbors)}/{int(total_neighbors)}",
+            local_text=f"{float(local_min_score):.3f}",
+            status_text=gate_status,
+        )
+        self._render()
+
+    def _render(self):
+        if self.rendered and self.lines:
+            print(f"\x1b[{len(self.lines)}F", end="")
+        for line in self.lines:
+            print(f"\r{line}\x1b[K")
+        self.rendered = True
+
 
 LOCAL_MIN_CORE_FIELDS = (
     "high_len",
@@ -65,43 +128,6 @@ LOCAL_MIN_CORE_FIELDS = (
     "atr_times_trail",
     "atr_buy_tol",
 )
-
-
-def _format_running_local_min_score(current_local_min_score):
-    if current_local_min_score is None:
-        return "N/A"
-    return f"{float(current_local_min_score):.3f}"
-
-
-def _format_finalist_progress_line(*, idx: int, total: int, trial, base_score: float, current_local_min_score, status: str):
-    return (
-        f"⏳ finalist {idx}/{total} | trial #{int(trial.number) + 1} | "
-        f"base_score={float(base_score):.3f} | local_min_score={_format_running_local_min_score(current_local_min_score)} | {status}"
-    )
-
-
-def _render_finalist_progress_panel(session, states, *, first_render: bool):
-    lines = [
-        _format_finalist_progress_line(
-            idx=state["idx"],
-            total=state["total"],
-            trial=state["trial"],
-            base_score=state["base_score"],
-            current_local_min_score=state.get("current_local_min_score"),
-            status=state.get("status", "pending"),
-        )
-        for state in states
-    ]
-    if first_render:
-        for line in lines:
-            _print_progress_line(session, line)
-        return
-    if lines:
-        sys.stdout.write(f"\x1b[{len(lines)}F")
-        sys.stdout.flush()
-    for line in lines:
-        sys.stdout.write("\r\x1b[2K" + line + "\n")
-    sys.stdout.flush()
 
 
 def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
@@ -172,16 +198,26 @@ def _build_neighbor_candidates(session, trial):
     return neighbors
 
 
-def compute_local_min_score(session, trial, *, progress_label: str | None = None, show_cache_hit: bool = False, progress_callback=None):
+def compute_local_min_score(
+    session,
+    trial,
+    *,
+    progress_label: str | None = None,
+    show_cache_hit: bool = False,
+    on_cache_hit=None,
+    on_start=None,
+    on_neighbor=None,
+    on_finish=None,
+):
     cache = _get_local_min_score_cache(session)
     cache_key = int(trial.number)
     cached = cache.get(cache_key)
     if cached is not None:
         cached_score = float(cached)
-        if progress_label and show_cache_hit:
+        if on_cache_hit is not None:
+            on_cache_hit(float(cached_score))
+        elif progress_label and show_cache_hit:
             _print_progress_line(session, f"ℹ️ {progress_label}: 使用快取 local_min_score={cached_score:.3f}")
-        if progress_callback is not None:
-            progress_callback(current_local_min_score=cached_score, total_neighbors=0, neighbor_idx=0, phase="cached")
         return cached_score
 
     neighbor_payloads = _build_neighbor_candidates(session, trial)
@@ -192,16 +228,16 @@ def compute_local_min_score(session, trial, *, progress_label: str | None = None
         except (TypeError, ValueError):
             local_min_score = float(INVALID_TRIAL_VALUE)
         cache[cache_key] = float(local_min_score)
-        if progress_callback is not None:
-            progress_callback(current_local_min_score=float(local_min_score), total_neighbors=0, neighbor_idx=0, phase="done")
-        if progress_label:
+        if on_finish is not None:
+            on_finish(0, float(local_min_score))
+        elif progress_label:
             _print_progress_line(session, f"✅ {progress_label}: 無合法鄰點，local_min_score={float(local_min_score):.3f}")
         return float(local_min_score)
 
-    if progress_label:
+    if on_start is not None:
+        on_start(len(neighbor_payloads))
+    elif progress_label:
         _print_progress_line(session, f"⏳ {progress_label}: 開始 local_min_score 分析，共 {len(neighbor_payloads)} 個鄰點")
-    if progress_callback is not None:
-        progress_callback(current_local_min_score=None, total_neighbors=len(neighbor_payloads), neighbor_idx=0, phase="start")
 
     local_min_score = float("inf")
     for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
@@ -226,16 +262,16 @@ def compute_local_min_score(session, trial, *, progress_label: str | None = None
         score = float(evaluation["score"])
         if score < local_min_score:
             local_min_score = score
-        if progress_callback is not None:
-            current_value = None if local_min_score == float("inf") else float(local_min_score)
-            progress_callback(current_local_min_score=current_value, total_neighbors=len(neighbor_payloads), neighbor_idx=neighbor_idx, phase="running")
+        if on_neighbor is not None:
+            current_local_min = None if local_min_score == float("inf") else float(local_min_score)
+            on_neighbor(neighbor_idx, len(neighbor_payloads), current_local_min)
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
     cache[cache_key] = float(local_min_score)
-    if progress_callback is not None:
-        progress_callback(current_local_min_score=float(local_min_score), total_neighbors=len(neighbor_payloads), neighbor_idx=len(neighbor_payloads), phase="done")
-    if progress_label:
+    if on_finish is not None:
+        on_finish(len(neighbor_payloads), float(local_min_score))
+    elif progress_label:
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         _print_progress_line(session, f"✅ {progress_label}: local_min_score={float(local_min_score):.3f} | gate={gate_status}")
     return float(local_min_score)
@@ -257,68 +293,50 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     if include_trial is not None and all(int(trial.number) != int(include_trial.number) for trial in selected_trials):
         selected_trials.append(include_trial)
 
-    states = []
-    total = len(selected_trials)
-    for finalist_idx, trial in enumerate(selected_trials, start=1):
-        states.append({
-            "idx": finalist_idx,
-            "total": total,
+    finalists = [
+        {
             "trial": trial,
             "base_score": float(trial.user_attrs.get("base_score", trial.value)),
-            "current_local_min_score": None,
-            "status": "pending",
-        })
+        }
+        for trial in selected_trials
+    ]
 
+    progress_board = None
     if show_progress:
-        _print_progress_line(session, f"🔍 開始補算 finalists local_min_score，共 {len(selected_trials)} 名")
-        _render_finalist_progress_panel(session, states, first_render=True)
+        _print_progress_line(session, f"🔍 開始補算 finalists local_min_score，共 {len(finalists)} 名")
+        progress_board = _FinalistProgressBoard(session, finalists)
+        progress_board.initialize()
 
-    finalists = []
-    for state in states:
-        trial = state["trial"]
-        cached = _get_local_min_score_cache(session).get(int(trial.number))
-        if cached is not None:
-            local_min_score = float(cached)
-            state["current_local_min_score"] = local_min_score
-            state["status"] = "cache"
-            if show_progress:
-                _render_finalist_progress_panel(session, states, first_render=False)
-        else:
-            state["status"] = "0/?"
-            if show_progress:
-                _render_finalist_progress_panel(session, states, first_render=False)
-
-            def _progress_callback(*, current_local_min_score, total_neighbors, neighbor_idx, phase):
-                if phase == "start":
-                    state["status"] = f"0/{total_neighbors}"
-                elif phase == "running":
-                    state["current_local_min_score"] = current_local_min_score
-                    state["status"] = f"{neighbor_idx}/{total_neighbors}"
-                elif phase == "done":
-                    state["current_local_min_score"] = current_local_min_score
-                    state["status"] = "done"
-                if show_progress:
-                    _render_finalist_progress_panel(session, states, first_render=False)
-
+    enriched_finalists = []
+    for finalist_idx, item in enumerate(finalists):
+        trial = item["trial"]
+        if progress_board is not None:
             local_min_score = compute_local_min_score(
                 session,
                 trial,
-                progress_label=None,
-                show_cache_hit=False,
-                progress_callback=_progress_callback,
+                on_cache_hit=lambda score, idx=finalist_idx: progress_board.update_cache(idx, local_min_score=score),
+                on_start=lambda total, idx=finalist_idx: progress_board.update_pending(idx, total_neighbors=total),
+                on_neighbor=lambda current, total, current_local_min, idx=finalist_idx: progress_board.update_neighbor(
+                    idx,
+                    current_neighbor=current,
+                    total_neighbors=total,
+                    current_local_min=current_local_min,
+                ),
+                on_finish=lambda total, score, idx=finalist_idx: progress_board.update_done(
+                    idx,
+                    total_neighbors=total,
+                    local_min_score=score,
+                ),
             )
-        gate_pass = bool(local_min_score > 0.0)
-        state["current_local_min_score"] = float(local_min_score)
-        state["status"] = "PASS" if gate_pass else "FAIL"
-        if show_progress:
-            _render_finalist_progress_panel(session, states, first_render=False)
-        finalists.append({
+        else:
+            local_min_score = compute_local_min_score(session, trial)
+        enriched_finalists.append({
             "trial": trial,
-            "base_score": float(trial.user_attrs.get("base_score", trial.value)),
+            "base_score": float(item["base_score"]),
             "local_min_score": float(local_min_score),
-            "gate_pass": gate_pass,
+            "gate_pass": bool(local_min_score > 0.0),
         })
-    return finalists
+    return enriched_finalists
 
 
 def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k: int = FINALIST_LOCAL_REVIEW_TOP_K):
@@ -404,32 +422,10 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     sorted_trials = sorted(qualified_trials, key=lambda trial: (float(trial.value), -int(trial.number)), reverse=True)
     _print_progress_line(session, f"🔍 開始分析 winner，共 {len(sorted_trials)} 個合格候選")
     for trial_idx, trial in enumerate(sorted_trials, start=1):
-        base_score = float(trial.user_attrs.get('base_score', trial.value))
-        prefix = f"⏳ 候選 {trial_idx}/{len(sorted_trials)} | trial #{int(trial.number) + 1} | base_score={base_score:.3f}"
-        _render_overwrite_line(prefix + " | local_min_score=N/A")
-
-        def _progress_callback(*, current_local_min_score, total_neighbors, neighbor_idx, phase):
-            if phase == "cached":
-                _render_overwrite_line(prefix + f" | local_min_score={float(current_local_min_score):.3f} | cache")
-                return
-            if phase == "start":
-                _render_overwrite_line(prefix + f" | local_min_score=N/A | 0/{total_neighbors}")
-                return
-            status = "done" if phase == "done" else f"{neighbor_idx}/{total_neighbors}"
-            local_text = _format_running_local_min_score(current_local_min_score)
-            _render_overwrite_line(prefix + f" | local_min_score={local_text} | {status}")
-
-        local_min_score = compute_local_min_score(
-            session,
-            trial,
-            progress_label=None,
-            show_cache_hit=False,
-            progress_callback=_progress_callback,
-        )
-        gate_status = "PASS" if local_min_score > 0.0 else "FAIL"
-        _finalize_overwrite_line(prefix + f" | local_min_score={float(local_min_score):.3f} | {gate_status}")
+        progress_label = f"候選 {trial_idx}/{len(sorted_trials)} | trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f}"
+        local_min_score = compute_local_min_score(session, trial, progress_label=progress_label, show_cache_hit=False)
         if local_min_score > 0.0:
-            _print_progress_line(session, f"🏁 winner 已確定: trial #{int(trial.number) + 1} | base_score={base_score:.3f} | local_min_score={float(local_min_score):.3f}")
+            _print_progress_line(session, f"🏁 winner 已確定: trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f} | local_min_score={float(local_min_score):.3f}")
             resolver_cache[cache_key] = trial
             return trial
     _print_progress_line(session, "ℹ️ 沒有任何 trial 通過 local_min_score gate")
