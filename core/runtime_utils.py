@@ -77,6 +77,18 @@ def is_interactive_stdin():
         return False
 
 
+def is_interactive_console():
+    stdin = getattr(sys, "stdin", None)
+    stdout = getattr(sys, "stdout", None)
+    if stdin is None or stdout is None:
+        return False
+
+    try:
+        return bool(stdin.isatty()) and bool(stdout.isatty())
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 def enable_line_buffered_stdout(stream=None):
     target = sys.stdout if stream is None else stream
     reconfigure = getattr(target, "reconfigure", None)

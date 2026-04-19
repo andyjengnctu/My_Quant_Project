@@ -7,7 +7,7 @@ from core.log_utils import format_exception_summary
 
 from core.display import print_strategy_dashboard
 from tools.optimizer.callbacks import print_optimizer_trial_milestone_dashboard
-from core.runtime_utils import safe_prompt_choice
+from core.runtime_utils import is_interactive_console, safe_prompt_choice
 from tools.optimizer.study_utils import (
     build_best_params_payload_from_trial,
     build_optimizer_trial_params,
@@ -20,8 +20,10 @@ from tools.optimizer.study_utils import (
 def prompt_existing_db_policy(db_file, colors):
     if not os.path.exists(db_file):
         return
+    if not is_interactive_console():
+        return
     choice = safe_prompt_choice(
-        "\n👉 Portfolio 記憶庫：[1] 接續訓練 (預設) [2] 刪除重來: ",
+        "\n👉 Portfolio 記憶庫：[1] 接續訓練 (預設)  [2] 刪除重來 : ",
         "1",
         ("1", "2"),
         "記憶庫操作選項",
