@@ -441,18 +441,19 @@ def main(argv=None, environ=None):
         if should_export:
             best_trial = best_trial_resolver(study)
             if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                print_local_min_score_finalist_review(
+                _, best_trial = print_local_min_score_finalist_review(
                     study,
                     session=session,
                     objective_mode=objective_mode,
                     colors=COLORS,
                     winner_trial=best_trial,
                 )
-                print_local_min_score_winner_summary(
-                    winner_trial=best_trial,
-                    session=session,
-                    colors=COLORS,
-                )
+                if best_trial is not None:
+                    print_local_min_score_winner_summary(
+                        winner_trial=best_trial,
+                        session=session,
+                        colors=COLORS,
+                    )
                 export_status = export_best_params_if_requested(
                     study,
                     best_params_path=RUN_BEST_PARAMS_PATH,

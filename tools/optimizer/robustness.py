@@ -279,21 +279,23 @@ def compute_local_min_score(
 
 
 
-def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k: int = FINALIST_LOCAL_REVIEW_TOP_K, include_trial=None, show_progress: bool = False):
+def _list_qualified_trials_for_objective(study, objective_mode: str):
     qualified_trials = [
         trial
         for trial in list_completed_study_trials(study)
         if is_qualified_trial_value(trial.value) and _trial_matches_objective_mode(trial, objective_mode)
     ]
-    if not qualified_trials:
-        return []
+    return sorted(qualified_trials, key=lambda trial: (float(trial.value), -int(trial.number)), reverse=True)
 
-    sorted_trials = sorted(qualified_trials, key=lambda trial: (float(trial.value), -int(trial.number)), reverse=True)
+
+def _build_display_finalists(sorted_trials, *, top_k: int, include_trial=None):
     selected_trials = list(sorted_trials[: max(1, int(top_k))])
     if include_trial is not None and all(int(trial.number) != int(include_trial.number) for trial in selected_trials):
-        selected_trials.append(include_trial)
-
-    finalists = [
+        if len(selected_trials) >= max(1, int(top_k)):
+            selected_trials = list(selected_trials[: max(0, int(top_k) - 1)]) + [include_trial]
+        else:
+            selected_trials.append(include_trial)
+    return [
         {
             "trial": trial,
             "base_score": float(trial.user_attrs.get("base_score", trial.value)),
@@ -301,9 +303,16 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
         for trial in selected_trials
     ]
 
+
+def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k: int = FINALIST_LOCAL_REVIEW_TOP_K, include_trial=None, show_progress: bool = False):
+    sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
+    if not sorted_trials:
+        return []
+
+    finalists = _build_display_finalists(sorted_trials, top_k=top_k, include_trial=include_trial)
     progress_board = None
     if show_progress:
-        _print_progress_line(session, f"🔍 開始補算 finalists local_min_score，共 {len(finalists)} 名")
+        _print_progress_line(session, f"🔍 Finalist Local Robustness Review")
         progress_board = _FinalistProgressBoard(session, finalists)
         progress_board.initialize()
 
@@ -349,7 +358,14 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         show_progress=True,
     )
     if not finalists:
-        return []
+        return [], winner_trial
+    if winner_trial is None:
+        winner_trial = resolve_best_completed_trial_with_local_min_score_or_none(
+            study,
+            session=session,
+            objective_mode=objective_mode,
+            show_progress=False,
+        )
 
     gray = colors.get("gray", "")
     green = colors.get("green", "")
@@ -381,7 +397,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             f"{result_color}{result_text:>12}{reset}"
         )
     print(f"{gray}{'=' * 96}{reset}")
-    return finalists
+    return finalists, winner_trial
 
 
 def print_local_min_score_winner_summary(*, winner_trial, session, colors: dict):
@@ -403,32 +419,27 @@ def print_local_min_score_winner_summary(*, winner_trial, session, colors: dict)
     print(f"{gray}{'=' * 96}{reset}")
 
 
-def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str):
+def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True):
     resolver_cache = _get_best_trial_resolver_cache(session)
     cache_key = _build_best_trial_cache_key(study, objective_mode)
     cached_trial = resolver_cache.get(cache_key)
     if cached_trial is not None:
         return cached_trial
 
-    qualified_trials = [
-        trial
-        for trial in list_completed_study_trials(study)
-        if is_qualified_trial_value(trial.value) and _trial_matches_objective_mode(trial, objective_mode)
-    ]
-    if not qualified_trials:
+    sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
+    if not sorted_trials:
         resolver_cache[cache_key] = None
         return None
 
-    sorted_trials = sorted(qualified_trials, key=lambda trial: (float(trial.value), -int(trial.number)), reverse=True)
-    _print_progress_line(session, f"🔍 開始分析 winner，共 {len(sorted_trials)} 個合格候選")
-    for trial_idx, trial in enumerate(sorted_trials, start=1):
-        progress_label = f"候選 {trial_idx}/{len(sorted_trials)} | trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f}"
-        local_min_score = compute_local_min_score(session, trial, progress_label=progress_label, show_cache_hit=False)
+    for trial in sorted_trials:
+        local_min_score = compute_local_min_score(session, trial, show_cache_hit=False)
         if local_min_score > 0.0:
-            _print_progress_line(session, f"🏁 winner 已確定: trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f} | local_min_score={float(local_min_score):.3f}")
+            if show_progress:
+                _print_progress_line(session, f"🏁 winner: trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f} | local_min_score={float(local_min_score):.3f}")
             resolver_cache[cache_key] = trial
             return trial
-    _print_progress_line(session, "ℹ️ 沒有任何 trial 通過 local_min_score gate")
+    if show_progress:
+        _print_progress_line(session, "ℹ️ 沒有任何 trial 通過 local_min_score gate")
     resolver_cache[cache_key] = None
     return None
 
@@ -439,6 +450,7 @@ def build_local_min_score_best_trial_resolver(*, session, objective_mode: str) -
             study,
             session=session,
             objective_mode=objective_mode,
+            show_progress=False,
         )
 
     return _resolver
