@@ -21,22 +21,17 @@ MIN_QUALIFIED_TRIAL_VALUE = -9000.0
 OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
 OBJECTIVE_MODE_LEGACY_BASE_SCORE = "legacy_base_score"
 OBJECTIVE_MODE_SPLIT_TRAIN_ROMD = "split_train_romd"
-OBJECTIVE_MODE_SPLIT_TEST_ROMD = "split_test_romd"  # legacy alias; historical train-selected split trials
 
 
 def normalize_objective_mode(objective_mode: str) -> str:
     mode = str(objective_mode or "").strip()
-    if mode == OBJECTIVE_MODE_SPLIT_TEST_ROMD:
-        return OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
     if mode == "":
         return OBJECTIVE_MODE_LEGACY_BASE_SCORE
     return mode
 
 
 def objective_modes_are_compatible(actual_mode: str, expected_mode: str) -> bool:
-    actual = normalize_objective_mode(actual_mode)
-    expected = normalize_objective_mode(expected_mode)
-    return actual == expected
+    return normalize_objective_mode(actual_mode) == normalize_objective_mode(expected_mode)
 
 
 

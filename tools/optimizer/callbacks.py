@@ -30,7 +30,6 @@ from core.strategy_dashboard import (
 )
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
-    OBJECTIVE_MODE_SPLIT_TEST_ROMD,
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
     is_qualified_trial_value,
     normalize_objective_mode,
@@ -57,7 +56,7 @@ def _safe_int(value, default=0):
 
 def _resolve_model_mode(objective_mode: str) -> str:
     mode = normalize_objective_mode(objective_mode)
-    if mode in {OBJECTIVE_MODE_SPLIT_TRAIN_ROMD, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
+    if mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD:
         return "split"
     return "legacy"
 

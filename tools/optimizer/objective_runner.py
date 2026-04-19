@@ -12,7 +12,6 @@ from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inp
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
-    OBJECTIVE_MODE_SPLIT_TEST_ROMD,
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
     normalize_objective_mode,
 )
@@ -218,7 +217,7 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
 
     final_score = float(base_score)
-    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TRAIN_ROMD, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
+    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TRAIN_ROMD}:
         return _append_invalid_profile_row(
             session=session,
             trial=trial,

@@ -9,8 +9,6 @@ WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 
 def _normalize_objective_mode(objective_mode: str) -> str:
     mode = str(objective_mode or "").strip()
-    if mode == "split_test_romd":
-        return "split_train_romd"
     if mode == "":
         return str(DEFAULT_TRAINING_SPLIT_POLICY["objective_mode"])
     return mode
