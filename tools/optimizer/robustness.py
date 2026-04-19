@@ -40,8 +40,8 @@ def _get_best_trial_resolver_cache(session):
     return session.local_min_best_trial_cache
 
 
-def _build_best_trial_cache_key(study, objective_mode: str):
-    return (id(study), str(normalize_objective_mode(objective_mode)))
+def _build_best_trial_cache_key(study, objective_mode: str, top_k: int):
+    return (id(study), str(normalize_objective_mode(objective_mode)), int(top_k))
 
 
 def _print_progress_line(session, message: str):
@@ -123,6 +123,29 @@ class _FinalistProgressBoard:
         out.flush()
         self.rendered = True
 
+
+
+
+def _compute_local_retention(base_score: float, local_min_score: float) -> float:
+    base = float(base_score)
+    if base <= 0.0:
+        return float("-inf")
+    return float(local_min_score) / base
+
+
+def _select_best_finalist_by_local_retention(finalists: list[dict]):
+    eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
+    if not eligible:
+        return None
+    eligible.sort(
+        key=lambda item: (
+            float(item.get("local_retention", float("-inf"))),
+            float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            -int(item["trial"].number),
+        ),
+        reverse=True,
+    )
+    return eligible[0]
 
 LOCAL_MIN_CORE_FIELDS = (
     "high_len",
@@ -347,12 +370,22 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
             )
         else:
             local_min_score = compute_local_min_score(session, trial)
+        base_score = float(item["base_score"])
         enriched_finalists.append({
             "trial": trial,
-            "base_score": float(item["base_score"]),
+            "base_score": base_score,
             "local_min_score": float(local_min_score),
+            "local_retention": _compute_local_retention(base_score, float(local_min_score)),
             "gate_pass": bool(local_min_score > 0.0),
         })
+    enriched_finalists.sort(
+        key=lambda item: (
+            float(item["local_retention"]),
+            float(item["base_score"]),
+            -int(item["trial"].number),
+        ),
+        reverse=True,
+    )
     return enriched_finalists
 
 
@@ -368,12 +401,8 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     if not finalists:
         return [], winner_trial
     if winner_trial is None:
-        winner_trial = resolve_best_completed_trial_with_local_min_score_or_none(
-            study,
-            session=session,
-            objective_mode=objective_mode,
-            show_progress=False,
-        )
+        best_finalist = _select_best_finalist_by_local_retention(finalists)
+        winner_trial = None if best_finalist is None else best_finalist["trial"]
 
     gray = colors.get("gray", "")
     green = colors.get("green", "")
@@ -389,7 +418,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         trial = item["trial"]
         print(f"  #{int(trial.number) + 1:<4} base_score={float(item['base_score']):.3f}")
     print(f"{gray}{'-' * 96}{reset}")
-    print(f"{'trial':<14}{'base_score':>14}{'local_min':>14}{'local_gate':>14}{'結果':>12}")
+    print(f"{'trial':<14}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
     for item in finalists:
         trial = item["trial"]
         gate_pass = bool(item["gate_pass"])
@@ -401,6 +430,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             f"#{int(trial.number) + 1:<13}"
             f"{float(item['base_score']):>14.3f}"
             f"{float(item['local_min_score']):>14.3f}"
+            f"{float(item['local_retention']):>12.3f}"
             f"{status_color}{status_text:>14}{reset}"
             f"{result_color}{result_text:>12}{reset}"
         )
@@ -427,29 +457,35 @@ def print_local_min_score_winner_summary(*, winner_trial, session, colors: dict)
     print(f"{gray}{'=' * 96}{reset}")
 
 
-def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True):
+def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K):
     resolver_cache = _get_best_trial_resolver_cache(session)
-    cache_key = _build_best_trial_cache_key(study, objective_mode)
+    cache_key = _build_best_trial_cache_key(study, objective_mode, top_k)
     cached_trial = resolver_cache.get(cache_key)
     if cached_trial is not None:
         return cached_trial
 
-    sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
-    if not sorted_trials:
+    finalists = list_local_min_score_finalists(
+        study,
+        session=session,
+        objective_mode=objective_mode,
+        top_k=top_k,
+        include_trial=None,
+        show_progress=show_progress,
+    )
+    best_finalist = _select_best_finalist_by_local_retention(finalists)
+    if best_finalist is None:
+        if show_progress:
+            _print_progress_line(session, "ℹ️ 沒有任何 finalist 通過 local_min_score gate")
         resolver_cache[cache_key] = None
         return None
-
-    for trial in sorted_trials:
-        local_min_score = compute_local_min_score(session, trial, show_cache_hit=False)
-        if local_min_score > 0.0:
-            if show_progress:
-                _print_progress_line(session, f"🏁 winner: trial #{int(trial.number) + 1} | base_score={float(trial.user_attrs.get('base_score', trial.value)):.3f} | local_min_score={float(local_min_score):.3f}")
-            resolver_cache[cache_key] = trial
-            return trial
+    trial = best_finalist["trial"]
     if show_progress:
-        _print_progress_line(session, "ℹ️ 沒有任何 trial 通過 local_min_score gate")
-    resolver_cache[cache_key] = None
-    return None
+        _print_progress_line(
+            session,
+            f"🏁 winner: trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
+        )
+    resolver_cache[cache_key] = trial
+    return trial
 
 
 def build_local_min_score_best_trial_resolver(*, session, objective_mode: str) -> Callable:
@@ -459,6 +495,7 @@ def build_local_min_score_best_trial_resolver(*, session, objective_mode: str) -
             session=session,
             objective_mode=objective_mode,
             show_progress=False,
+            top_k=OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K,
         )
 
     return _resolver
