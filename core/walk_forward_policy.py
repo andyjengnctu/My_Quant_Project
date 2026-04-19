@@ -8,9 +8,6 @@ from config.training_policy import TRAINING_SPLIT_POLICY
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 
 DEFAULT_TRAINING_SPLIT_POLICY = {
-    "architecture_mode": str(TRAINING_SPLIT_POLICY.get("architecture_mode", "fixed_predeploy_oos")),
-    "legacy_model_enabled": bool(TRAINING_SPLIT_POLICY.get("legacy_model_enabled", False)),
-    "promotion_flow_enabled": bool(TRAINING_SPLIT_POLICY.get("promotion_flow_enabled", False)),
     "selection_start_year": int(TRAINING_SPLIT_POLICY.get("selection_start_year", TRAINING_SPLIT_POLICY["train_start_year"])),
     "train_start_year": int(TRAINING_SPLIT_POLICY["train_start_year"]),
     "min_train_years": int(TRAINING_SPLIT_POLICY["min_train_years"]),
@@ -85,13 +82,6 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     payload = _load_policy_payload(path)
     merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
     merged.update(payload)
-    merged['architecture_mode'] = str(merged.get('architecture_mode', DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['architecture_mode'])
-    if 'disable_legacy_model' in merged and 'legacy_model_enabled' not in merged:
-        merged['legacy_model_enabled'] = not bool(merged.get('disable_legacy_model'))
-    if 'disable_promotion_flow' in merged and 'promotion_flow_enabled' not in merged:
-        merged['promotion_flow_enabled'] = not bool(merged.get('disable_promotion_flow'))
-    merged['legacy_model_enabled'] = bool(merged.get('legacy_model_enabled', DEFAULT_TRAINING_SPLIT_POLICY['legacy_model_enabled']))
-    merged['promotion_flow_enabled'] = bool(merged.get('promotion_flow_enabled', DEFAULT_TRAINING_SPLIT_POLICY['promotion_flow_enabled']))
     merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
@@ -108,8 +98,6 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['train_start_year']):
         raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
     merged['objective_mode'] = str(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])
-    merged['disable_legacy_model'] = not bool(merged['legacy_model_enabled'])
-    merged['disable_promotion_flow'] = not bool(merged['promotion_flow_enabled'])
     merged['policy_path'] = path
     return merged
 
@@ -129,3 +117,19 @@ def filter_search_train_dates(*, sorted_dates, train_start_year: int, search_tra
         if start_year <= year <= end_year:
             filtered.append(raw_date)
     return filtered
+
+
+def build_optimizer_runtime_policy(base_policy: dict, model_mode: str) -> dict:
+    normalized = str(model_mode or '').strip().lower() or 'split'
+    if normalized not in {'split', 'full'}:
+        raise ValueError(f"optimizer model_mode 只接受 split 或 full，收到: {model_mode}")
+    runtime_policy = dict(base_policy or {})
+    runtime_policy['model_mode'] = normalized
+    if normalized == 'split':
+        runtime_policy['objective_mode'] = 'split_test_romd'
+        if runtime_policy.get('oos_start_year') is not None:
+            runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
+    else:
+        runtime_policy['objective_mode'] = 'legacy_base_score'
+        runtime_policy['oos_start_year'] = None
+    return runtime_policy

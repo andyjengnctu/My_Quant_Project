@@ -28,7 +28,7 @@ from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_js
 
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
-PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "champion_params.json")
+PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "run_best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
 
 CSV_PATH_CACHE = None

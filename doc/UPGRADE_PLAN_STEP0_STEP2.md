@@ -2,12 +2,12 @@
 
 ## Step 0：清除不合目標架構的部分
 
-目標：先把現行 optimizer 主流程收斂成單一路徑，避免 legacy split / promotion / champion 流程持續干擾 Step 1 驗證。
+目標：先把現行 optimizer 主流程收斂成單一路徑，避免 legacy split / 舊升版流程 流程持續干擾 Step 1 驗證。
 
 本階段調整：
 - 固定 pre-deploy / OOS 驗證區間為 `2010~2019 / 2020~latest`
 - 停用 legacy 全資料模式入口
-- 停用 final holdout / champion / promotion 主流程
+- 停用 final holdout / promotion 主流程
 - 將正式輸出收斂為 `run_best + 單一連續 OOS 驗證報表`
 - 舊 compare / promotion 函式先保留，但降為 legacy，不列為正式主流程
 

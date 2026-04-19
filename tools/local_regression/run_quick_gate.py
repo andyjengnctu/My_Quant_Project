@@ -708,10 +708,10 @@ def _build_models_sandbox_dir(case_name: str) -> Path:
 
 def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
     results = []
-    params_path = PROJECT_ROOT / "models" / "champion_params.json"
+    params_path = PROJECT_ROOT / "models" / "run_best_params.json"
     db_path = PROJECT_ROOT / "models" / "portfolio_ai_10pos_overnight_reduced.db"
 
-    params_missing_models_dir = _build_models_sandbox_dir("missing_champion_params")
+    params_missing_models_dir = _build_models_sandbox_dir("missing_run_best_params")
     params_missing_models_dir.mkdir(parents=True, exist_ok=True)
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
@@ -719,22 +719,22 @@ def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
         timeout=timeout,
         env={MODELS_DIR_ENV_VAR: str(params_missing_models_dir)},
     )
-    results.append(summarize_result("error_path::missing_champion_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺 champion 參數檔應 fail-fast"))
+    results.append(summarize_result("error_path::missing_run_best_params", outcome["returncode"] != 0 and "找不到參數檔" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="缺 run_best 參數檔應 fail-fast"))
 
-    params_broken_models_dir = _build_models_sandbox_dir("broken_champion_params")
+    params_broken_models_dir = _build_models_sandbox_dir("broken_run_best_params")
     params_broken_models_dir.mkdir(parents=True, exist_ok=True)
-    (params_broken_models_dir / "champion_params.json").write_text("{not-valid-json", encoding="utf-8")
+    (params_broken_models_dir / "run_best_params.json").write_text("{not-valid-json", encoding="utf-8")
     outcome = _run_python_cli_probe(
         [sys.executable, "apps/portfolio_sim.py", "--dataset", "reduced"],
         input_text="\n\n\n\n",
         timeout=timeout,
         env={MODELS_DIR_ENV_VAR: str(params_broken_models_dir)},
     )
-    results.append(summarize_result("error_path::broken_champion_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞 champion 參數檔應 fail-fast"))
+    results.append(summarize_result("error_path::broken_run_best_params", outcome["returncode"] != 0 and "JSONDecodeError" in f"{outcome['stdout']}\n{outcome['stderr']}", detail="壞 run_best 參數檔應 fail-fast"))
 
     broken_db_models_dir = _build_models_sandbox_dir("broken_optimizer_db")
     broken_db_models_dir.mkdir(parents=True, exist_ok=True)
-    _copy_file_if_exists(params_path, broken_db_models_dir / "champion_params.json")
+    _copy_file_if_exists(params_path, broken_db_models_dir / "run_best_params.json")
     sandbox_db_path = broken_db_models_dir / db_path.name
 
     sandbox_db_path.write_text("not-a-sqlite-db", encoding="utf-8")

@@ -24,7 +24,7 @@ project/
 │  ├─ exact_accounting.py             # 正式整數 ledger / cost-basis allocation / tick 正規化單一真理來源
 │  ├─ backtest_core.py                # 單股回測總控 façade
 │  ├─ portfolio_engine.py             # 投組 timeline 總控 façade
-│  ├─ model_paths.py              # models 目錄與 champion/run_best 路徑解析 helper
+│  ├─ model_paths.py              # models 目錄與 run_best 參數路徑解析
 │  ├─ output_paths.py             # outputs/<category> 目錄正規化與建立 helper
 │  ├─ output_retention.py         # outputs retention 雙門檻清理 helper
 │  └─ display.py                      # 顯示 façade
@@ -34,7 +34,7 @@ project/
 │  └─ CMD.md                          # 常用指令與操作說明
 ├─ models/
 │  ├─ run_best_params.json           # 本輪訓練最佳參數檔
-│  └─ champion_params.json           # 目前正式現役參數檔
+│  └─ run_best_params.json           # 目前正式現役參數檔
 └─ tools/
    ├─ downloader/                     # 資料下載子系統
    ├─ optimizer/                      # 參數最佳化子系統

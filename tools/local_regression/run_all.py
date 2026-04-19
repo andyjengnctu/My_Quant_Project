@@ -993,7 +993,7 @@ def execute_all(
                 cache_summary: Dict[str, Any] = {}
                 cache_error = ""
                 try:
-                    params_for_cache = load_params_from_json(PROJECT_ROOT / "models" / "champion_params.json")
+                    params_for_cache = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
                     cache_summary = build_shared_prep_cache(
                         PROJECT_ROOT,
                         Path(dataset_info_local["dataset_dir"]),

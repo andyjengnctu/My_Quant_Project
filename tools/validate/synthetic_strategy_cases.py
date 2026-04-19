@@ -244,7 +244,7 @@ def validate_model_io_schema_case(base_params):
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
 
-    shipped_best_params_paths = [Path("models/champion_params.json"), Path("models/run_best_params.json")]
+    shipped_best_params_paths = [Path("models/run_best_params.json"), Path("models/run_best_params.json")]
     shipped_payload_keys = {}
     shipped_payload_type_mismatches = {}
     for shipped_path in shipped_best_params_paths:
@@ -1035,7 +1035,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
 
     canonical_model_files = [
         Path("models/run_best_params.json"),
-        Path("models/champion_params.json"),
+        Path("models/run_best_params.json"),
     ]
     canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
     shipped_repr_map = {}

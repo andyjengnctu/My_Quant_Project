@@ -20,7 +20,7 @@ from core.capital_policy import resolve_scanner_live_capital
 from core.params_io import load_params_from_json
 from core.strategy_params import V16StrategyParams, strategy_params_to_dict
 from core.output_paths import build_output_dir
-from core.model_paths import resolve_named_params_path
+from core.model_paths import resolve_run_best_params_path
 from core.runtime_utils import enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, validate_cli_args
 
 warnings.simplefilter("default")
@@ -45,7 +45,7 @@ OUTPUT_DIR = build_output_dir(BASE_DIR, "debug_trade_log")
 
 
 def load_params(json_file=None, *, verbose=True):
-    resolved_json_file = resolve_named_params_path(BASE_DIR, "run_best") if json_file is None else os.path.abspath(str(json_file))
+    resolved_json_file = resolve_run_best_params_path(BASE_DIR) if json_file is None else os.path.abspath(str(json_file))
     params = load_params_from_json(resolved_json_file)
     if verbose:
         print(f"{C_GREEN}✅ 成功載入參數大腦: {resolved_json_file}{C_RESET}")

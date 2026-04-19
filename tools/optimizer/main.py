@@ -15,11 +15,11 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.model_paths import resolve_models_dir
+from core.model_paths import resolve_models_dir, resolve_run_best_params_path
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args
 from core.output_paths import build_output_dir
-from core.walk_forward_policy import load_walk_forward_policy
-from config.training_policy import OPTIMIZER_FIXED_TP_PERCENT
+from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
+from config.training_policy import DEFAULT_OPTIMIZER_MODEL_MODE, OPTIMIZER_FIXED_TP_PERCENT
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
@@ -188,15 +188,44 @@ def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_
     return 0
 
 
+def _extract_cli_value(argv, option_name: str):
+    args = [] if argv is None else list(argv)
+    for idx in range(1, len(args)):
+        raw_arg = str(args[idx]).strip()
+        if raw_arg == option_name and idx + 1 < len(args):
+            return str(args[idx + 1]).strip()
+        if raw_arg.startswith(option_name + '='):
+            return raw_arg.split('=', 1)[1].strip()
+    return ''
+
+
+def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_OPTIMIZER_MODEL_MODE):
+    cli_value = _extract_cli_value(argv, '--model')
+    if cli_value:
+        normalized = cli_value.strip().lower()
+        source = 'CLI:--model'
+    else:
+        env_value = str((environ or {}).get('V16_OPTIMIZER_MODEL', '')).strip()
+        if env_value:
+            normalized = env_value.lower()
+            source = 'ENV:V16_OPTIMIZER_MODEL'
+        else:
+            normalized = str(default_model).strip().lower() or 'split'
+            source = 'DEFAULT'
+    if normalized not in {'split', 'full'}:
+        raise ValueError(f"optimizer 模式只接受 split 或 full，收到: {normalized}")
+    return normalized, source
+
+
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset",))
+    validate_cli_args(argv, value_options=("--dataset", "--model"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 目前只支援固定 pre-deploy 選參 + 單一連續 OOS 驗證。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full]")
+        print("說明: split=固定 pre-deploy 選參 + OOS 驗證；full=全資料選參。兩者都只輸出 run_best。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -222,7 +251,12 @@ def main(argv=None, environ=None):
     )
 
     loaded_policy = load_walk_forward_policy(PROJECT_ROOT)
-    walk_forward_policy = dict(loaded_policy)
+    try:
+        selected_model_mode, model_mode_source = resolve_optimizer_model_mode(argv, environ)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+    walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_test_romd'))
     best_trial_resolver = build_best_completed_trial_resolver(objective_mode)
@@ -282,14 +316,17 @@ def main(argv=None, environ=None):
             if not csv_inputs:
                 raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
             session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
-            return finalize_best_trial_outputs(
-                session=session,
-                study=study,
-                best_trial_resolver=best_trial_resolver,
-                dataset_label=dataset_label,
-                db_file=db_file,
-                walk_forward_policy=walk_forward_policy,
-            )
+            if selected_model_mode == 'split':
+                return finalize_best_trial_outputs(
+                    session=session,
+                    study=study,
+                    best_trial_resolver=best_trial_resolver,
+                    dataset_label=dataset_label,
+                    db_file=db_file,
+                    walk_forward_policy=walk_forward_policy,
+                )
+            print(f"{C_GREEN}🧭 全資料模式僅匯出 run_best，不額外產出 OOS 報表。{C_RESET}")
+            return 0
         finally:
             session.close_trial_prep_executor()
             close_study_storage(study)
@@ -324,10 +361,16 @@ def main(argv=None, environ=None):
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
+    if selected_model_mode == 'split':
+        scope_text = (
+            f"selection={selection_start_year}~{search_train_end_year} | "
+            f"oos={oos_start_year if oos_start_year is not None else search_train_end_year + 1}~latest"
+        )
+    else:
+        scope_text = 'selection=all_data | oos=disabled'
     print(
-        f"{C_GRAY}🧭 固定口徑設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | "
-        f"selection={selection_start_year}~{search_train_end_year} | "
-        f"oos={oos_start_year if oos_start_year is not None else search_train_end_year + 1}~latest{C_RESET}"
+        f"{C_GRAY}🧭 訓練模式: {selected_model_mode} | 來源: {model_mode_source} | "
+        f"設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | {scope_text}{C_RESET}"
     )
 
     try:
@@ -384,14 +427,17 @@ def main(argv=None, environ=None):
                 )
                 if export_status != 0:
                     return 1
-                finalize_best_trial_outputs(
-                    session=session,
-                    study=study,
-                    best_trial_resolver=best_trial_resolver,
-                    dataset_label=dataset_label,
-                    db_file=db_file,
-                    walk_forward_policy=walk_forward_policy,
-                )
+                if selected_model_mode == 'split':
+                    finalize_best_trial_outputs(
+                        session=session,
+                        study=study,
+                        best_trial_resolver=best_trial_resolver,
+                        dataset_label=dataset_label,
+                        db_file=db_file,
+                        walk_forward_policy=walk_forward_policy,
+                    )
+                else:
+                    print(f"{C_GREEN}🧭 全資料模式僅匯出 run_best，不額外產出 OOS 報表。{C_RESET}")
         elif export_policy == "interrupted_before_target":
             print(f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，依規則不自動覆寫 {RUN_BEST_PARAMS_PATH}。{C_RESET}")
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")

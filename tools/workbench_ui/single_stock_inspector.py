@@ -26,7 +26,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.scanner_display import build_scanner_sort_probe_text
-from core.model_paths import resolve_named_params_path
+from core.model_paths import resolve_run_best_params_path
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
@@ -842,7 +842,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "run_best")
 
     def _get_selected_params_path(self):
-        return resolve_named_params_path(WORKBENCH_PROJECT_ROOT, self._get_selected_param_source())
+        return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
 
     def _get_selected_params(self):
         return load_params(self._get_selected_params_path(), verbose=False)

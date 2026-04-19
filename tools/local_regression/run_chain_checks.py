@@ -501,7 +501,7 @@ def main(argv=None) -> int:
         dataset_info = ensure_reduced_dataset()
 
         try:
-            params = load_params_from_json(PROJECT_ROOT / "models" / "champion_params.json")
+            params = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
             start_year = int(manifest["portfolio_start_year"])
             max_positions = int(manifest["portfolio_max_positions"])
             enable_rotation = bool(manifest["portfolio_enable_rotation"])

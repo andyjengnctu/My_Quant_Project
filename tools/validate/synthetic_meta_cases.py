@@ -406,7 +406,7 @@ def validate_architecture_models_champion_params_file_tree_sync_case(_base_param
 
     required_tree_fragments = [
         "│  ├─ run_best_params.json           # 本輪訓練最佳參數檔",
-        "│  └─ champion_params.json           # 目前正式現役參數檔",
+        "│  └─ run_best_params.json           # 目前正式現役參數檔",
     ]
     stale_tree_fragments = [
         "│  ├─ all_best_params (LOG_R2).json  # 特定評分口徑下的最佳參數紀錄",
@@ -419,13 +419,13 @@ def validate_architecture_models_champion_params_file_tree_sync_case(_base_param
         add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_best_params_name_{stale_idx}", False, fragment in architecture_text)
 
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
-    add_check(results, "meta_architecture_contract", case_id, "repo_ships_champion_params", True, (models_dir / "champion_params.json").exists())
+    add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
         "models/run_best_params.json",
-        "models/champion_params.json",
+        "models/run_best_params.json",
     ]
     return results, summary
 

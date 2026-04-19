@@ -13,6 +13,7 @@ from core.config import (
 )
 from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.walk_forward_policy import filter_search_train_dates
+from core.model_paths import resolve_run_best_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_engine import run_portfolio_timeline
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
@@ -409,13 +410,105 @@ def _build_hard_gate_lines():
 
 
 def _compute_reference_console_cache(session):
-    _ = session
-    return None
+    params_path = resolve_run_best_params_path(PROJECT_ROOT)
+    if not os.path.exists(params_path):
+        return None
+    try:
+        params_payload = load_params_from_json(params_path)
+        params = _build_trial_params_object(params_payload)
+        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+        )
+        search_train_dates = _build_search_train_dates_for_session(session)
+        benchmark_data = prep_result["all_dfs_fast"].get("0050", None)
+        pf_profile = {}
+        (
+            ret_pct,
+            mdd,
+            trade_count,
+            final_eq,
+            avg_exp,
+            _max_exp,
+            bm_ret,
+            bm_mdd,
+            win_rate,
+            pf_ev,
+            pf_payoff,
+            total_missed,
+            total_missed_sells,
+            r_sq,
+            m_win_rate,
+            bm_r_sq,
+            bm_m_win_rate,
+            normal_trade_count,
+            extended_trade_count,
+            annual_trades,
+            reserved_buy_fill_rate,
+            annual_return_pct,
+            bm_annual_return_pct,
+        ) = run_portfolio_timeline(
+            prep_result["all_dfs_fast"],
+            prep_result["all_trade_logs"],
+            search_train_dates,
+            session.train_start_year,
+            params,
+            session.train_max_positions,
+            session.train_enable_rotation,
+            benchmark_ticker="0050",
+            benchmark_data=benchmark_data,
+            is_training=True,
+            profile_stats=pf_profile,
+            verbose=False,
+        )
+        cache = {
+            "pf_return": float(ret_pct),
+            "annual_return_pct": float(annual_return_pct),
+            "min_full_year_return_pct": float(pf_profile.get("min_full_year_return_pct", 0.0)),
+            "pf_mdd": float(mdd),
+            "r_squared": float(r_sq),
+            "m_win_rate": float(m_win_rate),
+            "win_rate": float(win_rate),
+            "pf_payoff": float(pf_payoff),
+            "pf_ev": float(pf_ev),
+            "pf_trades": int(trade_count),
+            "normal_trades": int(normal_trade_count),
+            "extended_trades": int(extended_trade_count),
+            "missed_buys": int(total_missed),
+            "missed_sells": int(total_missed_sells),
+            "missed_total": int(total_missed) + int(total_missed_sells),
+            "annual_trades": float(annual_trades),
+            "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
+            "avg_exposure": float(avg_exp),
+            "final_equity": float(final_eq),
+            "pf_romd": _calc_romd(float(ret_pct), float(mdd)),
+            "source_path": params_path,
+            "wf_report": None,
+        }
+        if _resolve_model_mode(session.objective_mode) == "split":
+            cache["wf_report"] = evaluate_walk_forward(
+                all_dfs_fast=prep_result["all_dfs_fast"],
+                all_trade_logs=prep_result["all_trade_logs"],
+                sorted_dates=sorted(prep_result["master_dates"]),
+                params=params,
+                max_positions=session.train_max_positions,
+                enable_rotation=session.train_enable_rotation,
+                benchmark_ticker="0050",
+                train_start_year=int(session.walk_forward_policy["train_start_year"]),
+                min_train_years=int(session.walk_forward_policy["min_train_years"]),
+                oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+            )
+        return cache
+    except Exception:
+        return None
 
 
 def _get_reference_console_cache(session):
-    if bool(getattr(session, "walk_forward_policy", {}).get("promotion_flow_enabled", False) is False):
-        return None
     cache = getattr(session, "_optimizer_console_reference_cache", None)
     if cache is None:
         cache = _compute_reference_console_cache(session)

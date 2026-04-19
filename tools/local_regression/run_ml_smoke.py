@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
 
-from core.model_paths import CHAMPION_PARAMS_PATH_ENV_VAR, MODELS_DIR_ENV_VAR
+from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
 from tools.local_regression.common import ensure_dir, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
@@ -138,7 +138,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         started = time.perf_counter()
         label_dir = ensure_dir(parent_run_dir / label)
         models_dir = ensure_dir(label_dir / "models")
-        params_path = models_dir / "champion_params.json"
+        params_path = models_dir / "run_best_params.json"
         db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
         failures = []
 
@@ -151,7 +151,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 "V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"])),
                 OPTIMIZER_SEED_ENV_VAR: str(ML_SMOKE_REPRO_SEED),
                 MODELS_DIR_ENV_VAR: str(models_dir),
-                CHAMPION_PARAMS_PATH_ENV_VAR: str(params_path),
+                RUN_BEST_PARAMS_PATH_ENV_VAR: str(params_path),
             },
         )
         write_text(
@@ -200,30 +200,30 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 failures.append("no_trials_recorded")
 
         params_info = _load_params_payload(params_path)
-        champion_params_required = db_metrics["qualified_trial_count"] > 0
+        run_best_params_required = db_metrics["qualified_trial_count"] > 0
         if not params_path.exists():
-            if champion_params_required:
-                failures.append("missing_champion_params_for_qualified_trial")
+            if run_best_params_required:
+                failures.append("missing_run_best_params_for_qualified_trial")
         elif params_info["params_read_error"]:
-            failures.append("champion_params_invalid_json")
+            failures.append("run_best_params_invalid_json")
         elif params_info["missing_keys"]:
-            failures.append(f"champion_params_missing_keys:{','.join(params_info['missing_keys'])}")
+            failures.append(f"run_best_params_missing_keys:{','.join(params_info['missing_keys'])}")
 
         payload_digest = _canonical_payload_digest(params_info["payload"]) if params_info["payload"] else ""
         result = {
             "label": label,
             "status": "PASS" if not failures else "FAIL",
             "db_path": str(db_path),
-            "champion_params_path": str(params_path),
+            "run_best_params_path": str(params_path),
             "db_trial_count": db_metrics["trial_count"],
             "qualified_trial_count": db_metrics["qualified_trial_count"],
             "best_trial_value": db_metrics["best_trial_value"],
-            "champion_params_required": champion_params_required,
-            "champion_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
-            "champion_params_payload": params_info["payload"],
-            "champion_params_digest": payload_digest,
+            "run_best_params_required": run_best_params_required,
+            "run_best_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
+            "run_best_params_payload": params_info["payload"],
+            "run_best_params_digest": payload_digest,
             "db_read_error": db_metrics["db_read_error"],
-            "champion_params_read_error": params_info["params_read_error"],
+            "run_best_params_read_error": params_info["params_read_error"],
             "optimizer_profile_summary_path": profile_metrics["optimizer_profile_summary_path"],
             "optimizer_profile_trial_count": profile_metrics["optimizer_profile_trial_count"],
             "optimizer_profile_avg_objective_wall_sec": profile_metrics["optimizer_profile_avg_objective_wall_sec"],
@@ -235,8 +235,8 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         write_json(label_dir / "ml_smoke_summary.json", result)
         return result
 
-def _extract_champion_params_digest(run_summary: Dict[str, Any]) -> str:
-    digest = run_summary.get("champion_params_digest")
+def _extract_run_best_params_digest(run_summary: Dict[str, Any]) -> str:
+    digest = run_summary.get("run_best_params_digest")
     if isinstance(digest, str) and digest != "":
         return digest
     legacy_digest = run_summary.get("best_params_digest")
@@ -246,13 +246,13 @@ def _extract_champion_params_digest(run_summary: Dict[str, Any]) -> str:
 
 
 def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) -> Dict[str, Any]:
-    first_digest = _extract_champion_params_digest(first_run)
-    second_digest = _extract_champion_params_digest(second_run)
+    first_digest = _extract_run_best_params_digest(first_run)
+    second_digest = _extract_run_best_params_digest(second_run)
     comparisons = {
         "trial_count_match": first_run["db_trial_count"] == second_run["db_trial_count"],
         "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
         "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
-        "champion_params_digest_match": first_digest == second_digest,
+        "run_best_params_digest_match": first_digest == second_digest,
         "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
     all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
@@ -269,7 +269,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "db_trial_count": first_run["db_trial_count"],
                 "qualified_trial_count": first_run["qualified_trial_count"],
                 "best_trial_value": first_run["best_trial_value"],
-                "champion_params_digest": first_digest,
+                "run_best_params_digest": first_digest,
                 "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": first_run["failures"],
@@ -281,7 +281,7 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "db_trial_count": second_run["db_trial_count"],
                 "qualified_trial_count": second_run["qualified_trial_count"],
                 "best_trial_value": second_run["best_trial_value"],
-                "champion_params_digest": second_digest,
+                "run_best_params_digest": second_digest,
                 "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": second_run["failures"],
@@ -320,12 +320,12 @@ def main(argv=None) -> int:
             "db_path": first_run["db_path"],
             "db_trial_count": first_run["db_trial_count"],
             "db_read_error": first_run["db_read_error"],
-            "champion_params_path": first_run["champion_params_path"],
-            "champion_params_required": first_run["champion_params_required"],
+            "run_best_params_path": first_run["run_best_params_path"],
+            "run_best_params_required": first_run["run_best_params_required"],
             "qualified_trial_count": first_run["qualified_trial_count"],
             "best_trial_value": first_run["best_trial_value"],
-            "champion_params_keys": first_run["champion_params_keys"],
-            "champion_params_read_error": first_run["champion_params_read_error"],
+            "run_best_params_keys": first_run["run_best_params_keys"],
+            "run_best_params_read_error": first_run["run_best_params_read_error"],
             "optimizer_profile_summary_path": first_run["optimizer_profile_summary_path"],
             "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
             "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],

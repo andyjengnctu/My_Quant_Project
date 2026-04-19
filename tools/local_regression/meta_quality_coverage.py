@@ -105,7 +105,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "min_history_ev": 0.1,
         "min_history_win_rate": 0.55,
     }
-    params_path = probe_dir / "coverage_champion_params.json"
+    params_path = probe_dir / "coverage_run_best_params.json"
     params_path.write_text(json.dumps(valid_params_payload, ensure_ascii=False), encoding="utf-8")
     profile_path = probe_dir / "optimizer_profile_summary_probe.json"
     profile_path.write_text(json.dumps({"trial_count": 1, "avg": {"objective_wall_sec": 1.234}}, ensure_ascii=False), encoding="utf-8")
@@ -119,7 +119,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "db_trial_count": 1,
         "qualified_trial_count": 1,
         "best_trial_value": 0.5,
-        "champion_params_digest": "abc",
+        "run_best_params_digest": "abc",
         "optimizer_profile_trial_count": 1,
         "optimizer_profile_avg_objective_wall_sec": profile_info["optimizer_profile_avg_objective_wall_sec"],
         "failures": [],
@@ -351,7 +351,7 @@ def build_coverage_summary(
 
             cov = coverage.Coverage(data_file=str(data_file), branch=True, source=[str(PROJECT_ROOT)])
             try:
-                base_params = load_params_from_json(PROJECT_ROOT / "models" / "champion_params.json")
+                base_params = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
                 cov.start()
                 results, summaries = suite_runner(base_params)
                 synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
