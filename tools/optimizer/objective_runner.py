@@ -13,6 +13,8 @@ from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
     OBJECTIVE_MODE_SPLIT_TEST_ROMD,
+    OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
+    normalize_objective_mode,
 )
 
 
@@ -49,7 +51,8 @@ def run_optimizer_objective(session, trial):
         session.record_optimizer_prep_failures(insufficient_failures)
 
     profile_row = build_initial_profile_row(trial.number, prep_result["prep_wall_sec"], prep_result["prep_profile"])
-    profile_row["objective_mode"] = str(session.objective_mode)
+    mode = normalize_objective_mode(session.objective_mode)
+    profile_row["objective_mode"] = str(mode)
     profile_row["search_train_end_year"] = int(session.search_train_end_year)
     master_dates = prep_result["master_dates"]
     if not master_dates:
@@ -62,7 +65,6 @@ def run_optimizer_objective(session, trial):
     sort_start = time.perf_counter()
     sorted_dates = sorted(master_dates)
     profile_row["sort_dates_sec"] = time.perf_counter() - sort_start
-    mode = str(session.objective_mode)
     use_full_history_search = mode == OBJECTIVE_MODE_LEGACY_BASE_SCORE
     if use_full_history_search:
         search_train_dates = list(sorted_dates)
@@ -76,7 +78,7 @@ def run_optimizer_objective(session, trial):
         effective_search_train_end_year = int(session.search_train_end_year)
     profile_row["search_train_end_year"] = int(effective_search_train_end_year)
     profile_row["search_train_date_count"] = int(len(search_train_dates))
-    trial.set_user_attr("objective_mode", str(session.objective_mode))
+    trial.set_user_attr("objective_mode", str(mode))
     trial.set_user_attr("search_train_end_year", int(effective_search_train_end_year))
     trial.set_user_attr("search_train_date_count", int(len(search_train_dates)))
     if not search_train_dates:
@@ -216,7 +218,7 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_m_win_rate", bm_m_win_rate)
 
     final_score = float(base_score)
-    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
+    if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TRAIN_ROMD, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
         return _append_invalid_profile_row(
             session=session,
             trial=trial,

@@ -5,6 +5,9 @@ from tools.optimizer.study_utils import INVALID_TRIAL_VALUE
 def build_initial_profile_row(trial_number, prep_wall_sec, prep_profile):
     return {
         "trial_number": trial_number + 1,
+        "objective_mode": "",
+        "search_train_end_year": 0,
+        "search_train_date_count": 0,
         "objective_wall_sec": 0.0,
         "prep_wall_sec": prep_wall_sec,
         "prep_worker_total_sum_sec": prep_profile["worker_total_sum_sec"],

@@ -7,7 +7,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.runtime_utils import run_cli_entrypoint, has_help_flag, resolve_cli_program_name, validate_cli_args
 
-HELP_DESCRIPTION = "說明: 預設資料集為完整。可選 --model split|full；split 為固定 pre-deploy+OOS，full 為全資料選參。輸入 0 只匯出 run_best。"
+HELP_DESCRIPTION = "說明: 預設資料集為完整。可選 --model split|full；split 為固定 pre-deploy train 選參 + OOS 獨立驗證，full 為全資料選參。輸入 0 只匯出 run_best。"
 
 
 def main(argv=None, environ=None):

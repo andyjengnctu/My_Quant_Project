@@ -7,13 +7,22 @@ from config.training_policy import TRAINING_SPLIT_POLICY
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 
+def _normalize_objective_mode(objective_mode: str) -> str:
+    mode = str(objective_mode or "").strip()
+    if mode == "split_test_romd":
+        return "split_train_romd"
+    if mode == "":
+        return str(DEFAULT_TRAINING_SPLIT_POLICY["objective_mode"])
+    return mode
+
+
 DEFAULT_TRAINING_SPLIT_POLICY = {
     "selection_start_year": int(TRAINING_SPLIT_POLICY.get("selection_start_year", TRAINING_SPLIT_POLICY["train_start_year"])),
     "train_start_year": int(TRAINING_SPLIT_POLICY["train_start_year"]),
     "min_train_years": int(TRAINING_SPLIT_POLICY["min_train_years"]),
     "search_train_end_year": None,
     "oos_start_year": TRAINING_SPLIT_POLICY.get("oos_start_year", None),
-    "objective_mode": str(TRAINING_SPLIT_POLICY.get("objective_mode", "split_test_romd")),
+    "objective_mode": str(TRAINING_SPLIT_POLICY.get("objective_mode", "split_train_romd")),
 }
 
 
@@ -101,7 +110,7 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
         pass
     if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['train_start_year']):
         raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
-    merged['objective_mode'] = str(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])).strip() or str(DEFAULT_TRAINING_SPLIT_POLICY['objective_mode'])
+    merged['objective_mode'] = _normalize_objective_mode(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode']))
     merged['policy_path'] = path
     return merged
 
@@ -130,7 +139,7 @@ def build_optimizer_runtime_policy(base_policy: dict, model_mode: str) -> dict:
     runtime_policy = dict(base_policy or {})
     runtime_policy['model_mode'] = normalized
     if normalized == 'split':
-        runtime_policy['objective_mode'] = 'split_test_romd'
+        runtime_policy['objective_mode'] = 'split_train_romd'
         if runtime_policy.get('oos_start_year') is not None:
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
     else:

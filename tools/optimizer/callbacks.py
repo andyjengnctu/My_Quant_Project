@@ -31,7 +31,9 @@ from core.strategy_dashboard import (
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TEST_ROMD,
+    OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
     is_qualified_trial_value,
+    normalize_objective_mode,
 )
 from tools.optimizer.walk_forward import build_test_period_metrics, evaluate_walk_forward
 
@@ -54,8 +56,8 @@ def _safe_int(value, default=0):
 
 
 def _resolve_model_mode(objective_mode: str) -> str:
-    mode = str(objective_mode)
-    if mode == OBJECTIVE_MODE_SPLIT_TEST_ROMD:
+    mode = normalize_objective_mode(objective_mode)
+    if mode in {OBJECTIVE_MODE_SPLIT_TRAIN_ROMD, OBJECTIVE_MODE_SPLIT_TEST_ROMD}:
         return "split"
     return "legacy"
 
@@ -527,7 +529,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
     search_train_dates = _build_search_train_dates_for_session(session)
     latest_data_end = _latest_data_end_text(session)
     if model_mode == "split":
-        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（Train RoMD）"
+        system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.3f}（Train RoMD／僅供選參）"
     else:
         system_score_display = f"{_safe_float(attrs.get('base_score', 0.0)):.2f}（base_score）"
     initial_capital = _safe_float(get_p(params, "initial_capital", 0.0))

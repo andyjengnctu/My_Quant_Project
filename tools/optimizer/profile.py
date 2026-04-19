@@ -5,7 +5,7 @@ import os
 from core.display import C_CYAN, C_GRAY, C_RESET
 
 PROFILE_FIELDS = [
-    "trial_number", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
+    "trial_number", "objective_mode", "search_train_end_year", "search_train_date_count", "objective_wall_sec", "prep_wall_sec", "prep_worker_total_sum_sec",
     "prep_worker_copy_sum_sec", "prep_worker_generate_signals_sum_sec", "prep_worker_assign_sum_sec",
     "prep_worker_run_backtest_sum_sec", "prep_worker_to_dict_sum_sec", "prep_ok_count",
     "prep_fail_count", "prep_avg_per_ok_sec", "sort_dates_sec", "portfolio_wall_sec",

@@ -43,7 +43,7 @@ TRAINING_SPLIT_POLICY = {
     "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,
     "search_train_end_year": OOS_EVALUATION_START_YEAR - 1,
     "oos_start_year": OOS_EVALUATION_START_YEAR,
-    "objective_mode": 'split_test_romd',
+    "objective_mode": 'split_train_romd',
 }
 
 # 共用硬門檻 (投組期未績效門檻)

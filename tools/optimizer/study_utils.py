@@ -20,7 +20,23 @@ INVALID_TRIAL_VALUE = -9999.0
 MIN_QUALIFIED_TRIAL_VALUE = -9000.0
 OPTIMIZER_TP_PERCENT_SEARCH_SPEC = {"low": 0.0, "high": 0.6, "step": 0.01}
 OBJECTIVE_MODE_LEGACY_BASE_SCORE = "legacy_base_score"
-OBJECTIVE_MODE_SPLIT_TEST_ROMD = "split_test_romd"
+OBJECTIVE_MODE_SPLIT_TRAIN_ROMD = "split_train_romd"
+OBJECTIVE_MODE_SPLIT_TEST_ROMD = "split_test_romd"  # legacy alias; historical train-selected split trials
+
+
+def normalize_objective_mode(objective_mode: str) -> str:
+    mode = str(objective_mode or "").strip()
+    if mode == OBJECTIVE_MODE_SPLIT_TEST_ROMD:
+        return OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
+    if mode == "":
+        return OBJECTIVE_MODE_LEGACY_BASE_SCORE
+    return mode
+
+
+def objective_modes_are_compatible(actual_mode: str, expected_mode: str) -> bool:
+    actual = normalize_objective_mode(actual_mode)
+    expected = normalize_objective_mode(expected_mode)
+    return actual == expected
 
 
 
@@ -177,10 +193,10 @@ def list_completed_study_trials(study):
 
 
 def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
-    expected = str(objective_mode or "").strip()
+    expected = normalize_objective_mode(objective_mode)
     actual = str(trial.user_attrs.get("objective_mode", "")).strip()
     if actual:
-        return actual == expected
+        return objective_modes_are_compatible(actual, expected)
     return expected == OBJECTIVE_MODE_LEGACY_BASE_SCORE
 
 def _wf_attr_float(trial, key: str, default: float = float("-inf")) -> float:
@@ -199,7 +215,7 @@ def _resolve_legacy_best_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_L
 
 
 def resolve_best_completed_trial_or_none(study, *, objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE):
-    mode = str(objective_mode or OBJECTIVE_MODE_LEGACY_BASE_SCORE).strip()
+    mode = normalize_objective_mode(objective_mode)
     return _resolve_legacy_best_trial_or_none(study, objective_mode=mode)
 
 

@@ -1381,7 +1381,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             mode_display="關閉明牌（穩定鎖倉）",
             max_pos=10,
             model_mode="split",
-            objective_mode="split_test_romd",
+            objective_mode="split_train_romd",
             score_calc_method=SCORE_CALC_METHOD,
             score_numerator_method=SCORE_NUMERATOR_METHOD,
             system_score_display="1.234",

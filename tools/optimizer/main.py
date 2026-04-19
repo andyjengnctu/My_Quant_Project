@@ -70,7 +70,7 @@ def build_optimizer_session(*, walk_forward_policy: dict):
     )
 
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
-    objective_mode = str(walk_forward_policy.get("objective_mode", "split_test_romd"))
+    objective_mode = str(walk_forward_policy.get("objective_mode", "split_train_romd"))
     return OptimizerSession(
         output_dir=OUTPUT_DIR,
         session_ts=session_ts,
@@ -202,7 +202,7 @@ def _extract_cli_value(argv, option_name: str):
 def _prompt_optimizer_model_mode(default_model: str):
     default_normalized = str(default_model).strip().lower() or 'split'
     default_choice = '1' if default_normalized == 'split' else '2'
-    print(f"{C_GRAY}ℹ️ 模式說明：split=固定 pre-deploy 選參 + OOS 驗證；full=全資料選參。{C_RESET}")
+    print(f"{C_GRAY}ℹ️ 模式說明：split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。{C_RESET}")
     choice = safe_prompt_choice(
         "👉 訓練模式：[1] split (預設)  [2] full : ",
         default_choice,
@@ -240,7 +240,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full]")
-        print("說明: split=固定 pre-deploy 選參 + OOS 驗證；full=全資料選參。兩者都只輸出 run_best。")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。兩者都只輸出 run_best。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -273,7 +273,7 @@ def main(argv=None, environ=None):
         return 1
     walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
     optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
-    objective_mode = str(walk_forward_policy.get('objective_mode', 'split_test_romd'))
+    objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
     best_trial_resolver = build_best_completed_trial_resolver(objective_mode)
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
 
