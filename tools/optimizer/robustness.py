@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import sys
 from typing import Callable
 
 
@@ -45,7 +46,7 @@ def _build_best_trial_cache_key(study, objective_mode: str):
 
 
 def _print_progress_line(session, message: str):
-    print(message)
+    print(message, flush=True)
 
 
 class _FinalistProgressBoard:
@@ -115,10 +116,12 @@ class _FinalistProgressBoard:
         self._render()
 
     def _render(self):
+        out = sys.stdout
         if self.rendered and self.lines:
-            print(f"\x1b[{len(self.lines)}F", end="")
+            out.write(f"\x1b[{len(self.lines)}F")
         for line in self.lines:
-            print(f"\r{line}\x1b[K")
+            out.write(f"\r{line}\x1b[K\n")
+        out.flush()
         self.rendered = True
 
 
