@@ -14,12 +14,12 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 系統評分 (Score) 算法切換
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
-SCORE_CALC_METHOD = 'LOG_R2'  
+SCORE_CALC_METHOD = 'RoMD'  
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
 # 'ANNUAL_RETURN' = 分子使用年化報酬率
-SCORE_NUMERATOR_METHOD = 'ANNUAL_RETURN'  
+SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'  
 
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
@@ -31,8 +31,8 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 # Optimizer train/test 切分設定
 # split 模式：train 只用 train 區間，test 固定從第一個 test 起始日一路到最新日。
-OPTIMIZER_TRAIN_START_YEAR = 2005
-OPTIMIZER_MIN_TRAIN_YEARS = 15
+OPTIMIZER_TRAIN_START_YEAR = 2000
+OPTIMIZER_MIN_TRAIN_YEARS = 20
 TRAINING_SPLIT_POLICY = {
     "train_start_year": OPTIMIZER_TRAIN_START_YEAR,
     "min_train_years": OPTIMIZER_MIN_TRAIN_YEARS,

@@ -11,6 +11,7 @@ import sys
 import traceback
 import threading
 import tkinter as tk
+import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from html import unescape
@@ -37,6 +38,10 @@ except ImportError as exc:  # pragma: no cover - GUI runtime fallback
     FIGURE_CANVAS_TKAGG_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 else:
     FIGURE_CANVAS_TKAGG_IMPORT_ERROR = ""
+
+
+def _warn_gui_fallback(action, exc):
+    warnings.warn(f"GUI fallback {action}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
 class _ConsoleWriter(io.TextIOBase):
@@ -580,7 +585,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         try:
             self._workbench_combobox_font = tkfont.Font(font=font_spec)
         except tk.TclError as exc:
-            _ = exc
+            _warn_gui_fallback('tkfont.Font(font=Workbench.TCombobox)', exc)
             self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
         return self._workbench_combobox_font
 
@@ -592,7 +597,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         try:
             live_text = combo.get()
         except tk.TclError as exc:
-            _ = exc
+            _warn_gui_fallback('combobox.get() during autosize', exc)
             live_text = ""
         text_candidates.append(str(live_text or ""))
         longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
