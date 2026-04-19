@@ -436,14 +436,17 @@ def main(argv=None, environ=None):
                 if export_status != 0:
                     return 1
                 if selected_model_mode == 'split':
-                    finalize_best_trial_outputs(
-                        session=session,
-                        study=study,
-                        best_trial_resolver=best_trial_resolver,
-                        dataset_label=dataset_label,
-                        db_file=db_file,
-                        walk_forward_policy=walk_forward_policy,
-                    )
+                    if is_interactive_stdin():
+                        finalize_best_trial_outputs(
+                            session=session,
+                            study=study,
+                            best_trial_resolver=best_trial_resolver,
+                            dataset_label=dataset_label,
+                            db_file=db_file,
+                            walk_forward_policy=walk_forward_policy,
+                        )
+                    else:
+                        print(f"{C_GREEN}🧭 split 模式已匯出 run_best；非互動執行略過 OOS 報表重算。{C_RESET}")
                 else:
                     print(f"{C_GREEN}🧭 全資料模式僅匯出 run_best，不額外產出 OOS 報表。{C_RESET}")
         elif export_policy == "interrupted_before_target":

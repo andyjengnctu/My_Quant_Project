@@ -410,6 +410,8 @@ def _build_hard_gate_lines():
 
 
 def _compute_reference_console_cache(session):
+    if not is_interactive_stdin():
+        return None
     params_path = resolve_run_best_params_path(PROJECT_ROOT)
     if not os.path.exists(params_path):
         return None
@@ -572,7 +574,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
 
     test_title = None
     test_rows = None
-    if model_mode == "split":
+    if model_mode == "split" and is_interactive_stdin():
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
