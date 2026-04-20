@@ -160,7 +160,7 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
     )
 
 
-def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors, best_trial_resolver=None):
+def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors, best_trial_resolver=None, artifact_label=None):
     if len(study.trials) == 0:
         print(f"{colors['red']}❌ 記憶庫為空，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
@@ -224,7 +224,8 @@ def resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_cou
 def print_resolved_run_request(*, n_trials, action, source, colors):
     action_labels = {
         "train": f"訓練 {int(n_trials)} 次",
-        "export_best": "匯出 run_best",
+        "export_candidate": "匯出 candidate_best",
+        "promote_candidate": "promote candidate",
     }
     print(f"{colors['gray']}🎯 Optimizer 動作: {action_labels.get(str(action), str(action))} | 來源: {source}{colors['reset']}")
 
