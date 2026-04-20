@@ -19,38 +19,37 @@ def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=
     print(f"📅 【各年度報酬率 vs {benchmark_ticker} 大盤】")
     print(f"{C_CYAN}================================================================================{C_RESET}")
 
+    base_columns = ["year", "year_return_pct", "is_full_year", "start_date", "end_date"]
     if not yearly_return_rows:
         print(f"{C_YELLOW}⚠️ 無年度報酬率資料。{C_RESET}")
-        return pd.DataFrame(columns=[
-            "year", "year_return_pct", "is_full_year", "start_date", "end_date",
-            "benchmark_year_return_pct", "alpha_pct"
-        ])
+        return pd.DataFrame(columns=base_columns)
 
     df_yearly = pd.DataFrame(yearly_return_rows).copy()
     if df_yearly.empty:
         print(f"{C_YELLOW}⚠️ 無年度報酬率資料。{C_RESET}")
-        return df_yearly
+        return pd.DataFrame(columns=base_columns)
 
     df_yearly["year_label"] = df_yearly["year"].astype(str)
     df_yearly["year_type"] = np.where(df_yearly["is_full_year"], "完整", "非完整")
 
+    df_display = df_yearly.copy()
     bm_rows = list(benchmark_yearly_return_rows or [])
     if bm_rows:
         df_bm = pd.DataFrame(bm_rows).copy().rename(columns={"year_return_pct": "benchmark_year_return_pct"})
         merge_keys = ["year", "is_full_year", "start_date", "end_date"]
-        available_merge_keys = [col for col in merge_keys if col in df_bm.columns and col in df_yearly.columns]
-        df_yearly = df_yearly.merge(
+        available_merge_keys = [col for col in merge_keys if col in df_bm.columns and col in df_display.columns]
+        df_display = df_display.merge(
             df_bm[available_merge_keys + ["benchmark_year_return_pct"]],
             on=available_merge_keys,
             how="left",
         )
     else:
-        df_yearly["benchmark_year_return_pct"] = np.nan
+        df_display["benchmark_year_return_pct"] = np.nan
 
-    df_yearly["alpha_pct"] = df_yearly["year_return_pct"] - df_yearly["benchmark_year_return_pct"]
+    df_display["alpha_pct"] = df_display["year_return_pct"] - df_display["benchmark_year_return_pct"]
 
     print(
-        df_yearly[[
+        df_display[[
             "year_label", "year_return_pct", "benchmark_year_return_pct", "alpha_pct",
             "year_type", "start_date", "end_date"
         ]].to_string(
@@ -63,6 +62,7 @@ def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=
         )
     )
     return df_yearly
+
 
 
 def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_year):
