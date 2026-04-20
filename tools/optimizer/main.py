@@ -344,7 +344,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。輸入 0 匯出 candidate_best；輸入 P promote candidate。")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。輸入 0 匯出 candidate_best；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
@@ -598,6 +598,8 @@ def main(argv=None, environ=None):
                 )
                 _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
                 print(f"{C_GREEN}💾 candidate_best summary 已寫入：{CANDIDATE_BEST_SUMMARY_PATH}{C_RESET}")
+                print(f"{C_CYAN}🧭 自動挑戰進版 run_best...{C_RESET}")
+                _promote_candidate_to_run_best()
                 if selected_model_mode == 'split':
                     finalize_best_trial_outputs(
                         session=session,
@@ -612,7 +614,7 @@ def main(argv=None, environ=None):
             else:
                 print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
         elif export_policy == "interrupted_before_target":
-            print(f"{C_YELLOW}ℹ️ 本輪僅完成 {session.current_session_trial}/{session.n_trials} 次，依規則不自動覆寫 {RUN_BEST_PARAMS_PATH}。{C_RESET}")
+            print(f"{C_YELLOW}ℹ️ 本輪由使用者中斷，略過 candidate_best 寫入與 run_best 自動進版。{C_RESET}")
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
