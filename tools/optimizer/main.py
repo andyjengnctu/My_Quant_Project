@@ -35,8 +35,8 @@ def configure_optuna_logging():
 OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
-CANDIDATE_BEST_PARAMS_PATH = os.path.join(PROJECT_ROOT, "config", "candidate_best_params.json")
-CANDIDATE_BEST_SUMMARY_PATH = os.path.join(PROJECT_ROOT, "config", "candidate_best_summary.json")
+CANDIDATE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_best_params.json")
+CANDIDATE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_best_summary.json")
 RUN_BEST_SUMMARY_PATH = os.path.join(PROJECT_ROOT, "config", "run_best_summary.json")
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
