@@ -32,10 +32,9 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K = 20  # local_min_score finalist review 的 top-k 候選數
 
 # optimizer 提供兩種資料區間模式：
-# split = 固定 pre-deploy(2015~2019) 選參 + 固定 OOS(2020~latest) 驗證
+# split = 指定資料選參; 額外切 OOS
 # full  = 全資料選參；不額外切 OOS
-# 注意：這裡只放 contract-safe baseline；日常實際切分請走 effective policy override，
-# 不要靠直接改 default 值來切年份。
+
 DEFAULT_OPTIMIZER_MODEL_MODE = 'split'
 PREDEPLOY_SELECTION_START_YEAR = 2018
 OOS_EVALUATION_START_YEAR = 2024
