@@ -26,7 +26,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.scanner_display import build_scanner_sort_probe_text
-from core.model_paths import resolve_run_best_params_path
+from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
@@ -69,6 +69,7 @@ WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
 PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 目前參數": "run_best",
+    "candidate_best | 候選參數": "candidate_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 COMBOBOX_WIDTH_RULES = {
@@ -842,13 +843,16 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "run_best")
 
     def _get_selected_params_path(self):
+        param_source = self._get_selected_param_source()
+        if param_source == "candidate_best":
+            return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
         return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
 
     def _get_selected_params(self):
         return load_params(self._get_selected_params_path(), verbose=False)
 
     def _get_selected_param_source_label(self):
-        return self._get_selected_param_source()
+        return self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
 
     def _on_reduced_stock_selected(self, _event=None):
         selected = self._reduced_stock_display_var.get().strip()
