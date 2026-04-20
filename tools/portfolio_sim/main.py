@@ -169,7 +169,11 @@ def main(argv=None, env=None):
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct
     )
 
-    df_yearly = print_yearly_return_report(pf_profile.get("yearly_return_rows", []))
+    df_yearly = print_yearly_return_report(
+        pf_profile.get("yearly_return_rows", []),
+        benchmark_yearly_return_rows=pf_profile.get("bm_yearly_return_rows", []),
+        benchmark_ticker=user_benchmark,
+    )
     if pf_profile.get("full_year_count", 0) > 0:
         print(
             f"{C_GRAY}完整年度數: {pf_profile.get('full_year_count', 0)} | "
