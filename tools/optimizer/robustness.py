@@ -411,15 +411,9 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     yellow = colors.get("yellow", "")
     reset = colors.get("reset", "")
 
-    print(f"{gray}{'=' * 96}{reset}")
-    print(f"{cyan}🔍 Finalist Local Robustness Review{reset}")
-    print(f"{gray}Top finalists by base_score:{reset}")
-    for item in finalists:
-        trial = item["trial"]
-        print(f"  #{int(trial.number) + 1:<4} base_score={float(item['base_score']):.3f}")
     print(f"{gray}{'-' * 96}{reset}")
-    print(f"{'trial':<14}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
-    for item in finalists:
+    print(f"{'rank':<8}{'trial':<14}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
+    for idx, item in enumerate(finalists, start=1):
         trial = item["trial"]
         gate_pass = bool(item["gate_pass"])
         status_text = 'PASS' if gate_pass else 'FAIL'
@@ -427,6 +421,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         result_text = 'winner' if winner_trial is not None and int(winner_trial.number) == int(trial.number) else ('保留' if gate_pass else '淘汰')
         result_color = yellow if result_text == 'winner' else status_color
         print(
+            f"#{idx:<7}"
             f"#{int(trial.number) + 1:<13}"
             f"{float(item['base_score']):>14.3f}"
             f"{float(item['local_min_score']):>14.3f}"
@@ -439,22 +434,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
 
 
 def print_local_min_score_winner_summary(*, winner_trial, session, colors: dict):
-    gray = colors.get("gray", "")
-    green = colors.get("green", "")
-    yellow = colors.get("yellow", "")
-    reset = colors.get("reset", "")
-    local_min_score = compute_local_min_score(session, winner_trial)
-    gate_status = 'PASS' if local_min_score > 0.0 else 'FAIL'
-    gate_color = green if gate_status == 'PASS' else colors.get('red', '')
-    print(f"{gray}{'=' * 96}{reset}")
-    print(f"{green}✅ Final winner after local robustness gate{reset}")
-    print(
-        f"winner trial       : #{int(winner_trial.number) + 1}\n"
-        f"base_score         : {float(winner_trial.user_attrs.get('base_score', winner_trial.value)):.3f}\n"
-        f"local_min_score    : {float(local_min_score):.3f}\n"
-        f"local gate         : {gate_color}{gate_status}{reset}"
-    )
-    print(f"{gray}{'=' * 96}{reset}")
+    return None
 
 
 def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K):

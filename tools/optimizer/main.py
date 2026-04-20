@@ -137,14 +137,13 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
 
 
 def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_summary: dict | None):
-    print(f"{C_GRAY}{'=' * 96}{C_RESET}")
-    print(f"{C_CYAN}📋 candidate_best vs current run_best{C_RESET}")
-    print(f"candidate | base={float(candidate_summary.get('base_score', 0.0)):.3f} | local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} | retention={float(candidate_summary.get('retention', 0.0)):.3f}")
+    print(f"{C_GRAY}{'-' * 96}{C_RESET}")
+    print(f"      candidate | base={float(candidate_summary.get('base_score', 0.0)):.3f} | local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} | retention={float(candidate_summary.get('retention', 0.0)):.3f}")
     if run_best_summary is None:
-        print(f"run_best  | 尚無 summary，視同未建立 promote 基線")
+        print(f"      run_best  | 尚無 summary，視同未建立 promote 基線")
     else:
-        print(f"run_best  | base={float(run_best_summary.get('base_score', 0.0)):.3f} | local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} | retention={float(run_best_summary.get('retention', 0.0)):.3f}")
-    print(f"{C_GRAY}{'=' * 96}{C_RESET}")
+        print(f"      run_best  | base={float(run_best_summary.get('base_score', 0.0)):.3f} | local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} | retention={float(run_best_summary.get('retention', 0.0)):.3f}")
+    print(f"{C_GRAY}{'-' * 96}{C_RESET}")
 
 
 def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict | None):
@@ -180,15 +179,13 @@ def _promote_candidate_to_run_best():
     _print_candidate_vs_run_best_summary(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     should_promote, reason = _should_promote_candidate(candidate_summary=candidate_summary, run_best_summary=run_best_summary)
     if not should_promote:
-        print(f"{C_YELLOW}ℹ️ 未進版 run_best：{reason}{C_RESET}")
+        print(f"{C_YELLOW}ℹ️ run_best 未進版 ：{reason}{C_RESET}")
         return 0
     promoted_summary = dict(candidate_summary)
     promoted_summary["promoted_at"] = get_taipei_now().isoformat()
     _write_json_file(RUN_BEST_PARAMS_PATH, candidate_params)
     _write_json_file(RUN_BEST_SUMMARY_PATH, promoted_summary)
-    print(f"{C_GREEN}✅ 已 promote candidate -> run_best{C_RESET}")
-    print(f"{C_GRAY}run_best params : {RUN_BEST_PARAMS_PATH}{C_RESET}")
-    print(f"{C_GRAY}run_best summary: {RUN_BEST_SUMMARY_PATH}{C_RESET}")
+    print(f"{C_GREEN}✅ run_best 已進版：{RUN_BEST_PARAMS_PATH}{C_RESET}")
     return 0
 
 
@@ -287,19 +284,7 @@ def generate_best_trial_walk_forward_report(*, session, best_trial, dataset_labe
 
 
 def print_walk_forward_outputs(*, report, report_paths):
-    from tools.optimizer.walk_forward import build_test_period_metrics
-
-    print(f"{C_GREEN}🧭 已輸出 OOS 期間報表：{report_paths['md_path']}{C_RESET}")
-    total_metrics = build_test_period_metrics(report)
-    print(
-        f"{C_GRAY}   OOS 區間: {total_metrics.get('oos_start', '')} ~ {total_metrics.get('oos_end', '')} | "
-        f"RoMD: {float(total_metrics.get('test_score_romd', 0.0)):.3f} | "
-        f"最大回撤: {float(total_metrics.get('max_drawdown_pct', 0.0)):.2f}%{C_RESET}"
-    )
-    upgrade_gate = dict(report.get("upgrade_gate") or {})
-    gate_status = str(upgrade_gate.get("status", "fail")).upper()
-    gate_color = C_GREEN if gate_status == "PASS" else C_RED
-    print(f"{gate_color}   OOS 可用性檢查: {gate_status} | {upgrade_gate.get('recommendation', 'N/A')}{C_RESET}")
+    return None
 
 
 def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_label: str, db_file: str, walk_forward_policy: dict):
@@ -484,6 +469,7 @@ def main(argv=None, environ=None):
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
                 best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
+                suppress_success_message=True,
             )
             if export_status != 0:
                 return export_status
@@ -496,7 +482,7 @@ def main(argv=None, environ=None):
                 action_label="export_candidate",
             )
             _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
-            print(f"{C_GREEN}💾 candidate_best summary 已寫入：{CANDIDATE_BEST_SUMMARY_PATH}{C_RESET}")
+            print(f"{C_GREEN}💾 candidate_best 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
             if selected_model_mode == 'split':
                 return finalize_best_trial_outputs(
                     session=session,
@@ -506,7 +492,6 @@ def main(argv=None, environ=None):
                     db_file=db_file,
                     walk_forward_policy=walk_forward_policy,
                 )
-            print(f"{C_GREEN}🧭 全資料模式僅匯出 candidate_best，不額外產出 OOS 報表。{C_RESET}")
             return 0
         finally:
             session.close_trial_prep_executor()
@@ -620,6 +605,7 @@ def main(argv=None, environ=None):
                     fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                     colors=COLORS,
                     best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
+                    suppress_success_message=True,
                 )
                 if export_status != 0:
                     return 1
@@ -632,8 +618,7 @@ def main(argv=None, environ=None):
                     action_label="train",
                 )
                 _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
-                print(f"{C_GREEN}💾 candidate_best summary 已寫入：{CANDIDATE_BEST_SUMMARY_PATH}{C_RESET}")
-                print(f"{C_CYAN}🧭 自動挑戰進版 run_best...{C_RESET}")
+                print(f"{C_GREEN}💾 candidate_best 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
                 _promote_candidate_to_run_best()
                 if selected_model_mode == 'split':
                     finalize_best_trial_outputs(
@@ -644,8 +629,6 @@ def main(argv=None, environ=None):
                         db_file=db_file,
                         walk_forward_policy=walk_forward_policy,
                     )
-                else:
-                    print(f"{C_GREEN}🧭 全資料模式僅匯出 candidate_best，不額外產出 OOS 報表。{C_RESET}")
             else:
                 print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
         elif export_policy == "interrupted_before_target":

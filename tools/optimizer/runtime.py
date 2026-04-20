@@ -160,7 +160,7 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
     )
 
 
-def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors, best_trial_resolver=None, artifact_label=None):
+def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors, best_trial_resolver=None, artifact_label=None, suppress_success_message: bool = False):
     if len(study.trials) == 0:
         print(f"{colors['red']}❌ 記憶庫為空，無法匯出。{colors['reset']}", file=sys.stderr)
         return 1
@@ -178,7 +178,8 @@ def export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent
         best_params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=fixed_tp_percent)
         with open(best_params_path, "w", encoding="utf-8") as handle:
             json.dump(best_params_payload, handle, indent=4, ensure_ascii=False)
-        print(f"\n{colors['green']}💾 匯出成功！已從記憶庫提取最強參數！{colors['reset']}\n")
+        if not suppress_success_message:
+            print(f"\n{colors['green']}💾 匯出成功！已從記憶庫提取最強參數！{colors['reset']}\n")
         return 0
 
     print(f"{colors['red']}❌ 目前記憶庫中尚無及格的紀錄，無法匯出。{colors['reset']}", file=sys.stderr)
