@@ -19,7 +19,11 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.model_paths import resolve_models_dir, resolve_run_best_params_path
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice
 from core.output_paths import build_output_dir
-from core.walk_forward_policy import build_optimizer_runtime_policy, load_walk_forward_policy
+from core.walk_forward_policy import (
+    build_optimizer_effective_policy_fingerprint,
+    build_optimizer_runtime_policy,
+    load_walk_forward_policy,
+)
 from config.training_policy import DEFAULT_OPTIMIZER_MODEL_MODE, OPTIMIZER_FIXED_TP_PERCENT
 
 warnings.simplefilter("default")
@@ -75,6 +79,33 @@ def _load_json_file_or_none(path: str):
         return None
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict):
+    if not hasattr(study, "user_attrs") or not hasattr(study, "set_user_attr"):
+        return
+    contract = build_optimizer_effective_policy_fingerprint(walk_forward_policy)
+    fingerprint_key = "optimizer_effective_policy_fingerprint_sha256"
+    snapshot_key = "optimizer_effective_policy_snapshot"
+    existing_fingerprint = getattr(study, "user_attrs", {}).get(fingerprint_key)
+    existing_trials = list(getattr(study, "trials", []) or [])
+    if not existing_fingerprint:
+        study.set_user_attr(fingerprint_key, contract["fingerprint_sha256"])
+        study.set_user_attr(snapshot_key, contract["snapshot"])
+        return
+    if str(existing_fingerprint) == str(contract["fingerprint_sha256"]):
+        if getattr(study, "user_attrs", {}).get(snapshot_key) is None:
+            study.set_user_attr(snapshot_key, contract["snapshot"])
+        return
+    if len(existing_trials) == 0:
+        study.set_user_attr(fingerprint_key, contract["fingerprint_sha256"])
+        study.set_user_attr(snapshot_key, contract["snapshot"])
+        return
+    raise RuntimeError(
+        "Optimizer 記憶庫的 effective policy 與目前設定不一致，禁止接續同一個 study。"
+        f"\n目前 policy: {contract['snapshot']}"
+        "\n請改用新記憶庫，或先刪除舊記憶庫再重來。"
+    )
 
 
 def _find_finalist_entry(finalists, winner_trial):
@@ -423,6 +454,7 @@ def main(argv=None, environ=None):
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
             study = create_optimizer_study(db_name, seed=optimizer_seed)
+            _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
@@ -517,9 +549,11 @@ def main(argv=None, environ=None):
         )
     else:
         scope_text = 'selection=all_data | oos=disabled'
+    inline_override_fields = list(walk_forward_policy.get("inline_override_fields", []) or [])
+    override_text = "" if not inline_override_fields else f" | override={','.join(inline_override_fields)}"
     print(
         f"{C_GRAY}🧭 訓練模式: {selected_model_mode} | 來源: {model_mode_source} | "
-        f"設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')} | {scope_text}{C_RESET}"
+        f"設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')}{override_text} | {scope_text}{C_RESET}"
     )
     print(f"{C_GRAY}Train/Test policy: {scope_text}{C_RESET}")
 
@@ -528,6 +562,7 @@ def main(argv=None, environ=None):
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
         study = create_optimizer_study(db_name, seed=optimizer_seed)
+        _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1

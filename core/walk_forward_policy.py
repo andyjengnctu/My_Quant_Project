@@ -1,11 +1,17 @@
+import hashlib
 import importlib.util
 import json
 import os
 from typing import Mapping, Optional
 
-from config.training_policy import TRAINING_SPLIT_POLICY
+from config.training_policy import TRAINING_SPLIT_POLICY, build_training_score_policy_snapshot
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
+WALK_FORWARD_SELECTION_START_YEAR_ENV_VAR = "V16_WF_SELECTION_START_YEAR"
+WALK_FORWARD_TRAIN_START_YEAR_ENV_VAR = "V16_WF_TRAIN_START_YEAR"
+WALK_FORWARD_MIN_TRAIN_YEARS_ENV_VAR = "V16_WF_MIN_TRAIN_YEARS"
+WALK_FORWARD_SEARCH_TRAIN_END_YEAR_ENV_VAR = "V16_WF_SEARCH_TRAIN_END_YEAR"
+WALK_FORWARD_OOS_START_YEAR_ENV_VAR = "V16_WF_OOS_START_YEAR"
 
 def _normalize_objective_mode(objective_mode: str) -> str:
     mode = str(objective_mode or "").strip()
@@ -22,6 +28,59 @@ DEFAULT_TRAINING_SPLIT_POLICY = {
     "oos_start_year": TRAINING_SPLIT_POLICY.get("oos_start_year", None),
     "objective_mode": str(TRAINING_SPLIT_POLICY.get("objective_mode", "split_train_romd")),
 }
+
+
+def _extract_inline_policy_overrides(environ: Optional[Mapping[str, str]] = None) -> dict:
+    env = os.environ if environ is None else environ
+    raw_mapping = {
+        "selection_start_year": str(env.get(WALK_FORWARD_SELECTION_START_YEAR_ENV_VAR, "")).strip(),
+        "train_start_year": str(env.get(WALK_FORWARD_TRAIN_START_YEAR_ENV_VAR, "")).strip(),
+        "min_train_years": str(env.get(WALK_FORWARD_MIN_TRAIN_YEARS_ENV_VAR, "")).strip(),
+        "search_train_end_year": str(env.get(WALK_FORWARD_SEARCH_TRAIN_END_YEAR_ENV_VAR, "")).strip(),
+        "oos_start_year": str(env.get(WALK_FORWARD_OOS_START_YEAR_ENV_VAR, "")).strip(),
+    }
+    overrides = {}
+    for key, raw_value in raw_mapping.items():
+        if raw_value == "":
+            continue
+        try:
+            overrides[key] = int(raw_value)
+        except ValueError as exc:
+            raise ValueError(f"training split policy env override: {key} 必須是整數，收到: {raw_value}") from exc
+    if "selection_start_year" in overrides and "train_start_year" not in overrides:
+        overrides["train_start_year"] = int(overrides["selection_start_year"])
+    if "train_start_year" in overrides and "selection_start_year" not in overrides:
+        overrides["selection_start_year"] = int(overrides["train_start_year"])
+    return overrides
+
+
+def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -> dict:
+    return {
+        "selection_start_year": int(policy["selection_start_year"]),
+        "train_start_year": int(policy["train_start_year"]),
+        "min_train_years": int(policy["min_train_years"]),
+        "search_train_end_year": int(policy["search_train_end_year"]),
+        "oos_start_year": None if policy.get("oos_start_year") is None else int(policy["oos_start_year"]),
+        "objective_mode": str(policy.get("objective_mode", DEFAULT_TRAINING_SPLIT_POLICY["objective_mode"])),
+        "model_mode": str(policy.get("model_mode", "split")),
+    }
+
+
+def build_optimizer_effective_policy_snapshot(policy: Mapping[str, object]) -> dict:
+    return {
+        "walk_forward_policy": build_walk_forward_policy_effective_snapshot(policy),
+        "training_score_policy": build_training_score_policy_snapshot(),
+        "policy_schema_version": 1,
+    }
+
+
+def build_optimizer_effective_policy_fingerprint(policy: Mapping[str, object]) -> dict:
+    snapshot = build_optimizer_effective_policy_snapshot(policy)
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return {
+        "snapshot": snapshot,
+        "fingerprint_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
 
 
 def _resolve_policy_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
@@ -87,11 +146,14 @@ def _load_policy_payload(path: str) -> dict:
 def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, str]] = None) -> dict:
     path = _resolve_policy_path(project_root, environ=environ)
     payload = _load_policy_payload(path)
+    inline_overrides = _extract_inline_policy_overrides(environ=environ)
     merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
     merged.update(payload)
+    merged.update(inline_overrides)
     default_policy_path = os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
     is_external_override = os.path.abspath(path) != default_policy_path
-    if is_external_override and "oos_start_year" not in payload and "search_train_end_year" not in payload:
+    has_explicit_oos_or_end = any(key in payload or key in inline_overrides for key in ("oos_start_year", "search_train_end_year"))
+    if is_external_override and not has_explicit_oos_or_end:
         merged["oos_start_year"] = None
     merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
@@ -110,6 +172,7 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
         raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
     merged['objective_mode'] = _normalize_objective_mode(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode']))
     merged['policy_path'] = path
+    merged['inline_override_fields'] = sorted(inline_overrides.keys())
     return merged
 
 
