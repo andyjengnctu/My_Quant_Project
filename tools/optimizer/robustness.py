@@ -326,9 +326,11 @@ def _build_display_finalists(sorted_trials, *, top_k: int, include_trial=None):
             selected_trials = list(selected_trials[: max(0, int(top_k) - 1)]) + [include_trial]
         else:
             selected_trials.append(include_trial)
+    base_rank_map = {int(trial.number): idx for idx, trial in enumerate(sorted_trials, start=1)}
     return [
         {
             "trial": trial,
+            "base_rank": int(base_rank_map.get(int(trial.number), 0)),
             "base_score": float(trial.user_attrs.get("base_score", trial.value)),
         }
         for trial in selected_trials
@@ -343,7 +345,6 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     finalists = _build_display_finalists(sorted_trials, top_k=top_k, include_trial=include_trial)
     progress_board = None
     if show_progress:
-        _print_progress_line(session, f"🔍 Finalist Local Robustness Review")
         progress_board = _FinalistProgressBoard(session, finalists)
         progress_board.initialize()
 
@@ -373,6 +374,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
         base_score = float(item["base_score"])
         enriched_finalists.append({
             "trial": trial,
+            "base_rank": int(item.get("base_rank", 0)),
             "base_score": base_score,
             "local_min_score": float(local_min_score),
             "local_retention": _compute_local_retention(base_score, float(local_min_score)),
@@ -412,7 +414,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     reset = colors.get("reset", "")
 
     print(f"{gray}{'-' * 96}{reset}")
-    print(f"{'rank':<8}{'trial':<14}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
+    print(f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
     for idx, item in enumerate(finalists, start=1):
         trial = item["trial"]
         gate_pass = bool(item["gate_pass"])
@@ -421,8 +423,8 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         result_text = 'winner' if winner_trial is not None and int(winner_trial.number) == int(trial.number) else ('保留' if gate_pass else '淘汰')
         result_color = yellow if result_text == 'winner' else status_color
         print(
-            f"#{idx:<7}"
             f"#{int(trial.number) + 1:<13}"
+            f"#{int(item.get('base_rank', idx)):>7}"
             f"{float(item['base_score']):>14.3f}"
             f"{float(item['local_min_score']):>14.3f}"
             f"{float(item['local_retention']):>12.3f}"

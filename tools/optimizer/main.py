@@ -566,8 +566,6 @@ def main(argv=None, environ=None):
         )
 
         session.profile_recorder.init_output_files()
-        if session.profile_recorder.enabled:
-            print(f"{C_GRAY}🧪 Profiling 已啟用，trial 明細將寫入: {session.profile_recorder.csv_path}{C_RESET}")
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         training_interrupted = False

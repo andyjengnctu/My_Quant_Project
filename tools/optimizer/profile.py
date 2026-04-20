@@ -84,14 +84,4 @@ class OptimizerProfileRecorder:
             json.dump(summary, handle, ensure_ascii=False, indent=2)
 
         avg = summary["avg"]
-        print(f"{C_CYAN}📊 Profiling 平均摘要（{summary['trial_count']} trials）:{C_RESET}")
-        print(
-            f"{C_GRAY}   objective={avg['objective_wall_sec']:.3f}s | "
-            f"prep_wall={avg['prep_wall_sec']:.3f}s | portfolio_wall={avg['portfolio_wall_sec']:.3f}s | "
-            f"worker_generate_sum={avg['prep_worker_generate_signals_sum_sec']:.3f}s | "
-            f"worker_backtest_sum={avg['prep_worker_run_backtest_sum_sec']:.3f}s | "
-            f"to_dict_sum={avg['prep_worker_to_dict_sum_sec']:.3f}s | "
-            f"pf_day_loop={avg['portfolio_day_loop_sec']:.3f}s{C_RESET}"
-        )
-        print(f"{C_GRAY}   CSV: {self.csv_path}{C_RESET}")
-        print(f"{C_GRAY}   JSON: {self.summary_path}{C_RESET}")
+        _ = avg
