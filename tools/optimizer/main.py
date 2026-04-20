@@ -614,7 +614,10 @@ def main(argv=None, environ=None):
             else:
                 print(f"{C_YELLOW}ℹ️ 訓練完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
         elif export_policy == "interrupted_before_target":
-            print(f"{C_YELLOW}ℹ️ 本輪由使用者中斷，略過 candidate_best 寫入與 run_best 自動進版。{C_RESET}")
+            print(
+                f"{C_YELLOW}ℹ️ 本輪由使用者中斷，已完成 {session.current_session_trial}/{session.n_trials}；"
+                f"不自動覆寫 candidate_best 或 run_best。{C_RESET}"
+            )
         print(f"\n{C_YELLOW}🛑 訓練階段結束或已中斷。{C_RESET}")
         return 0
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
