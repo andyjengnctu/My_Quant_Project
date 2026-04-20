@@ -4,7 +4,7 @@ import json
 import os
 from typing import Mapping, Optional
 
-from config.training_policy import TRAINING_SPLIT_POLICY, build_training_score_policy_snapshot
+from config.training_policy import build_training_score_policy_snapshot
 
 WALK_FORWARD_POLICY_PATH_ENV_VAR = "V16_WALK_FORWARD_POLICY_PATH"
 WALK_FORWARD_SELECTION_START_YEAR_ENV_VAR = "V16_WF_SELECTION_START_YEAR"
@@ -13,21 +13,30 @@ WALK_FORWARD_MIN_TRAIN_YEARS_ENV_VAR = "V16_WF_MIN_TRAIN_YEARS"
 WALK_FORWARD_SEARCH_TRAIN_END_YEAR_ENV_VAR = "V16_WF_SEARCH_TRAIN_END_YEAR"
 WALK_FORWARD_OOS_START_YEAR_ENV_VAR = "V16_WF_OOS_START_YEAR"
 
-def _normalize_objective_mode(objective_mode: str) -> str:
+def _normalize_objective_mode(objective_mode: str, default_objective_mode: str) -> str:
     mode = str(objective_mode or "").strip()
     if mode == "":
-        return str(DEFAULT_TRAINING_SPLIT_POLICY["objective_mode"])
+        return str(default_objective_mode)
     return mode
 
 
-DEFAULT_TRAINING_SPLIT_POLICY = {
-    "selection_start_year": int(TRAINING_SPLIT_POLICY.get("selection_start_year", TRAINING_SPLIT_POLICY["train_start_year"])),
-    "train_start_year": int(TRAINING_SPLIT_POLICY["train_start_year"]),
-    "min_train_years": int(TRAINING_SPLIT_POLICY["min_train_years"]),
-    "search_train_end_year": None,
-    "oos_start_year": TRAINING_SPLIT_POLICY.get("oos_start_year", None),
-    "objective_mode": str(TRAINING_SPLIT_POLICY.get("objective_mode", "split_train_romd")),
-}
+def _build_default_training_split_policy(project_root: str) -> dict:
+    default_policy_path = os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
+    payload = _load_policy_payload(default_policy_path)
+    if not payload:
+        raise ValueError(f"training split policy 預設設定檔不存在或無法載入: {default_policy_path}")
+    train_start_year = int(payload["train_start_year"])
+    min_train_years = int(payload["min_train_years"])
+    selection_start_year = int(payload.get("selection_start_year", train_start_year))
+    oos_start_year = payload.get("oos_start_year", None)
+    return {
+        "selection_start_year": selection_start_year,
+        "train_start_year": train_start_year,
+        "min_train_years": min_train_years,
+        "search_train_end_year": None,
+        "oos_start_year": None if oos_start_year is None else int(oos_start_year),
+        "objective_mode": str(payload.get("objective_mode", "split_train_romd")),
+    }
 
 
 def _extract_inline_policy_overrides(environ: Optional[Mapping[str, str]] = None) -> dict:
@@ -93,15 +102,15 @@ def _resolve_policy_path(project_root: str, environ: Optional[Mapping[str, str]]
     return os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
 
 
-def _coerce_int(data: dict, key: str, minimum: int) -> int:
-    value = int(data.get(key, DEFAULT_TRAINING_SPLIT_POLICY[key]))
+def _coerce_int(data: dict, key: str, minimum: int, default_policy: Mapping[str, object]) -> int:
+    value = int(data.get(key, default_policy[key]))
     if value < minimum:
         raise ValueError(f"training split policy: {key} 必須 >= {minimum}，收到: {value}")
     return value
 
 
-def _coerce_optional_int(data: dict, key: str, minimum: int) -> int | None:
-    value = data.get(key, DEFAULT_TRAINING_SPLIT_POLICY[key])
+def _coerce_optional_int(data: dict, key: str, minimum: int, default_policy: Mapping[str, object]) -> int | None:
+    value = data.get(key, default_policy[key])
     if value is None:
         return None
     value = int(value)
@@ -144,10 +153,11 @@ def _load_policy_payload(path: str) -> dict:
 
 
 def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, str]] = None) -> dict:
+    default_policy = _build_default_training_split_policy(project_root)
     path = _resolve_policy_path(project_root, environ=environ)
     payload = _load_policy_payload(path)
     inline_overrides = _extract_inline_policy_overrides(environ=environ)
-    merged = dict(DEFAULT_TRAINING_SPLIT_POLICY)
+    merged = dict(default_policy)
     merged.update(payload)
     merged.update(inline_overrides)
     default_policy_path = os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
@@ -155,22 +165,20 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     has_explicit_oos_or_end = any(key in payload or key in inline_overrides for key in ("oos_start_year", "search_train_end_year"))
     if is_external_override and not has_explicit_oos_or_end:
         merged["oos_start_year"] = None
-    merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900)
-    merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900)
-    merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1)
-    merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900)
-    merged['oos_start_year'] = _coerce_optional_int(merged, 'oos_start_year', 1900)
+    merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900, default_policy)
+    merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900, default_policy)
+    merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1, default_policy)
+    merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900, default_policy)
+    merged['oos_start_year'] = _coerce_optional_int(merged, 'oos_start_year', 1900, default_policy)
     if merged['oos_start_year'] is not None:
         merged['search_train_end_year'] = int(merged['oos_start_year']) - 1
     if merged['search_train_end_year'] is None:
         merged['search_train_end_year'] = int(merged['train_start_year']) + int(merged['min_train_years']) - 1
     if merged['search_train_end_year'] < merged['train_start_year']:
         raise ValueError('training split policy: search_train_end_year 不可小於 train_start_year')
-    if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['search_train_end_year']):
-        pass
     if merged['oos_start_year'] is not None and int(merged['oos_start_year']) <= int(merged['train_start_year']):
         raise ValueError('training split policy: oos_start_year 必須大於 train_start_year')
-    merged['objective_mode'] = _normalize_objective_mode(merged.get('objective_mode', DEFAULT_TRAINING_SPLIT_POLICY['objective_mode']))
+    merged['objective_mode'] = _normalize_objective_mode(merged.get('objective_mode', default_policy['objective_mode']), default_policy['objective_mode'])
     merged['policy_path'] = path
     merged['inline_override_fields'] = sorted(inline_overrides.keys())
     return merged
