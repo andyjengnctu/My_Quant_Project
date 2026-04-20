@@ -8,7 +8,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
-from core.model_paths import resolve_run_best_params_path
+from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, validate_cli_args
 
@@ -25,7 +25,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源固定為 run_best；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 run_best（預設）或 candidate_best；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
         return 0
 
     from core.data_utils import normalize_ticker_from_csv_filename
@@ -70,8 +70,14 @@ def main(argv=None, env=None):
     )
 
     try:
-        param_source = "run_best"
-        print(f"{C_GRAY}ℹ️ 參數來源固定為 run_best（目前正式開發口徑）。{C_RESET}")
+        param_source_choice = safe_prompt_choice(
+            "👉 參數來源：[Enter] run_best (預設)  [C] candidate_best :  ",
+            "R",
+            ("R", "C"),
+            "參數來源",
+        )
+        param_source = "candidate_best" if param_source_choice == "C" else "run_best"
+        print(f"{C_GRAY}ℹ️ 參數來源: {param_source}{C_RESET}")
         rotation_choice = safe_prompt_choice(
             "👉 汰弱換股：[N] 關閉 (預設)  [Y] 啟用 :  ",
             "N",
@@ -105,13 +111,17 @@ def main(argv=None, env=None):
     from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
     try:
-        params_path = resolve_run_best_params_path(PROJECT_ROOT)
+        if param_source == "candidate_best":
+            params_path = resolve_candidate_best_params_path(PROJECT_ROOT)
+        else:
+            params_path = resolve_run_best_params_path(PROJECT_ROOT)
         params = load_strict_params(params_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
     print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+    print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
 
     ensure_runtime_dirs()
     try:
