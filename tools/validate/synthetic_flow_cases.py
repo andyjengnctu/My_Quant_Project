@@ -300,6 +300,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     signal_state = create_signal_tracking_state(100.0, 10.0, params)
 
     active_extended_signals = {ticker: dict(signal_state)}
+    sizing_capital = 1_000_000.0
     day2_candidates, day2_orderable, day2_normal_setup_tickers = build_daily_candidates(
         normal_setup_index={},
         active_extended_signals=active_extended_signals,
@@ -317,7 +318,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_signal_day_limit_used_before_anchor_exists", 100.0, None if day2_plan is None else float(day2_plan["limit_px"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_limit_down_guard_keeps_candidate_out_of_orderable_list", 0, len(day2_orderable))
 
-    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1], params)
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[1], params, sizing_capital)
     updated_signal_state = active_extended_signals.get(ticker)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_reachable_counterfactual_fill_freezes_entry_ref_from_open_vs_limit", 98.0, None if updated_signal_state is None else float(updated_signal_state.get("entry_ref_price", float("nan"))))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_invalidation_barrier_uses_fixed_counterfactual_fill_basis", 88.0, None if updated_signal_state is None else float(updated_signal_state.get("continuation_invalidation_barrier", float("nan"))))
@@ -338,18 +339,18 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_reuses_fixed_counterfactual_entry_ref", 98.0, None if day3_plan is None else float(day3_plan["limit_px"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
-    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params)
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params, sizing_capital)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
 
-    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_hit_clears_signal_next_day", False, ticker in active_extended_signals)
+    cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params, sizing_capital)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_alone_does_not_clear_live_shadow_signal", True, ticker in active_extended_signals)
 
     stop_frame = frame.copy()
     stop_frame.loc[dates[3], ["Open", "High", "Low", "Close"]] = [96.0, 97.0, 87.5, 90.0]
     stop_dfs_fast = {ticker: pack_prepared_stock_data(stop_frame)}
     stop_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 10.0, params)}
-    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[1], params)
-    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[3], params)
+    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[1], params, sizing_capital)
+    cleanup_extended_signals_for_day(stop_active_extended_signals, {}, stop_dfs_fast, dates[3], params, sizing_capital)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_invalidation_barrier_hit_clears_signal_next_day", False, ticker in stop_active_extended_signals)
 
     summary["day2_orderable_count"] = len(day2_orderable)
