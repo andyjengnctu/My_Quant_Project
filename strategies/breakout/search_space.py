@@ -18,7 +18,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "vol_long_len": {"kind": "int", "high": 30, "depends_on": "vol_short_len", "enabled_by": "use_vol"},  # (AI註: 長期量能窗長搜尋，僅 use_vol=True 啟用且下限跟隨 vol_short_len)
     "min_history_trades": {"kind": "int", "low": 0, "high": 5},  # (AI註: 歷史績效最少交易次數搜尋，預設區間 0~5)
     "min_history_ev": {"kind": "float", "low": -1.0, "high": 0.5, "step": 0.1},  # (AI註: 歷史績效最小期望值搜尋，預設區間 -1.0~0.5)
-    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.6, "step": 0.01},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
+    "min_history_win_rate": {"kind": "float", "low": 0.0, "high": 0.7, "step": 0.01},  # (AI註: 歷史績效最小勝率搜尋，預設區間 0.0~0.6)
 }
 
 

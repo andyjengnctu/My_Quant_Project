@@ -1,13 +1,13 @@
 {
-    "trial_number": 36,
-    "base_score": 13.245732629051236,
-    "local_min_score": 7.845798093657826,
-    "retention": 0.5923264732408995,
+    "trial_number": 691,
+    "base_score": 21.343862358611045,
+    "local_min_score": 17.671993918988782,
+    "retention": 0.8279660739031672,
     "local_gate": true,
     "objective_mode": "split_train_romd",
     "train_start_year": 2023,
-    "search_train_end_year": 2024,
-    "oos_start_year": 2025,
+    "search_train_end_year": 2025,
+    "oos_start_year": 2026,
     "action": "train",
-    "created_at": "2026-04-21T03:00:49.170214+08:00"
+    "created_at": "2026-04-21T14:18:20.861620+08:00"
 }
