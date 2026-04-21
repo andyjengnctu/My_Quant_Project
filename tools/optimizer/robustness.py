@@ -8,7 +8,7 @@ from typing import Callable
 from config.training_policy import OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K
 from core.params_io import build_params_from_mapping
 from core.strategy_params import build_runtime_param_raw_value
-from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE, resolve_breakout_neighbor_spec
+from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import evaluate_prepared_train_score, resolve_search_train_scope
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
@@ -147,14 +147,6 @@ def _select_best_finalist_by_local_retention(finalists: list[dict]):
     )
     return eligible[0]
 
-LOCAL_MIN_CORE_FIELDS = (
-    "high_len",
-    "atr_len",
-    "atr_times_init",
-    "atr_times_trail",
-    "atr_buy_tol",
-)
-
 
 def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
     expected = normalize_objective_mode(objective_mode)
@@ -182,15 +174,7 @@ def _apply_step(field_name: str, current_value, step_value, direction: int, kind
 
 def _build_neighbor_candidates(session, trial):
     center_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
-    candidate_fields = list(LOCAL_MIN_CORE_FIELDS)
-    if "tp_percent" in trial.params:
-        candidate_fields.append("tp_percent")
-    if bool(center_payload.get("use_bb", False)):
-        candidate_fields.extend(("bb_len", "bb_mult"))
-    if bool(center_payload.get("use_kc", False)):
-        candidate_fields.extend(("kc_len", "kc_mult"))
-    if bool(center_payload.get("use_vol", False)):
-        candidate_fields.extend(("vol_short_len", "vol_long_len"))
+    candidate_fields = get_breakout_local_min_candidate_fields(trial, center_payload=center_payload)
 
     neighbors = []
     seen_payload_keys = set()

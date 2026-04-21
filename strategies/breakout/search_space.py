@@ -77,6 +77,25 @@ def build_trial_params(session, trial):
     )
 
 
+def get_breakout_local_min_candidate_fields(trial, *, center_payload):
+    candidate_fields = [
+        "high_len",
+        "atr_len",
+        "atr_times_init",
+        "atr_times_trail",
+        "atr_buy_tol",
+    ]
+    if "tp_percent" in getattr(trial, "params", {}):
+        candidate_fields.append("tp_percent")
+    if bool(center_payload.get("use_bb", False)):
+        candidate_fields.extend(("bb_len", "bb_mult"))
+    if bool(center_payload.get("use_kc", False)):
+        candidate_fields.extend(("kc_len", "kc_mult"))
+    if bool(center_payload.get("use_vol", False)):
+        candidate_fields.extend(("vol_short_len", "vol_long_len"))
+    return tuple(candidate_fields)
+
+
 def resolve_breakout_neighbor_spec(field_name, *, center_payload=None):
     spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
     kind = str(spec["kind"])

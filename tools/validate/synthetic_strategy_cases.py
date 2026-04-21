@@ -1113,6 +1113,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             self.n_trials = 0
             self.current_session_trial = 0
             self.profile_recorder = _FakeMainProfileRecorder()
+            self.get_best_completed_trial_or_none = lambda study: getattr(study, "best_trial", None)
 
         def load_raw_data(self, *args, **kwargs):
             return None
