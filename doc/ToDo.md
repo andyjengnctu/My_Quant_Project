@@ -1,11 +1,9 @@
 ## Going
 
 - Debug
-    股價當天下跌為何隔天trailing反而上升? 例如2881.csv的2014/11/6最高價下跌，隔日trailing還上升
+    extended_tbd找不到有問題
     買價接近停損，倉數會變的超大    
     workben加頁投組檢示
-
-
 
 - anti-overfitting
     
