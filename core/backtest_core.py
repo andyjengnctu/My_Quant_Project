@@ -10,9 +10,11 @@ from core.signal_utils import generate_signals
 from core.trade_plans import (
     build_extended_entry_plan_from_signal,
     build_normal_entry_plan,
+    create_extended_tbd_tracking_state,
     create_signal_tracking_state,
     execute_pre_market_entry_plan,
     should_clear_extended_signal,
+    update_extended_tbd_shadow_trade_for_bar,
 )
 
 
@@ -89,6 +91,22 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             continue
 
         pos_start_of_current_bar = position['qty']
+        if active_extended_signal_tbd is not None:
+            active_extended_signal_tbd = update_extended_tbd_shadow_trade_for_bar(
+                active_extended_signal_tbd,
+                y_atr=ATR_main[j - 1],
+                y_ind_sell=sellCondition[j - 1],
+                y_close=C[j - 1],
+                y_high=H[j - 1],
+                t_open=O[j],
+                t_high=H[j],
+                t_low=L[j],
+                t_close=C[j],
+                t_volume=V[j],
+                params=params,
+                current_date=Dates[j],
+            )
+
         if pos_start_of_current_bar > 0:
             if collect_stats:
                 total_bars_held += 1
@@ -165,11 +183,12 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 trade_date=Dates[j],
             )
             if entry_result['filled']:
+                filled_signal_state = active_extended_signal
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
-                if signal_state is not None:
-                    active_extended_signal_tbd = dict(signal_state)
+                if filled_signal_state is not None:
+                    active_extended_signal_tbd = create_extended_tbd_tracking_state(filled_signal_state, position)
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
@@ -198,19 +217,18 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 trade_date=Dates[j],
             )
             if entry_result['filled']:
+                filled_signal_state = active_extended_signal
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
-                if signal_state is not None:
-                    active_extended_signal_tbd = dict(signal_state)
+                if filled_signal_state is not None:
+                    active_extended_signal_tbd = create_extended_tbd_tracking_state(filled_signal_state, position)
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
 
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j], t_open=O[j], params=params):
             active_extended_signal = None
-        if should_clear_extended_signal(active_extended_signal_tbd, L[j], H[j], t_open=O[j], params=params):
-            active_extended_signal_tbd = None
 
         if collect_stats:
             currentEquity_milli = currentCapital_milli

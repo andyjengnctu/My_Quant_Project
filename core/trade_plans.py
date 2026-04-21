@@ -11,10 +11,14 @@ from core.entry_plans import (
 from core.extended_signals import (
     build_extended_candidate_plan_from_signal,
     build_extended_entry_plan_from_signal,
+    build_extended_tbd_candidate_plan_from_state,
+    create_extended_tbd_tracking_state,
     create_signal_tracking_state,
     evaluate_extended_candidate_eligibility,
     is_extended_signal_orderable_for_day,
+    is_extended_tbd_orderable_for_day,
     should_clear_extended_signal,
+    update_extended_tbd_shadow_trade_for_bar,
 )
 from core.history_filters import evaluate_history_candidate_metrics
 
@@ -31,8 +35,12 @@ __all__ = [
     "execute_pre_market_entry_plan",
     "should_clear_extended_signal",
     "create_signal_tracking_state",
+    "create_extended_tbd_tracking_state",
+    "update_extended_tbd_shadow_trade_for_bar",
     "build_extended_candidate_plan_from_signal",
+    "build_extended_tbd_candidate_plan_from_state",
     "build_extended_entry_plan_from_signal",
     "evaluate_extended_candidate_eligibility",
     "is_extended_signal_orderable_for_day",
+    "is_extended_tbd_orderable_for_day",
 ]

@@ -1,3 +1,5 @@
+
+import copy
 import numpy as np
 import pandas as pd
 
@@ -74,6 +76,81 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
     }
 
 
+def create_extended_tbd_tracking_state(signal_state, shadow_position):
+    if signal_state is None or shadow_position is None:
+        return None
+    if int(shadow_position.get('qty', 0) or 0) <= 0:
+        return None
+    return {
+        'signal_state': copy.deepcopy(signal_state),
+        'shadow_position': copy.deepcopy(shadow_position),
+        'ticker': signal_state.get('ticker') or shadow_position.get('ticker'),
+        'security_profile': signal_state.get('security_profile') or shadow_position.get('security_profile'),
+    }
+
+
+def _resolve_tbd_signal_state(tbd_state):
+    if tbd_state is None:
+        return None
+    return tbd_state.get('signal_state')
+
+
+def _resolve_tbd_shadow_position(tbd_state):
+    if tbd_state is None:
+        return None
+    return tbd_state.get('shadow_position')
+
+
+def is_extended_tbd_shadow_alive(tbd_state):
+    shadow_position = _resolve_tbd_shadow_position(tbd_state)
+    if shadow_position is None:
+        return False
+    return int(shadow_position.get('qty', 0) or 0) > 0
+
+
+def update_extended_tbd_shadow_trade_for_bar(
+    tbd_state,
+    *,
+    y_atr,
+    y_ind_sell,
+    y_close,
+    y_high,
+    t_open,
+    t_high,
+    t_low,
+    t_close,
+    t_volume,
+    params,
+    current_date=None,
+):
+    if tbd_state is None or not is_extended_tbd_shadow_alive(tbd_state):
+        return None
+
+    from core.position_step import execute_bar_step
+
+    shadow_position = copy.deepcopy(_resolve_tbd_shadow_position(tbd_state))
+    shadow_position, _freed_cash, _pnl_realized, _events = execute_bar_step(
+        shadow_position,
+        y_atr,
+        y_ind_sell,
+        y_close,
+        t_open,
+        t_high,
+        t_low,
+        t_close,
+        t_volume,
+        params,
+        current_date=current_date,
+        y_high=y_high,
+    )
+    if int(shadow_position.get('qty', 0) or 0) <= 0:
+        return None
+
+    updated_state = dict(tbd_state)
+    updated_state['shadow_position'] = shadow_position
+    return updated_state
+
+
 # # (AI註: 單一真理來源 - 延續候選掛單只延續 setup 的可掛單資格；若已建立反事實 entry ref，後續 limit 固定為該 entry ref，避免每日追價漂移)
 def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     if signal_state is None:
@@ -109,6 +186,35 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
     return resize_candidate_plan_to_capital(base_plan, sizing_capital, params)
 
 
+def build_extended_tbd_candidate_plan_from_state(tbd_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
+    if tbd_state is None or not is_extended_tbd_shadow_alive(tbd_state):
+        return None
+    signal_state = _resolve_tbd_signal_state(tbd_state)
+    shadow_position = _resolve_tbd_shadow_position(tbd_state)
+    if signal_state is None or shadow_position is None:
+        return None
+
+    candidate_plan = build_extended_candidate_plan_from_signal(
+        signal_state,
+        sizing_capital,
+        params,
+        ticker=ticker or tbd_state.get('ticker'),
+        security_profile=security_profile or tbd_state.get('security_profile'),
+        trade_date=trade_date,
+    )
+    if candidate_plan is None:
+        return None
+
+    enriched_plan = dict(candidate_plan)
+    enriched_plan['shadow_sl'] = shadow_position.get('sl', np.nan)
+    enriched_plan['shadow_initial_stop'] = shadow_position.get('initial_stop', np.nan)
+    enriched_plan['shadow_trailing_stop'] = shadow_position.get('trailing_stop', np.nan)
+    enriched_plan['shadow_tp_half'] = shadow_position.get('tp_half', np.nan)
+    enriched_plan['shadow_sold_half'] = bool(shadow_position.get('sold_half', False))
+    enriched_plan['shadow_entry_price'] = shadow_position.get('entry_fill_price', np.nan)
+    return enriched_plan
+
+
 # # (AI註: 單一真理來源 - 延續訊號今日能否掛單；signal_valid 與 today_orderable 分層，固定 limit 若低於今日跌停價則不得進 orderable list)
 def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):
     if signal_state is None or candidate_plan is None:
@@ -118,6 +224,19 @@ def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, 
     resolved_ticker = ticker or candidate_plan.get("ticker") or signal_state.get("ticker")
     resolved_security_profile = security_profile or candidate_plan.get("security_profile") or signal_state.get("security_profile")
     return is_limit_buy_price_reachable_for_day(candidate_plan["limit_price"], y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
+
+
+def is_extended_tbd_orderable_for_day(tbd_state, candidate_plan, y_close, ticker=None, security_profile=None):
+    if tbd_state is None or not is_extended_tbd_shadow_alive(tbd_state):
+        return False
+    signal_state = _resolve_tbd_signal_state(tbd_state)
+    return is_extended_signal_orderable_for_day(
+        signal_state,
+        candidate_plan,
+        y_close,
+        ticker=ticker or tbd_state.get('ticker'),
+        security_profile=security_profile or tbd_state.get('security_profile'),
+    )
 
 
 # # (AI註: 單一真理來源 - 延續單實際掛單規格；僅接受有效候選且今日價格帶仍可達)

@@ -1,9 +1,9 @@
 {
-    "high_len": 250,
+    "high_len": 200,
     "atr_len": 4,
     "atr_buy_tol": 2.0,
     "atr_times_init": 2.8,
-    "atr_times_trail": 4.3,
+    "atr_times_trail": 4.5,
     "tp_percent": 0.0,
     "use_bb": false,
     "bb_len": 20,

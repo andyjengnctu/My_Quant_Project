@@ -8,8 +8,10 @@ from core.price_utils import (
 from core.capital_policy import resolve_single_backtest_sizing_capital
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
+    build_extended_tbd_candidate_plan_from_state,
     evaluate_history_candidate_metrics,
     is_extended_signal_orderable_for_day,
+    is_extended_tbd_orderable_for_day,
 )
 
 
@@ -194,7 +196,7 @@ def build_backtest_stats(
     if active_extended_signal_tbd is not None:
         sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
         resolved_ticker = resolved_ticker or active_extended_signal_tbd.get("ticker")
-        extended_candidate_tbd_today = build_extended_candidate_plan_from_signal(
+        extended_candidate_tbd_today = build_extended_tbd_candidate_plan_from_state(
             active_extended_signal_tbd,
             sizing_capital,
             params,
@@ -202,7 +204,7 @@ def build_backtest_stats(
             security_profile=resolved_security_profile,
             trade_date=final_date,
         )
-        extended_tbd_orderable_today = is_extended_signal_orderable_for_day(
+        extended_tbd_orderable_today = is_extended_tbd_orderable_for_day(
             active_extended_signal_tbd,
             extended_candidate_tbd_today,
             close_last,
