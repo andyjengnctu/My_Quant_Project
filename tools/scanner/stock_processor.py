@@ -129,6 +129,8 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
 def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     if not stats or not stats['is_candidate']:
         return None
+    if bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0:
+        return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
     expected_value = float(stats['expected_value'])

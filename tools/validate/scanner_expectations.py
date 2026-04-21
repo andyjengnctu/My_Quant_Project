@@ -135,6 +135,8 @@ def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, tr
 
     if not scanner_ref_stats or not scanner_ref_stats["is_candidate"]:
         return None
+    if bool(scanner_ref_stats.get("hasOpenPositionAtEnd")) or int(scanner_ref_stats.get("current_position", 0) or 0) > 0:
+        return None
 
     if scanner_ref_stats["is_setup_today"]:
         proj_qty = calc_reference_candidate_qty(
