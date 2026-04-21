@@ -37,6 +37,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     position = {'qty': 0}
     active_extended_signal = None
+    scanner_extended_signal = None
     currentCapital_milli = money_to_milli(params.initial_capital)
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
     totalProfit_milli, totalLoss_milli = 0, 0
@@ -140,6 +141,13 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             )
             if signal_state is not None:
                 active_extended_signal = signal_state
+                scanner_extended_signal = create_signal_tracking_state(
+                    buy_limits[j - 1],
+                    ATR_main[j - 1],
+                    params,
+                    ticker=resolved_ticker,
+                    security_profile=resolved_security_profile,
+                )
 
             entry_plan = build_normal_entry_plan(
                 buy_limits[j - 1],
@@ -221,6 +229,23 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         ):
             active_extended_signal = None
 
+        if should_clear_extended_signal(
+            scanner_extended_signal,
+            L[j],
+            H[j],
+            t_open=O[j],
+            t_close=C[j],
+            t_volume=V[j],
+            y_close=C[j - 1],
+            y_high=H[j - 1],
+            y_atr=ATR_main[j - 1],
+            y_ind_sell=sellCondition[j - 1],
+            sizing_capital=sizing_cap,
+            current_date=Dates[j],
+            params=params,
+        ):
+            scanner_extended_signal = None
+
         if collect_stats:
             currentEquity_milli = currentCapital_milli
             if position['qty'] > 0:
@@ -301,7 +326,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         low_last=L[-1],
         had_open_position_at_end=had_open_position_at_end,
         active_extended_signal=active_extended_signal,
-        active_extended_signal_tbd=active_extended_signal,
+        active_extended_signal_tbd=scanner_extended_signal,
         end_position_qty=end_position_qty,
         avg_bars_held=avg_bars_held,
         final_date=Dates[-1],
