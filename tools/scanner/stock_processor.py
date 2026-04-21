@@ -130,6 +130,12 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     if not stats or not stats['is_candidate']:
         return None
 
+    if bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0:
+        return None
+
+    if bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0:
+        return None
+
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
     expected_value = float(stats['expected_value'])
     win_rate_pct = float(stats['win_rate'])
@@ -194,9 +200,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             label_prefix='延續(TBD)',
             kind_if_orderable='extended_tbd',
         )
-
-    if bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0:
-        return None
 
     return _build_scanner_row(
         kind='candidate',
