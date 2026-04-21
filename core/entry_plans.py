@@ -206,6 +206,38 @@ def _apply_inherited_shadow_entry_day_state(position, *, t_high):
     return position
 
 
+# # (AI註: 單一真理來源 - 延續 shadow trade 啟動時，使用與正式進場同源的 fill / stop / target / entry-day pending exit 規則；不再依賴 low<=limit 才能存在)
+def build_counterfactual_shadow_position_from_plan(entry_plan, *, t_open, t_high, t_low, params, ticker=None, security_profile=None, trade_date=None):
+    if entry_plan is None:
+        return None
+
+    qty = int(entry_plan.get('qty', 0) or 0)
+    resolved_ticker = ticker or entry_plan.get('ticker')
+    resolved_security_profile = security_profile or entry_plan.get('security_profile')
+    limit_price = entry_plan.get('limit_price', np.nan)
+    if qty <= 0 or pd.isna(t_open) or pd.isna(limit_price):
+        return None
+
+    buy_price = adjust_long_buy_fill_price(min(t_open, limit_price), ticker=resolved_ticker, security_profile=resolved_security_profile)
+    position = build_position_from_entry_fill(
+        buy_price=buy_price,
+        qty=qty,
+        init_sl=entry_plan.get('init_sl'),
+        init_trail=entry_plan.get('init_trail'),
+        params=params,
+        entry_type='extended_shadow',
+        target_price=entry_plan.get('target_price'),
+        limit_price=limit_price,
+        entry_atr=entry_plan.get('entry_atr'),
+        ticker=resolved_ticker,
+        security_profile=resolved_security_profile,
+        trade_date=trade_date,
+    )
+    position = _apply_entry_day_position_state(position, t_high=t_high)
+    position = _apply_entry_day_pending_exit(position, t_high=t_high, t_low=t_low, params=params)
+    return position
+
+
 # # (AI註: 單一真理來源 - 成交後的部位欄位統一由此建立)
 def build_position_from_entry_fill(
     buy_price,

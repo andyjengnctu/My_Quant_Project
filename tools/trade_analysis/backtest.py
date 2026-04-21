@@ -188,7 +188,7 @@ def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
         f"最大回撤: {stats_dict.get('max_drawdown', 0.0):.2f}%",
     ]
     set_chart_summary_box(chart_context, summary_lines=summary_lines)
-    has_raw_buy_signal = bool(stats_dict.get('is_setup_today')) or stats_dict.get('extended_candidate_today') is not None
+    has_raw_buy_signal = bool(stats_dict.get('is_setup_today')) or stats_dict.get('extended_candidate_today') is not None or stats_dict.get('extended_candidate_tbd_today') is not None
     sell_signal_today = bool(sell_condition[-1]) if len(sell_condition) > 0 else False
     history_gate_ok = bool(stats_dict.get('is_candidate', False))
     if sell_signal_today:

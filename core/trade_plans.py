@@ -16,6 +16,7 @@ from core.extended_signals import (
     create_signal_tracking_state,
     evaluate_extended_candidate_eligibility,
     is_extended_signal_orderable_for_day,
+    is_extended_tbd_display_day,
     is_extended_tbd_orderable_for_day,
     should_clear_extended_signal,
     update_extended_tbd_shadow_trade_for_bar,
@@ -42,5 +43,6 @@ __all__ = [
     "build_extended_entry_plan_from_signal",
     "evaluate_extended_candidate_eligibility",
     "is_extended_signal_orderable_for_day",
+    "is_extended_tbd_display_day",
     "is_extended_tbd_orderable_for_day",
 ]

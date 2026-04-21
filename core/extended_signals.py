@@ -2,7 +2,11 @@ import copy
 import numpy as np
 import pandas as pd
 
-from core.entry_plans import execute_pre_market_entry_plan, resize_candidate_plan_to_capital
+from core.entry_plans import (
+    build_counterfactual_shadow_position_from_plan,
+    execute_pre_market_entry_plan,
+    resize_candidate_plan_to_capital,
+)
 from core.price_utils import (
     calc_frozen_target_price,
     calc_initial_stop_from_reference,
@@ -24,6 +28,16 @@ def _resolve_shadow_position(signal_state):
 
 def _has_live_shadow_position(signal_state):
     return _resolve_shadow_position(signal_state) is not None
+
+
+# # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看『今日是否到價』，與 shadow engine 是否存在分離)
+def is_extended_tbd_display_day(signal_state, day_low):
+    if signal_state is None or pd.isna(day_low):
+        return False
+    original_limit = signal_state.get('orig_limit', np.nan)
+    if pd.isna(original_limit):
+        return False
+    return float(day_low) <= float(original_limit)
 
 
 # # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立；共用同一份 shadow trade 狀態，不再拆 extended / TBD 雙核心)
@@ -57,7 +71,7 @@ def _sync_signal_shadow_fields(signal_state, shadow_position):
     return signal_state
 
 
-# # (AI註: 單一真理來源 - 當延續首次滿足 low <= 原始 limit 時，立即啟動共同 shadow trade；之後 normal / extended / TBD 都以此 shadow trade 為唯一管理基準)
+# # (AI註: 單一真理來源 - 進入 extended 後即啟動共同 shadow trade；不再把 shadow existence 綁在 low<=limit，避免 extended 在 low>limit 時無法判定失效)
 def ensure_extended_signal_counterfactual_anchor(
     signal_state,
     *,
@@ -78,9 +92,7 @@ def ensure_extended_signal_counterfactual_anchor(
 
     original_limit = signal_state.get("orig_limit", np.nan)
     original_atr = signal_state.get("orig_atr", np.nan)
-    if pd.isna(original_limit) or pd.isna(original_atr) or pd.isna(t_open) or pd.isna(t_low):
-        return signal_state
-    if t_low > original_limit:
+    if pd.isna(original_limit) or pd.isna(original_atr) or pd.isna(t_open):
         return signal_state
 
     candidate_plan = build_extended_candidate_plan_from_signal(
@@ -94,24 +106,20 @@ def ensure_extended_signal_counterfactual_anchor(
     if candidate_plan is None or candidate_plan.get("qty", 0) <= 0:
         return signal_state
 
-    entry_result = execute_pre_market_entry_plan(
-        entry_plan=candidate_plan,
+    shadow_position = build_counterfactual_shadow_position_from_plan(
+        candidate_plan,
         t_open=t_open,
         t_high=t_high,
         t_low=t_low,
-        t_close=t_close,
-        t_volume=t_volume,
-        y_close=y_close,
         params=params,
-        entry_type="extended_shadow",
         ticker=signal_state.get("ticker"),
         security_profile=signal_state.get("security_profile"),
         trade_date=current_date,
     )
-    if not entry_result.get("filled"):
+    if shadow_position is None:
         return signal_state
 
-    return _sync_signal_shadow_fields(signal_state, entry_result.get("position"))
+    return _sync_signal_shadow_fields(signal_state, shadow_position)
 
 
 # # (AI註: 單一真理來源 - 延續 shadow trade 每日只用同一套 execute_bar_step 推進，不可再疊另一套 barrier 規則)
