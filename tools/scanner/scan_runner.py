@@ -45,9 +45,9 @@ def _adapt_candidate_scan_result(result):
         return {"history_qualified": False, "skip_insufficient": False, "row": None, "sanitize_issue": None}
 
     status, proj_cost, ev, sort_value, msg, ticker, sanitize_issue = result
-    history_qualified = status in ['buy', 'extended', 'candidate']
+    history_qualified = status in ['buy', 'extended', 'extended_tbd', 'candidate']
     row = None
-    if status in ['buy', 'extended']:
+    if status in ['buy', 'extended', 'extended_tbd']:
         row = {
             'kind': status,
             'proj_cost': proj_cost,
@@ -72,9 +72,9 @@ def _adapt_history_scan_result(result):
 
     status = result.get('status')
     return {
-        "history_qualified": status in ['buy', 'extended', 'candidate'],
+        "history_qualified": status in ['buy', 'extended', 'extended_tbd', 'candidate'],
         "skip_insufficient": status == 'skip_insufficient',
-        "row": result if status in ['buy', 'extended', 'candidate'] else None,
+        "row": result if status in ['buy', 'extended', 'extended_tbd', 'candidate'] else None,
         "sanitize_issue": result.get('sanitize_issue'),
     }
 
@@ -83,7 +83,8 @@ def _format_candidate_progress(count_scanned, total_files, rows):
     return (
         f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}] "
         f"新訊號:{sum(1 for x in rows if x['kind'] == 'buy')} | "
-        f"延續:{sum(1 for x in rows if x['kind'] == 'extended')}{C_RESET}"
+        f"延續:{sum(1 for x in rows if x['kind'] == 'extended')} | "
+        f"延續(TBD):{sum(1 for x in rows if x['kind'] == 'extended_tbd')}{C_RESET}"
     )
 
 
@@ -92,6 +93,7 @@ def _format_history_progress(count_scanned, total_files, rows):
         f"{C_GRAY}⏳ 極速運算中: [{count_scanned}/{total_files}] "
         f"新訊號:{sum(1 for x in rows if x['kind'] == 'buy')} | "
         f"延續:{sum(1 for x in rows if x['kind'] == 'extended')} | "
+        f"延續(TBD):{sum(1 for x in rows if x['kind'] == 'extended_tbd')} | "
         f"歷績:{sum(1 for x in rows if x['kind'] == 'candidate')}{C_RESET}"
     )
 

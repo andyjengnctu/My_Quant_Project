@@ -37,6 +37,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
 
     position = {'qty': 0}
     active_extended_signal = None
+    active_extended_signal_tbd = None
     currentCapital_milli = money_to_milli(params.initial_capital)
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
     totalProfit_milli, totalLoss_milli = 0, 0
@@ -67,6 +68,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             close_last=float('nan'),
             had_open_position_at_end=False,
             active_extended_signal=None,
+            active_extended_signal_tbd=None,
             end_position_qty=0,
             avg_bars_held=0,
             final_date=None,
@@ -166,6 +168,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
+                if signal_state is not None:
+                    active_extended_signal_tbd = dict(signal_state)
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
@@ -197,12 +201,16 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
+                if signal_state is not None:
+                    active_extended_signal_tbd = dict(signal_state)
                 active_extended_signal = None
             elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
 
         if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, L[j], H[j], t_open=O[j], params=params):
             active_extended_signal = None
+        if should_clear_extended_signal(active_extended_signal_tbd, L[j], H[j], t_open=O[j], params=params):
+            active_extended_signal_tbd = None
 
         if collect_stats:
             currentEquity_milli = currentCapital_milli
@@ -283,6 +291,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         close_last=C[-1],
         had_open_position_at_end=had_open_position_at_end,
         active_extended_signal=active_extended_signal,
+        active_extended_signal_tbd=active_extended_signal_tbd,
         end_position_qty=end_position_qty,
         avg_bars_held=avg_bars_held,
         final_date=Dates[-1],

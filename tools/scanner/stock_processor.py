@@ -43,8 +43,101 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
+def _should_exclude_forced_close_case(stats):
+    if not stats:
+        return False
+    if bool(stats.get('hasOpenPositionAtEnd', False)):
+        return True
+    return int(stats.get('current_position', 0) or 0) > 0
+
+
+def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue):
+    sort_value = _calc_sort_value(
+        expected_value=expected_value,
+        proj_cost=proj_cost,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+    )
+    stat_str = _build_stat_str(
+        expected_value=expected_value,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+        sort_value=sort_value,
+    )
+    return {
+        'kind': kind,
+        'ticker': ticker,
+        'proj_cost': proj_cost,
+        'ev': expected_value,
+        'expected_value': expected_value,
+        'sort_value': sort_value,
+        'text': f"{ticker:<6} | {stat_str} | {detail}",
+        'sanitize_issue': sanitize_issue,
+        'win_rate': win_rate_pct,
+        'trade_count': trade_count,
+        'asset_growth': asset_growth_pct,
+    }
+
+
+def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, params, trade_date, sanitize_issue, candidate_plan, orderable_today, label_prefix, kind_if_orderable):
+    limit_price = candidate_plan.get('limit_price') if candidate_plan is not None else None
+    init_sl = candidate_plan.get('init_sl') if candidate_plan is not None else None
+    proj_cost = None
+    barrier_parts = []
+    if limit_price is not None and not pd.isna(limit_price):
+        barrier_parts.append(f"{label_prefix}掛單:{float(limit_price):>6.2f}")
+    else:
+        barrier_parts.append(f"{label_prefix}掛單:-")
+
+    invalidation_barrier = candidate_plan.get('continuation_invalidation_barrier') if candidate_plan is not None else None
+    completion_barrier = candidate_plan.get('continuation_completion_barrier') if candidate_plan is not None else None
+    if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
+        barrier_parts.append(f"失效線:{float(invalidation_barrier):>6.2f}")
+    if completion_barrier is not None and not pd.isna(completion_barrier):
+        barrier_parts.append(f"達標線:{float(completion_barrier):>6.2f}")
+
+    proj_qty = 0
+    if limit_price is not None and init_sl is not None and not pd.isna(limit_price) and not pd.isna(init_sl):
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
+        if proj_qty > 0:
+            proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
+            barrier_parts.append(f"參考投入:{proj_cost:>7,.0f}")
+            if not can_execute_half_take_profit(proj_qty, params.tp_percent):
+                barrier_parts.append("半倉停利:股數不足")
+
+    if kind_if_orderable == 'extended_tbd':
+        barrier_parts.append("需確認實際投組是否已買入")
+
+    if orderable_today and proj_qty > 0:
+        kind = kind_if_orderable
+    else:
+        kind = 'candidate'
+        if not orderable_today:
+            barrier_parts.append("今日不可掛單")
+        elif proj_qty == 0:
+            barrier_parts.append("股數不足，今日不掛單")
+        else:
+            barrier_parts.append("今日延續觀察")
+
+    return _build_scanner_row(
+        kind=kind,
+        ticker=ticker,
+        expected_value=expected_value,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
+        proj_cost=proj_cost,
+        detail=' | '.join(barrier_parts),
+        sanitize_issue=sanitize_issue,
+    )
+
+
 def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     if not stats or not stats['is_candidate']:
+        return None
+    if _should_exclude_forced_close_case(stats):
         return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
@@ -64,127 +157,65 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             proj_cost = 0.0
             detail = "新訊號成立 | 股數不足，今日不掛單"
             kind = 'candidate'
-        sort_value = _calc_sort_value(
+        return _build_scanner_row(
+            kind=kind,
+            ticker=ticker,
             expected_value=expected_value,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
             proj_cost=proj_cost,
-            win_rate_pct=win_rate_pct,
-            trade_count=trade_count,
-            asset_growth_pct=asset_growth_pct,
+            detail=detail,
+            sanitize_issue=sanitize_issue,
         )
-        stat_str = _build_stat_str(
-            expected_value=expected_value,
-            win_rate_pct=win_rate_pct,
-            trade_count=trade_count,
-            asset_growth_pct=asset_growth_pct,
-            sort_value=sort_value,
-        )
-        return {
-            'kind': kind,
-            'ticker': ticker,
-            'proj_cost': proj_cost,
-            'ev': expected_value,
-            'expected_value': expected_value,
-            'sort_value': sort_value,
-            'text': f"{ticker:<6} | {stat_str} | {detail}",
-            'sanitize_issue': sanitize_issue,
-            'win_rate': win_rate_pct,
-            'trade_count': trade_count,
-            'asset_growth': asset_growth_pct,
-        }
 
     extended_candidate = stats.get('extended_candidate_today')
     extended_orderable_today = bool(stats.get('extended_orderable_today', extended_candidate is not None))
     if extended_candidate is not None:
-        limit_price = extended_candidate.get('limit_price')
-        init_sl = extended_candidate.get('init_sl')
-        proj_cost = None
-        barrier_parts = []
-        if limit_price is not None and not pd.isna(limit_price):
-            barrier_parts.append(f"延續掛單:{float(limit_price):>6.2f}")
-        else:
-            barrier_parts.append("延續掛單:-")
-        invalidation_barrier = extended_candidate.get('continuation_invalidation_barrier')
-        completion_barrier = extended_candidate.get('continuation_completion_barrier')
-        if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
-            barrier_parts.append(f"失效線:{float(invalidation_barrier):>6.2f}")
-        if completion_barrier is not None and not pd.isna(completion_barrier):
-            barrier_parts.append(f"達標線:{float(completion_barrier):>6.2f}")
-
-        proj_qty = 0
-        if limit_price is not None and init_sl is not None and not pd.isna(limit_price) and not pd.isna(init_sl):
-            proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
-            if proj_qty > 0:
-                proj_cost = calc_entry_total_cost(limit_price, proj_qty, params)
-                barrier_parts.append(f"參考投入:{proj_cost:>7,.0f}")
-                if not can_execute_half_take_profit(proj_qty, params.tp_percent):
-                    barrier_parts.append("半倉停利:股數不足")
-
-        if extended_orderable_today and proj_qty > 0:
-            kind = 'extended'
-        else:
-            kind = 'candidate'
-            if not extended_orderable_today:
-                barrier_parts.append("今日不可掛單")
-            elif proj_qty == 0:
-                barrier_parts.append("股數不足，今日不掛單")
-            else:
-                barrier_parts.append("今日延續觀察")
-
-        sort_value = _calc_sort_value(
-            expected_value=expected_value,
-            proj_cost=proj_cost,
-            win_rate_pct=win_rate_pct,
-            trade_count=trade_count,
-            asset_growth_pct=asset_growth_pct,
-        )
-        stat_str = _build_stat_str(
+        return _build_extended_like_row(
+            ticker=ticker,
             expected_value=expected_value,
             win_rate_pct=win_rate_pct,
             trade_count=trade_count,
             asset_growth_pct=asset_growth_pct,
-            sort_value=sort_value,
+            params=params,
+            trade_date=trade_date,
+            sanitize_issue=sanitize_issue,
+            candidate_plan=extended_candidate,
+            orderable_today=extended_orderable_today,
+            label_prefix='延續',
+            kind_if_orderable='extended',
         )
-        return {
-            'kind': kind,
-            'ticker': ticker,
-            'proj_cost': proj_cost,
-            'ev': expected_value,
-            'expected_value': expected_value,
-            'sort_value': sort_value,
-            'text': f"{ticker:<6} | {stat_str} | {' | '.join(barrier_parts)}",
-            'sanitize_issue': sanitize_issue,
-            'win_rate': win_rate_pct,
-            'trade_count': trade_count,
-            'asset_growth': asset_growth_pct,
-        }
 
-    sort_value = _calc_sort_value(
+    extended_candidate_tbd = stats.get('extended_candidate_tbd_today')
+    extended_tbd_orderable_today = bool(stats.get('extended_tbd_orderable_today', extended_candidate_tbd is not None))
+    if extended_candidate_tbd is not None:
+        return _build_extended_like_row(
+            ticker=ticker,
+            expected_value=expected_value,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+            params=params,
+            trade_date=trade_date,
+            sanitize_issue=sanitize_issue,
+            candidate_plan=extended_candidate_tbd,
+            orderable_today=extended_tbd_orderable_today,
+            label_prefix='延續(TBD)',
+            kind_if_orderable='extended_tbd',
+        )
+
+    return _build_scanner_row(
+        kind='candidate',
+        ticker=ticker,
         expected_value=expected_value,
+        win_rate_pct=win_rate_pct,
+        trade_count=trade_count,
+        asset_growth_pct=asset_growth_pct,
         proj_cost=None,
-        win_rate_pct=win_rate_pct,
-        trade_count=trade_count,
-        asset_growth_pct=asset_growth_pct,
+        detail='僅歷績符合：今日無新訊號 / 延續掛單',
+        sanitize_issue=sanitize_issue,
     )
-    stat_str = _build_stat_str(
-        expected_value=expected_value,
-        win_rate_pct=win_rate_pct,
-        trade_count=trade_count,
-        asset_growth_pct=asset_growth_pct,
-        sort_value=sort_value,
-    )
-    return {
-        'kind': 'candidate',
-        'ticker': ticker,
-        'proj_cost': None,
-        'ev': expected_value,
-        'expected_value': expected_value,
-        'sort_value': sort_value,
-        'text': f"{ticker:<6} | {stat_str} | 僅歷績符合：今日無新訊號 / 延續掛單",
-        'sanitize_issue': sanitize_issue,
-        'win_rate': win_rate_pct,
-        'trade_count': trade_count,
-        'asset_growth': asset_growth_pct,
-    }
 
 
 def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
@@ -198,7 +229,7 @@ def build_scanner_response_from_stats(*, ticker, stats, params, sanitize_stats, 
     if history_row is None:
         return None
 
-    if history_row['kind'] not in ('buy', 'extended'):
+    if history_row['kind'] not in ('buy', 'extended', 'extended_tbd'):
         return ('candidate', None, None, None, None, ticker, history_row['sanitize_issue'])
 
     return (

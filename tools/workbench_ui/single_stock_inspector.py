@@ -902,6 +902,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             kind_label = "新訊號"
         elif kind == "extended":
             kind_label = "延續候選"
+        elif kind == "extended_tbd":
+            kind_label = "延續候選(TBD)"
         else:
             kind_label = ""
         probe_text = build_scanner_sort_probe_text(
@@ -977,7 +979,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
             candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
             display_values = [
-                f"{item.get('ticker', '')} | {'新訊號' if item.get('kind') == 'buy' else '延續候選'}"
+                f"{item.get('ticker', '')} | {('新訊號' if item.get('kind') == 'buy' else ('延續候選(TBD)' if item.get('kind') == 'extended_tbd' else '延續候選'))}"
                 for item in candidate_rows
             ]
             self._apply_scan_dropdown(
