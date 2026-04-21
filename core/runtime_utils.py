@@ -222,6 +222,27 @@ def parse_int_strict(raw_value, field_name, *, min_value=None, max_value=None):
     return value
 
 
+# # (AI註: 浮點輸入驗證集中處理，避免各工具各自 float(...) 造成錯誤訊息與邊界口徑分叉)
+def parse_float_strict(raw_value, field_name, *, min_value=None, max_value=None, strict_gt=False, strict_lt=False):
+    text = str(raw_value).strip()
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} 必須是數字，收到: {raw_value}") from None
+
+    if min_value is not None:
+        if strict_gt and value <= min_value:
+            raise ValueError(f"{field_name} 必須 > {min_value}，收到: {value}")
+        if not strict_gt and value < min_value:
+            raise ValueError(f"{field_name} 必須 >= {min_value}，收到: {value}")
+    if max_value is not None:
+        if strict_lt and value >= max_value:
+            raise ValueError(f"{field_name} 必須 < {max_value}，收到: {value}")
+        if not strict_lt and value > max_value:
+            raise ValueError(f"{field_name} 必須 <= {max_value}，收到: {value}")
+    return value
+
+
 # # (AI註: prompt + 整數解析共用單一入口；互動 / ENV / pipe 的錯誤訊息保持一致)
 def safe_prompt_int(prompt_text, default_value, field_name, *, min_value=None, max_value=None):
     raw_value = safe_prompt(prompt_text, str(default_value))

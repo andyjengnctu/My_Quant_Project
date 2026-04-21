@@ -10,10 +10,23 @@ if PROJECT_ROOT not in sys.path:
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, validate_cli_args
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=RuntimeWarning)
+
+
+_FIXED_RISK_MENU_DEFAULT = 0.01
+_FIXED_RISK_MENU_QUICK_CHOICE_2 = 0.02
+
+
+def _resolve_portfolio_fixed_risk_input(raw_value):
+    text = str(raw_value).strip()
+    if text == "":
+        return _FIXED_RISK_MENU_DEFAULT
+    if text == "2":
+        return _FIXED_RISK_MENU_QUICK_CHOICE_2
+    return parse_float_strict(text, "固定風險比例", min_value=0.0, max_value=1.0, strict_gt=True)
 
 
 def main(argv=None, env=None):
@@ -95,6 +108,11 @@ def main(argv=None, env=None):
             f"👉 開始回測年份：[Enter] 測試起始年{default_start_year_hint}  [數字] 指定年份: ",
             "",
         ).strip()
+        raw_fixed_risk = safe_prompt(
+            "👉 單筆固定風險：[Enter] 0.01  [2] 0.02  [數字] 指定比例: ",
+            "",
+        ).strip()
+        user_fixed_risk = _resolve_portfolio_fixed_risk_input(raw_fixed_risk)
         from tools.portfolio_sim.simulation_runner import PORTFOLIO_DEFAULT_BENCHMARK_TICKER
 
         if raw_start_year == "":
@@ -120,8 +138,15 @@ def main(argv=None, env=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    try:
+        params.fixed_risk = user_fixed_risk
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
     print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
     print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
+    print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
 
     ensure_runtime_dirs()
     try:
