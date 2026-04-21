@@ -153,7 +153,7 @@ def execute_reserved_entries_for_day(
     return restore_money_like_from_milli(cash_milli, cash_template), total_missed_buys
 
 
-def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params):
+def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs_fast, today, params, sizing_capital):
     for ticker in sorted(list(active_extended_signals.keys())):
         if ticker in portfolio:
             del active_extended_signals[ticker]
@@ -167,8 +167,31 @@ def cleanup_extended_signals_for_day(active_extended_signals, portfolio, all_dfs
         if t_pos < 0:
             continue
 
+        if t_pos <= 0:
+            continue
+        y_pos = t_pos - 1
         t_open = get_fast_value(fast_df, 'Open', pos=t_pos)
         t_low = get_fast_value(fast_df, 'Low', pos=t_pos)
         t_high = get_fast_value(fast_df, 'High', pos=t_pos)
-        if should_clear_extended_signal(active_extended_signals[ticker], t_low, t_high, t_open=t_open, params=params):
+        t_close = get_fast_close(fast_df, pos=t_pos)
+        t_volume = get_fast_value(fast_df, 'Volume', pos=t_pos)
+        y_close = get_fast_close(fast_df, pos=y_pos)
+        y_high = get_fast_value(fast_df, 'High', pos=y_pos)
+        y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        y_ind_sell = bool(get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos))
+        if should_clear_extended_signal(
+            active_extended_signals[ticker],
+            t_low,
+            t_high,
+            t_open=t_open,
+            t_close=t_close,
+            t_volume=t_volume,
+            y_close=y_close,
+            y_high=y_high,
+            y_atr=y_atr,
+            y_ind_sell=y_ind_sell,
+            sizing_capital=sizing_capital,
+            current_date=today,
+            params=params,
+        ):
             del active_extended_signals[ticker]

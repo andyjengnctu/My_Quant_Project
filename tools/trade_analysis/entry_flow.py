@@ -287,7 +287,21 @@ def process_debug_entry_for_day(
                 note="不計 miss buy",
             )
 
-    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(active_extended_signal, t_low, t_high, t_open=t_open, params=params):
+    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(
+        active_extended_signal,
+        t_low,
+        t_high,
+        t_open=t_open,
+        t_close=t_close,
+        t_volume=t_volume,
+        y_close=close_prev,
+        y_high=np.nan,
+        y_atr=atr_prev,
+        y_ind_sell=False,
+        sizing_capital=sizing_cap,
+        current_date=current_date,
+        params=params,
+    ):
         active_extended_signal = None
 
     return position, active_extended_signal, spent_cash

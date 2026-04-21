@@ -13,6 +13,7 @@ from core.trade_plans import (
     is_extended_signal_orderable_for_day,
     is_extended_tbd_orderable_for_day,
 )
+from core.extended_signals import is_extended_tbd_shadow_alive
 
 
 def finalize_open_position_at_end(
@@ -137,9 +138,9 @@ def build_backtest_stats(
     close_last,
     had_open_position_at_end,
     active_extended_signal,
-    active_extended_signal_tbd,
-    end_position_qty,
-    avg_bars_held,
+    active_extended_signal_tbd=None,
+    end_position_qty=0,
+    avg_bars_held=0,
     final_date=None,
     ticker=None,
     security_profile=None,
@@ -170,10 +171,11 @@ def build_backtest_stats(
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
 
+    shadow_active_today = is_extended_tbd_shadow_alive(active_extended_signal)
     extended_candidate_today = None
     extended_orderable_today = False
-    if active_extended_signal is not None:
-        sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
+    sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
+    if active_extended_signal is not None and not shadow_active_today:
         resolved_ticker = resolved_ticker or active_extended_signal.get("ticker")
         extended_candidate_today = build_extended_candidate_plan_from_signal(
             active_extended_signal,
@@ -193,11 +195,10 @@ def build_backtest_stats(
 
     extended_candidate_tbd_today = None
     extended_tbd_orderable_today = False
-    if active_extended_signal_tbd is not None:
-        sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
-        resolved_ticker = resolved_ticker or active_extended_signal_tbd.get("ticker")
+    if active_extended_signal is not None and shadow_active_today:
+        resolved_ticker = resolved_ticker or active_extended_signal.get("ticker")
         extended_candidate_tbd_today = build_extended_tbd_candidate_plan_from_state(
-            active_extended_signal_tbd,
+            active_extended_signal,
             sizing_capital,
             params,
             ticker=resolved_ticker,
@@ -205,7 +206,7 @@ def build_backtest_stats(
             trade_date=final_date,
         )
         extended_tbd_orderable_today = is_extended_tbd_orderable_for_day(
-            active_extended_signal_tbd,
+            active_extended_signal,
             extended_candidate_tbd_today,
             close_last,
             ticker=resolved_ticker,
@@ -234,7 +235,7 @@ def build_backtest_stats(
         'history_trade_count': _history_trade_count,
         'hasOpenPositionAtEnd': had_open_position_at_end,
         'activeExtendedSignal': active_extended_signal is not None,
-        'activeExtendedSignalTBD': active_extended_signal_tbd is not None,
+        'activeExtendedSignalTBD': shadow_active_today,
         'endPositionQty': end_position_qty,
         'avgBarsHeld': avg_bars_held,
         'trade_count': trade_count,

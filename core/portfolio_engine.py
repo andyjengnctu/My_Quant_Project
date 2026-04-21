@@ -206,6 +206,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             all_dfs_fast=all_dfs_fast,
             today=today,
             params=params,
+            sizing_capital=sizing_equity,
         )
 
         t0 = time.perf_counter() if profile_stats is not None else None
