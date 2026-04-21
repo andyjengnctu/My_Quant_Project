@@ -212,6 +212,9 @@ def build_extended_tbd_candidate_plan_from_state(tbd_state, sizing_capital, para
     enriched_plan['shadow_tp_half'] = shadow_position.get('tp_half', np.nan)
     enriched_plan['shadow_sold_half'] = bool(shadow_position.get('sold_half', False))
     enriched_plan['shadow_entry_price'] = shadow_position.get('entry_fill_price', np.nan)
+    enriched_plan['shadow_pending_exit_action'] = shadow_position.get('pending_exit_action')
+    enriched_plan['shadow_pending_exit_trigger_price'] = shadow_position.get('pending_exit_trigger_price', np.nan)
+    enriched_plan['shadow_position_state'] = copy.deepcopy(shadow_position)
     return enriched_plan
 
 
@@ -228,6 +231,9 @@ def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, 
 
 def is_extended_tbd_orderable_for_day(tbd_state, candidate_plan, y_close, ticker=None, security_profile=None):
     if tbd_state is None or not is_extended_tbd_shadow_alive(tbd_state):
+        return False
+    shadow_position = _resolve_tbd_shadow_position(tbd_state)
+    if shadow_position is not None and shadow_position.get('pending_exit_action') is not None:
         return False
     signal_state = _resolve_tbd_signal_state(tbd_state)
     return is_extended_signal_orderable_for_day(

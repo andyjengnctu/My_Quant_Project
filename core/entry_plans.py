@@ -137,6 +137,7 @@ def _apply_entry_day_position_state(position, *, t_high):
     return position
 
 
+
 def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
     if position is None or position.get("qty", 0) <= 0:
         return position
@@ -157,6 +158,51 @@ def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
     elif tp_hit and half_sell_qty > 0 and not position.get("sold_half", False):
         position["pending_exit_action"] = "TP_HALF"
         position["pending_exit_trigger_price"] = milli_to_price(position["tp_half_milli"])
+    return position
+
+
+def _apply_inherited_shadow_management(position, *, shadow_position):
+    if position is None or shadow_position is None:
+        return position
+
+    inherited_fields = (
+        'sl_milli',
+        'initial_stop_milli',
+        'trailing_stop_milli',
+        'tp_half_milli',
+        'sl',
+        'initial_stop',
+        'trailing_stop',
+        'tp_half',
+        'sold_half',
+        'highest_high_since_entry_milli',
+        'highest_high_since_entry',
+        'pending_exit_action',
+        'pending_exit_trigger_price',
+    )
+    for field in inherited_fields:
+        if field in shadow_position:
+            position[field] = shadow_position[field]
+
+    position['inherited_shadow_management'] = True
+    position['shadow_entry_fill_price_milli'] = shadow_position.get('entry_fill_price_milli', 0)
+    position['shadow_entry_fill_price'] = shadow_position.get('entry_fill_price', float('nan'))
+    position['shadow_sold_half'] = bool(shadow_position.get('sold_half', False))
+    return position
+
+
+def _apply_inherited_shadow_entry_day_state(position, *, t_high):
+    if position is None:
+        return position
+
+    position['entry_day_stop_triggered'] = False
+    position['entry_day_tp_triggered'] = False
+
+    highest_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
+    if not pd.isna(t_high):
+        highest_high_milli = max(highest_high_milli, price_to_milli(t_high))
+    position['highest_high_since_entry_milli'] = highest_high_milli
+    position['highest_high_since_entry'] = milli_to_price(highest_high_milli)
     return position
 
 
@@ -310,7 +356,12 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         security_profile=resolved_security_profile,
         trade_date=trade_date,
     )
-    position = _apply_entry_day_position_state(position, t_high=t_high)
+    inherited_shadow_position = entry_plan.get("shadow_position_state")
+    if inherited_shadow_position is not None:
+        position = _apply_inherited_shadow_management(position, shadow_position=inherited_shadow_position)
+        position = _apply_inherited_shadow_entry_day_state(position, t_high=t_high)
+    else:
+        position = _apply_entry_day_position_state(position, t_high=t_high)
     position = _apply_entry_day_pending_exit(position, t_high=t_high, t_low=t_low, params=params)
     result["filled"] = True
     result["count_as_missed_buy"] = False
