@@ -40,9 +40,6 @@ class OptimizerSession:
         train_max_positions,
         train_start_year,
         train_enable_rotation,
-        optimizer_high_len_min,
-        optimizer_high_len_max,
-        optimizer_high_len_step,
         default_max_workers,
         enable_optimizer_profiling,
         enable_profile_console_print,
@@ -70,9 +67,6 @@ class OptimizerSession:
         self.train_max_positions = train_max_positions
         self.train_start_year = train_start_year
         self.train_enable_rotation = train_enable_rotation
-        self.optimizer_high_len_min = optimizer_high_len_min
-        self.optimizer_high_len_max = optimizer_high_len_max
-        self.optimizer_high_len_step = optimizer_high_len_step
         self.default_max_workers = default_max_workers
         self.profile_recorder = profile_recorder_cls(
             output_dir=output_dir,

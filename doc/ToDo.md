@@ -1,5 +1,9 @@
 ## Going
 
+- Debug
+    0.01 risk not effect
+    有大量延後，但scanner不到
+    
 - anti-overfitting
     
     驗證架構: rolling move forward來的驗證策略架構本身，每次驗1年真正OOS資料，最後看加總績效，每輪設定訓練上限(次數/時間/變化/最小等)。

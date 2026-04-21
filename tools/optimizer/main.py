@@ -46,9 +46,6 @@ DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
 TRAIN_ENABLE_ROTATION = False
 DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name == "nt" else min(6, max(1, (os.cpu_count() or 1) // 2))
-OPTIMIZER_HIGH_LEN_MIN = 40
-OPTIMIZER_HIGH_LEN_MAX = 250
-OPTIMIZER_HIGH_LEN_STEP = 5
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
@@ -216,9 +213,6 @@ def build_optimizer_session(*, walk_forward_policy: dict):
         train_max_positions=TRAIN_MAX_POSITIONS,
         train_start_year=int(walk_forward_policy["train_start_year"]),
         train_enable_rotation=TRAIN_ENABLE_ROTATION,
-        optimizer_high_len_min=OPTIMIZER_HIGH_LEN_MIN,
-        optimizer_high_len_max=OPTIMIZER_HIGH_LEN_MAX,
-        optimizer_high_len_step=OPTIMIZER_HIGH_LEN_STEP,
         default_max_workers=DEFAULT_OPTIMIZER_MAX_WORKERS,
         enable_optimizer_profiling=ENABLE_OPTIMIZER_PROFILING,
         enable_profile_console_print=ENABLE_PROFILE_CONSOLE_PRINT,
@@ -363,7 +357,8 @@ def main(argv=None, environ=None):
         print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。輸入 0 匯出 candidate_best；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
-    from core.data_utils import discover_unique_csv_inputs, get_required_min_rows_from_high_len
+    from core.data_utils import discover_unique_csv_inputs
+    from strategies.breakout.search_space import get_breakout_optimizer_required_min_rows
     from tools.optimizer.prep import load_all_raw_data
     from tools.optimizer.runtime import (
         create_optimizer_study,
@@ -396,7 +391,7 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
     walk_forward_policy = build_optimizer_runtime_policy(loaded_policy, selected_model_mode)
-    optimizer_required_min_rows = get_required_min_rows_from_high_len(OPTIMIZER_HIGH_LEN_MAX)
+    optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
     session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
     best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)

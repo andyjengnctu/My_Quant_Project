@@ -8,7 +8,7 @@ from typing import Callable
 from config.training_policy import OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K
 from core.params_io import build_params_from_mapping
 from core.strategy_params import build_runtime_param_raw_value
-from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
+from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import evaluate_prepared_train_score, resolve_search_train_scope
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
@@ -164,21 +164,12 @@ def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
     return expected == normalize_objective_mode("")
 
 
-def _resolve_neighbor_step(session, field_name: str):
-    if field_name == "high_len":
-        return int(session.optimizer_high_len_step), "int", int(session.optimizer_high_len_min), int(session.optimizer_high_len_max)
+def _resolve_neighbor_step(session, field_name: str, *, center_payload=None):
     if field_name == "tp_percent":
         spec = OPTIMIZER_TP_PERCENT_SEARCH_SPEC
         return float(spec["step"]), "float", float(spec["low"]), float(spec["high"])
 
-    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
-    kind = str(spec["kind"])
-    step = spec.get("step", 1)
-    if field_name == "vol_long_len":
-        low_value = 1
-    else:
-        low_value = spec["low"]
-    return step, kind, low_value, spec["high"]
+    return resolve_breakout_neighbor_spec(field_name, center_payload=center_payload)
 
 
 def _apply_step(field_name: str, current_value, step_value, direction: int, kind: str):
@@ -204,7 +195,7 @@ def _build_neighbor_candidates(session, trial):
     neighbors = []
     seen_payload_keys = set()
     for field_name in candidate_fields:
-        step_value, kind, low_value, high_value = _resolve_neighbor_step(session, field_name)
+        step_value, kind, low_value, high_value = _resolve_neighbor_step(session, field_name, center_payload=center_payload)
         current_value = center_payload[field_name]
         for direction in (-1, 1):
             candidate_value = _apply_step(field_name, current_value, step_value, direction, kind)

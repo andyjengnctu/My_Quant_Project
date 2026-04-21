@@ -128,9 +128,6 @@ class _FakeOptimizerSession:
         self.objective_mode = OBJECTIVE_MODE_LEGACY_BASE_SCORE
         self.train_max_positions = 3
         self.train_enable_rotation = False
-        self.optimizer_high_len_min = 20
-        self.optimizer_high_len_max = 250
-        self.optimizer_high_len_step = 5
         self.optimizer_fixed_tp_percent = fixed_tp_percent
         self.profile_recorder = _FakeProfileRecorder()
         self.recorded_prep_failures = []

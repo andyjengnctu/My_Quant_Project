@@ -1,3 +1,4 @@
+from core.data_utils import get_required_min_rows_from_lookbacks
 from strategies.breakout.adapter import build_breakout_strategy_params
 from strategies.breakout.schema import BREAKOUT_PARAM_SPECS
 
@@ -6,6 +7,7 @@ BREAKOUT_OPTIMIZER_SEARCH_SPACE = {
     "use_bb": {"kind": "categorical", "choices": [True, False]},  # (AI註: 布林通道濾網開關搜尋)
     "use_kc": {"kind": "categorical", "choices": [True, False]},  # (AI註: 肯特納通道濾網開關搜尋)
     "use_vol": {"kind": "categorical", "choices": [True, False]},  # (AI註: 量能濾網開關搜尋)
+    "high_len": {"kind": "int", "low": 40, "high": 250, "step": 5},  # (AI註: 突破新高觀察窗長搜尋，預設區間 40~250、步長 5)
     "atr_len": {"kind": "int", "low": 3, "high": 25},  # (AI註: ATR 窗長搜尋範圍，預設區間 3~25)
     "atr_times_init": {"kind": "float", "low": 1.0, "high": 3.5, "step": 0.1},  # (AI註: 初始停損 ATR 倍數搜尋，預設區間 1.0~3.5)
     "atr_times_trail": {"kind": "float", "low": 2.0, "high": 4.5, "step": 0.1},  # (AI註: 移動停損 ATR 倍數搜尋，預設區間 2.0~4.5)
@@ -41,7 +43,7 @@ def build_trial_params(session, trial):
         atr_times_init=trial.suggest_float("atr_times_init", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_init"]["step"]),
         atr_times_trail=trial.suggest_float("atr_times_trail", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_times_trail"]["step"]),
         atr_buy_tol=trial.suggest_float("atr_buy_tol", BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_buy_tol"]["step"]),
-        high_len=trial.suggest_int("high_len", session.optimizer_high_len_min, session.optimizer_high_len_max, step=session.optimizer_high_len_step),
+        high_len=trial.suggest_int("high_len", BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["step"]),
         tp_percent=session.resolve_optimizer_tp_percent(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent),
         use_bb=ai_use_bb,
         use_kc=ai_use_kc,
@@ -72,4 +74,33 @@ def build_trial_params(session, trial):
         min_history_ev=trial.suggest_float("min_history_ev", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_ev"]["step"]),
         min_history_win_rate=trial.suggest_float("min_history_win_rate", BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["low"], BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["high"], step=BREAKOUT_OPTIMIZER_SEARCH_SPACE["min_history_win_rate"]["step"]),
         use_compounding=True,
+    )
+
+
+def resolve_breakout_neighbor_spec(field_name, *, center_payload=None):
+    spec = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field_name]
+    kind = str(spec["kind"])
+    step = spec.get("step", 1)
+    high_value = spec["high"]
+
+    if field_name == "vol_long_len":
+        floor_value = int(BREAKOUT_PARAM_SPECS["vol_long_len"].get("min_value", 1))
+        anchor_value = floor_value
+        if center_payload is not None:
+            anchor_value = max(anchor_value, int(center_payload["vol_short_len"]))
+        low_value = anchor_value
+    else:
+        low_value = spec["low"]
+
+    return step, kind, low_value, high_value
+
+
+def get_breakout_optimizer_required_min_rows():
+    return get_required_min_rows_from_lookbacks(
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["high_len"]["high"],
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["atr_len"]["high"],
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["bb_len"]["high"],
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["kc_len"]["high"],
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_short_len"]["high"],
+        BREAKOUT_OPTIMIZER_SEARCH_SPACE["vol_long_len"]["high"],
     )
