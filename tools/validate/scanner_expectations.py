@@ -157,6 +157,17 @@ def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, tr
         proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
         return "extended" if proj_qty > 0 else "candidate"
 
+    extended_candidate_tbd_today = scanner_ref_stats.get("extended_candidate_tbd_today")
+    if extended_candidate_tbd_today is not None:
+        if not bool(scanner_ref_stats.get("extended_tbd_orderable_today", True)):
+            return "candidate"
+        limit_price = extended_candidate_tbd_today.get("limit_price")
+        init_sl = extended_candidate_tbd_today.get("init_sl")
+        if limit_price is None or init_sl is None:
+            return "candidate"
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
+        return "extended_tbd" if proj_qty > 0 else "candidate"
+
     return "candidate"
 
 
@@ -169,19 +180,28 @@ def build_expected_scanner_payload(scanner_ref_stats, params, *, ticker=None, tr
         "sort_value": None,
     }
 
-    if status not in ("buy", "extended"):
+    if status not in ("buy", "extended", "extended_tbd"):
         return payload
 
     if status == "buy":
         limit_price = scanner_ref_stats["buy_limit"]
         stop_loss = scanner_ref_stats["stop_loss"]
         proj_qty = calc_reference_candidate_qty(limit_price, stop_loss, params, ticker=ticker, trade_date=trade_date)
-    else:
+    elif status == "extended":
         extended_candidate = scanner_ref_stats.get("extended_candidate_today")
         if extended_candidate is None:
             return payload
         limit_price = extended_candidate["limit_price"]
         init_sl = extended_candidate.get("init_sl")
+        if init_sl is None:
+            return payload
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
+    else:
+        extended_candidate_tbd = scanner_ref_stats.get("extended_candidate_tbd_today")
+        if extended_candidate_tbd is None:
+            return payload
+        limit_price = extended_candidate_tbd["limit_price"]
+        init_sl = extended_candidate_tbd.get("init_sl")
         if init_sl is None:
             return payload
         proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)

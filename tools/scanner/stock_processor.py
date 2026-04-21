@@ -43,14 +43,6 @@ def _calc_sort_value(*, expected_value, proj_cost, win_rate_pct, trade_count, as
     )
 
 
-def _should_exclude_forced_close_case(stats):
-    if not stats:
-        return False
-    if bool(stats.get('hasOpenPositionAtEnd', False)):
-        return True
-    return int(stats.get('current_position', 0) or 0) > 0
-
-
 def _build_scanner_row(*, kind, ticker, expected_value, win_rate_pct, trade_count, asset_growth_pct, proj_cost, detail, sanitize_issue):
     sort_value = _calc_sort_value(
         expected_value=expected_value,
@@ -136,8 +128,6 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
 
 def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_stats, trade_date=None):
     if not stats or not stats['is_candidate']:
-        return None
-    if _should_exclude_forced_close_case(stats):
         return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
