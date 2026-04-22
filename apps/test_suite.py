@@ -66,6 +66,10 @@ class _CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
     ]
 
 
+class _DWORD(ctypes.c_ulong):
+    pass
+
+
 def _char_display_width(ch: str) -> int:
     return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
 
@@ -165,17 +169,56 @@ class ConsoleProgress:
     def _refresh_console_metrics(self) -> None:
         self.console_width = self._get_console_width()
 
-    def _get_cursor_row(self) -> int | None:
+    def _get_console_info(self) -> _CONSOLE_SCREEN_BUFFER_INFO | None:
         if self.win32_handle is None:
             return None
         try:
             info = _CONSOLE_SCREEN_BUFFER_INFO()
             if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
                 return None
-            return int(info.dwCursorPosition.Y)
+            return info
         except Exception as exc:
             _ = exc
             return None
+
+    def _get_cursor_row(self) -> int | None:
+        info = self._get_console_info()
+        if info is None:
+            return None
+        return int(info.dwCursorPosition.Y)
+
+    def _reserve_win32_block(self, line_count: int) -> bool:
+        info = self._get_console_info()
+        if info is None:
+            return False
+        current_row = int(info.dwCursorPosition.Y)
+        self.anchor_row = current_row
+        sys.stdout.write("\n" * line_count)
+        sys.stdout.flush()
+        after_info = self._get_console_info()
+        if after_info is None:
+            return False
+        self.anchor_row = max(0, int(after_info.dwCursorPosition.Y) - line_count)
+        self.reserved_line_count = line_count
+        return self._move_cursor(0, self.anchor_row)
+
+    def _write_win32_line(self, row: int, text: str) -> bool:
+        if self.win32_handle is None:
+            return False
+        try:
+            kernel32 = ctypes.windll.kernel32
+            fitted = self._fit_console_line(text)
+            coord = _COORD(0, int(row))
+            written = _DWORD()
+            fill_len = max(int(self.console_width) - 1, 1)
+            if kernel32.FillConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar(" "), fill_len, coord, ctypes.byref(written)) == 0:
+                return False
+            if kernel32.WriteConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar_p(fitted), len(fitted), coord, ctypes.byref(written)) == 0:
+                return False
+            return True
+        except Exception as exc:
+            _ = exc
+            return False
 
     def _move_cursor(self, x: int, y: int) -> bool:
         if self.win32_handle is None:
