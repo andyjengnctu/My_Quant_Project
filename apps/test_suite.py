@@ -319,11 +319,9 @@ class ConsoleProgress:
                 prepared = [self._fit_console_line(line) for line in lines]
                 rendered = False
                 for offset, line in enumerate(prepared):
-                    if not self._move_cursor(0, self.anchor_row + offset):
+                    if not self._write_win32_line(self.anchor_row + offset, line):
                         rendered = False
                         break
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
                     rendered = True
                 if rendered:
                     self._move_cursor(0, self.anchor_row + len(lines))
