@@ -173,10 +173,12 @@ def build_backtest_stats(
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
 
-    # # (AI註: 期末強制結算代表該檔在回測最後一天實際仍持倉，scanner / workbench 不得再把它列成新訊號、延續或延續(TBD))
+    # # (AI註: scanner / workbench 的 TBD 用途是讓使用者確認『實際投組是否已持有』，
+    # # 因此不可用單股路徑的 current_position / hasOpenPositionAtEnd 直接整體封鎖；
+    # # 否則凡是單股已買進且仍在倉的情境，TBD 會被全部吞掉。
     has_terminal_position = bool(had_open_position_at_end) or current_position > 0
-    display_extended_signal = None if has_terminal_position else active_extended_signal
-    display_extended_tbd_signal = None if has_terminal_position else (active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal)
+    display_extended_signal = active_extended_signal
+    display_extended_tbd_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
     shadow_active_today = is_extended_tbd_shadow_alive(display_extended_tbd_signal)
     tbd_display_today = display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
     extended_candidate_today = None

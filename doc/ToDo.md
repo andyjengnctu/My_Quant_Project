@@ -5,6 +5,9 @@
     買價接近停損，倉數會變的超大    
     workben加頁投組檢示
 
+00735.csv在2026/3/2已出現high > 停利，為何在exnteded_tbd
+
+
 - anti-overfitting
     
     驗證架構: rolling move forward來的驗證策略架構本身，每次驗1年真正OOS資料，最後看加總績效，每輪設定訓練上限(次數/時間/變化/最小等)。

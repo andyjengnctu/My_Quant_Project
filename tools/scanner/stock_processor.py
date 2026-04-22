@@ -131,14 +131,36 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         return None
 
     has_terminal_position = bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0
-    if has_terminal_position:
-        return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
     expected_value = float(stats['expected_value'])
     win_rate_pct = float(stats['win_rate'])
     trade_count = int(stats['trade_count'])
     asset_growth_pct = float(stats.get('asset_growth', 0.0))
+
+    extended_candidate = stats.get('extended_candidate_today')
+    extended_orderable_today = bool(stats.get('extended_orderable_today', extended_candidate is not None))
+    extended_candidate_tbd = stats.get('extended_candidate_tbd_today')
+    has_actionable_signal = stats['is_setup_today'] or extended_candidate is not None or extended_candidate_tbd is not None
+
+    if has_terminal_position:
+        if extended_candidate_tbd is None:
+            return None
+        extended_tbd_orderable_today = bool(stats.get('extended_tbd_orderable_today', True))
+        return _build_extended_like_row(
+            ticker=ticker,
+            expected_value=expected_value,
+            win_rate_pct=win_rate_pct,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth_pct,
+            params=params,
+            trade_date=trade_date,
+            sanitize_issue=sanitize_issue,
+            candidate_plan=extended_candidate_tbd,
+            orderable_today=extended_tbd_orderable_today,
+            label_prefix='延續(TBD)',
+            kind_if_orderable='extended_tbd',
+        )
 
     if stats['is_setup_today']:
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
@@ -163,8 +185,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             sanitize_issue=sanitize_issue,
         )
 
-    extended_candidate = stats.get('extended_candidate_today')
-    extended_orderable_today = bool(stats.get('extended_orderable_today', extended_candidate is not None))
     if extended_candidate is not None:
         return _build_extended_like_row(
             ticker=ticker,
@@ -181,7 +201,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             kind_if_orderable='extended',
         )
 
-    extended_candidate_tbd = stats.get('extended_candidate_tbd_today')
     extended_tbd_orderable_today = bool(stats.get('extended_tbd_orderable_today', extended_candidate_tbd is not None))
     if extended_candidate_tbd is not None:
         return _build_extended_like_row(

@@ -137,8 +137,22 @@ def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, tr
         return None
 
     has_terminal_position = bool(scanner_ref_stats.get("hasOpenPositionAtEnd")) or int(scanner_ref_stats.get("current_position", 0) or 0) > 0
-    if has_terminal_position:
+    has_actionable_signal = bool(scanner_ref_stats.get("is_setup_today")) or scanner_ref_stats.get("extended_candidate_today") is not None or scanner_ref_stats.get("extended_candidate_tbd_today") is not None
+    if has_terminal_position and not has_actionable_signal:
         return None
+
+    if has_terminal_position:
+        extended_candidate_tbd_today = scanner_ref_stats.get("extended_candidate_tbd_today")
+        if extended_candidate_tbd_today is None:
+            return None
+        if not bool(scanner_ref_stats.get("extended_tbd_orderable_today", True)):
+            return "candidate"
+        limit_price = extended_candidate_tbd_today.get("limit_price")
+        init_sl = extended_candidate_tbd_today.get("init_sl")
+        if limit_price is None or init_sl is None:
+            return "candidate"
+        proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
+        return "extended_tbd" if proj_qty > 0 else "candidate"
 
     if scanner_ref_stats["is_setup_today"]:
         proj_qty = calc_reference_candidate_qty(
