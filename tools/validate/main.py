@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -228,27 +227,10 @@ def main(argv=None, environ=None):
                 print("將只執行 synthetic coverage suite，但本次驗證不可視為完整通過。")
 
         total_tickers = len(selected_tickers)
-        run_real_scan_in_background = total_tickers > 0
         real_results = []
         real_summaries = []
-        real_future = None
-        real_scan_executor = None
-        if run_real_scan_in_background:
+        if total_tickers > 0:
             print(f"開始自動掃描 {total_tickers} 檔股票...")
-            real_scan_executor = ThreadPoolExecutor(max_workers=1)
-            real_future = real_scan_executor.submit(
-                run_real_ticker_scan,
-                selected_tickers,
-                base_params,
-                project_root=PROJECT_ROOT,
-                data_dir=DATA_DIR,
-                csv_map_getter=get_data_dir_csv_map,
-                add_fail_result=add_fail_result,
-                add_skip_result=add_skip_result,
-                format_exception_summary=format_exception_summary,
-                is_insufficient_data_error=is_insufficient_data_error,
-                progress_printer=None,
-            )
         else:
             scan_stats = {"total_tickers": 0, "worker_count": 1}
 
@@ -278,12 +260,19 @@ def main(argv=None, environ=None):
                 "synthetic": True,
             })
 
-        if real_future is not None:
-            try:
-                real_results, real_summaries, scan_stats = real_future.result()
-            finally:
-                if real_scan_executor is not None:
-                    real_scan_executor.shutdown(wait=True)
+        if total_tickers > 0:
+            real_results, real_summaries, scan_stats = run_real_ticker_scan(
+                selected_tickers,
+                base_params,
+                project_root=PROJECT_ROOT,
+                data_dir=DATA_DIR,
+                csv_map_getter=get_data_dir_csv_map,
+                add_fail_result=add_fail_result,
+                add_skip_result=add_skip_result,
+                format_exception_summary=format_exception_summary,
+                is_insufficient_data_error=is_insufficient_data_error,
+                progress_printer=None,
+            )
             all_results.extend(real_results)
             summaries.extend(real_summaries)
 

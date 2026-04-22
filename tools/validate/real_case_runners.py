@@ -24,7 +24,7 @@ from tools.validate.tool_adapters import (
     run_portfolio_sim_tool_check,
     run_scanner_tool_check,
 )
-from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
+from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry, resolve_shared_prep_cache_dir_from_env, _load_pickle
 from core.strategy_params import strategy_params_to_dict
 
 
@@ -261,6 +261,19 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
 def _determine_real_scan_worker_count(total_tickers):
     if total_tickers <= 1:
         return 1
+
+    cache_dir = resolve_shared_prep_cache_dir_from_env()
+    if cache_dir is not None:
+        index_path = cache_dir / "shared_prep_cache_index.pkl"
+        try:
+            index_payload = _load_pickle(index_path) if index_path.exists() else None
+        except Exception:
+            index_payload = None
+        if isinstance(index_payload, dict):
+            ready_count = int(index_payload.get("validation_cache_ready_count", 0) or 0)
+            prepared_count = int(index_payload.get("prepared_count", 0) or 0)
+            if ready_count > 0 and ready_count == prepared_count:
+                return 1
 
     cpu_count = os.cpu_count() or 1
     if cpu_count <= 2:
