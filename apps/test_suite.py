@@ -94,9 +94,8 @@ def _truncate_display_width(text: str, max_width: int) -> str:
 
 
 class ConsoleProgress:
-    def __init__(self, *, header_lines: list[str] | None = None) -> None:
+    def __init__(self) -> None:
         self.suite_started = time.time()
-        self.header_lines = list(header_lines or [])
         self.rendered_once = False
         self.finalized = False
         self.last_render_ts = 0.0
@@ -104,9 +103,8 @@ class ConsoleProgress:
         self.display_index_map = {name: index for index, name in enumerate(self.step_order, start=1)}
         self.major_total = len(self.step_order)
         self.win32_handle = self._get_windows_console_handle()
-        self.use_cls_redraw = os.name == "nt" and hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-        self.use_win32_redraw = (not self.use_cls_redraw) and self.win32_handle is not None
-        self.use_ansi_redraw = (not self.use_cls_redraw) and (not self.use_win32_redraw) and self._supports_ansi_redraw()
+        self.use_win32_redraw = self.win32_handle is not None
+        self.use_ansi_redraw = (not self.use_win32_redraw) and self._supports_ansi_redraw()
         self.anchor_row: int | None = None
         self.console_width = self._get_console_width()
         self.step_states: Dict[str, Dict[str, Any]] = {
@@ -260,16 +258,6 @@ class ConsoleProgress:
             return
         self.last_render_ts = now
         lines = [self._format_line(self.step_states[name]) for name in self.step_order]
-
-        if self.use_cls_redraw:
-            os.system("cls")
-            if self.header_lines:
-                sys.stdout.write("\n".join(self.header_lines) + "\n")
-            sys.stdout.write("\n".join(lines) + "\n")
-            sys.stdout.flush()
-            self.rendered_once = True
-            return
-
         if self.use_win32_redraw:
             self._refresh_console_metrics()
             if self.anchor_row is None:
@@ -382,12 +370,9 @@ def main(argv=None) -> int:
 
     from tools.local_regression.run_all import execute_all
 
-    header_lines = [
-        "=== Test Suite (reduced) ===",
-        "[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。",
-    ]
-    print("\n".join(header_lines))
-    progress = ConsoleProgress(header_lines=header_lines)
+    print("=== Test Suite (reduced) ===")
+    print("[前置檢查] 先檢查目前 Python 環境是否已具備 requirements；不自動安裝。")
+    progress = ConsoleProgress()
     result = execute_all(progress_callback=progress)
     _print_human_summary(result)
     return 0 if result["overall_status"] == "PASS" else 1
