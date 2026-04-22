@@ -168,6 +168,8 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     stop_price_milli = price_to_milli(stopPrice)
     cap_milli = money_to_milli(cap)
     max_risk_milli = calc_risk_budget_milli(cap_milli, riskPct)
+    max_position_cap_pct = float(getattr(params, "max_position_cap_pct", 1.0))
+    max_position_cap_milli = min(cap_milli, calc_risk_budget_milli(cap_milli, max_position_cap_pct))
 
     buy_fee_ppm = rate_to_ppm(params.buy_fee)
     sell_fee_ppm = rate_to_ppm(params.sell_fee)
@@ -178,10 +180,14 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     est_entry_unit_milli = buy_price_milli + est_buy_fee_per_share_milli
     est_exit_unit_milli = stop_price_milli - est_sell_cost_per_share_milli
     risk_per_share_milli = est_entry_unit_milli - est_exit_unit_milli
-    if risk_per_share_milli <= 0:
+    if risk_per_share_milli <= 0 or max_position_cap_milli <= 0:
         return 0
 
-    qty = int(min(cap_milli // max(est_entry_unit_milli, 1), max_risk_milli // max(risk_per_share_milli, 1)))
+    qty = int(min(
+        cap_milli // max(est_entry_unit_milli, 1),
+        max_risk_milli // max(risk_per_share_milli, 1),
+        max_position_cap_milli // max(est_entry_unit_milli, 1),
+    ))
 
     while qty > 0:
         buy_ledger = build_buy_ledger_from_price(bPrice, qty, params)
@@ -197,7 +203,7 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
         exact_exit_net_milli = sell_ledger["net_sell_total_milli"]
         actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
 
-        if exact_entry_cost_milli <= cap_milli and actual_risk_milli <= max_risk_milli:
+        if exact_entry_cost_milli <= cap_milli and exact_entry_cost_milli <= max_position_cap_milli and actual_risk_milli <= max_risk_milli:
             return qty
         qty -= 1
     return 0

@@ -68,7 +68,7 @@ def validate_price_utils_unit_case(_base_params):
     add_check(results, "unit_price_utils", case_id, "sell_fill_rounds_down_to_tick", 10.0, adjust_long_sell_fill_price(10.03), tol=1e-9)
     add_check(results, "unit_price_utils", case_id, "entry_price_uses_min_fee", 102.0, calc_entry_price(100.0, 10, params), tol=1e-9)
     add_check(results, "unit_price_utils", case_id, "net_sell_price_includes_fee_and_tax", 97.7, calc_net_sell_price(100.0, 10, params), tol=1e-9)
-    add_check(results, "unit_price_utils", case_id, "position_size_expected_qty", 30, sized_qty)
+    add_check(results, "unit_price_utils", case_id, "position_size_expected_qty", 29, sized_qty)
     add_check(results, "unit_price_utils", case_id, "position_size_entry_cost_respects_cap", True, entry_cost <= 10_000.0)
     add_check(results, "unit_price_utils", case_id, "position_size_actual_risk_respects_limit", True, actual_risk <= 200.0 + 1e-9)
     add_check(results, "unit_price_utils", case_id, "invalid_stop_returns_zero_qty", 0, calc_position_size(100.0, 101.0, 10_000.0, 0.02, params))
@@ -448,11 +448,15 @@ def _oracle_position_size(buy_price: float, stop_price: float, capital: float, r
 
     cap_milli = money_to_milli(capital)
     risk_budget_milli = calc_risk_budget_milli(cap_milli, risk_fraction)
+    max_position_cap_pct = float(getattr(params, "max_position_cap_pct", 1.0))
+    max_position_cap_milli = min(money_to_milli(capital), calc_risk_budget_milli(capital, max_position_cap_pct))
     max_qty = int(capital // buy_price)
 
     for qty in range(max_qty, 0, -1):
         entry_ledger = build_buy_ledger_from_price(buy_price, qty, params)
         if entry_ledger["net_buy_total_milli"] > cap_milli:
+            continue
+        if entry_ledger["net_buy_total_milli"] > max_position_cap_milli:
             continue
         stop_ledger = build_sell_ledger_from_price(stop_price, qty, params)
         realized_risk_milli = entry_ledger["net_buy_total_milli"] - stop_ledger["net_sell_total_milli"]

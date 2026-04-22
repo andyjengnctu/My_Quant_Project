@@ -29,6 +29,8 @@ def validate_synthetic_param_guardrail_case(base_params):
     invalid_cases = [
         ("tp_percent_ge_1_rejected", {**case["base_payload"], "tp_percent": 1.0}, "tp_percent"),
         ("fixed_risk_zero_rejected", {**case["base_payload"], "fixed_risk": 0.0}, "fixed_risk"),
+        ("max_position_cap_pct_zero_rejected", {**case["base_payload"], "max_position_cap_pct": 0.0}, "max_position_cap_pct"),
+        ("max_position_cap_pct_gt_one_rejected", {**case["base_payload"], "max_position_cap_pct": 1.1}, "max_position_cap_pct"),
         ("min_history_win_rate_gt_1_rejected", {**case["base_payload"], "min_history_win_rate": 1.1}, "min_history_win_rate"),
         ("vol_long_len_lt_short_rejected", {**case["base_payload"], "vol_short_len": 10, "vol_long_len": 5}, "vol_long_len"),
         ("use_bb_string_type_rejected", {**case["base_payload"], "use_bb": "abc"}, "use_bb"),

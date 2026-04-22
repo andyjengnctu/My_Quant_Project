@@ -9,6 +9,7 @@ DEFAULT_FEE_RATE = float(BROKER_FEE_RATE * BROKER_FEE_DISCOUNT)
 EXECUTION_POLICY_PARAM_SPECS = {
     "initial_capital": {"type": float, "default": 1_000_000.0, "min_value": 0.0, "strict_gt": True},  # 回測/投組初始本金
     "fixed_risk": {"type": float, "default": 0.01, "min_value": 0.0, "strict_gt": True, "max_value": 1.0},  # 單筆固定風險比例
+    "max_position_cap_pct": {"type": float, "default": 0.30, "min_value": 0.0, "strict_gt": True, "max_value": 1.0},  # 單一標的最大資金占總資產比例
     "buy_fee": {"type": float, "default": DEFAULT_FEE_RATE, "min_value": 0.0},  # 買進手續費率，預設券商手續費 × 折扣
     "sell_fee": {"type": float, "default": DEFAULT_FEE_RATE, "min_value": 0.0},  # 賣出手續費率，預設券商手續費 × 折扣
     "tax_rate": {"type": float, "default": 0.003, "min_value": 0.0},  # 賣出交易稅率

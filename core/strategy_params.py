@@ -131,6 +131,7 @@ class V16StrategyParams:
     min_history_win_rate: float = SELECTION_POLICY_PARAM_SPECS["min_history_win_rate"]["default"]
     initial_capital: float = EXECUTION_POLICY_PARAM_SPECS["initial_capital"]["default"]
     fixed_risk: float = EXECUTION_POLICY_PARAM_SPECS["fixed_risk"]["default"]
+    max_position_cap_pct: float = EXECUTION_POLICY_PARAM_SPECS["max_position_cap_pct"]["default"]
     buy_fee: float = EXECUTION_POLICY_PARAM_SPECS["buy_fee"]["default"]
     sell_fee: float = EXECUTION_POLICY_PARAM_SPECS["sell_fee"]["default"]
     tax_rate: float = EXECUTION_POLICY_PARAM_SPECS["tax_rate"]["default"]
