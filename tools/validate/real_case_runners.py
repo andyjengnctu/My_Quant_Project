@@ -25,6 +25,7 @@ from tools.validate.tool_adapters import (
     run_scanner_tool_check,
 )
 from tools.local_regression.shared_prep_cache import load_shared_prep_cache_entry
+from core.strategy_params import strategy_params_to_dict
 
 
 def run_single_backtest_check(df, params):
@@ -32,6 +33,9 @@ def run_single_backtest_check(df, params):
     return stats, standalone_logs, prep_df
 
 
+
+def _build_consistency_params_snapshot(params):
+    return strategy_params_to_dict(params, include_runtime=True)
 
 
 def build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs):
@@ -162,10 +166,12 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         "sanitize_duplicate": sanitize_stats["duplicate_date_count"],
     }
 
+    validation_consistency_cache = None
     if use_shared_prepared:
         single_stats = dict(cache_entry["single_stats"])
         standalone_logs = list(cache_entry["standalone_logs"])
         prep_df = cache_entry["prepared_df"].copy()
+        validation_consistency_cache = cache_entry.get("validation_consistency_cache")
         portfolio_context = {
             "fast_data": cache_entry["fast_data"],
             "sorted_dates": list(cache_entry["sorted_dates"]),
@@ -178,16 +184,25 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         portfolio_context = build_single_ticker_portfolio_context(ticker, prep_df, standalone_logs)
     scanner_ref_stats = rebuild_scanner_reference_stats_from_single_stats(single_stats, df, scanner_params)
     parity_params = build_consistency_parity_params(params)
-    portfolio_sim_stats = run_portfolio_sim_tool_check(
-        ticker,
-        file_path,
-        parity_params,
-        prepared_df=prep_df,
-        standalone_logs=standalone_logs,
-        packed_fast_data=portfolio_context["fast_data"],
-        sorted_dates=portfolio_context["sorted_dates"],
-        start_year=portfolio_context["start_year"],
+    expected_cache_snapshot = _build_consistency_params_snapshot(params)
+    use_validation_consistency_cache = (
+        isinstance(validation_consistency_cache, dict)
+        and validation_consistency_cache.get("status") == "ready"
+        and validation_consistency_cache.get("consistency_params_snapshot") == expected_cache_snapshot
     )
+    if use_validation_consistency_cache:
+        portfolio_sim_stats = dict(validation_consistency_cache["portfolio_sim_stats"])
+    else:
+        portfolio_sim_stats = run_portfolio_sim_tool_check(
+            ticker,
+            file_path,
+            parity_params,
+            prepared_df=prep_df,
+            standalone_logs=standalone_logs,
+            packed_fast_data=portfolio_context["fast_data"],
+            sorted_dates=portfolio_context["sorted_dates"],
+            start_year=portfolio_context["start_year"],
+        )
     portfolio_stats = dict(portfolio_sim_stats)
     scanner_result, scanner_module_path = run_scanner_tool_check(
         ticker,
@@ -202,7 +217,11 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
         downloader_df, downloader_module_path, downloader_request, downloader_expected_dataset = run_downloader_tool_check(ticker)
     except VALIDATION_RECOVERABLE_EXCEPTIONS as e:
         downloader_error = f"{type(e).__name__}: {e}"
-    debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params, prepared_df=prep_df)
+    if use_validation_consistency_cache:
+        debug_df = validation_consistency_cache["debug_trade_log_df"].copy()
+        debug_module_path = validation_consistency_cache.get("debug_module_path")
+    else:
+        debug_df, debug_module_path = run_debug_trade_log_check(ticker, df, params, prepared_df=prep_df)
 
     summary["portfolio_sim_module_path"] = portfolio_sim_stats["module_path"]
     summary["scanner_module_path"] = scanner_module_path
@@ -216,6 +235,7 @@ def validate_one_ticker(project_root, data_dir, csv_map_getter, ticker, base_par
     summary["has_missed_buy"] = bool(single_stats["missed_buys"] > 0)
     summary["portfolio_half_take_profit_rows"] = int(portfolio_sim_stats["portfolio_half_take_profit_rows"])
     summary["shared_prep_cache_used"] = bool(use_shared_prepared)
+    summary["shared_validation_cache_used"] = bool(use_validation_consistency_cache)
 
     append_real_case_checks(
         results,
