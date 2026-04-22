@@ -148,13 +148,13 @@ class ConsoleProgress:
             if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)) == 0:
                 return None
             return handle
-        except Exception:
+        except Exception as exc:
             return None
 
     def _get_console_width(self) -> int:
         try:
             return max(int(os.get_terminal_size(sys.stdout.fileno()).columns), 40)
-        except Exception:
+        except Exception as exc:
             return 120
 
     def _refresh_console_metrics(self) -> None:
@@ -168,7 +168,7 @@ class ConsoleProgress:
             if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
                 return None
             return int(info.dwCursorPosition.Y)
-        except Exception:
+        except Exception as exc:
             return None
 
     def _move_cursor(self, x: int, y: int) -> bool:
@@ -177,7 +177,7 @@ class ConsoleProgress:
         try:
             coord = _COORD(int(x), int(y))
             return bool(ctypes.windll.kernel32.SetConsoleCursorPosition(self.win32_handle, coord))
-        except Exception:
+        except Exception as exc:
             return False
 
     def _fit_console_line(self, text: str) -> str:
