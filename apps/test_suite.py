@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import unicodedata
-import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -66,13 +65,6 @@ class _CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
     ]
 
 
-def _win32_kernel32():
-    try:
-        return ctypes.windll.kernel32
-    except Exception:
-        return None
-
-
 def _char_display_width(ch: str) -> int:
     return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
 
@@ -107,7 +99,6 @@ class ConsoleProgress:
         self.rendered_once = False
         self.finalized = False
         self.last_render_ts = 0.0
-        self._render_lock = threading.RLock()
         self.step_order = list(DISPLAY_STEP_ORDER)
         self.display_index_map = {name: index for index, name in enumerate(self.step_order, start=1)}
         self.major_total = len(self.step_order)
@@ -115,6 +106,7 @@ class ConsoleProgress:
         self.use_win32_redraw = self.win32_handle is not None
         self.use_ansi_redraw = (not self.use_win32_redraw) and self._supports_ansi_redraw()
         self.anchor_row: int | None = None
+        self.reserved_line_count = 0
         self.console_width = self._get_console_width()
         self.step_states: Dict[str, Dict[str, Any]] = {
             name: {
@@ -150,14 +142,11 @@ class ConsoleProgress:
         if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
             return None
         try:
-            kernel32 = _win32_kernel32()
-            if kernel32 is None:
-                return None
-            handle = kernel32.GetStdHandle(-11)
+            handle = ctypes.windll.kernel32.GetStdHandle(-11)
             if handle in (0, -1):
                 return None
             info = _CONSOLE_SCREEN_BUFFER_INFO()
-            if kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)) == 0:
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)) == 0:
                 return None
             return handle
         except Exception as exc:
@@ -178,11 +167,8 @@ class ConsoleProgress:
         if self.win32_handle is None:
             return None
         try:
-            kernel32 = _win32_kernel32()
-            if kernel32 is None:
-                return None
             info = _CONSOLE_SCREEN_BUFFER_INFO()
-            if kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
                 return None
             return int(info.dwCursorPosition.Y)
         except Exception as exc:
@@ -193,11 +179,8 @@ class ConsoleProgress:
         if self.win32_handle is None:
             return False
         try:
-            kernel32 = _win32_kernel32()
-            if kernel32 is None:
-                return False
             coord = _COORD(int(x), int(y))
-            return bool(kernel32.SetConsoleCursorPosition(self.win32_handle, coord))
+            return bool(ctypes.windll.kernel32.SetConsoleCursorPosition(self.win32_handle, coord))
         except Exception as exc:
             _ = exc
             return False
@@ -207,31 +190,6 @@ class ConsoleProgress:
         trimmed = _truncate_display_width(text, max_width)
         padding = max_width - _display_width(trimmed)
         return trimmed + (" " * max(padding, 0))
-
-    def _write_win32_lines(self, lines: list[str], start_row: int) -> bool:
-        if self.win32_handle is None:
-            return False
-        kernel32 = _win32_kernel32()
-        if kernel32 is None:
-            return False
-        try:
-            chars_written = ctypes.c_uint32()
-            info = _CONSOLE_SCREEN_BUFFER_INFO()
-            if kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
-                return False
-            width = max(int(self.console_width), 20)
-            attr = info.wAttributes
-            for offset, line in enumerate(lines):
-                row = int(start_row) + offset
-                coord = _COORD(0, row)
-                kernel32.FillConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar(' '), width, coord, ctypes.byref(chars_written))
-                kernel32.FillConsoleOutputAttribute(self.win32_handle, attr, width, coord, ctypes.byref(chars_written))
-                if line:
-                    kernel32.WriteConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar_p(line), len(line), coord, ctypes.byref(chars_written))
-            self._move_cursor(0, int(start_row) + len(lines))
-            return True
-        except Exception:
-            return False
 
     def _enable_windows_virtual_terminal(self) -> bool:
         if os.name != "nt":
@@ -294,37 +252,45 @@ class ConsoleProgress:
         return line
 
     def _render_block(self, *, force: bool = False) -> None:
-        with self._render_lock:
-            if self.finalized:
-                return
-            now = time.time()
-            if not force and (now - self.last_render_ts) < 0.1:
-                return
-            self.last_render_ts = now
-            lines = [self._format_line(self.step_states[name]) for name in self.step_order]
-            if self.use_win32_redraw:
-                self._refresh_console_metrics()
-                if self.anchor_row is None:
-                    self.anchor_row = self._get_cursor_row()
-                if self.anchor_row is not None:
-                    prepared = [self._fit_console_line(line) for line in lines]
-                    if self._write_win32_lines(prepared, self.anchor_row):
+        if self.finalized:
+            return
+        now = time.time()
+        if not force and (now - self.last_render_ts) < 0.1:
+            return
+        self.last_render_ts = now
+        lines = [self._format_line(self.step_states[name]) for name in self.step_order]
+        if self.use_win32_redraw:
+            self._refresh_console_metrics()
+            if self.anchor_row is None:
+                self.anchor_row = self._get_cursor_row()
+            if self.anchor_row is not None:
+                if self.reserved_line_count < len(lines):
+                    current_row = self._get_cursor_row()
+                    if current_row is not None and self._move_cursor(0, current_row):
+                        sys.stdout.write("\n" * len(lines))
                         sys.stdout.flush()
-                        self.rendered_once = True
-                        return
-            if self.use_ansi_redraw and self.rendered_once:
-                sys.stdout.write(f"\x1b[{len(lines)}F")
-                for index, line in enumerate(lines):
-                    sys.stdout.write("\x1b[2K")
-                    sys.stdout.write(line)
-                    if index < len(lines) - 1:
-                        sys.stdout.write("\n")
-                sys.stdout.write("\n")
-            else:
-                block = "\n".join(lines)
-                sys.stdout.write(block + "\n")
-            sys.stdout.flush()
-            self.rendered_once = True
+                        self.reserved_line_count = len(lines)
+                    self._move_cursor(0, self.anchor_row)
+                if self._move_cursor(0, self.anchor_row):
+                    prepared = [self._fit_console_line(line) for line in lines]
+                    sys.stdout.write("\n".join(prepared))
+                    sys.stdout.flush()
+                    self._move_cursor(0, self.anchor_row + len(lines))
+                    self.rendered_once = True
+                    return
+        if self.use_ansi_redraw and self.rendered_once:
+            sys.stdout.write(f"\x1b[{len(lines)}F")
+            for index, line in enumerate(lines):
+                sys.stdout.write("\x1b[2K")
+                sys.stdout.write(line)
+                if index < len(lines) - 1:
+                    sys.stdout.write("\n")
+            sys.stdout.write("\n")
+        else:
+            block = "\n".join(lines)
+            sys.stdout.write(block + "\n")
+        sys.stdout.flush()
+        self.rendered_once = True
 
     def _ensure_step_state(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = str(payload["name"])
