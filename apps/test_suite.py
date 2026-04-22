@@ -149,12 +149,14 @@ class ConsoleProgress:
                 return None
             return handle
         except Exception as exc:
+            _ = exc
             return None
 
     def _get_console_width(self) -> int:
         try:
             return max(int(os.get_terminal_size(sys.stdout.fileno()).columns), 40)
         except Exception as exc:
+            _ = exc
             return 120
 
     def _refresh_console_metrics(self) -> None:
@@ -169,6 +171,7 @@ class ConsoleProgress:
                 return None
             return int(info.dwCursorPosition.Y)
         except Exception as exc:
+            _ = exc
             return None
 
     def _move_cursor(self, x: int, y: int) -> bool:
@@ -178,6 +181,7 @@ class ConsoleProgress:
             coord = _COORD(int(x), int(y))
             return bool(ctypes.windll.kernel32.SetConsoleCursorPosition(self.win32_handle, coord))
         except Exception as exc:
+            _ = exc
             return False
 
     def _fit_console_line(self, text: str) -> str:
