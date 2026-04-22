@@ -43,6 +43,17 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     return best_qty, best_reserved_cost_milli
 
 
+# # (AI註: 單一真理來源 - 候選單 sizing_capital 缺漏時統一回退到目前可用資金，避免 None / NaN 讓 exact accounting 路徑爆掉)
+def _resolve_candidate_sizing_capital(candidate_plan, fallback_capital):
+    if candidate_plan is None:
+        return fallback_capital
+
+    sizing_capital = candidate_plan.get("sizing_capital")
+    if sizing_capital is None or pd.isna(sizing_capital):
+        return fallback_capital
+    return sizing_capital
+
+
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
 def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     if candidate_plan is None:
@@ -53,11 +64,12 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     if pd.isna(limit_price) or pd.isna(init_sl):
         return None
 
+    resolved_sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, sizing_capital)
     resized_plan = dict(candidate_plan)
     qty = calc_position_size(
         limit_price,
         init_sl,
-        sizing_capital,
+        resolved_sizing_capital,
         params.fixed_risk,
         params,
         ticker=candidate_plan.get("ticker"),
@@ -66,13 +78,13 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     )
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
-    resized_plan["sizing_capital"] = float(sizing_capital)
+    resized_plan["sizing_capital"] = float(resolved_sizing_capital)
     return resized_plan
 
 
 # # (AI註: 單一真理來源 - 盤前依當下可用現金重算有效掛單規格與保留資金)
 def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
-    sizing_capital = candidate_plan.get("sizing_capital", available_cash) if candidate_plan is not None else available_cash
+    sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, available_cash)
     resized_plan = resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params)
     if resized_plan is None or resized_plan["qty"] <= 0:
         return None
