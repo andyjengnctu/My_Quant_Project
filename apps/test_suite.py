@@ -4,6 +4,7 @@ import ctypes
 import os
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict
 
@@ -46,6 +47,52 @@ FINALIZING_STATUS = "整理中"
 # consistency step 的正式 coverage 以 synthetic registry、`--help`、文件與 `doc/TEST_SUITE_CHECKLIST.md` 為準；註解僅供閱讀，不作可機械比對的 formal contract。
 
 
+class _COORD(ctypes.Structure):
+    _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+
+class _SMALL_RECT(ctypes.Structure):
+    _fields_ = [("Left", ctypes.c_short), ("Top", ctypes.c_short), ("Right", ctypes.c_short), ("Bottom", ctypes.c_short)]
+
+
+class _CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", _COORD),
+        ("dwCursorPosition", _COORD),
+        ("wAttributes", ctypes.c_ushort),
+        ("srWindow", _SMALL_RECT),
+        ("dwMaximumWindowSize", _COORD),
+    ]
+
+
+def _char_display_width(ch: str) -> int:
+    return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for ch in str(text):
+        if ch not in {"\n", "\r"}:
+            width += _char_display_width(ch)
+    return width
+
+
+def _truncate_display_width(text: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    result = []
+    width = 0
+    for ch in str(text):
+        if ch in {"\n", "\r"}:
+            continue
+        ch_width = _char_display_width(ch)
+        if width + ch_width > max_width:
+            break
+        result.append(ch)
+        width += ch_width
+    return "".join(result)
+
+
 class ConsoleProgress:
     def __init__(self) -> None:
         self.suite_started = time.time()
@@ -55,7 +102,11 @@ class ConsoleProgress:
         self.step_order = list(DISPLAY_STEP_ORDER)
         self.display_index_map = {name: index for index, name in enumerate(self.step_order, start=1)}
         self.major_total = len(self.step_order)
-        self.use_ansi_redraw = self._supports_ansi_redraw()
+        self.win32_handle = self._get_windows_console_handle()
+        self.use_win32_redraw = self.win32_handle is not None
+        self.use_ansi_redraw = (not self.use_win32_redraw) and self._supports_ansi_redraw()
+        self.anchor_row: int | None = None
+        self.console_width = self._get_console_width()
         self.step_states: Dict[str, Dict[str, Any]] = {
             name: {
                 "name": name,
@@ -83,6 +134,57 @@ class ConsoleProgress:
             or os.environ.get("TERM")
             or os.environ.get("ConEmuANSI") == "ON"
         )
+
+    def _get_windows_console_handle(self):
+        if os.name != "nt":
+            return None
+        if not hasattr(sys.stdout, "isatty") or not sys.stdout.isatty():
+            return None
+        try:
+            handle = ctypes.windll.kernel32.GetStdHandle(-11)
+            if handle in (0, -1):
+                return None
+            info = _CONSOLE_SCREEN_BUFFER_INFO()
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)) == 0:
+                return None
+            return handle
+        except Exception:
+            return None
+
+    def _get_console_width(self) -> int:
+        try:
+            return max(int(os.get_terminal_size(sys.stdout.fileno()).columns), 40)
+        except Exception:
+            return 120
+
+    def _refresh_console_metrics(self) -> None:
+        self.console_width = self._get_console_width()
+
+    def _get_cursor_row(self) -> int | None:
+        if self.win32_handle is None:
+            return None
+        try:
+            info = _CONSOLE_SCREEN_BUFFER_INFO()
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
+                return None
+            return int(info.dwCursorPosition.Y)
+        except Exception:
+            return None
+
+    def _move_cursor(self, x: int, y: int) -> bool:
+        if self.win32_handle is None:
+            return False
+        try:
+            coord = _COORD(int(x), int(y))
+            return bool(ctypes.windll.kernel32.SetConsoleCursorPosition(self.win32_handle, coord))
+        except Exception:
+            return False
+
+    def _fit_console_line(self, text: str) -> str:
+        max_width = max(int(self.console_width) - 1, 20)
+        trimmed = _truncate_display_width(text, max_width)
+        padding = max_width - _display_width(trimmed)
+        return trimmed + (" " * max(padding, 0))
 
     def _enable_windows_virtual_terminal(self) -> bool:
         if os.name != "nt":
@@ -152,6 +254,17 @@ class ConsoleProgress:
             return
         self.last_render_ts = now
         lines = [self._format_line(self.step_states[name]) for name in self.step_order]
+        if self.use_win32_redraw:
+            self._refresh_console_metrics()
+            if self.anchor_row is None:
+                self.anchor_row = self._get_cursor_row()
+            if self.anchor_row is not None and self._move_cursor(0, self.anchor_row):
+                prepared = [self._fit_console_line(line) for line in lines]
+                sys.stdout.write("\n".join(prepared) + "\n")
+                sys.stdout.flush()
+                self._move_cursor(0, self.anchor_row + len(lines))
+                self.rendered_once = True
+                return
         if self.use_ansi_redraw and self.rendered_once:
             sys.stdout.write(f"\x1b[{len(lines)}F")
             for index, line in enumerate(lines):
