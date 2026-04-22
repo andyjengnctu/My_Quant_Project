@@ -131,6 +131,8 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
         return None
 
     has_terminal_position = bool(stats.get('hasOpenPositionAtEnd')) or int(stats.get('current_position', 0) or 0) > 0
+    if has_terminal_position:
+        return None
 
     sanitize_issue = _build_sanitize_issue(ticker, sanitize_stats)
     expected_value = float(stats['expected_value'])
@@ -139,8 +141,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
     asset_growth_pct = float(stats.get('asset_growth', 0.0))
 
     if stats['is_setup_today']:
-        if has_terminal_position:
-            return None
         proj_qty = calc_reference_candidate_qty(stats['buy_limit'], stats['stop_loss'], params, ticker=ticker, trade_date=trade_date)
         if proj_qty > 0:
             proj_cost = calc_entry_total_cost(stats['buy_limit'], proj_qty, params)
@@ -198,9 +198,6 @@ def build_history_qualified_row_from_stats(*, ticker, stats, params, sanitize_st
             label_prefix='延續(TBD)',
             kind_if_orderable='extended_tbd',
         )
-
-    if has_terminal_position:
-        return None
 
     return _build_scanner_row(
         kind='candidate',

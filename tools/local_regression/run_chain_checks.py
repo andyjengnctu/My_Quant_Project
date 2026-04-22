@@ -146,7 +146,7 @@ def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dic
             "has_sanitize_issue": bool(sanitize_issue),
         })
 
-        if status in ["buy", "extended", "candidate"]:
+        if status in ["buy", "extended", "extended_tbd", "candidate"]:
             count_history_qualified += 1
             if sanitize_issue is not None:
                 count_sanitized_candidates += 1
@@ -154,7 +154,7 @@ def _build_scanner_snapshot_from_context(context: Dict[str, Any], params) -> Dic
         elif status == "skip_insufficient":
             count_skipped_insufficient += 1
 
-        if status in ["buy", "extended"]:
+        if status in ["buy", "extended", "extended_tbd"]:
             candidate_rows.append(_normalize_scanner_candidate_row({
                 "kind": status,
                 "ticker": normalized_ticker,

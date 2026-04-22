@@ -137,10 +137,10 @@ def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, tr
         return None
 
     has_terminal_position = bool(scanner_ref_stats.get("hasOpenPositionAtEnd")) or int(scanner_ref_stats.get("current_position", 0) or 0) > 0
+    if has_terminal_position:
+        return None
 
     if scanner_ref_stats["is_setup_today"]:
-        if has_terminal_position:
-            return None
         proj_qty = calc_reference_candidate_qty(
             scanner_ref_stats["buy_limit"],
             scanner_ref_stats["stop_loss"],
@@ -171,9 +171,6 @@ def derive_expected_scanner_status(scanner_ref_stats, params, *, ticker=None, tr
             return "candidate"
         proj_qty = calc_reference_candidate_qty(limit_price, init_sl, params, ticker=ticker, trade_date=trade_date)
         return "extended_tbd" if proj_qty > 0 else "candidate"
-
-    if has_terminal_position:
-        return None
 
     return "candidate"
 

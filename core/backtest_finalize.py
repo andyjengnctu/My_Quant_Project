@@ -164,18 +164,21 @@ def build_backtest_stats(
     total_net_profit = current_equity - params.initial_capital
     total_net_profit_pct = ((current_equity / params.initial_capital) - 1) * 100 if params.initial_capital > 0 else 0.0
     buy_next_day = bool(buy_condition_last)
-    display_extended_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
 
-    resolved_ticker = ticker or (display_extended_signal or {}).get("ticker") or (active_extended_signal or {}).get("ticker")
-    resolved_security_profile = security_profile or (display_extended_signal or {}).get("security_profile") or (active_extended_signal or {}).get("security_profile")
+    resolved_ticker = ticker or (active_extended_signal_tbd or {}).get("ticker") or (active_extended_signal or {}).get("ticker")
+    resolved_security_profile = security_profile or (active_extended_signal_tbd or {}).get("security_profile") or (active_extended_signal or {}).get("security_profile")
     buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     stop_loss = calc_initial_stop_from_reference(close_last, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     tp_price = calc_frozen_target_price(close_last, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
 
-    shadow_active_today = is_extended_tbd_shadow_alive(display_extended_signal)
-    tbd_display_today = display_extended_signal is not None and is_extended_tbd_display_day(display_extended_signal, low_last)
+    # # (AI註: 期末強制結算代表該檔在回測最後一天實際仍持倉，scanner / workbench 不得再把它列成新訊號、延續或延續(TBD))
+    has_terminal_position = bool(had_open_position_at_end) or current_position > 0
+    display_extended_signal = None if has_terminal_position else active_extended_signal
+    display_extended_tbd_signal = None if has_terminal_position else (active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal)
+    shadow_active_today = is_extended_tbd_shadow_alive(display_extended_tbd_signal)
+    tbd_display_today = display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
     extended_candidate_today = None
     extended_orderable_today = False
     sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)
@@ -199,11 +202,11 @@ def build_backtest_stats(
 
     extended_candidate_tbd_today = None
     extended_tbd_orderable_today = False
-    if display_extended_signal is not None and tbd_display_today:
-        resolved_ticker = resolved_ticker or display_extended_signal.get("ticker")
+    if display_extended_tbd_signal is not None and tbd_display_today:
+        resolved_ticker = resolved_ticker or display_extended_tbd_signal.get("ticker")
         if shadow_active_today:
             extended_candidate_tbd_today = build_extended_tbd_candidate_plan_from_state(
-                display_extended_signal,
+                display_extended_tbd_signal,
                 sizing_capital,
                 params,
                 ticker=resolved_ticker,
@@ -212,7 +215,7 @@ def build_backtest_stats(
             )
         else:
             extended_candidate_tbd_today = build_extended_candidate_plan_from_signal(
-                display_extended_signal,
+                display_extended_tbd_signal,
                 sizing_capital,
                 params,
                 ticker=resolved_ticker,
@@ -220,13 +223,13 @@ def build_backtest_stats(
                 trade_date=final_date,
             )
         extended_tbd_orderable_today = is_extended_tbd_orderable_for_day(
-            display_extended_signal,
+            display_extended_tbd_signal,
             extended_candidate_tbd_today,
             close_last,
             ticker=resolved_ticker,
             security_profile=resolved_security_profile,
         ) if shadow_active_today else is_extended_signal_orderable_for_day(
-            display_extended_signal,
+            display_extended_tbd_signal,
             extended_candidate_tbd_today,
             close_last,
             ticker=resolved_ticker,
@@ -255,7 +258,7 @@ def build_backtest_stats(
         'history_trade_count': _history_trade_count,
         'hasOpenPositionAtEnd': had_open_position_at_end,
         'activeExtendedSignal': display_extended_signal is not None,
-        'activeExtendedSignalTBD': tbd_display_today,
+        'activeExtendedSignalTBD': display_extended_tbd_signal is not None and tbd_display_today,
         'endPositionQty': end_position_qty,
         'avgBarsHeld': avg_bars_held,
         'trade_count': trade_count,
