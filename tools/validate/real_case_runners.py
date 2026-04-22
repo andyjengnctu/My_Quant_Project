@@ -267,7 +267,8 @@ def _determine_real_scan_worker_count(total_tickers):
         index_path = cache_dir / "shared_prep_cache_index.pkl"
         try:
             index_payload = _load_pickle(index_path) if index_path.exists() else None
-        except Exception:
+        except Exception as exc:
+            _ = exc
             index_payload = None
         if isinstance(index_payload, dict):
             ready_count = int(index_payload.get("validation_cache_ready_count", 0) or 0)
