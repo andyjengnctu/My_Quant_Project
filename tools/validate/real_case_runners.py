@@ -242,13 +242,6 @@ def _determine_real_scan_worker_count(total_tickers):
     if total_tickers <= 1:
         return 1
 
-    # AI註解: Windows 的 ProcessPoolExecutor 採 spawn；對 reduced consistency 這種「ticker 數少、
-    # 但每個 worker 需要載入大量模組」的工作型態，spawn / import 開銷可能遠大於實際檢查時間。
-    # 這會讓 formal validation 在部分本機環境反而比單進程慢很多。
-    # 這裡將 Windows 預設退回單進程，避免 bundle 驗證被 process 啟動成本主導；非 Windows 保持原本併行規則。
-    if os.name == "nt":
-        return 1
-
     cpu_count = os.cpu_count() or 1
     if cpu_count <= 2:
         return 1
