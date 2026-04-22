@@ -1128,6 +1128,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
              patch.object(run_all_module, "load_manifest", return_value=manifest), \
              patch.object(run_all_module, "_run_preflight", side_effect=_fake_run_preflight), \
              patch.object(run_all_module, "ensure_reduced_dataset", return_value=dataset_info), \
+             patch.object(run_all_module, "build_shared_prep_cache", return_value={"prepared_count": 0, "skipped_count": 0, "duplicate_issue_count": 0}), \
              patch.object(run_all_module, "_run_script", side_effect=_fake_run_script), \
              patch.object(run_all_module, "build_bundle_zip", return_value=bundle_path), \
              patch.object(run_all_module, "archive_bundle_history", side_effect=lambda path: path), \

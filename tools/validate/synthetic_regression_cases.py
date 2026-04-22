@@ -351,6 +351,7 @@ def validate_run_all_repeatability_case(_base_params):
              patch('tools.local_regression.run_all.load_manifest', return_value=manifest), \
              patch('tools.local_regression.run_all._run_preflight', side_effect=_fake_run_preflight), \
              patch('tools.local_regression.run_all.ensure_reduced_dataset', side_effect=_fake_dataset_info), \
+             patch('tools.local_regression.run_all.build_shared_prep_cache', return_value={'prepared_count': 0, 'skipped_count': 0, 'duplicate_issue_count': 0}), \
              patch('tools.local_regression.run_all._run_script', side_effect=_fake_run_script), \
              patch('tools.local_regression.run_all.archive_bundle_history', side_effect=_fake_archive), \
              patch('tools.local_regression.run_all.publish_root_bundle_copy', side_effect=_fake_publish), \
