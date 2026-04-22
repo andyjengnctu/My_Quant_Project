@@ -43,18 +43,12 @@ def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
             return True
 
     invalidation_barrier = signal_state.get("continuation_invalidation_barrier", np.nan)
-    completion_barrier = signal_state.get("continuation_completion_barrier", np.nan)
     stop_hit = (
         not pd.isna(day_low)
         and not pd.isna(invalidation_barrier)
         and price_to_milli(day_low) <= price_to_milli(invalidation_barrier)
     )
-    completion_hit = (
-        not pd.isna(day_high)
-        and not pd.isna(completion_barrier)
-        and price_to_milli(day_high) >= price_to_milli(completion_barrier)
-    )
-    return stop_hit or completion_hit
+    return stop_hit
 
 
 # # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看『今日是否到價』，與 shadow engine 是否存在分離)

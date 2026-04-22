@@ -320,7 +320,12 @@ def validate_synthetic_portfolio_history_filter_only_case(base_params):
 
         single_stats = run_v16_backtest(df.copy(), params)
         scanner_ref_stats = run_scanner_reference_check(ticker, file_path, params)
-        scanner_result, _scanner_module_path = run_scanner_tool_check(ticker, file_path, params)
+        scanner_result, _scanner_module_path = run_scanner_tool_check(
+            ticker,
+            file_path,
+            params,
+            precomputed_stats=scanner_ref_stats,
+        )
 
         add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_trade_executes_even_when_history_threshold_unmet", True, int(single_stats["trade_count"]) > 0)
         add_check(results, "synthetic_portfolio_history_filter_only", case_id, "single_backtest_history_gate_remains_false", False, bool(single_stats["is_candidate"]))

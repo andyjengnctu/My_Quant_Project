@@ -1,11 +1,9 @@
 ## Going
 
 - Debug
-    extended_tbd找不到有問題
+    workbench所有下拉選單顯示代碼|類型|目前排序用的值|勝率|次數這五個值就好，選單寬度隨字數長度自動調整，盡量維持精簡看的懂就好, 避免選單太寬
     買價接近停損，倉數會變的超大    
     workben加頁投組檢示
-
-00735.csv在2026/3/2已出現high > 停利，為何在exnteded_tbd
 
 
 - anti-overfitting

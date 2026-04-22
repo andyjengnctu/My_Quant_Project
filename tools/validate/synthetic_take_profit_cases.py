@@ -535,7 +535,12 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
         scanner_ticker = scanner_case["primary_ticker"]
         scanner_path = os.path.join(temp_dir, f"{scanner_ticker}.csv")
         scanner_ref_stats = run_scanner_reference_check(scanner_ticker, scanner_path, scanner_case["params"])
-        scanner_result, _scanner_module_path = run_scanner_tool_check(scanner_ticker, scanner_path, scanner_case["params"])
+        scanner_result, _scanner_module_path = run_scanner_tool_check(
+            scanner_ticker,
+            scanner_path,
+            scanner_case["params"],
+            precomputed_stats=scanner_ref_stats,
+        )
         proj_qty = calc_reference_candidate_qty(scanner_ref_stats["buy_limit"], scanner_ref_stats["stop_loss"], scanner_case["params"], ticker=scanner_ticker, trade_date=scanner_ref_stats.get("trade_date")) if scanner_ref_stats.get("is_setup_today") else 0
         scanner_message = "" if scanner_result is None or scanner_result.get("message") is None else str(scanner_result.get("message"))
         add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "scanner_projected_qty", 1, proj_qty)

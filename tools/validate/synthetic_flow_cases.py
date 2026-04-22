@@ -740,7 +740,12 @@ def validate_synthetic_extended_miss_buy_case(base_params):
         primary_ticker = case["primary_ticker"]
         primary_path = os.path.join(temp_dir, f"{primary_ticker}.csv")
         scanner_ref_stats = run_scanner_reference_check(primary_ticker, primary_path, case["params"])
-        scanner_result, _scanner_module_path = run_scanner_tool_check(primary_ticker, primary_path, case["params"])
+        scanner_result, _scanner_module_path = run_scanner_tool_check(
+            primary_ticker,
+            primary_path,
+            case["params"],
+            precomputed_stats=scanner_ref_stats,
+        )
         expected_payload = build_expected_scanner_payload(scanner_ref_stats, case["params"], ticker=primary_ticker, trade_date=scanner_ref_stats.get("trade_date"))
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_expected_status", "extended", expected_payload["status"])
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_tool_status", "extended", None if scanner_result is None else scanner_result["status"])

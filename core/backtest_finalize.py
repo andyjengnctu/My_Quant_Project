@@ -166,7 +166,9 @@ def build_backtest_stats(
     buy_next_day = bool(buy_condition_last)
 
     resolved_ticker = ticker or (active_extended_signal_tbd or {}).get("ticker") or (active_extended_signal or {}).get("ticker")
-    resolved_security_profile = security_profile or (active_extended_signal_tbd or {}).get("security_profile") or (active_extended_signal or {}).get("security_profile")
+    resolved_security_profile = security_profile or (active_extended_signal or {}).get("security_profile")
+    if resolved_security_profile is None:
+        resolved_security_profile = (active_extended_signal_tbd or {}).get("security_profile")
     buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     stop_loss = calc_initial_stop_from_reference(close_last, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     tp_price = calc_frozen_target_price(close_last, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
@@ -180,7 +182,7 @@ def build_backtest_stats(
     display_extended_signal = active_extended_signal
     display_extended_tbd_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
     shadow_active_today = is_extended_tbd_shadow_alive(display_extended_tbd_signal)
-    tbd_display_today = display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
+    tbd_display_today = has_terminal_position and display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
     extended_candidate_today = None
     extended_orderable_today = False
     sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)

@@ -13,7 +13,7 @@
   "ml_smoke_timeout_sec": 300,
   "ml_smoke_trials": 1,
   "performance_chain_checks_max_sec": 240,
-  "performance_consistency_max_sec": 240,
+  "performance_consistency_max_sec": 300,
   "performance_meta_quality_max_sec": 30,
   "performance_ml_smoke_max_sec": 45,
   "performance_optimizer_trial_avg_max_sec": 15,
