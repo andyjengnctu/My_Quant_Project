@@ -306,23 +306,18 @@ class ConsoleProgress:
         lines = [self._format_line(self.step_states[name]) for name in self.step_order]
         if self.use_win32_redraw:
             self._refresh_console_metrics()
-            if self.anchor_row is None:
-                self.anchor_row = self._get_cursor_row()
+            if self.anchor_row is None or self.reserved_line_count < len(lines):
+                if not self._reserve_win32_block(len(lines)):
+                    self.anchor_row = None
+                else:
+                    self.reserved_line_count = len(lines)
             if self.anchor_row is not None:
-                if self.reserved_line_count < len(lines):
-                    current_row = self._get_cursor_row()
-                    if current_row is not None and self._move_cursor(0, current_row):
-                        sys.stdout.write("\n" * len(lines))
-                        sys.stdout.flush()
-                        self.reserved_line_count = len(lines)
-                    self._move_cursor(0, self.anchor_row)
                 prepared = [self._fit_console_line(line) for line in lines]
-                rendered = False
+                rendered = True
                 for offset, line in enumerate(prepared):
                     if not self._write_win32_line(self.anchor_row + offset, line):
                         rendered = False
                         break
-                    rendered = True
                 if rendered:
                     self._move_cursor(0, self.anchor_row + len(lines))
                     self.rendered_once = True
