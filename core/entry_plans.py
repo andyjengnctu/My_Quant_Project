@@ -23,6 +23,26 @@ from core.price_utils import (
 )
 
 
+def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
+    if max_qty <= 0 or available_cash_milli <= 0:
+        return 0, 0
+
+    best_qty = 0
+    best_reserved_cost_milli = 0
+    low, high = 1, int(max_qty)
+    while low <= high:
+        mid = (low + high) // 2
+        reserved_cost_milli = build_buy_ledger_from_price(limit_price, mid, params)["net_buy_total_milli"]
+        if reserved_cost_milli <= available_cash_milli:
+            best_qty = mid
+            best_reserved_cost_milli = reserved_cost_milli
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    return best_qty, best_reserved_cost_milli
+
+
 # # (AI註: 單一真理來源 - 候選單在不同資金上限下的 qty / is_orderable 重算統一由此處理)
 def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     if candidate_plan is None:
@@ -46,20 +66,29 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
     )
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
+    resized_plan["sizing_capital"] = float(sizing_capital)
     return resized_plan
 
 
 # # (AI註: 單一真理來源 - 盤前依當下可用現金重算有效掛單規格與保留資金)
 def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
-    resized_plan = resize_candidate_plan_to_capital(candidate_plan, available_cash, params)
+    sizing_capital = candidate_plan.get("sizing_capital", available_cash) if candidate_plan is not None else available_cash
+    resized_plan = resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params)
     if resized_plan is None or resized_plan["qty"] <= 0:
         return None
 
-    buy_ledger = build_buy_ledger_from_price(resized_plan["limit_price"], resized_plan["qty"], params)
-    reserved_cost_milli = buy_ledger["net_buy_total_milli"]
-    if reserved_cost_milli > money_to_milli(available_cash):
+    available_cash_milli = money_to_milli(available_cash)
+    affordable_qty, reserved_cost_milli = _find_affordable_qty(
+        resized_plan["limit_price"],
+        resized_plan["qty"],
+        available_cash_milli,
+        params,
+    )
+    if affordable_qty <= 0:
         return None
 
+    resized_plan["qty"] = affordable_qty
+    resized_plan["is_orderable"] = True
     resized_plan["reserved_cost_milli"] = reserved_cost_milli
     resized_plan["reserved_cost"] = milli_to_money(reserved_cost_milli)
     return resized_plan

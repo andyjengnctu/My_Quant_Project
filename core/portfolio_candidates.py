@@ -41,6 +41,7 @@ def _make_candidate_row(
     entry_ref_price=None,
     security_profile=None,
     trade_date=None,
+    sizing_capital=None,
 ):
     est_cost = calc_entry_total_cost(est_limit_px, est_qty, params) if est_qty > 0 else 0.0
     sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
@@ -68,6 +69,7 @@ def _make_candidate_row(
         'entry_ref_price': entry_ref_price,
         'security_profile': security_profile,
         'trade_date': trade_date,
+        'sizing_capital': sizing_capital,
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
@@ -152,6 +154,7 @@ def _collect_normal_candidates(
             params=params,
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
+            sizing_capital=candidate_plan.get('sizing_capital'),
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)
@@ -236,6 +239,7 @@ def _collect_extended_candidates(
             params=params,
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
+            sizing_capital=candidate_plan.get('sizing_capital'),
             signal_state=active_extended_signals[ticker],
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),

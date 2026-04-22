@@ -329,6 +329,7 @@ def validate_exact_accounting_cash_risk_boundary_case(_base_params):
         "init_trail": 4.999,
         "target_price": 5.01,
         "entry_atr": 0.001,
+        "sizing_capital": 10_000.0,
     }
     resized = build_cash_capped_entry_plan(candidate_plan, 10_000.0, params)
     exact_cash = milli_to_money(resized["reserved_cost_milli"])

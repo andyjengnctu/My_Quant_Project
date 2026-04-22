@@ -249,6 +249,7 @@ def validate_synthetic_single_backtest_uses_compounding_capital_case(base_params
     params.atr_times_init = 1.0
     params.atr_times_trail = 1.0
     params.use_compounding = True
+    params.max_position_cap_pct = 1.0
 
     case_id = "SYNTH_SINGLE_BACKTEST_COMPOUNDING_CAPITAL"
     results = []

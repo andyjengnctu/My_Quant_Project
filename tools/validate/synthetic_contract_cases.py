@@ -1450,6 +1450,7 @@ def validate_single_ticker_compounding_parity_contract_case(base_params):
     params.atr_times_init = 1.0
     params.atr_times_trail = 1.0
     params.use_compounding = True
+    params.max_position_cap_pct = 1.0
 
     case_id = "OUTPUT_SINGLE_TICKER_COMPOUNDING_PARITY"
     ticker = case_id
@@ -1576,6 +1577,7 @@ def validate_scanner_live_capital_contract_case(base_params):
     params.tax_rate = 0.0
     params.min_fee = 0.0
     params.scanner_live_capital = 2_000_000.0
+    params.max_position_cap_pct = 1.0
 
     buy_limit = 100.0
     stop_loss = 90.0

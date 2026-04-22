@@ -19,6 +19,7 @@ def _build_candidate_plan_seed(candidate_row):
         'ticker': candidate_row.get('ticker'),
         'security_profile': candidate_row.get('security_profile'),
         'trade_date': candidate_row.get('trade_date'),
+        'sizing_capital': candidate_row.get('sizing_capital'),
     }
 
 

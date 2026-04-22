@@ -493,6 +493,7 @@ def validate_synthetic_round_trip_pnl_only_on_tail_exit_case(base_params):
 
 def validate_synthetic_unexecutable_half_tp_case(base_params):
     case = build_synthetic_unexecutable_half_tp_case(base_params)
+    case["params"].max_position_cap_pct = 1.0
     results = []
     summary = {"ticker": case["case_id"], "synthetic": True}
 
@@ -528,6 +529,7 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
     scanner_case["params"].initial_capital = 130.0
     scanner_case["params"].scanner_live_capital = 130.0
     scanner_case["params"].fixed_risk = 1.0
+    scanner_case["params"].max_position_cap_pct = 1.0
     scanner_case["frames"][scanner_case["primary_ticker"]] = scanner_case["frames"][scanner_case["primary_ticker"]].iloc[:271].copy()
 
     with tempfile.TemporaryDirectory() as temp_dir:
