@@ -65,6 +65,9 @@ class _CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
     ]
 
 
+_DWORD = ctypes.c_ulong
+
+
 def _char_display_width(ch: str) -> int:
     return 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
 
@@ -185,6 +188,52 @@ class ConsoleProgress:
             _ = exc
             return False
 
+    def _get_window_bottom(self) -> int | None:
+        if self.win32_handle is None:
+            return None
+        try:
+            info = _CONSOLE_SCREEN_BUFFER_INFO()
+            if ctypes.windll.kernel32.GetConsoleScreenBufferInfo(self.win32_handle, ctypes.byref(info)) == 0:
+                return None
+            return int(info.srWindow.Bottom)
+        except Exception as exc:
+            _ = exc
+            return None
+
+    def _write_console_line(self, y: int, text: str) -> bool:
+        if self.win32_handle is None:
+            return False
+        try:
+            width = max(int(self.console_width) - 1, 20)
+            coord = _COORD(0, int(y))
+            written = _DWORD()
+            kernel32 = ctypes.windll.kernel32
+            kernel32.FillConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar(' '), width, coord, ctypes.byref(written))
+            fitted = _truncate_display_width(text, width)
+            if fitted:
+                kernel32.WriteConsoleOutputCharacterW(self.win32_handle, ctypes.c_wchar_p(fitted), len(fitted), coord, ctypes.byref(written))
+            return True
+        except Exception as exc:
+            _ = exc
+            return False
+
+    def _ensure_win32_reserved_block(self, line_count: int) -> bool:
+        if self.win32_handle is None:
+            return False
+        if self.anchor_row is not None and self.reserved_line_count >= line_count:
+            return True
+        current_row = self._get_cursor_row()
+        if current_row is None:
+            return False
+        sys.stdout.write("\n" * line_count)
+        sys.stdout.flush()
+        after_row = self._get_cursor_row()
+        if after_row is None:
+            return False
+        self.anchor_row = max(0, int(after_row) - line_count)
+        self.reserved_line_count = line_count
+        return True
+
     def _fit_console_line(self, text: str) -> str:
         max_width = max(int(self.console_width) - 1, 20)
         trimmed = _truncate_display_width(text, max_width)
@@ -261,20 +310,14 @@ class ConsoleProgress:
         lines = [self._format_line(self.step_states[name]) for name in self.step_order]
         if self.use_win32_redraw:
             self._refresh_console_metrics()
-            if self.anchor_row is None:
-                self.anchor_row = self._get_cursor_row()
-            if self.anchor_row is not None:
-                if self.reserved_line_count < len(lines):
-                    current_row = self._get_cursor_row()
-                    if current_row is not None and self._move_cursor(0, current_row):
-                        sys.stdout.write("\n" * len(lines))
-                        sys.stdout.flush()
-                        self.reserved_line_count = len(lines)
-                    self._move_cursor(0, self.anchor_row)
-                if self._move_cursor(0, self.anchor_row):
-                    prepared = [self._fit_console_line(line) for line in lines]
-                    sys.stdout.write("\n".join(prepared))
-                    sys.stdout.flush()
+            if self._ensure_win32_reserved_block(len(lines)) and self.anchor_row is not None:
+                prepared = [self._fit_console_line(line) for line in lines]
+                ok = True
+                for offset, line in enumerate(prepared):
+                    if not self._write_console_line(self.anchor_row + offset, line):
+                        ok = False
+                        break
+                if ok:
                     self._move_cursor(0, self.anchor_row + len(lines))
                     self.rendered_once = True
                     return
