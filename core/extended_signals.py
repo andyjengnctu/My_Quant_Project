@@ -12,6 +12,7 @@ from core.price_utils import (
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
     is_limit_buy_price_reachable_for_day,
+    price_to_milli,
 )
 
 
@@ -28,6 +29,32 @@ def _resolve_shadow_position(signal_state):
 
 def _has_live_shadow_position(signal_state):
     return _resolve_shadow_position(signal_state) is not None
+
+
+def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
+    if signal_state is None:
+        return False
+
+    shadow_position = _resolve_shadow_position(signal_state)
+    if shadow_position is not None:
+        if shadow_position.get("pending_exit_action") in {"STOP", "TP_HALF"}:
+            return True
+        if bool(shadow_position.get("sold_half", False)):
+            return True
+
+    invalidation_barrier = signal_state.get("continuation_invalidation_barrier", np.nan)
+    completion_barrier = signal_state.get("continuation_completion_barrier", np.nan)
+    stop_hit = (
+        not pd.isna(day_low)
+        and not pd.isna(invalidation_barrier)
+        and price_to_milli(day_low) <= price_to_milli(invalidation_barrier)
+    )
+    completion_hit = (
+        not pd.isna(day_high)
+        and not pd.isna(completion_barrier)
+        and price_to_milli(day_high) >= price_to_milli(completion_barrier)
+    )
+    return stop_hit or completion_hit
 
 
 # # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看『今日是否到價』，與 shadow engine 是否存在分離)
@@ -205,7 +232,7 @@ def should_clear_extended_signal(
         if updated_state is None:
             signal_state["shadow_position"] = None
             return True
-        return False
+        return _did_extended_signal_touch_barrier(updated_state, day_low=t_low, day_high=t_high)
 
     ensure_extended_signal_counterfactual_anchor(
         signal_state,
@@ -223,8 +250,7 @@ def should_clear_extended_signal(
     if shadow_position is None:
         return False
 
-    pending_exit_action = shadow_position.get("pending_exit_action")
-    return pending_exit_action == "STOP"
+    return _did_extended_signal_touch_barrier(signal_state, day_low=t_low, day_high=t_high)
 
 
 # # (AI註: 單一真理來源 - 延續候選掛單資格一律從共同 shadow trade 派生；未啟動 shadow 前用原始 limit，啟動後沿用固定 shadow entry 與目前 shadow 管理狀態)
