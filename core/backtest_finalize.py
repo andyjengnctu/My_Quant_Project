@@ -58,6 +58,9 @@ def finalize_open_position_at_end(
             'had_open_position_at_end': had_open_position_at_end,
             'end_position_qty': end_position_qty,
             'trade_logs': trade_logs,
+            'final_trade_exit_date': None,
+            'final_trade_pnl': None,
+            'final_trade_r_mult': None,
         }
 
     resolved_ticker = ticker or position.get("ticker")
@@ -115,6 +118,9 @@ def finalize_open_position_at_end(
         'had_open_position_at_end': had_open_position_at_end,
         'end_position_qty': end_position_qty,
         'trade_logs': trade_logs,
+        'final_trade_exit_date': final_date,
+        'final_trade_pnl': total_pnl,
+        'final_trade_r_mult': trade_r_mult,
     }
 
 

@@ -167,7 +167,7 @@ def build_normal_setup_index(all_dfs_fast):
     return setup_index
 
 
-def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None):
+def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False):
     t_total_start = time.perf_counter() if profile_stats is not None else None
     resolved_ticker = ticker or df.attrs.get('ticker')
 
@@ -181,14 +181,27 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    _stats_unused, standalone_logs = run_v16_backtest(
+    backtest_result = run_v16_backtest(
         df,
         params,
-        return_logs=True,
+        return_logs=include_trade_logs,
         precomputed_signals=precomputed_signals,
         ticker=resolved_ticker,
         collect_stats=False,
+        return_pit_stats_index=include_pit_stats_index,
     )
+    if include_trade_logs and include_pit_stats_index:
+        _stats_unused, standalone_logs, pit_stats_index = backtest_result
+    elif include_trade_logs:
+        _stats_unused, standalone_logs = backtest_result
+        pit_stats_index = None
+    elif include_pit_stats_index:
+        _stats_unused, pit_stats_index = backtest_result
+        standalone_logs = None
+    else:
+        _stats_unused = backtest_result
+        standalone_logs = None
+        pit_stats_index = None
     if profile_stats is not None:
         profile_stats['run_backtest_sec'] = time.perf_counter() - t0
 
@@ -198,7 +211,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['to_dict_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start
 
-    return dynamic_data, standalone_logs
+    return dynamic_data, standalone_logs, pit_stats_index
 
 
 def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False, ticker=None):

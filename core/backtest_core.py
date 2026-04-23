@@ -16,7 +16,75 @@ from core.trade_plans import (
 )
 
 
-def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True):
+def _empty_pit_stats_index():
+    return {
+        'exit_dates': [],
+        'cum_trade_count': np.array([], dtype=np.int32),
+        'cum_win_count': np.array([], dtype=np.int32),
+        'cum_win_r_sum': np.array([], dtype=np.float64),
+        'cum_loss_r_sum': np.array([], dtype=np.float64),
+        'cum_total_r_sum': np.array([], dtype=np.float64),
+        'cum_pnl_sum': np.array([], dtype=np.float64),
+    }
+
+
+def _create_pit_stats_builder():
+    return {
+        'exit_dates': [],
+        'cum_trade_count': [],
+        'cum_win_count': [],
+        'cum_win_r_sum': [],
+        'cum_loss_r_sum': [],
+        'cum_total_r_sum': [],
+        'cum_pnl_sum': [],
+        '_trade_count': 0,
+        '_win_count': 0,
+        '_win_r_sum': 0.0,
+        '_loss_r_sum': 0.0,
+        '_total_r_sum': 0.0,
+        '_pnl_sum': 0.0,
+    }
+
+
+def _append_pit_trade(builder, *, exit_date, pnl, r_mult):
+    if builder is None:
+        return
+
+    builder['_trade_count'] += 1
+    builder['_total_r_sum'] += float(r_mult)
+    builder['_pnl_sum'] += float(pnl)
+    if float(pnl) > 0.0:
+        builder['_win_count'] += 1
+        builder['_win_r_sum'] += float(r_mult)
+    else:
+        builder['_loss_r_sum'] += float(r_mult)
+
+    builder['exit_dates'].append(exit_date)
+    builder['cum_trade_count'].append(builder['_trade_count'])
+    builder['cum_win_count'].append(builder['_win_count'])
+    builder['cum_win_r_sum'].append(builder['_win_r_sum'])
+    builder['cum_loss_r_sum'].append(builder['_loss_r_sum'])
+    builder['cum_total_r_sum'].append(builder['_total_r_sum'])
+    builder['cum_pnl_sum'].append(builder['_pnl_sum'])
+
+
+def _finalize_pit_stats_index(builder):
+    if builder is None:
+        return None
+    if not builder['exit_dates']:
+        return _empty_pit_stats_index()
+    return {
+        'exit_dates': list(builder['exit_dates']),
+        'cum_trade_count': np.array(builder['cum_trade_count'], dtype=np.int32),
+        'cum_win_count': np.array(builder['cum_win_count'], dtype=np.int32),
+        'cum_win_r_sum': np.array(builder['cum_win_r_sum'], dtype=np.float64),
+        'cum_loss_r_sum': np.array(builder['cum_loss_r_sum'], dtype=np.float64),
+        'cum_total_r_sum': np.array(builder['cum_total_r_sum'], dtype=np.float64),
+        'cum_pnl_sum': np.array(builder['cum_pnl_sum'], dtype=np.float64),
+    }
+
+
+def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True, return_pit_stats_index=False):
     if params is None:
         params = V16StrategyParams()
 
@@ -38,6 +106,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     position = {'qty': 0}
     active_extended_signal = None
     scanner_extended_signal = None
+    pit_stats_builder = _create_pit_stats_builder() if return_pit_stats_index else None
     currentCapital_milli = money_to_milli(params.initial_capital)
     tradeCount, fullWins, missedBuyCount, missedSellCount = 0, 0, 0, 0
     totalProfit_milli, totalLoss_milli = 0, 0
@@ -75,6 +144,11 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             security_profile=resolved_security_profile,
         )
         stats_dict['is_candidate'] = False
+        if return_pit_stats_index:
+            pit_stats_index = _empty_pit_stats_index()
+            if return_logs:
+                return (stats_dict if collect_stats else None), trade_logs, pit_stats_index
+            return (stats_dict if collect_stats else None), pit_stats_index
         if return_logs:
             return (stats_dict if collect_stats else None), trade_logs
         return stats_dict if collect_stats else None
@@ -116,6 +190,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                     tradeCount += 1
                 if return_logs:
                     trade_logs.append({'exit_date': Dates[j], 'pnl': total_pnl, 'r_mult': trade_r_mult})
+                if pit_stats_builder is not None:
+                    _append_pit_trade(pit_stats_builder, exit_date=Dates[j], pnl=total_pnl, r_mult=trade_r_mult)
                 if collect_stats:
                     if position['realized_pnl_milli'] > 0:
                         fullWins += 1
@@ -141,13 +217,14 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             )
             if signal_state is not None:
                 active_extended_signal = signal_state
-                scanner_extended_signal = create_signal_tracking_state(
-                    buy_limits[j - 1],
-                    ATR_main[j - 1],
-                    params,
-                    ticker=resolved_ticker,
-                    security_profile=resolved_security_profile,
-                )
+                if collect_stats:
+                    scanner_extended_signal = create_signal_tracking_state(
+                        buy_limits[j - 1],
+                        ATR_main[j - 1],
+                        params,
+                        ticker=resolved_ticker,
+                        security_profile=resolved_security_profile,
+                    )
 
             entry_plan = build_normal_entry_plan(
                 buy_limits[j - 1],
@@ -229,7 +306,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         ):
             active_extended_signal = None
 
-        if should_clear_extended_signal(
+        if collect_stats and should_clear_extended_signal(
             scanner_extended_signal,
             L[j],
             H[j],
@@ -298,8 +375,20 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     had_open_position_at_end = final_state['had_open_position_at_end']
     end_position_qty = final_state['end_position_qty']
     trade_logs = final_state['trade_logs']
+    if pit_stats_builder is not None and final_state.get('final_trade_exit_date') is not None:
+        _append_pit_trade(
+            pit_stats_builder,
+            exit_date=final_state['final_trade_exit_date'],
+            pnl=final_state['final_trade_pnl'],
+            r_mult=final_state['final_trade_r_mult'],
+        )
+    pit_stats_index = _finalize_pit_stats_index(pit_stats_builder) if return_pit_stats_index else None
 
     if not collect_stats:
+        if return_pit_stats_index:
+            if return_logs:
+                return None, trade_logs, pit_stats_index
+            return None, pit_stats_index
         if return_logs:
             return None, trade_logs
         return None
@@ -333,6 +422,10 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         security_profile=resolved_security_profile,
     )
 
+    if return_pit_stats_index:
+        if return_logs:
+            return stats_dict, trade_logs, pit_stats_index
+        return stats_dict, pit_stats_index
     if return_logs:
         return stats_dict, trade_logs
     return stats_dict

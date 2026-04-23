@@ -10,7 +10,7 @@ import pandas as pd
 
 from core.data_utils import get_required_min_rows
 from core.log_utils import format_exception_summary
-from core.portfolio_fast_data import build_trade_stats_index, merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
+from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
@@ -46,11 +46,15 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
                 },
             }
 
-        dynamic_data, logs = prep_optimizer_stock_data_bundle(df, params, profile_stats=profile_stats, ticker=ticker)
+        dynamic_data, logs, pit_stats_index = prep_optimizer_stock_data_bundle(
+            df,
+            params,
+            profile_stats=profile_stats,
+            ticker=ticker,
+            include_trade_logs=include_trade_logs,
+            include_pit_stats_index=include_pit_stats_index,
+        )
         pack_sec = float(profile_stats.get('to_dict_sec', 0.0))
-        pit_stats_index = build_trade_stats_index(logs) if include_pit_stats_index else None
-        if not include_trade_logs:
-            logs = None
         return {
             "ticker": ticker,
             "ok": True,
