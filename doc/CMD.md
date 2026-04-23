@@ -1,6 +1,6 @@
 # 常用指令
 
-python package_zip.py && python test_suite.py
+python apps/package_zip.py && python apps/test_suite.py
 
 ## 環境 / 測試
 
