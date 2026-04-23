@@ -99,12 +99,16 @@ class OptimizerProfileRecorder:
         return summary
 
     def print_summary(self):
-        if not self.enabled or not self.rows:
+        if not self.enabled:
             return
 
         summary = self.build_summary_payload()
+        os.makedirs(self.output_dir, exist_ok=True)
         with open(self.summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+        if not self.rows:
+            return
 
         avg = summary["avg"]
         print(

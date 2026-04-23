@@ -1,6 +1,6 @@
 # 常用指令
 
-python apps/package_zip.py && python apps/test_suite.py
+python apps/ml_optimizer.py --timing --trials 5 `效能驗證`
 
 ## 環境 / 測試
 
