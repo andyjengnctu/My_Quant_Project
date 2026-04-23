@@ -11,6 +11,15 @@ def tv_rma(source, length):
     if len(valid_idx) < length:
         return rma
     first_valid = valid_idx[length - 1]
+    tail_start = valid_idx[0]
+    if valid_idx[-1] - tail_start + 1 == len(valid_idx):
+        seed = np.mean(source[tail_start:first_valid + 1])
+        tail = np.empty(source.size - first_valid, dtype=np.float64)
+        tail[0] = seed
+        if tail.size > 1:
+            tail[1:] = source[first_valid + 1:]
+        rma[first_valid:] = pd.Series(tail).ewm(alpha=1.0 / length, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
+        return rma
     rma[first_valid] = np.mean(source[valid_idx[0]:first_valid + 1])
     alpha = 1.0 / length
     for i in range(first_valid + 1, len(source)):
@@ -42,6 +51,9 @@ def tv_ema(source, length):
     if len(valid_idx) == 0:
         return ema
     first_valid = valid_idx[0]
+    if valid_idx[-1] - first_valid + 1 == len(valid_idx):
+        ema[first_valid:] = pd.Series(source[first_valid:]).ewm(span=length, adjust=False).mean().to_numpy(dtype=np.float64, copy=False)
+        return ema
     ema[first_valid] = source[first_valid]
     alpha = 2.0 / (length + 1)
     for i in range(first_valid + 1, len(source)):
@@ -139,7 +151,7 @@ def generate_signals(df, params, ticker=None):
         volCondition = np.ones_like(C, dtype=bool)
 
     if getattr(params, 'use_kc', True):
-        ATR_kc = tv_atr(H, L, C, params.kc_len)
+        ATR_kc = ATR_main if params.kc_len == params.atr_len else tv_atr(H, L, C, params.kc_len)
         KC_Mid = tv_ema(C, params.kc_len)
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
         prev_kc_lower = np.empty_like(KC_Lower)
