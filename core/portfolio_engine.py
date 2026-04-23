@@ -30,7 +30,7 @@ from core.portfolio_ops import (
     try_rotate_weakest_position,
 )
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None):
+def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
     t_portfolio_start = time.perf_counter() if profile_stats is not None else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
@@ -48,7 +48,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         ticker_dates_sec = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
+    if pit_stats_index is None:
+        pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
+    else:
+        pit_stats_index = dict(pit_stats_index)
     normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_stats is not None:
         build_trade_index_sec = time.perf_counter() - t0

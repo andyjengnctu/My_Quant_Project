@@ -77,6 +77,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
 
     all_dfs_fast = prep_result["all_dfs_fast"]
     all_trade_logs = prep_result["all_trade_logs"]
+    all_pit_stats_index = prep_result.get("all_pit_stats_index")
     benchmark_data = all_dfs_fast.get("0050", None)
     pf_profile = {} if profile_stats is None else profile_stats
 
@@ -117,6 +118,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         is_training=True,
         profile_stats=pf_profile,
         verbose=False,
+        pit_stats_index=all_pit_stats_index,
     )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
@@ -218,6 +220,8 @@ def run_optimizer_objective(session, trial):
         executor_bundle=prep_executor_bundle,
         static_fast_cache=session.static_fast_cache,
         static_master_dates=session.master_dates,
+        include_trade_logs=False,
+        include_pit_stats_index=True,
     )
     trial.set_user_attr("prep_mode", prep_result["prep_mode"])
     trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")
