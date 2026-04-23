@@ -1105,6 +1105,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         def init_output_files(self):
             return None
 
+        def mark_run_started(self):
+            return None
+
         def print_summary(self):
             return None
 
