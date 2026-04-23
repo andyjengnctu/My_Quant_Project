@@ -817,6 +817,7 @@ def _build_fake_prepare_result(*, master_dates):
         "master_dates": list(master_dates),
         "all_dfs_fast": {"0050": object()},
         "all_trade_logs": {},
+        "all_pit_stats_index": {},
     }
 
 
@@ -834,6 +835,9 @@ def _make_fake_portfolio_runner(*, ret_pct, mdd, annual_return_pct, yearly_retur
         is_training=False,
         profile_stats=None,
         verbose=False,
+        replay_counts=None,
+        pit_stats_index=None,
+        **_unused_kwargs,
     ):
         if profile_stats is not None:
             profile_stats.update({

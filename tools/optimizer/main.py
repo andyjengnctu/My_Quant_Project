@@ -622,7 +622,6 @@ def main(argv=None, environ=None):
         session.profile_recorder.init_output_files()
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
-        session.profile_recorder.mark_run_started()
         optimize_started_at = time.perf_counter()
         training_interrupted = False
         try:
