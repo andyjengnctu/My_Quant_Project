@@ -16,8 +16,11 @@ from core.price_utils import (
 )
 
 
-def _reset_exec_contexts(position):
-    position['_last_exec_contexts'] = []
+def _reset_exec_contexts(position, *, enabled=True):
+    if enabled:
+        position['_last_exec_contexts'] = []
+    else:
+        position.pop('_last_exec_contexts', None)
 
 
 def _record_exec_context(
@@ -33,7 +36,10 @@ def _record_exec_context(
     net_total_milli=0,
     allocated_cost_milli=0,
     pnl_milli=0,
+    enabled=True,
 ):
+    if not enabled:
+        return
     position.setdefault('_last_exec_contexts', []).append(
         {
             'event': event,
@@ -57,7 +63,7 @@ def sum_last_exec_contexts_milli(position):
     return freed_cash_milli, pnl_realized_milli
 
 
-def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None):
+def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True):
     sell_ledger = build_sell_ledger_from_price(
         exec_price,
         sell_qty,
@@ -91,6 +97,7 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
         net_total_milli=freed_cash_milli,
         allocated_cost_milli=allocated_cost_milli,
         pnl_milli=pnl_milli,
+        enabled=record_exec_contexts,
     )
     return freed_cash_milli, pnl_milli
 
@@ -118,7 +125,7 @@ def _update_trailing_stop(position, *, y_high, y_atr, params):
     position['sl'] = milli_to_money(position['sl_milli'])
 
 
-def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None):
+def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True):
     pending_action = position.get('pending_exit_action')
     if pending_action is None or position.get('qty', 0) <= 0:
         return False, 0, 0, []
@@ -138,6 +145,7 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             deferred=True,
             trigger_price=position.get('pending_exit_trigger_price'),
             trade_date=current_date,
+            record_exec_contexts=record_exec_contexts,
         )
         position['pending_exit_action'] = None
         position['pending_exit_trigger_price'] = float('nan')
@@ -158,6 +166,7 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             deferred=True,
             trigger_price=position.get('pending_exit_trigger_price'),
             trade_date=current_date,
+            record_exec_contexts=record_exec_contexts,
         )
         position['sold_half'] = True
         position['pending_exit_action'] = None
@@ -167,13 +176,18 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
     return False, 0, 0, []
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True):
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
-    _reset_exec_contexts(position)
+    _reset_exec_contexts(position, enabled=record_exec_contexts)
+
+    def _finish():
+        if return_milli:
+            return position, freed_cash_milli, pnl_realized_milli, events
+        return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
 
     if position['qty'] <= 0:
-        return position, 0.0, 0.0, events
+        return _finish()
 
     pending_consumed, pending_freed_cash_milli, pending_pnl_milli, pending_events = _try_execute_pending_exit_on_open(
         position,
@@ -185,13 +199,14 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         t_volume=t_volume,
         params=params,
         current_date=current_date,
+        record_exec_contexts=record_exec_contexts,
     )
     if pending_consumed:
         freed_cash_milli += pending_freed_cash_milli
         pnl_realized_milli += pending_pnl_milli
         events.extend(pending_events)
         if position['qty'] <= 0 or 'MISSED_SELL' in pending_events:
-            return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
+            return _finish()
 
     _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params)
 
@@ -207,14 +222,14 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 params=params,
                 deferred=False,
                 trade_date=current_date,
+                record_exec_contexts=record_exec_contexts,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
             events.append('IND_SELL')
         else:
             events.extend(['MISSED_SELL', sell_block_reason])
-
-        return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
+        return _finish()
 
     is_stop_hit = price_to_milli(t_low) <= position['sl_milli']
     half_sell_qty = calc_half_take_profit_sell_qty(position['qty'], params.tp_percent)
@@ -234,6 +249,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             deferred=False,
             trigger_price=position['tp_half'],
             trade_date=current_date,
+            record_exec_contexts=record_exec_contexts,
         )
         freed_cash_milli += leg_freed_cash_milli
         pnl_realized_milli += leg_pnl_milli
@@ -253,6 +269,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 deferred=False,
                 trigger_price=position['sl'],
                 trade_date=current_date,
+                record_exec_contexts=record_exec_contexts,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
@@ -260,4 +277,4 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         else:
             events.extend(['MISSED_SELL', sell_block_reason])
 
-    return position, milli_to_money(freed_cash_milli), milli_to_money(pnl_realized_milli), events
+    return _finish()

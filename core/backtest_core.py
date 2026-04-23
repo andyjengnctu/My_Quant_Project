@@ -166,7 +166,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
         if pos_start_of_current_bar > 0:
             if collect_stats:
                 total_bars_held += 1
-            position, _freed_cash, _pnl_realized, events = execute_bar_step(
+            position, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
                 position,
                 ATR_main[j - 1],
                 sellCondition[j - 1],
@@ -179,8 +179,9 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params,
                 current_date=Dates[j],
                 y_high=H[j - 1],
+                return_milli=True,
+                record_exec_contexts=False,
             )
-            freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in position.get('_last_exec_contexts', []))
             currentCapital_milli += freed_cash_milli
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl = position['realized_pnl']
