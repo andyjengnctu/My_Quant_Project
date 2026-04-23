@@ -1,5 +1,7 @@
 # 常用指令
 
+python package_zip.py && python test_suite.py
+
 ## 環境 / 測試
 
 ```bash

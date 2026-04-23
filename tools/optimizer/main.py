@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 import warnings
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -313,6 +314,37 @@ def _extract_cli_value(argv, option_name: str):
     return ''
 
 
+def _has_cli_flag(argv, option_name: str) -> bool:
+    args = [] if argv is None else list(argv)
+    return any(str(arg).strip() == option_name for arg in args[1:])
+
+
+def _resolve_cli_run_request(argv):
+    from core.runtime_utils import parse_int_strict
+    from tools.optimizer.benchmark import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
+
+    timing_mode = _has_cli_flag(argv, '--timing')
+    cli_trials_raw = _extract_cli_value(argv, '--trials')
+    if cli_trials_raw:
+        cli_trials = parse_int_strict(cli_trials_raw, 'CLI 參數 --trials', min_value=0)
+        if timing_mode and cli_trials <= 0:
+            raise ValueError('--timing 模式要求 --trials >= 1。')
+        return {
+            'timing_mode': timing_mode,
+            'n_trials': int(cli_trials),
+            'action': 'train' if int(cli_trials) > 0 else 'export_candidate',
+            'source': 'CLI:--timing+--trials' if timing_mode else 'CLI:--trials',
+        }
+    if timing_mode:
+        return {
+            'timing_mode': True,
+            'n_trials': 3,
+            'action': 'train',
+            'source': 'CLI:--timing',
+        }
+    return None
+
+
 def _prompt_optimizer_model_mode(default_model: str):
     default_normalized = str(default_model).strip().lower() or 'split'
     default_choice = '1' if default_normalized == 'split' else '2'
@@ -350,11 +382,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset", "--model"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials"), flag_options=("--timing",))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。輸入 0 匯出 candidate_best；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing]")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -383,6 +415,12 @@ def main(argv=None, environ=None):
         resolve_optimizer_seed,
         resolve_optimizer_trial_count,
     )
+    from tools.optimizer.benchmark import (
+        build_timing_db_file_path,
+        build_timing_summary,
+        print_timing_summary,
+        write_timing_summary,
+    )
 
     loaded_policy = load_walk_forward_policy(PROJECT_ROOT)
     try:
@@ -404,16 +442,29 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
-    db_file = build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
+    try:
+        cli_run_request = _resolve_cli_run_request(argv)
+    except ValueError as exc:
+        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+        return 1
+
+    timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
+    db_file = build_timing_db_file_path(output_dir=OUTPUT_DIR, dataset_profile_key=dataset_profile_key, session_ts=session.session_ts) if timing_mode else build_optimizer_db_file_path(dataset_profile_key, MODELS_DIR)
     db_name = f"sqlite:///{db_file}"
     ensure_runtime_dirs()
 
-    trial_count_exit, trial_source = resolve_trial_count_or_exit(
-        session,
-        environ=environ,
-        resolve_optimizer_trial_count=resolve_optimizer_trial_count,
-        colors=COLORS,
-    )
+    if cli_run_request is not None:
+        session.n_trials = int(cli_run_request["n_trials"])
+        session.run_action = str(cli_run_request.get("action", "train"))
+        trial_source = str(cli_run_request.get("source", "CLI"))
+        trial_count_exit = None
+    else:
+        trial_count_exit, trial_source = resolve_trial_count_or_exit(
+            session,
+            environ=environ,
+            resolve_optimizer_trial_count=resolve_optimizer_trial_count,
+            colors=COLORS,
+        )
     if trial_count_exit is not None:
         return trial_count_exit
     if str(getattr(session, "run_action", "train")) == "promote_candidate":
@@ -428,7 +479,7 @@ def main(argv=None, environ=None):
 
     if session.n_trials == 0:
         if not os.path.exists(db_file):
-            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；非互動模式預設 trial 數為 0，若要在乾淨 repo 建立新記憶庫，請先設定 V16_OPTIMIZER_TRIALS>0 或先完成一次訓練。{C_RESET}", file=sys.stderr)
+            print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {db_file}；非互動模式預設 trial 數為 0，若要在乾淨 repo 建立新記憶庫，請先設定 V16_OPTIMIZER_TRIALS>0、使用 --trials N，或先完成一次訓練。{C_RESET}", file=sys.stderr)
             return 1
         try:
             ensure_optimizer_db_usable(db_file)
@@ -513,6 +564,8 @@ def main(argv=None, environ=None):
 
     configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
+    if timing_mode:
+        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer。{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -538,7 +591,8 @@ def main(argv=None, environ=None):
     print(f"{C_GRAY}Train/Test policy: {scope_text}{C_RESET}")
 
     try:
-        prompt_existing_db_policy(db_file, COLORS)
+        if not timing_mode:
+            prompt_existing_db_policy(db_file, COLORS)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
         study = create_optimizer_study(db_name, seed=optimizer_seed)
@@ -547,8 +601,13 @@ def main(argv=None, environ=None):
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
+    overall_started_at = time.perf_counter()
+    raw_data_load_sec = 0.0
+    optimize_wall_sec = 0.0
     try:
+        raw_data_load_started_at = time.perf_counter()
         session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+        raw_data_load_sec = max(0.0, time.perf_counter() - raw_data_load_started_at)
 
         maybe_print_history_best(
             study,
@@ -563,6 +622,7 @@ def main(argv=None, environ=None):
         session.profile_recorder.init_output_files()
 
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
+        optimize_started_at = time.perf_counter()
         training_interrupted = False
         try:
             study.optimize(session.objective, n_trials=session.n_trials, n_jobs=1, callbacks=[session.monitoring_callback])
@@ -570,6 +630,7 @@ def main(argv=None, environ=None):
             training_interrupted = True
             print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
 
+        optimize_wall_sec = max(0.0, time.perf_counter() - optimize_started_at)
         print()
         session.profile_recorder.print_summary()
         session.print_optimizer_prep_summary()
@@ -578,7 +639,25 @@ def main(argv=None, environ=None):
             completed_session_trials=session.current_session_trial,
             interrupted=training_interrupted,
         )
-        if should_export:
+        if timing_mode:
+            timing_payload = build_timing_summary(
+                session=session,
+                dataset_label=dataset_label,
+                dataset_profile_key=dataset_profile_key,
+                selected_model_mode=selected_model_mode,
+                db_file=db_file,
+                raw_data_load_sec=raw_data_load_sec,
+                optimize_wall_sec=optimize_wall_sec,
+                total_wall_sec=max(0.0, time.perf_counter() - overall_started_at),
+            )
+            timing_summary_path = write_timing_summary(
+                output_dir=OUTPUT_DIR,
+                session_ts=session.session_ts,
+                payload=timing_payload,
+            )
+            print_timing_summary(payload=timing_payload)
+            print(f"{C_GRAY}   測時摘要: {timing_summary_path}{C_RESET}")
+        elif should_export:
             finalists, best_trial = print_local_min_score_finalist_review(
                 study,
                 session=session,
