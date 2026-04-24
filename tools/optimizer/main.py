@@ -621,7 +621,7 @@ def main(argv=None, environ=None):
             train_max_positions=TRAIN_MAX_POSITIONS,
             colors=COLORS,
             best_trial_resolver=session.get_best_completed_trial_or_none,
-            session=None,
+            session=session,
         )
 
         session.profile_recorder.init_output_files()
