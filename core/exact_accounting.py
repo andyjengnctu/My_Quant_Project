@@ -348,6 +348,15 @@ def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
     return _round_decimal_to_int(Decimal(gross_milli) * Decimal(tax_ppm) / _DECIMAL_PPM)
 
 
+def calc_fee_milli_fast(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:
+    fee_milli = (int(gross_milli) * int(fee_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
+    return max(fee_milli, int(min_fee_milli))
+
+
+def calc_tax_milli_fast(gross_milli: int, tax_ppm: int) -> int:
+    return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
+
+
 def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
     resolved_profile = resolve_security_profile(
         security_profile,
@@ -411,6 +420,22 @@ def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, s
         "tax_milli": tax_milli,
         "net_sell_total_milli": net_sell_total_milli,
     }
+
+
+def calc_net_sell_total_milli_fast(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
+    schedule = _resolve_fee_schedule(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    qty = int(qty)
+    gross_sell_milli = int(exec_price_milli) * qty
+    sell_fee_milli = calc_fee_milli_fast(gross_sell_milli, schedule["sell_fee_ppm"], schedule["min_fee_milli"])
+    tax_milli = calc_tax_milli_fast(gross_sell_milli, schedule["tax_ppm"])
+    return gross_sell_milli - sell_fee_milli - tax_milli
 
 
 def calc_initial_risk_total_milli(net_buy_total_milli: int, stop_net_sell_total_milli: int, fixed_risk_ppm: int) -> int:

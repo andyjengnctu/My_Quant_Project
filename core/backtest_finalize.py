@@ -1,4 +1,4 @@
-from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money
+from core.exact_accounting import calc_net_sell_total_milli_fast, calc_ratio_from_milli, milli_to_money
 from core.price_utils import (
     adjust_long_buy_limit,
     adjust_long_sell_fill_price,
@@ -65,15 +65,15 @@ def finalize_open_position_at_end(
 
     resolved_ticker = ticker or position.get("ticker")
     exec_price = adjust_long_sell_fill_price(final_close, ticker=resolved_ticker)
-    sell_ledger = build_sell_ledger_from_price(
-        exec_price,
+    net_sell_total_milli = calc_net_sell_total_milli_fast(
+        int(round(exec_price * 1000)),
         position['qty'],
         params,
         ticker=resolved_ticker,
         security_profile=position.get('security_profile'),
         trade_date=final_date,
     )
-    pnl_milli = sell_ledger['net_sell_total_milli'] - position['remaining_cost_basis_milli']
+    pnl_milli = net_sell_total_milli - position['remaining_cost_basis_milli']
     total_pnl_milli = position['realized_pnl_milli'] + pnl_milli
     total_pnl = milli_to_money(total_pnl_milli)
     trade_r_mult = calc_ratio_from_milli(total_pnl_milli, position.get('initial_risk_total_milli', 0))
@@ -93,7 +93,7 @@ def finalize_open_position_at_end(
             total_loss_milli += abs(total_pnl_milli)
             total_r_loss += abs(trade_r_mult)
 
-    current_capital_milli += sell_ledger['net_sell_total_milli']
+    current_capital_milli += net_sell_total_milli
     current_equity_milli = current_capital_milli
     if collect_stats:
         peak_capital_milli = max(peak_capital_milli, current_equity_milli)

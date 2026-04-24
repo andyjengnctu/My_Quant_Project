@@ -2,11 +2,10 @@ import pandas as pd
 
 from core.exact_accounting import (
     allocate_cost_basis_milli,
-    build_sell_ledger_from_price,
     calc_average_price_from_total_milli,
+    calc_net_sell_total_milli_fast,
     milli_to_money,
     price_to_milli,
-    sync_position_display_fields,
 )
 from core.price_utils import (
     adjust_long_sell_fill_price,
@@ -64,41 +63,48 @@ def sum_last_exec_contexts_milli(position):
 
 
 def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True):
-    sell_ledger = build_sell_ledger_from_price(
-        exec_price,
+    exec_price_milli = price_to_milli(exec_price)
+    ticker = position.get('ticker')
+    security_profile = position.get('security_profile')
+    allocated_cost_milli = allocate_cost_basis_milli(position['remaining_cost_basis_milli'], position['qty'], sell_qty)
+    freed_cash_milli = calc_net_sell_total_milli_fast(
+        exec_price_milli,
         sell_qty,
         params,
-        ticker=position.get('ticker'),
-        security_profile=position.get('security_profile'),
+        ticker=ticker,
+        security_profile=security_profile,
         trade_date=trade_date,
     )
-    allocated_cost_milli = allocate_cost_basis_milli(position['remaining_cost_basis_milli'], position['qty'], sell_qty)
-    freed_cash_milli = sell_ledger['net_sell_total_milli']
     pnl_milli = freed_cash_milli - allocated_cost_milli
 
-    position['realized_pnl_milli'] += pnl_milli
-    position['remaining_cost_basis_milli'] -= allocated_cost_milli
-    position['qty'] -= sell_qty
-    if position['qty'] <= 0:
-        position['qty'] = 0
-        position['remaining_cost_basis_milli'] = 0
-    sync_position_display_fields(position)
+    realized_pnl_milli = position['realized_pnl_milli'] + pnl_milli
+    remaining_cost_basis_milli = position['remaining_cost_basis_milli'] - allocated_cost_milli
+    remaining_qty = position['qty'] - sell_qty
+    if remaining_qty <= 0:
+        remaining_qty = 0
+        remaining_cost_basis_milli = 0
+    position['realized_pnl_milli'] = realized_pnl_milli
+    position['remaining_cost_basis_milli'] = remaining_cost_basis_milli
+    position['qty'] = remaining_qty
+    position['realized_pnl'] = milli_to_money(realized_pnl_milli)
+    position['remaining_cost_basis'] = milli_to_money(remaining_cost_basis_milli)
 
-    avg_net_price = calc_average_price_from_total_milli(freed_cash_milli, sell_qty)
-    _record_exec_context(
-        position,
-        event=event,
-        exec_price=exec_price,
-        net_price=avg_net_price,
-        qty=sell_qty,
-        pnl=milli_to_money(pnl_milli),
-        deferred=deferred,
-        trigger_price=trigger_price,
-        net_total_milli=freed_cash_milli,
-        allocated_cost_milli=allocated_cost_milli,
-        pnl_milli=pnl_milli,
-        enabled=record_exec_contexts,
-    )
+    if record_exec_contexts:
+        avg_net_price = calc_average_price_from_total_milli(freed_cash_milli, sell_qty)
+        _record_exec_context(
+            position,
+            event=event,
+            exec_price=exec_price,
+            net_price=avg_net_price,
+            qty=sell_qty,
+            pnl=milli_to_money(pnl_milli),
+            deferred=deferred,
+            trigger_price=trigger_price,
+            net_total_milli=freed_cash_milli,
+            allocated_cost_milli=allocated_cost_milli,
+            pnl_milli=pnl_milli,
+            enabled=True,
+        )
     return freed_cash_milli, pnl_milli
 
 
