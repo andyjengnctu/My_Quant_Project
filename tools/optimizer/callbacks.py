@@ -680,16 +680,30 @@ def run_optimizer_monitoring_callback(session, study, trial):
 
     total_trials_display = str(session.n_trials) if isinstance(session.n_trials, int) and session.n_trials > 0 else "?"
 
+    def _print_status_line(display_total_wall_sec: float) -> float:
+        status_started_at = time.perf_counter()
+        print(
+            f"\r{session.colors['gray']}⏳ [累積 {trial.number + 1:>4} | 本輪 {session.current_session_trial:>3}/{total_trials_display}] "
+            f"耗時: {float(display_total_wall_sec):>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{session.colors['reset']}\033[K",
+            end="",
+            flush=True,
+        )
+        return max(0.0, time.perf_counter() - status_started_at)
+
     best_lookup_started_at = time.perf_counter()
     best_completed_trial = session.get_best_completed_trial_or_none(study)
     callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
     should_render_milestone_dashboard = not bool(getattr(session, "disable_milestone_dashboard", False))
-    if (
+    is_new_best = (
         should_render_milestone_dashboard
         and best_completed_trial is not None
         and best_completed_trial.number == trial.number
         and is_qualified_trial_value(trial.value)
-    ):
+    )
+
+    if is_new_best:
+        pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
+        callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
         milestone_started_at = time.perf_counter()
         print()
         print_optimizer_trial_milestone_dashboard(
@@ -700,16 +714,8 @@ def run_optimizer_monitoring_callback(session, study, trial):
         )
         callback_milestone_dashboard_sec = max(0.0, time.perf_counter() - milestone_started_at)
 
-    status_started_at = time.perf_counter()
     pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
-    display_total_wall_sec = float(duration) + float(pre_status_elapsed)
-    print(
-        f"\r{session.colors['gray']}⏳ [累積 {trial.number + 1:>4} | 本輪 {session.current_session_trial:>3}/{total_trials_display}] "
-        f"耗時: {display_total_wall_sec:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{session.colors['reset']}\033[K",
-        end="",
-        flush=True,
-    )
-    callback_status_line_sec = max(0.0, time.perf_counter() - status_started_at)
+    callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
 
     callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
     trial_total_wall_sec = float(duration) + float(callback_wall_sec)
