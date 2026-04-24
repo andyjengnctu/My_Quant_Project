@@ -14,7 +14,8 @@ PROFILE_FIELDS = [
     "portfolio_day_loop_sec", "portfolio_candidate_scan_sec", "portfolio_rotation_sec",
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
-    "score_calc_sec", "ret_pct", "mdd", "trade_count",
+    "score_calc_sec", "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
+    "ret_pct", "mdd", "trade_count",
     "annual_return_pct", "annual_trades", "reserved_buy_fill_rate",
     "full_year_count", "min_full_year_return_pct",
     "m_win_rate", "r_squared",
@@ -59,6 +60,31 @@ class OptimizerProfileRecorder:
             writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
             writer.writerow(normalized)
 
+    def patch_row(self, trial_number, updates):
+        if not self.enabled or not updates:
+            return
+        target = int(trial_number) + 1
+        for row in self.rows:
+            try:
+                current_trial_number = int(row.get("trial_number", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if current_trial_number == target:
+                for key, value in updates.items():
+                    if key in PROFILE_FIELDS:
+                        row[key] = value
+                return
+
+    def _rewrite_csv_from_rows(self):
+        if not self.enabled:
+            return
+        os.makedirs(self.output_dir, exist_ok=True)
+        with open(self.csv_path, "w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
+            writer.writeheader()
+            for row in self.rows:
+                writer.writerow({field: row.get(field, "") for field in PROFILE_FIELDS})
+
     def build_summary_payload(self):
         if not self.enabled or not self.rows:
             return {
@@ -76,6 +102,7 @@ class OptimizerProfileRecorder:
             "portfolio_candidate_scan_sec", "portfolio_rotation_sec", "portfolio_settle_sec",
             "portfolio_buy_sec", "portfolio_equity_mark_sec", "portfolio_closeout_sec",
             "portfolio_curve_stats_sec", "filter_rules_sec", "score_calc_sec",
+            "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
         ]
         summary = {
             "trial_count": len(self.rows),
@@ -103,6 +130,7 @@ class OptimizerProfileRecorder:
             return
 
         summary = self.build_summary_payload()
+        self._rewrite_csv_from_rows()
         os.makedirs(self.output_dir, exist_ok=True)
         with open(self.summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2)
@@ -119,6 +147,8 @@ class OptimizerProfileRecorder:
             f"worker_generate_sum={avg.get('prep_worker_generate_signals_sum_sec', 0.0):.3f}s | "
             f"worker_backtest_sum={avg.get('prep_worker_run_backtest_sum_sec', 0.0):.3f}s | "
             f"to_dict_sum={avg.get('prep_worker_to_dict_sum_sec', 0.0):.3f}s | "
+            f"outer_nonobj={avg.get('outer_nonobjective_sec', 0.0):.3f}s | "
+            f"callback={avg.get('callback_wall_sec', 0.0):.3f}s | "
             f"pf_day_loop={avg.get('portfolio_day_loop_sec', 0.0):.3f}s{C_RESET}"
         )
         print(f"{C_GRAY}   CSV: {self.csv_path}{C_RESET}")

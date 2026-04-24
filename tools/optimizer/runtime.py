@@ -33,7 +33,7 @@ def prompt_existing_db_policy(db_file, colors):
         print(f"{colors['red']}🗑️ 已刪除舊記憶。{colors['reset']}")
 
 
-def create_optimizer_study(db_name, *, seed=None):
+def create_optimizer_study(db_name, *, seed=None, sampler_kind="tpe"):
     try:
         import optuna
         from sqlalchemy.exc import SQLAlchemyError
@@ -44,7 +44,10 @@ def create_optimizer_study(db_name, *, seed=None):
             "load_if_exists": True,
             "direction": "maximize",
         }
-        if seed is not None:
+        sampler_key = str(sampler_kind or "tpe").strip().lower()
+        if sampler_key == "random":
+            create_kwargs["sampler"] = optuna.samplers.RandomSampler(seed=(None if seed is None else int(seed)))
+        elif seed is not None:
             create_kwargs["sampler"] = optuna.samplers.TPESampler(seed=int(seed))
 
         return optuna.create_study(**create_kwargs)

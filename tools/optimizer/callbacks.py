@@ -1,4 +1,5 @@
 import os
+import time
 
 import pandas as pd
 
@@ -653,8 +654,21 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
 
 
 def run_optimizer_monitoring_callback(session, study, trial):
+    callback_started_at = time.perf_counter()
     session.current_session_trial += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
+    profile_row = trial.user_attrs.get("profile_row") or {}
+    try:
+        objective_wall_sec = float(profile_row.get("objective_wall_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        objective_wall_sec = 0.0
+    session.profile_recorder.patch_row(
+        trial.number,
+        {
+            "trial_total_wall_sec": float(duration),
+            "outer_nonobjective_sec": max(0.0, float(duration) - float(objective_wall_sec)),
+        },
+    )
     prep_mode = trial.user_attrs.get("prep_mode", "parallel")
     mode_suffix = " [fallback]" if prep_mode == "sequential_fallback" else ""
 
@@ -688,3 +702,5 @@ def run_optimizer_monitoring_callback(session, study, trial):
             title="績效與風險對比表",
             milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
         )
+    callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
+    session.profile_recorder.patch_row(trial.number, {"callback_wall_sec": float(callback_wall_sec)})

@@ -20,9 +20,13 @@ def _row_get_float(row: dict[str, Any] | None, key: str, default: float = 0.0) -
         return float(default)
 
 
-def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: str, selected_model_mode: str, db_file: str, raw_data_load_sec: float, optimize_wall_sec: float, total_wall_sec: float) -> dict[str, Any]:
+def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: str, selected_model_mode: str, db_file: str, raw_data_load_sec: float, optimize_wall_sec: float, total_wall_sec: float, optimizer_seed: int | None = None, timing_sampler_kind: str | None = None) -> dict[str, Any]:
     profile_summary = session.profile_recorder.build_summary_payload()
     first_row = session.profile_recorder.rows[0] if session.profile_recorder.rows else None
+    completed_trials = int(getattr(session, "current_session_trial", 0))
+    avg = dict(profile_summary.get("avg", {}))
+    profile_objective_sum_sec = float(avg.get("objective_wall_sec", 0.0)) * float(completed_trials)
+    profile_trial_total_sum_sec = float(avg.get("trial_total_wall_sec", 0.0)) * float(completed_trials)
     return {
         "mode": "timing",
         "session_ts": session.session_ts,
@@ -30,14 +34,20 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
         "dataset_label": str(dataset_label),
         "model_mode": str(selected_model_mode),
         "db_file": str(db_file),
+        "timing_sampler_kind": str(timing_sampler_kind or ""),
+        "optimizer_seed": (None if optimizer_seed is None else int(optimizer_seed)),
         "requested_trials": int(getattr(session, "n_trials", 0)),
-        "completed_trials": int(getattr(session, "current_session_trial", 0)),
+        "completed_trials": completed_trials,
         "raw_data_load_sec": float(raw_data_load_sec),
         "optimize_wall_sec": float(optimize_wall_sec),
         "total_wall_sec": float(total_wall_sec),
         "first_trial_completed_wall_sec": profile_summary.get("first_trial_completed_wall_sec"),
         "profile_csv_path": session.profile_recorder.csv_path,
         "profile_summary_path": session.profile_recorder.summary_path,
+        "profile_objective_sum_sec": float(profile_objective_sum_sec),
+        "profile_trial_total_sum_sec": float(profile_trial_total_sum_sec),
+        "optimize_minus_profile_objective_sec": float(optimize_wall_sec) - float(profile_objective_sum_sec),
+        "optimize_minus_profile_trial_total_sec": float(optimize_wall_sec) - float(profile_trial_total_sum_sec),
         "first_trial": {
             "objective_wall_sec": _row_get_float(first_row, "objective_wall_sec"),
             "prep_wall_sec": _row_get_float(first_row, "prep_wall_sec"),
@@ -48,7 +58,7 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
             "portfolio_build_trade_index_sec": _row_get_float(first_row, "portfolio_build_trade_index_sec"),
             "portfolio_day_loop_sec": _row_get_float(first_row, "portfolio_day_loop_sec"),
         },
-        "avg": dict(profile_summary.get("avg", {})),
+        "avg": avg,
     }
 
 
@@ -69,7 +79,9 @@ def print_timing_summary(*, payload: dict[str, Any]):
         f"raw_data_load={float(payload.get('raw_data_load_sec', 0.0)):.3f}s | "
         f"first_trial_done={float(payload.get('first_trial_completed_wall_sec') or 0.0):.3f}s | "
         f"optimize_wall={float(payload.get('optimize_wall_sec', 0.0)):.3f}s | "
-        f"total_wall={float(payload.get('total_wall_sec', 0.0)):.3f}s"
+        f"total_wall={float(payload.get('total_wall_sec', 0.0)):.3f}s | "
+        f"opt-gap(obj)={float(payload.get('optimize_minus_profile_objective_sec', 0.0)):.3f}s | "
+        f"opt-gap(trial)={float(payload.get('optimize_minus_profile_trial_total_sec', 0.0)):.3f}s"
     )
     print(
         "   first_trial | "
@@ -90,6 +102,8 @@ def print_timing_summary(*, payload: dict[str, Any]):
         f"worker_generate_sum={float(avg.get('prep_worker_generate_signals_sum_sec', 0.0)):.3f}s | "
         f"worker_backtest_sum={float(avg.get('prep_worker_run_backtest_sum_sec', 0.0)):.3f}s | "
         f"to_dict_sum={float(avg.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
+        f"outer_nonobj={float(avg.get('outer_nonobjective_sec', 0.0)):.3f}s | "
+        f"callback={float(avg.get('callback_wall_sec', 0.0)):.3f}s | "
         f"build_trade_index={float(avg.get('portfolio_build_trade_index_sec', 0.0)):.3f}s | "
         f"day_loop={float(avg.get('portfolio_day_loop_sec', 0.0)):.3f}s"
     )

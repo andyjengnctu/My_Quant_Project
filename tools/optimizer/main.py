@@ -484,7 +484,7 @@ def main(argv=None, environ=None):
         try:
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
-            study = create_optimizer_study(db_name, seed=optimizer_seed)
+            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind="tpe")
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -565,7 +565,7 @@ def main(argv=None, environ=None):
     configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     if timing_mode:
-        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer。{C_RESET}")
+        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合。{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -650,6 +650,8 @@ def main(argv=None, environ=None):
                 raw_data_load_sec=raw_data_load_sec,
                 optimize_wall_sec=optimize_wall_sec,
                 total_wall_sec=max(0.0, time.perf_counter() - overall_started_at),
+                optimizer_seed=optimizer_seed,
+                timing_sampler_kind=("random" if timing_mode else "tpe"),
             )
             timing_summary_path = write_timing_summary(
                 output_dir=OUTPUT_DIR,
