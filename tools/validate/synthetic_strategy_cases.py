@@ -1179,7 +1179,8 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             session.n_trials = 5
             return None, "TEST"
 
-        def _fake_create_optimizer_study(_db_name, *, seed=None):
+        def _fake_create_optimizer_study(_db_name, *, seed=None, sampler_kind="tpe"):
+            _ = sampler_kind
             return _InterruptingStudy(fake_session)
 
         def _fake_export_best_params_if_requested(study, *, best_params_path, fixed_tp_percent, colors):
