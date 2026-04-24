@@ -567,7 +567,7 @@ def main(argv=None, environ=None):
     configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     if timing_mode:
-        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合。{C_RESET}")
+        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合，且關閉 milestone dashboard 顯示以避免 UI 開銷污染測時。{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -602,6 +602,9 @@ def main(argv=None, environ=None):
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
+
+    session.timing_mode = timing_mode
+    session.disable_milestone_dashboard = bool(timing_mode)
 
     overall_started_at = time.perf_counter()
     raw_data_load_sec = 0.0

@@ -698,8 +698,10 @@ def run_optimizer_monitoring_callback(session, study, trial):
     best_lookup_started_at = time.perf_counter()
     best_completed_trial = session.get_best_completed_trial_or_none(study)
     callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
+    should_render_milestone_dashboard = not bool(getattr(session, "disable_milestone_dashboard", False))
     if (
-        best_completed_trial is not None
+        should_render_milestone_dashboard
+        and best_completed_trial is not None
         and best_completed_trial.number == trial.number
         and is_qualified_trial_value(trial.value)
     ):
