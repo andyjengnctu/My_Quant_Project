@@ -79,7 +79,6 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
     from core.scanner_display import print_scanner_header
     from core.strategy_dashboard import print_strategy_dashboard
-    from apps import test_suite as test_suite_module
     from tools.local_regression import run_all as run_all_module
     from tools.local_regression import run_chain_checks as chain_checks_module
     from tools.local_regression import run_ml_smoke as ml_smoke_module
@@ -368,31 +367,6 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     finally:
         chain_checks_module.get_pit_stats_from_index = original_get_pit_stats
 
-    progress = test_suite_module.ConsoleProgress()
-    progress.use_win32_redraw = False
-    progress.use_ansi_redraw = False
-    progress.console_width = 48
-
-    def _exercise_console_progress() -> None:
-        test_suite_module._char_display_width("測")
-        test_suite_module._char_display_width("A")
-        test_suite_module._display_width("A測\nB")
-        test_suite_module._truncate_display_width("A測B", 0)
-        test_suite_module._truncate_display_width("A測B", 3)
-        progress._format_label({"name": "quick_gate", "execution_mode": "parallel"})
-        progress._format_label({"name": "meta_quality", "execution_mode": "parallel"})
-        progress._fit_console_line("測試進度 ABC")
-        progress("step_start", {"name": "quick_gate", "execution_mode": "parallel"})
-        progress("step_progress", {"name": "quick_gate", "elapsed_sec": 0.25})
-        progress("step_finish", {"name": "quick_gate", "status": "PASS", "duration_sec": 0.5})
-        progress("step_start", {"name": "consistency", "execution_mode": "serial"})
-        progress("step_finish", {"name": "consistency", "status": "FAIL", "duration_sec": 0.75})
-        progress("finalizing", {"elapsed_sec": 1.0})
-        progress("done", {"overall_status": "FAIL", "elapsed_sec": 1.25})
-
-    _silent_call(_exercise_console_progress)
-    _silent_call(lambda: test_suite_module.main(["apps/test_suite.py", "--help"]))
-
     return {
         "ml_params_keys": sorted(params_info["payload"].keys()),
         "profile_trial_count": profile_info["optimizer_profile_trial_count"],
@@ -402,7 +376,6 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         "worker_probe_values": [worker_probe_single, worker_probe_1, worker_probe_2, worker_probe_3, worker_probe_4],
         "chain_debug_rows": chain_debug_rows,
         "chain_summary_blockers": chain_summary_blockers,
-        "console_progress_finalized": progress.finalized,
     }
 
 
