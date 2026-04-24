@@ -79,6 +79,7 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
     from core.test_suite_reporting import TEST_SUITE_STEP_LABELS, print_test_suite_human_summary
     from core.scanner_display import print_scanner_header
     from core.strategy_dashboard import print_strategy_dashboard
+    from apps import test_suite as test_suite_module
     from tools.local_regression import run_all as run_all_module
     from tools.local_regression import run_chain_checks as chain_checks_module
     from tools.local_regression import run_ml_smoke as ml_smoke_module
@@ -250,12 +251,158 @@ def _exercise_coverage_formal_helpers(coverage_dir: Path) -> Dict[str, Any]:
         step_labels=TEST_SUITE_STEP_LABELS,
     ))
 
+    pandas_module = __import__("pandas")
+
+    original_cpu_count = chain_checks_module.os.cpu_count
+    try:
+        chain_checks_module.os.cpu_count = lambda: 1
+        worker_probe_1 = chain_checks_module._determine_chain_worker_count(8)
+        chain_checks_module.os.cpu_count = lambda: 3
+        worker_probe_2 = chain_checks_module._determine_chain_worker_count(8)
+        chain_checks_module.os.cpu_count = lambda: 6
+        worker_probe_3 = chain_checks_module._determine_chain_worker_count(8)
+        chain_checks_module.os.cpu_count = lambda: 16
+        worker_probe_4 = chain_checks_module._determine_chain_worker_count(8)
+    finally:
+        chain_checks_module.os.cpu_count = original_cpu_count
+    worker_probe_single = chain_checks_module._determine_chain_worker_count(1)
+
+    chain_debug_rows = [
+        chain_checks_module._derive_debug_row_count(
+            standalone_logs=[{"Type": "買進"}],
+            replay_counts={"trade_rows": [{"Type": "半倉停利"}, {"Type": "錯失買進"}, {"Type": "錯失賣出"}]},
+            single_stats={"missed_buys": 3, "missed_sells": 2},
+        ),
+        chain_checks_module._derive_debug_row_count(
+            standalone_logs=[],
+            replay_counts={"trade_rows": []},
+            single_stats={"missed_buys": 0, "missed_sells": 0},
+        ),
+    ]
+    chain_checks_module._normalize_scanner_candidate_row({
+        "kind": "skip",
+        "ticker": "",
+        "proj_cost": None,
+        "expected_value": None,
+        "sort_value": None,
+        "text": None,
+    })
+
+    probe_dates = pandas_module.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    no_setup_df = pandas_module.DataFrame({"is_setup": [False, False, False]}, index=probe_dates)
+    setup_df = pandas_module.DataFrame({"is_setup": [False, True, True]}, index=probe_dates)
+    base_replay_counts = {"trade_rows": [], "candidate_dates": [], "orderable_dates": []}
+    chain_summary_blockers = [
+        chain_checks_module.summarize_ticker(
+            ticker="NOSET",
+            params=valid_params_payload,
+            start_year=2024,
+            df=no_setup_df,
+            single_stats={"trade_count": 0, "missed_buys": 0, "missed_sells": 0},
+            standalone_logs=[],
+            sanitize_stats={"dropped_row_count": 0},
+            replay_counts=base_replay_counts,
+            debug_row_count=0,
+        )["blocked_by"],
+        chain_checks_module.summarize_ticker(
+            ticker="HIST",
+            params=valid_params_payload,
+            start_year=2024,
+            df=setup_df,
+            single_stats={"trade_count": 0, "missed_buys": 0, "missed_sells": 0},
+            standalone_logs=[],
+            sanitize_stats={"dropped_row_count": 0},
+            replay_counts=base_replay_counts,
+            debug_row_count=0,
+        )["blocked_by"],
+    ]
+    original_get_pit_stats = chain_checks_module.get_pit_stats_from_index
+    try:
+        chain_checks_module.get_pit_stats_from_index = lambda *_args, **_kwargs: (True, 0.1, 0.5, 3, 1.0)
+        chain_summary_blockers.extend([
+            chain_checks_module.summarize_ticker(
+                ticker="HELD",
+                params=valid_params_payload,
+                start_year=2024,
+                df=setup_df,
+                single_stats={"trade_count": 0, "missed_buys": 0, "missed_sells": 0},
+                standalone_logs=[],
+                sanitize_stats={"dropped_row_count": 0},
+                replay_counts={"trade_rows": [], "candidate_dates": [], "orderable_dates": []},
+                debug_row_count=0,
+            )["blocked_by"],
+            chain_checks_module.summarize_ticker(
+                ticker="RISK",
+                params=valid_params_payload,
+                start_year=2024,
+                df=setup_df,
+                single_stats={"trade_count": 0, "missed_buys": 0, "missed_sells": 0},
+                standalone_logs=[],
+                sanitize_stats={"dropped_row_count": 0},
+                replay_counts={"trade_rows": [], "candidate_dates": ["2024-01-04"], "orderable_dates": []},
+                debug_row_count=0,
+            )["blocked_by"],
+            chain_checks_module.summarize_ticker(
+                ticker="CASH",
+                params=valid_params_payload,
+                start_year=2024,
+                df=setup_df,
+                single_stats={"trade_count": 0, "missed_buys": 0, "missed_sells": 0},
+                standalone_logs=[],
+                sanitize_stats={"dropped_row_count": 0},
+                replay_counts={"trade_rows": [], "candidate_dates": ["2024-01-04"], "orderable_dates": ["2024-01-04"]},
+                debug_row_count=0,
+            )["blocked_by"],
+            chain_checks_module.summarize_ticker(
+                ticker="FILL",
+                params=valid_params_payload,
+                start_year=2024,
+                df=setup_df,
+                single_stats={"trade_count": 1, "missed_buys": 0, "missed_sells": 0},
+                standalone_logs=[],
+                sanitize_stats={"dropped_row_count": 1},
+                replay_counts={"trade_rows": [{"Date": "2024-01-04", "Type": "買進", "備註": ""}], "candidate_dates": ["2024-01-04"], "orderable_dates": ["2024-01-04"]},
+                debug_row_count=0,
+            )["blocked_by"],
+        ])
+    finally:
+        chain_checks_module.get_pit_stats_from_index = original_get_pit_stats
+
+    progress = test_suite_module.ConsoleProgress()
+    progress.use_win32_redraw = False
+    progress.use_ansi_redraw = False
+    progress.console_width = 48
+
+    def _exercise_console_progress() -> None:
+        test_suite_module._char_display_width("測")
+        test_suite_module._char_display_width("A")
+        test_suite_module._display_width("A測\nB")
+        test_suite_module._truncate_display_width("A測B", 0)
+        test_suite_module._truncate_display_width("A測B", 3)
+        progress._format_label({"name": "quick_gate", "execution_mode": "parallel"})
+        progress._format_label({"name": "meta_quality", "execution_mode": "parallel"})
+        progress._fit_console_line("測試進度 ABC")
+        progress("step_start", {"name": "quick_gate", "execution_mode": "parallel"})
+        progress("step_progress", {"name": "quick_gate", "elapsed_sec": 0.25})
+        progress("step_finish", {"name": "quick_gate", "status": "PASS", "duration_sec": 0.5})
+        progress("step_start", {"name": "consistency", "execution_mode": "serial"})
+        progress("step_finish", {"name": "consistency", "status": "FAIL", "duration_sec": 0.75})
+        progress("finalizing", {"elapsed_sec": 1.0})
+        progress("done", {"overall_status": "FAIL", "elapsed_sec": 1.25})
+
+    _silent_call(_exercise_console_progress)
+    _silent_call(lambda: test_suite_module.main(["apps/test_suite.py", "--help"]))
+
     return {
         "ml_params_keys": sorted(params_info["payload"].keys()),
         "profile_trial_count": profile_info["optimizer_profile_trial_count"],
         "normalized_ticker": normalized_row["ticker"],
         "run_all_preflight_lines": len([line for line in preflight_probe.splitlines() if line.strip()]),
         "dataset_probe_status": dataset_probe.get("status"),
+        "worker_probe_values": [worker_probe_single, worker_probe_1, worker_probe_2, worker_probe_3, worker_probe_4],
+        "chain_debug_rows": chain_debug_rows,
+        "chain_summary_blockers": chain_summary_blockers,
+        "console_progress_finalized": progress.finalized,
     }
 
 
