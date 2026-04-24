@@ -623,6 +623,8 @@ def main(argv=None, environ=None):
             best_trial_resolver=session.get_best_completed_trial_or_none,
             session=session,
         )
+        if timing_mode:
+            _print_run_best_baseline_summary(_load_json_file_or_none(RUN_BEST_SUMMARY_PATH))
 
         session.profile_recorder.init_output_files()
 

@@ -46,8 +46,10 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
         "profile_summary_path": session.profile_recorder.summary_path,
         "profile_objective_sum_sec": float(profile_objective_sum_sec),
         "profile_trial_total_sum_sec": float(profile_trial_total_sum_sec),
+        "profile_trial_plus_raw_sum_sec": float(profile_trial_total_sum_sec) + float(raw_data_load_sec),
         "optimize_minus_profile_objective_sec": float(optimize_wall_sec) - float(profile_objective_sum_sec),
         "optimize_minus_profile_trial_total_sec": float(optimize_wall_sec) - float(profile_trial_total_sum_sec),
+        "total_minus_profile_trial_plus_raw_sec": float(total_wall_sec) - (float(profile_trial_total_sum_sec) + float(raw_data_load_sec)),
         "first_trial": {
             "objective_wall_sec": _row_get_float(first_row, "objective_wall_sec"),
             "prep_wall_sec": _row_get_float(first_row, "prep_wall_sec"),
@@ -80,8 +82,11 @@ def print_timing_summary(*, payload: dict[str, Any]):
         f"first_trial_done={float(payload.get('first_trial_completed_wall_sec') or 0.0):.3f}s | "
         f"optimize_wall={float(payload.get('optimize_wall_sec', 0.0)):.3f}s | "
         f"total_wall={float(payload.get('total_wall_sec', 0.0)):.3f}s | "
+        f"trial_sum={float(payload.get('profile_trial_total_sum_sec', 0.0)):.3f}s | "
+        f"trial+raw={float(payload.get('profile_trial_plus_raw_sum_sec', 0.0)):.3f}s | "
         f"opt-gap(obj)={float(payload.get('optimize_minus_profile_objective_sec', 0.0)):.3f}s | "
-        f"opt-gap(trial)={float(payload.get('optimize_minus_profile_trial_total_sec', 0.0)):.3f}s"
+        f"opt-gap(trial)={float(payload.get('optimize_minus_profile_trial_total_sec', 0.0)):.3f}s | "
+        f"total-gap(trial+raw)={float(payload.get('total_minus_profile_trial_plus_raw_sec', 0.0)):.3f}s"
     )
     print(
         "   first_trial | "
