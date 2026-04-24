@@ -78,28 +78,6 @@ def _load_json_file_or_none(path: str):
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
-def _print_run_best_baseline_summary(run_best_summary: dict | None):
-    print(f"{C_CYAN}📌 run_best 基線摘要{C_RESET}")
-    if not run_best_summary:
-        print(f"{C_GRAY}   尚無 run_best_summary.json，略過基線摘要。{C_RESET}")
-        return
-    trial_no = run_best_summary.get('trial_number')
-    objective_mode = str(run_best_summary.get('objective_mode', ''))
-    train_start_year = run_best_summary.get('train_start_year')
-    search_train_end_year = run_best_summary.get('search_train_end_year')
-    oos_start_year = run_best_summary.get('oos_start_year')
-    print(
-        f"{C_GRAY}   trial={trial_no if trial_no is not None else 'N/A'} | "
-        f"base={float(run_best_summary.get('base_score', 0.0)):.3f} | "
-        f"local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} | "
-        f"retention={float(run_best_summary.get('retention', 0.0)):.3f}{C_RESET}"
-    )
-    print(
-        f"{C_GRAY}   mode={objective_mode or 'N/A'} | "
-        f"train={train_start_year if train_start_year is not None else 'N/A'}~{search_train_end_year if search_train_end_year is not None else 'N/A'} | "
-        f"oos_start={oos_start_year if oos_start_year is not None else 'N/A'}{C_RESET}"
-    )
-
 
 def _ensure_study_effective_policy_compatible(*, study, walk_forward_policy: dict):
     if not hasattr(study, "user_attrs") or not hasattr(study, "set_user_attr"):
@@ -589,7 +567,7 @@ def main(argv=None, environ=None):
     configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     if timing_mode:
-        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合，且關閉 milestone dashboard 顯示以避免 UI 開銷污染測時。{C_RESET}")
+        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合，並保留逐 trial 時間輸出，方便對照真實訓練進度。{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -645,15 +623,12 @@ def main(argv=None, environ=None):
             best_trial_resolver=session.get_best_completed_trial_or_none,
             session=session,
         )
-        if timing_mode:
-            _print_run_best_baseline_summary(_load_json_file_or_none(RUN_BEST_SUMMARY_PATH))
 
         session.profile_recorder.init_output_files()
 
-        startup_elapsed_sec = max(0.0, time.perf_counter() - overall_started_at)
+        startup_total_sec = max(0.0, time.perf_counter() - overall_started_at)
         print(
-            f"{C_GRAY}⏱️ 前置完成：raw_data_load={raw_data_load_sec:.3f}s | "
-            f"startup_total={startup_elapsed_sec:.3f}s | 即將進入第 1 輪{C_RESET}"
+            f"{C_GRAY}⏱️ 前置完成：raw_data_load={raw_data_load_sec:.3f}s | startup_total={startup_total_sec:.3f}s | 即將進入第 1 輪{C_RESET}"
         )
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         session.profile_recorder.mark_run_started()

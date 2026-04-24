@@ -52,6 +52,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
     else:
         pit_stats_index = dict(pit_stats_index)
+        if all_standalone_logs:
+            for ticker, logs in all_standalone_logs.items():
+                if pit_stats_index.get(ticker) is None:
+                    pit_stats_index[ticker] = build_trade_stats_index(logs)
     normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_stats is not None:
         build_trade_index_sec = time.perf_counter() - t0
