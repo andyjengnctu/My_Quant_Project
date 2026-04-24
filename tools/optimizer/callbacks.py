@@ -521,7 +521,7 @@ def _get_reference_console_cache(session):
 
 
 
-def _build_optimizer_trial_dashboard_payload(session, trial):
+def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown=None):
     attrs = trial.user_attrs
     params_mapping = session.build_optimizer_trial_params(trial.params, attrs, fixed_tp_percent=session.optimizer_fixed_tp_percent)
     params = _build_trial_params_object(params_mapping)
@@ -580,6 +580,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         consume_trial_milestone_inputs = getattr(session, "consume_trial_milestone_inputs", None)
         cached_trial_inputs = consume_trial_milestone_inputs(trial.number) if callable(consume_trial_milestone_inputs) else None
+        candidate_wf_started_at = time.perf_counter()
         if cached_trial_inputs is not None:
             candidate_wf_report = evaluate_walk_forward(
                 all_dfs_fast=(cached_trial_inputs.get("all_dfs_fast") or session.static_fast_cache),
@@ -618,6 +619,9 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
                 pit_stats_index=prep_result.get("all_pit_stats_index"),
             )
+        candidate_wf_elapsed = max(0.0, time.perf_counter() - candidate_wf_started_at)
+        if isinstance(timing_breakdown, dict):
+            timing_breakdown["candidate_wf_sec"] = candidate_wf_elapsed
         candidate_test_metrics, benchmark_test_metrics, oos_range_text = _build_oos_metrics_from_report(
             report=candidate_wf_report,
             initial_capital=initial_capital,
@@ -651,7 +655,11 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
 
 
 def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title: str, title: str = "績效與風險對比表"):
-    payload = _build_optimizer_trial_dashboard_payload(session, trial)
+    timing_breakdown = {}
+    payload_started_at = time.perf_counter()
+    payload = _build_optimizer_trial_dashboard_payload(session, trial, timing_breakdown=timing_breakdown)
+    payload_elapsed = max(0.0, time.perf_counter() - payload_started_at)
+    render_started_at = time.perf_counter()
     print_optimizer_trial_console_dashboard(
         title=title,
         milestone_title=milestone_title,
@@ -672,6 +680,12 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         params_lines=_build_training_param_lines(payload["params"]),
         hard_gate_lines=_build_hard_gate_lines(),
     )
+    render_elapsed = max(0.0, time.perf_counter() - render_started_at)
+    return {
+        "payload_sec": float(payload_elapsed),
+        "candidate_wf_sec": float(timing_breakdown.get("candidate_wf_sec", 0.0)),
+        "render_sec": float(render_elapsed),
+    }
 
 
 def run_optimizer_monitoring_callback(session, study, trial):
@@ -679,6 +693,9 @@ def run_optimizer_monitoring_callback(session, study, trial):
     callback_best_lookup_sec = 0.0
     callback_status_line_sec = 0.0
     callback_milestone_dashboard_sec = 0.0
+    callback_milestone_payload_sec = 0.0
+    callback_milestone_candidate_wf_sec = 0.0
+    callback_milestone_render_sec = 0.0
 
     session.current_session_trial += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
@@ -727,13 +744,16 @@ def run_optimizer_monitoring_callback(session, study, trial):
         callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
         milestone_started_at = time.perf_counter()
         print()
-        print_optimizer_trial_milestone_dashboard(
+        milestone_stats = print_optimizer_trial_milestone_dashboard(
             session,
             trial,
             title="績效與風險對比表",
             milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
         )
         callback_milestone_dashboard_sec = max(0.0, time.perf_counter() - milestone_started_at)
+        callback_milestone_payload_sec = float((milestone_stats or {}).get("payload_sec", 0.0))
+        callback_milestone_candidate_wf_sec = float((milestone_stats or {}).get("candidate_wf_sec", 0.0))
+        callback_milestone_render_sec = float((milestone_stats or {}).get("render_sec", 0.0))
 
     pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
     callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
@@ -754,6 +774,9 @@ def run_optimizer_monitoring_callback(session, study, trial):
             "callback_best_lookup_sec": float(callback_best_lookup_sec),
             "callback_status_line_sec": float(callback_status_line_sec),
             "callback_milestone_dashboard_sec": float(callback_milestone_dashboard_sec),
+            "callback_milestone_payload_sec": float(callback_milestone_payload_sec),
+            "callback_milestone_candidate_wf_sec": float(callback_milestone_candidate_wf_sec),
+            "callback_milestone_render_sec": float(callback_milestone_render_sec),
         },
     )
     session.profile_recorder.mark_trial_completed(trial.number)

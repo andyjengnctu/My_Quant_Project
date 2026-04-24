@@ -16,6 +16,7 @@ PROFILE_FIELDS = [
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
     "score_calc_sec", "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
     "callback_best_lookup_sec", "callback_status_line_sec", "callback_milestone_dashboard_sec",
+    "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
     "ret_pct", "mdd", "trade_count",
     "annual_return_pct", "annual_trades", "reserved_buy_fill_rate",
     "full_year_count", "min_full_year_return_pct",
@@ -68,7 +69,7 @@ class OptimizerProfileRecorder:
         if self.first_trial_completed_wall_sec is None:
             self.first_trial_completed_wall_sec = elapsed
             return
-        if trial_number in (0, 1, "0", "1"):
+        if trial_number in (0, "0"):
             self.first_trial_completed_wall_sec = elapsed
 
     def patch_row(self, trial_number, updates):
@@ -115,6 +116,8 @@ class OptimizerProfileRecorder:
             "portfolio_curve_stats_sec", "filter_rules_sec", "score_calc_sec",
             "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
             "callback_best_lookup_sec", "callback_status_line_sec", "callback_milestone_dashboard_sec",
+            "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
+    "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
         ]
         summary = {
             "trial_count": len(self.rows),
@@ -164,6 +167,9 @@ class OptimizerProfileRecorder:
             f"cb_best={avg.get('callback_best_lookup_sec', 0.0):.3f}s | "
             f"cb_status={avg.get('callback_status_line_sec', 0.0):.3f}s | "
             f"cb_milestone={avg.get('callback_milestone_dashboard_sec', 0.0):.3f}s | "
+            f"cb_payload={avg.get('callback_milestone_payload_sec', 0.0):.3f}s | "
+            f"cb_wf={avg.get('callback_milestone_candidate_wf_sec', 0.0):.3f}s | "
+            f"cb_render={avg.get('callback_milestone_render_sec', 0.0):.3f}s | "
             f"pf_day_loop={avg.get('portfolio_day_loop_sec', 0.0):.3f}s{C_RESET}"
         )
         print(f"{C_GRAY}   CSV: {self.csv_path}{C_RESET}")
