@@ -83,16 +83,29 @@ def execute_reserved_entries_for_day(
         if get_buy_sort_method() == 'PROJ_COST':
             chosen_key = None
             for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
-                probe_entry_plan = _build_cash_capped_entry_plan_for_candidate(
+                probe_projected_cost_milli = int(probe_cand.get('proj_cost_milli', 0) or 0)
+                if chosen_key is not None and probe_projected_cost_milli <= chosen_key:
+                    break
+
+                probe_entry_plan = _build_candidate_full_entry_plan_if_affordable(
                     probe_cand,
-                    effective_entry_budget,
                     effective_entry_budget_milli,
+                )
+                if probe_entry_plan is not None:
+                    chosen_key = int(probe_entry_plan['reserved_cost_milli'])
+                    chosen_idx = cand_idx
+                    chosen_entry_plan = probe_entry_plan
+                    break
+
+                probe_entry_plan = build_cash_capped_entry_plan(
+                    _build_candidate_plan_seed(probe_cand),
+                    effective_entry_budget,
                     params,
                 )
                 if probe_entry_plan is None:
                     continue
 
-                probe_reserved_cost_milli = probe_entry_plan['reserved_cost_milli']
+                probe_reserved_cost_milli = int(probe_entry_plan['reserved_cost_milli'])
                 if chosen_key is None or probe_reserved_cost_milli > chosen_key:
                     chosen_key = probe_reserved_cost_milli
                     chosen_idx = cand_idx
