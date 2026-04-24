@@ -117,7 +117,6 @@ class OptimizerProfileRecorder:
             "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
             "callback_best_lookup_sec", "callback_status_line_sec", "callback_milestone_dashboard_sec",
             "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
-    "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
         ]
         summary = {
             "trial_count": len(self.rows),
