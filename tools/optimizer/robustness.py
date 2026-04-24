@@ -6,7 +6,7 @@ from typing import Callable
 
 
 from config.training_policy import OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K
-from core.params_io import build_params_from_mapping
+from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import evaluate_prepared_train_score, resolve_search_train_scope
@@ -32,6 +32,42 @@ def _get_local_min_score_cache(session):
     if not hasattr(session, "local_min_score_cache"):
         session.local_min_score_cache = {}
     return session.local_min_score_cache
+
+
+def _get_local_min_payload_score_cache(session):
+    if not hasattr(session, "local_min_payload_score_cache"):
+        session.local_min_payload_score_cache = {}
+    return session.local_min_payload_score_cache
+
+
+def _build_payload_score_cache_key(payload: dict):
+    canonical_payload = params_to_json_dict(build_params_from_mapping(payload))
+    return tuple(sorted(canonical_payload.items()))
+
+
+def _get_seeded_payload_trial_numbers(session):
+    if not hasattr(session, "local_min_seeded_payload_trial_numbers"):
+        session.local_min_seeded_payload_trial_numbers = set()
+    return session.local_min_seeded_payload_trial_numbers
+
+
+def _seed_payload_score_cache_from_study(session, study, objective_mode: str):
+    cache = _get_local_min_payload_score_cache(session)
+    seeded_trial_numbers = _get_seeded_payload_trial_numbers(session)
+    for completed_trial in _list_qualified_trials_for_objective(study, objective_mode):
+        trial_number = int(completed_trial.number)
+        if trial_number in seeded_trial_numbers:
+            continue
+        try:
+            payload = build_best_params_payload_from_trial(
+                completed_trial,
+                fixed_tp_percent=session.optimizer_fixed_tp_percent,
+            )
+            cache[_build_payload_score_cache_key(payload)] = float(completed_trial.value)
+            seeded_trial_numbers.add(trial_number)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
+    return cache
 
 
 def _get_best_trial_resolver_cache(session):
@@ -103,14 +139,15 @@ class _FinalistProgressBoard:
         )
         self._render()
 
-    def update_done(self, idx: int, *, total_neighbors: int, local_min_score: float):
+    def update_done(self, idx: int, *, evaluated_neighbors: int, total_neighbors: int, local_min_score: float, early_stopped: bool = False):
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
+        stop_text = " | early stop" if bool(early_stopped) else ""
         self.lines[idx] = self._format_line(
             idx,
             prefix="✅",
-            progress_text=f"進度 {int(total_neighbors)}/{int(total_neighbors)}",
+            progress_text=f"進度 {int(evaluated_neighbors)}/{int(total_neighbors)}",
             local_text=f"{float(local_min_score):.3f}",
-            status_text=gate_status,
+            status_text=f"{gate_status}{stop_text}",
         )
         self._render()
 
@@ -211,6 +248,7 @@ def compute_local_min_score(
     on_finish=None,
 ):
     cache = _get_local_min_score_cache(session)
+    payload_score_cache = _get_local_min_payload_score_cache(session)
     cache_key = int(trial.number)
     cached = cache.get(cache_key)
     if cached is not None:
@@ -233,55 +271,76 @@ def compute_local_min_score(
             local_min_score = float(base_score)
         except (TypeError, ValueError):
             local_min_score = float(INVALID_TRIAL_VALUE)
-        cache[cache_key] = {"score": float(local_min_score), "total_neighbors": 0}
+        cache[cache_key] = {"score": float(local_min_score), "total_neighbors": 0, "evaluated_neighbors": 0, "early_stopped": False}
         if on_finish is not None:
-            on_finish(0, float(local_min_score))
+            on_finish(0, 0, float(local_min_score), False)
         elif progress_label:
             _print_progress_line(session, f"✅ {progress_label}: 無合法鄰點，local_min_score={float(local_min_score):.3f}")
         return float(local_min_score)
 
+    total_neighbors = len(neighbor_payloads)
     if on_start is not None:
-        on_start(len(neighbor_payloads))
+        on_start(total_neighbors)
     elif progress_label:
-        _print_progress_line(session, f"⏳ {progress_label}: 開始 local_min_score 分析，共 {len(neighbor_payloads)} 個鄰點")
+        _print_progress_line(session, f"⏳ {progress_label}: 開始 local_min_score 分析，共 {total_neighbors} 個鄰點")
 
     local_min_score = float("inf")
+    evaluated_neighbors = 0
+    early_stopped = False
     for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
-        ai_params = build_params_from_mapping(payload)
-        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-        prep_result = prepare_trial_inputs(
-            raw_data_cache=session.raw_data_cache,
-            params=ai_params,
-            default_max_workers=session.default_max_workers,
-            executor_bundle=prep_executor_bundle,
-            static_fast_cache=session.static_fast_cache,
-            static_master_dates=session.master_dates,
-        )
-        search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=session.objective_mode)
-        evaluation = evaluate_prepared_train_score(
-            session,
-            ai_params=ai_params,
-            prep_result=prep_result,
-            search_scope=search_scope,
-            profile_stats=None,
-        )
-        score = float(evaluation["score"])
+        evaluated_neighbors = neighbor_idx
+        payload_cache_key = _build_payload_score_cache_key(payload)
+        cached_payload_score = payload_score_cache.get(payload_cache_key)
+        if cached_payload_score is None:
+            ai_params = build_params_from_mapping(payload)
+            prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=session.raw_data_cache,
+                params=ai_params,
+                default_max_workers=session.default_max_workers,
+                executor_bundle=prep_executor_bundle,
+                static_fast_cache=session.static_fast_cache,
+                static_master_dates=session.master_dates,
+                include_trade_logs=False,
+                include_pit_stats_index=True,
+            )
+            search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=session.objective_mode)
+            evaluation = evaluate_prepared_train_score(
+                session,
+                ai_params=ai_params,
+                prep_result=prep_result,
+                search_scope=search_scope,
+                profile_stats=None,
+            )
+            score = float(evaluation["score"])
+            payload_score_cache[payload_cache_key] = score
+        else:
+            score = float(cached_payload_score)
+
         if score < local_min_score:
             local_min_score = score
         if on_neighbor is not None:
             current_local_min = None if local_min_score == float("inf") else float(local_min_score)
-            on_neighbor(neighbor_idx, len(neighbor_payloads), current_local_min)
+            on_neighbor(neighbor_idx, total_neighbors, current_local_min)
+        if local_min_score <= 0.0:
+            early_stopped = neighbor_idx < total_neighbors
+            break
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
-    cache[cache_key] = {"score": float(local_min_score), "total_neighbors": len(neighbor_payloads)}
+    cache[cache_key] = {
+        "score": float(local_min_score),
+        "total_neighbors": total_neighbors,
+        "evaluated_neighbors": evaluated_neighbors,
+        "early_stopped": bool(early_stopped),
+    }
     if on_finish is not None:
-        on_finish(len(neighbor_payloads), float(local_min_score))
+        on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))
     elif progress_label:
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
-        _print_progress_line(session, f"✅ {progress_label}: local_min_score={float(local_min_score):.3f} | gate={gate_status}")
+        stop_text = " | early stop" if bool(early_stopped) else ""
+        _print_progress_line(session, f"✅ {progress_label}: local_min_score={float(local_min_score):.3f} | gate={gate_status}{stop_text}")
     return float(local_min_score)
-
 
 
 
@@ -317,6 +376,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     if not sorted_trials:
         return []
 
+    _seed_payload_score_cache_from_study(session, study, objective_mode)
     finalists = _build_display_finalists(sorted_trials, top_k=top_k, include_trial=include_trial)
     progress_board = None
     if show_progress:
@@ -338,10 +398,12 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
                     total_neighbors=total,
                     current_local_min=current_local_min,
                 ),
-                on_finish=lambda total, score, idx=finalist_idx: progress_board.update_done(
+                on_finish=lambda evaluated, total, score, early_stopped, idx=finalist_idx: progress_board.update_done(
                     idx,
+                    evaluated_neighbors=evaluated,
                     total_neighbors=total,
                     local_min_score=score,
+                    early_stopped=early_stopped,
                 ),
             )
         else:

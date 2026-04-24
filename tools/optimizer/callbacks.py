@@ -425,6 +425,8 @@ def _compute_reference_console_cache(session):
             executor_bundle=prep_executor_bundle,
             static_fast_cache=session.static_fast_cache,
             static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
         )
         search_train_dates = _build_search_train_dates_for_session(session)
         benchmark_data = prep_result["all_dfs_fast"].get("0050", None)
@@ -466,6 +468,7 @@ def _compute_reference_console_cache(session):
             is_training=True,
             profile_stats=pf_profile,
             verbose=False,
+            pit_stats_index=prep_result.get("all_pit_stats_index"),
         )
         cache = {
             "pf_return": float(ret_pct),

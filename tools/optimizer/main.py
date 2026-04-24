@@ -238,6 +238,8 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         executor_bundle=prep_executor_bundle,
         static_fast_cache=session.static_fast_cache,
         static_master_dates=session.master_dates,
+        include_trade_logs=False,
+        include_pit_stats_index=True,
     )
     report = evaluate_walk_forward(
         all_dfs_fast=prep_result["all_dfs_fast"],
@@ -250,6 +252,7 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         train_start_year=int(walk_forward_policy["train_start_year"]),
         min_train_years=int(walk_forward_policy["min_train_years"]),
         oos_start_year=walk_forward_policy.get("oos_start_year"),
+        pit_stats_index=prep_result.get("all_pit_stats_index"),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,
