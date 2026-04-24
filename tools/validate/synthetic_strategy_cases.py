@@ -22,6 +22,7 @@ from core.config import SCORE_CALC_METHOD, SCORE_NUMERATOR_METHOD, V16StrategyPa
 from core.params_io import params_to_json_dict
 from core.portfolio_stats import calc_portfolio_score
 from tools.optimizer.objective_runner import run_optimizer_objective
+from tools.optimizer.session import OptimizerSession
 from tools.optimizer import callbacks as optimizer_callbacks
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
@@ -1230,6 +1231,75 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
     add_check(results, "strategy_contract", case_id, "optimizer_main_interrupt_stderr_empty", "", stderr_text)
+
+    summary["checks"] = len(results)
+    return results, summary
+
+
+def validate_optimizer_session_milestone_cache_case(_base_params):
+    case_id = "OPTIMIZER_SESSION_MILESTONE_CACHE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    class _NoopRecorder:
+        def __init__(self, **kwargs):
+            self.enabled = False
+            self.console_print = False
+            self.print_every_n_trials = 999999
+            self.rows = []
+
+        def append_row(self, row):
+            self.rows.append(dict(row))
+
+        def patch_row(self, trial_number, patch):
+            return None
+
+        def mark_trial_completed(self, trial_number=None):
+            return None
+
+        def mark_run_started(self):
+            return None
+
+        def init_output_files(self):
+            return None
+
+        def print_summary(self):
+            return None
+
+    session = OptimizerSession(
+        output_dir=".",
+        session_ts="synthetic",
+        profile_recorder_cls=_NoopRecorder,
+        build_optimizer_trial_params=lambda trial, fixed_tp_percent=None: None,
+        get_best_completed_trial_or_none=lambda study: None,
+        objective_mode=OBJECTIVE_MODE_LEGACY_BASE_SCORE,
+        search_train_end_year=2025,
+        walk_forward_policy={"oos_start_year": 2021, "oos_end_year": 2025},
+        resolve_optimizer_tp_percent=lambda trial, fixed_tp_percent: 0.25,
+        print_strategy_dashboard=lambda *args, **kwargs: None,
+        colors={"yellow": "", "reset": ""},
+        optimizer_fixed_tp_percent=0.25,
+        train_max_positions=3,
+        train_start_year=2020,
+        train_enable_rotation=False,
+        default_max_workers=1,
+        enable_optimizer_profiling=False,
+        enable_profile_console_print=False,
+        profile_print_every_n_trials=999999,
+    )
+
+    session.cache_trial_milestone_inputs(1)
+    session.cache_trial_milestone_inputs(1, sorted_master_dates=[1, 2], all_pit_stats_index={"2330": {1: []}}, all_dfs_fast={"2330": {"is_setup": [False, True]}})
+    session.cache_trial_milestone_inputs(2, all_pit_stats_index={"1101": {2: []}})
+    session.cache_trial_milestone_inputs(3, all_pit_stats_index={"1216": {3: []}})
+    session.cache_trial_milestone_inputs(4, all_pit_stats_index={"2603": {4: []}})
+    evicted_payload = session.consume_trial_milestone_inputs(1)
+    kept_payload = session.consume_trial_milestone_inputs(4)
+    session.discard_trial_milestone_inputs(999)
+
+    add_check(results, "strategy_contract", case_id, "optimizer_session_ignores_empty_milestone_payload", True, evicted_payload is None)
+    add_check(results, "strategy_contract", case_id, "optimizer_session_keeps_recent_milestone_payload", True, isinstance(kept_payload, dict) and kept_payload.get("all_pit_stats_index") == {"2603": {4: []}})
+    add_check(results, "strategy_contract", case_id, "optimizer_session_caps_milestone_cache_size", 2, len(session._optimizer_trial_milestone_inputs))
 
     summary["checks"] = len(results)
     return results, summary
