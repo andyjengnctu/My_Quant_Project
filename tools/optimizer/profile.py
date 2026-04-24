@@ -61,6 +61,16 @@ class OptimizerProfileRecorder:
             writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
             writer.writerow(normalized)
 
+    def mark_trial_completed(self, trial_number=None):
+        if self._run_started_perf_counter is None:
+            return
+        elapsed = max(0.0, time.perf_counter() - self._run_started_perf_counter)
+        if self.first_trial_completed_wall_sec is None:
+            self.first_trial_completed_wall_sec = elapsed
+            return
+        if trial_number in (0, 1, "0", "1"):
+            self.first_trial_completed_wall_sec = elapsed
+
     def patch_row(self, trial_number, updates):
         if not self.enabled or not updates:
             return

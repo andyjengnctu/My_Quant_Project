@@ -114,6 +114,9 @@ class _FakeProfileRecorder:
     def append_row(self, row):
         self.rows.append(dict(row))
 
+    def mark_trial_completed(self, trial_number=None):
+        return None
+
 
 class _FakeOptimizerSession:
     def __init__(self, *, fixed_tp_percent=0.25):
@@ -1110,6 +1113,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             return None
 
         def mark_run_started(self):
+            return None
+
+        def mark_trial_completed(self, trial_number=None):
             return None
 
         def print_summary(self):
