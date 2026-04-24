@@ -95,13 +95,14 @@ class OptimizerSession:
             self.master_dates.update(get_fast_dates(fast_df))
         self.sorted_master_dates = sorted(self.master_dates)
 
-    def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None):
-        if all_pit_stats_index is None:
+    def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None):
+        if all_pit_stats_index is None and all_dfs_fast is None:
             return
         cache = self._optimizer_trial_milestone_inputs
         cache[int(trial_number)] = {
             'sorted_master_dates': tuple(sorted_master_dates or ()),
             'all_pit_stats_index': all_pit_stats_index,
+            'all_dfs_fast': all_dfs_fast,
         }
         if len(cache) > 3:
             oldest_trial = sorted(cache.keys())[0]

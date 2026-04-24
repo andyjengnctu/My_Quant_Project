@@ -330,6 +330,7 @@ def run_optimizer_objective(session, trial):
             trial.number,
             sorted_master_dates=sorted(prep_result["master_dates"]),
             all_pit_stats_index=prep_result.get("all_pit_stats_index"),
+            all_dfs_fast=prep_result.get("all_dfs_fast"),
         )
 
     final_score = float(evaluation["base_score"])

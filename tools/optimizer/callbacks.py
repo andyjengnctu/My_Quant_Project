@@ -582,7 +582,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
         cached_trial_inputs = consume_trial_milestone_inputs(trial.number) if callable(consume_trial_milestone_inputs) else None
         if cached_trial_inputs is not None:
             candidate_wf_report = evaluate_walk_forward(
-                all_dfs_fast=session.static_fast_cache,
+                all_dfs_fast=(cached_trial_inputs.get("all_dfs_fast") or session.static_fast_cache),
                 all_trade_logs={},
                 sorted_dates=list(cached_trial_inputs.get("sorted_master_dates") or []),
                 params=params,
