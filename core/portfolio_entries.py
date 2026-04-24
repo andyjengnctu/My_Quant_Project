@@ -23,6 +23,31 @@ def _build_candidate_plan_seed(candidate_row):
     }
 
 
+def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash_milli):
+    qty = int(candidate_row.get('qty', 0) or 0)
+    reserved_cost_milli = int(candidate_row.get('proj_cost_milli', 0) or 0)
+    if qty <= 0 or reserved_cost_milli <= 0 or reserved_cost_milli > int(available_cash_milli):
+        return None
+
+    entry_plan = _build_candidate_plan_seed(candidate_row)
+    entry_plan['qty'] = qty
+    entry_plan['is_orderable'] = True
+    entry_plan['reserved_cost_milli'] = reserved_cost_milli
+    entry_plan['reserved_cost'] = milli_to_money(reserved_cost_milli)
+    return entry_plan
+
+
+def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params):
+    full_entry_plan = _build_candidate_full_entry_plan_if_affordable(candidate_row, effective_entry_budget_milli)
+    if full_entry_plan is not None:
+        return full_entry_plan
+    return build_cash_capped_entry_plan(
+        _build_candidate_plan_seed(candidate_row),
+        effective_entry_budget,
+        params,
+    )
+
+
 def execute_reserved_entries_for_day(
     portfolio,
     active_extended_signals,
@@ -53,13 +78,15 @@ def execute_reserved_entries_for_day(
             params.initial_capital,
             params,
         )
+        effective_entry_budget_milli = coerce_money_like_to_milli(effective_entry_budget)
 
         if get_buy_sort_method() == 'PROJ_COST':
             chosen_key = None
             for cand_idx, probe_cand in enumerate(remaining_orderable_candidates):
-                probe_entry_plan = build_cash_capped_entry_plan(
-                    _build_candidate_plan_seed(probe_cand),
+                probe_entry_plan = _build_cash_capped_entry_plan_for_candidate(
+                    probe_cand,
                     effective_entry_budget,
+                    effective_entry_budget_milli,
                     params,
                 )
                 if probe_entry_plan is None:
@@ -78,9 +105,10 @@ def execute_reserved_entries_for_day(
         if cand.get('is_orderable') is False:
             continue
         if chosen_entry_plan is None:
-            chosen_entry_plan = build_cash_capped_entry_plan(
-                _build_candidate_plan_seed(cand),
+            chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
+                cand,
                 effective_entry_budget,
+                effective_entry_budget_milli,
                 params,
             )
             if chosen_entry_plan is None:

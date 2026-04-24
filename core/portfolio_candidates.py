@@ -1,6 +1,6 @@
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
-from core.exact_accounting import calc_entry_total_cost
+from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
 from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     build_normal_candidate_plan,
@@ -43,7 +43,13 @@ def _make_candidate_row(
     trade_date=None,
     sizing_capital=None,
 ):
-    est_cost = calc_entry_total_cost(est_limit_px, est_qty, params) if est_qty > 0 else 0.0
+    if est_qty > 0:
+        est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
+        est_cost_milli = int(est_ledger["net_buy_total_milli"])
+        est_cost = milli_to_money(est_cost_milli)
+    else:
+        est_cost_milli = 0
+        est_cost = 0.0
     sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
     row = {
         'ticker': ticker,
@@ -55,6 +61,7 @@ def _make_candidate_row(
         'yesterday_pos': y_pos,
         'qty': est_qty,
         'proj_cost': est_cost,
+        'proj_cost_milli': est_cost_milli,
         'sort_value': sort_value,
         'hist_win_rate': win_rate,
         'hist_trade_count': trade_count,

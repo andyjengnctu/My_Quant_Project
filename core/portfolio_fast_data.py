@@ -181,29 +181,35 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    backtest_result = run_v16_backtest(
-        df,
-        params,
-        return_logs=include_trade_logs,
-        precomputed_signals=precomputed_signals,
-        ticker=resolved_ticker,
-        collect_stats=False,
-        return_pit_stats_index=include_pit_stats_index,
-    )
-    if include_trade_logs and include_pit_stats_index:
-        _stats_unused, standalone_logs, pit_stats_index = backtest_result
-    elif include_trade_logs:
-        _stats_unused, standalone_logs = backtest_result
-        pit_stats_index = None
-    elif include_pit_stats_index:
-        _stats_unused, pit_stats_index = backtest_result
-        standalone_logs = None
+    _atr_main, buy_condition, _sell_condition, _buy_limits = precomputed_signals
+    has_executable_setup = bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
+    if not has_executable_setup:
+        standalone_logs = [] if include_trade_logs else None
+        pit_stats_index = build_trade_stats_index([]) if include_pit_stats_index else None
     else:
-        _stats_unused = backtest_result
-        standalone_logs = None
-        pit_stats_index = None
+        backtest_result = run_v16_backtest(
+            df,
+            params,
+            return_logs=include_trade_logs,
+            precomputed_signals=precomputed_signals,
+            ticker=resolved_ticker,
+            collect_stats=False,
+            return_pit_stats_index=include_pit_stats_index,
+        )
+        if include_trade_logs and include_pit_stats_index:
+            _stats_unused, standalone_logs, pit_stats_index = backtest_result
+        elif include_trade_logs:
+            _stats_unused, standalone_logs = backtest_result
+            pit_stats_index = None
+        elif include_pit_stats_index:
+            _stats_unused, pit_stats_index = backtest_result
+            standalone_logs = None
+        else:
+            _stats_unused = backtest_result
+            standalone_logs = None
+            pit_stats_index = None
     if profile_stats is not None:
-        profile_stats['run_backtest_sec'] = time.perf_counter() - t0
+        profile_stats["run_backtest_sec"] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
     dynamic_data = pack_optimizer_dynamic_data(precomputed_signals)
