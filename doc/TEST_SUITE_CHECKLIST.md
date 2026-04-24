@@ -461,6 +461,7 @@
 | T253 | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` | B166 |
 | T256 | `validate_validate_runtime_tmp_output_staging_contract_case` | B167 |
 | T257 | `validate_optimizer_walk_forward_policy_contract_case` | B52 |
+| T258 | `validate_optimizer_session_milestone_cache_case` | B52 |
 
 ## G. 逐項收斂紀錄
 
@@ -1267,3 +1268,4 @@
 | 2026-04-18 | B52 | 檢出 walk-forward policy config loader 與 optimizer callbacks 顯示鏈缺少 formal contract，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_strategy_cases.py` |
 | 2026-04-18 | B52 | 補齊 walk-forward policy config loader / callbacks contract 後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
 | 2026-04-18 | T257 | 新增 optimizer walk-forward policy / callbacks contract 並驗證 | NEW -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
+| 2026-04-24 | T258 | 新增 optimizer milestone cache contract 並驗證 | NEW -> DONE | `validate_optimizer_session_milestone_cache_case` |
