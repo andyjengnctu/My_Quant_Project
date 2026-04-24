@@ -114,6 +114,7 @@ def _evaluate_single_holdout_period(
     max_positions,
     enable_rotation,
     benchmark_ticker: str,
+    pit_stats_index=None,
 ) -> dict | None:
     test_dates = list(holdout_period.get('test_dates') or [])
     if not test_dates:
@@ -157,6 +158,7 @@ def _evaluate_single_holdout_period(
         is_training=True,
         profile_stats=pf_profile,
         verbose=False,
+        pit_stats_index=pit_stats_index,
     )
     test_score_romd = calc_portfolio_score(
         ret_pct,
@@ -214,6 +216,7 @@ def evaluate_walk_forward(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
     oos_start_year: int | None = None,
+    pit_stats_index=None,
 ):
     holdout_period = build_test_holdout_period(
         sorted_dates,
@@ -231,6 +234,7 @@ def evaluate_walk_forward(
             max_positions=max_positions,
             enable_rotation=enable_rotation,
             benchmark_ticker=benchmark_ticker,
+            pit_stats_index=pit_stats_index,
         )
 
     summary = {

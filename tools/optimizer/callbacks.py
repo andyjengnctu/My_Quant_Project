@@ -503,6 +503,7 @@ def _compute_reference_console_cache(session):
                 train_start_year=int(session.walk_forward_policy["train_start_year"]),
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                pit_stats_index=prep_result.get("all_pit_stats_index"),
             )
         return cache
     except Exception as exc:
@@ -577,26 +578,46 @@ def _build_optimizer_trial_dashboard_payload(session, trial):
     test_rows = None
     if model_mode == "split":
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
-        prep_result = prepare_trial_inputs(
-            raw_data_cache=session.raw_data_cache,
-            params=params,
-            default_max_workers=session.default_max_workers,
-            executor_bundle=prep_executor_bundle,
-            static_fast_cache=session.static_fast_cache,
-            static_master_dates=session.master_dates,
-        )
-        candidate_wf_report = evaluate_walk_forward(
-            all_dfs_fast=prep_result["all_dfs_fast"],
-            all_trade_logs=prep_result["all_trade_logs"],
-            sorted_dates=sorted(prep_result["master_dates"]),
-            params=params,
-            max_positions=session.train_max_positions,
-            enable_rotation=session.train_enable_rotation,
-            benchmark_ticker="0050",
-            train_start_year=int(session.walk_forward_policy["train_start_year"]),
-            min_train_years=int(session.walk_forward_policy["min_train_years"]),
-            oos_start_year=session.walk_forward_policy.get("oos_start_year"),
-        )
+        consume_trial_milestone_inputs = getattr(session, "consume_trial_milestone_inputs", None)
+        cached_trial_inputs = consume_trial_milestone_inputs(trial.number) if callable(consume_trial_milestone_inputs) else None
+        if cached_trial_inputs is not None:
+            candidate_wf_report = evaluate_walk_forward(
+                all_dfs_fast=session.static_fast_cache,
+                all_trade_logs={},
+                sorted_dates=list(cached_trial_inputs.get("sorted_master_dates") or []),
+                params=params,
+                max_positions=session.train_max_positions,
+                enable_rotation=session.train_enable_rotation,
+                benchmark_ticker="0050",
+                train_start_year=int(session.walk_forward_policy["train_start_year"]),
+                min_train_years=int(session.walk_forward_policy["min_train_years"]),
+                oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                pit_stats_index=cached_trial_inputs.get("all_pit_stats_index"),
+            )
+        else:
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=session.raw_data_cache,
+                params=params,
+                default_max_workers=session.default_max_workers,
+                executor_bundle=prep_executor_bundle,
+                static_fast_cache=session.static_fast_cache,
+                static_master_dates=session.master_dates,
+                include_trade_logs=False,
+                include_pit_stats_index=True,
+            )
+            candidate_wf_report = evaluate_walk_forward(
+                all_dfs_fast=prep_result["all_dfs_fast"],
+                all_trade_logs=prep_result["all_trade_logs"],
+                sorted_dates=sorted(prep_result["master_dates"]),
+                params=params,
+                max_positions=session.train_max_positions,
+                enable_rotation=session.train_enable_rotation,
+                benchmark_ticker="0050",
+                train_start_year=int(session.walk_forward_policy["train_start_year"]),
+                min_train_years=int(session.walk_forward_policy["min_train_years"]),
+                oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                pit_stats_index=prep_result.get("all_pit_stats_index"),
+            )
         candidate_test_metrics, benchmark_test_metrics, oos_range_text = _build_oos_metrics_from_report(
             report=candidate_wf_report,
             initial_capital=initial_capital,
@@ -716,6 +737,11 @@ def run_optimizer_monitoring_callback(session, study, trial):
 
     pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
     callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
+
+    if not is_new_best:
+        discard_trial_milestone_inputs = getattr(session, "discard_trial_milestone_inputs", None)
+        if callable(discard_trial_milestone_inputs):
+            discard_trial_milestone_inputs(trial.number)
 
     callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
     trial_total_wall_sec = float(duration) + float(callback_wall_sec)

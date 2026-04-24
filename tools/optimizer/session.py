@@ -76,6 +76,7 @@ class OptimizerSession:
             print_every_n_trials=profile_print_every_n_trials,
         )
         self._trial_prep_executor_bundle = None
+        self._optimizer_trial_milestone_inputs = {}
         self.static_fast_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
@@ -93,6 +94,25 @@ class OptimizerSession:
         for fast_df in self.static_fast_cache.values():
             self.master_dates.update(get_fast_dates(fast_df))
         self.sorted_master_dates = sorted(self.master_dates)
+
+    def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None):
+        if all_pit_stats_index is None:
+            return
+        cache = self._optimizer_trial_milestone_inputs
+        cache[int(trial_number)] = {
+            'sorted_master_dates': tuple(sorted_master_dates or ()),
+            'all_pit_stats_index': all_pit_stats_index,
+        }
+        if len(cache) > 3:
+            oldest_trial = sorted(cache.keys())[0]
+            if oldest_trial != int(trial_number):
+                cache.pop(oldest_trial, None)
+
+    def consume_trial_milestone_inputs(self, trial_number):
+        return self._optimizer_trial_milestone_inputs.pop(int(trial_number), None)
+
+    def discard_trial_milestone_inputs(self, trial_number):
+        self._optimizer_trial_milestone_inputs.pop(int(trial_number), None)
 
     def get_trial_prep_executor_bundle(self, max_workers):
         try:

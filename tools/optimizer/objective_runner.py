@@ -324,6 +324,14 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_r_squared", evaluation["bm_r_squared"])
     trial.set_user_attr("bm_m_win_rate", evaluation["bm_m_win_rate"])
 
+    cache_trial_milestone_inputs = getattr(session, "cache_trial_milestone_inputs", None)
+    if callable(cache_trial_milestone_inputs):
+        cache_trial_milestone_inputs(
+            trial.number,
+            sorted_master_dates=sorted(prep_result["master_dates"]),
+            all_pit_stats_index=prep_result.get("all_pit_stats_index"),
+        )
+
     final_score = float(evaluation["base_score"])
     if mode not in {OBJECTIVE_MODE_LEGACY_BASE_SCORE, OBJECTIVE_MODE_SPLIT_TRAIN_ROMD}:
         return _append_invalid_profile_row(
