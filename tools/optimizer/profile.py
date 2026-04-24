@@ -15,6 +15,7 @@ PROFILE_FIELDS = [
     "portfolio_settle_sec", "portfolio_buy_sec", "portfolio_equity_mark_sec",
     "portfolio_closeout_sec", "portfolio_curve_stats_sec", "filter_rules_sec",
     "score_calc_sec", "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
+    "callback_best_lookup_sec", "callback_status_line_sec", "callback_milestone_dashboard_sec",
     "ret_pct", "mdd", "trade_count",
     "annual_return_pct", "annual_trades", "reserved_buy_fill_rate",
     "full_year_count", "min_full_year_return_pct",
@@ -103,6 +104,7 @@ class OptimizerProfileRecorder:
             "portfolio_buy_sec", "portfolio_equity_mark_sec", "portfolio_closeout_sec",
             "portfolio_curve_stats_sec", "filter_rules_sec", "score_calc_sec",
             "trial_total_wall_sec", "outer_nonobjective_sec", "callback_wall_sec",
+            "callback_best_lookup_sec", "callback_status_line_sec", "callback_milestone_dashboard_sec",
         ]
         summary = {
             "trial_count": len(self.rows),
@@ -149,6 +151,9 @@ class OptimizerProfileRecorder:
             f"to_dict_sum={avg.get('prep_worker_to_dict_sum_sec', 0.0):.3f}s | "
             f"outer_nonobj={avg.get('outer_nonobjective_sec', 0.0):.3f}s | "
             f"callback={avg.get('callback_wall_sec', 0.0):.3f}s | "
+            f"cb_best={avg.get('callback_best_lookup_sec', 0.0):.3f}s | "
+            f"cb_status={avg.get('callback_status_line_sec', 0.0):.3f}s | "
+            f"cb_milestone={avg.get('callback_milestone_dashboard_sec', 0.0):.3f}s | "
             f"pf_day_loop={avg.get('portfolio_day_loop_sec', 0.0):.3f}s{C_RESET}"
         )
         print(f"{C_GRAY}   CSV: {self.csv_path}{C_RESET}")

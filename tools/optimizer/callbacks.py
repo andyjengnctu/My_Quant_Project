@@ -655,6 +655,10 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
 
 def run_optimizer_monitoring_callback(session, study, trial):
     callback_started_at = time.perf_counter()
+    callback_best_lookup_sec = 0.0
+    callback_status_line_sec = 0.0
+    callback_milestone_dashboard_sec = 0.0
+
     session.current_session_trial += 1
     duration = trial.duration.total_seconds() if trial.duration else 0.0
     profile_row = trial.user_attrs.get("profile_row") or {}
@@ -682,19 +686,24 @@ def run_optimizer_monitoring_callback(session, study, trial):
         status_text, score_text = f"{session.colors['green']}進化中{mode_suffix}{session.colors['reset']}", f"{trial.value:.3f}"
 
     total_trials_display = str(session.n_trials) if isinstance(session.n_trials, int) and session.n_trials > 0 else "?"
+    status_started_at = time.perf_counter()
     print(
         f"\r{session.colors['gray']}⏳ [累積 {trial.number + 1:>4} | 本輪 {session.current_session_trial:>3}/{total_trials_display}] "
         f"耗時: {duration:>5.1f}s | 系統評分: {score_text:>7} | 狀態: {status_text}{session.colors['reset']}\033[K",
         end="",
         flush=True,
     )
+    callback_status_line_sec = max(0.0, time.perf_counter() - status_started_at)
 
+    best_lookup_started_at = time.perf_counter()
     best_completed_trial = session.get_best_completed_trial_or_none(study)
+    callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
     if (
         best_completed_trial is not None
         and best_completed_trial.number == trial.number
         and is_qualified_trial_value(trial.value)
     ):
+        milestone_started_at = time.perf_counter()
         print()
         print_optimizer_trial_milestone_dashboard(
             session,
@@ -702,5 +711,14 @@ def run_optimizer_monitoring_callback(session, study, trial):
             title="績效與風險對比表",
             milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
         )
+        callback_milestone_dashboard_sec = max(0.0, time.perf_counter() - milestone_started_at)
     callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
-    session.profile_recorder.patch_row(trial.number, {"callback_wall_sec": float(callback_wall_sec)})
+    session.profile_recorder.patch_row(
+        trial.number,
+        {
+            "callback_wall_sec": float(callback_wall_sec),
+            "callback_best_lookup_sec": float(callback_best_lookup_sec),
+            "callback_status_line_sec": float(callback_status_line_sec),
+            "callback_milestone_dashboard_sec": float(callback_milestone_dashboard_sec),
+        },
+    )

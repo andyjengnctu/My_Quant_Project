@@ -104,6 +104,9 @@ def print_timing_summary(*, payload: dict[str, Any]):
         f"to_dict_sum={float(avg.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
         f"outer_nonobj={float(avg.get('outer_nonobjective_sec', 0.0)):.3f}s | "
         f"callback={float(avg.get('callback_wall_sec', 0.0)):.3f}s | "
+        f"cb_best={float(avg.get('callback_best_lookup_sec', 0.0)):.3f}s | "
+        f"cb_status={float(avg.get('callback_status_line_sec', 0.0)):.3f}s | "
+        f"cb_milestone={float(avg.get('callback_milestone_dashboard_sec', 0.0)):.3f}s | "
         f"build_trade_index={float(avg.get('portfolio_build_trade_index_sec', 0.0)):.3f}s | "
         f"day_loop={float(avg.get('portfolio_day_loop_sec', 0.0)):.3f}s"
     )

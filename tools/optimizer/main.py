@@ -476,6 +476,8 @@ def main(argv=None, environ=None):
     except ValueError as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
+    if timing_mode and optimizer_seed is None:
+        optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
 
     if session.n_trials == 0:
         if not os.path.exists(db_file):
@@ -484,7 +486,7 @@ def main(argv=None, environ=None):
         try:
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
-            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind="tpe")
+            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=("random" if timing_mode else "tpe"))
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
         except RuntimeError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -595,7 +597,7 @@ def main(argv=None, environ=None):
             prompt_existing_db_policy(db_file, COLORS)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
-        study = create_optimizer_study(db_name, seed=optimizer_seed)
+        study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=("random" if timing_mode else "tpe"))
         _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
