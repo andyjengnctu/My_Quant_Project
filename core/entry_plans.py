@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from core.exact_accounting import (
+    build_buy_ledger,
     build_buy_ledger_from_price,
     build_sell_ledger_from_price,
     calc_initial_risk_total_milli,
@@ -27,20 +28,31 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if max_qty <= 0 or available_cash_milli <= 0:
         return 0, 0
 
-    best_qty = 0
-    best_reserved_cost_milli = 0
-    low, high = 1, int(max_qty)
-    while low <= high:
-        mid = (low + high) // 2
-        reserved_cost_milli = build_buy_ledger_from_price(limit_price, mid, params)["net_buy_total_milli"]
-        if reserved_cost_milli <= available_cash_milli:
-            best_qty = mid
-            best_reserved_cost_milli = reserved_cost_milli
-            low = mid + 1
-        else:
-            high = mid - 1
+    price_milli = price_to_milli(limit_price)
+    if price_milli <= 0:
+        return 0, 0
 
-    return best_qty, best_reserved_cost_milli
+    # # (AI註: 先用不含手續費的理論上限定位到可負擔股數附近，再由 exact accounting 微調；帳務仍由 build_buy_ledger() 單一真理來源決定)
+    candidate_qty = min(int(max_qty), int(available_cash_milli) // int(price_milli))
+    if candidate_qty <= 0:
+        return 0, 0
+
+    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+    while candidate_qty > 0 and reserved_cost_milli > int(available_cash_milli):
+        candidate_qty -= 1
+        if candidate_qty <= 0:
+            return 0, 0
+        reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+
+    while candidate_qty < int(max_qty):
+        next_qty = candidate_qty + 1
+        next_cost_milli = build_buy_ledger(price_milli, next_qty, params)["net_buy_total_milli"]
+        if next_cost_milli > int(available_cash_milli):
+            break
+        candidate_qty = next_qty
+        reserved_cost_milli = next_cost_milli
+
+    return candidate_qty, reserved_cost_milli
 
 
 # # (AI註: 單一真理來源 - 候選單 sizing_capital 缺漏時統一回退到目前可用資金，避免 None / NaN 讓 exact accounting 路徑爆掉)

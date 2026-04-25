@@ -1,5 +1,6 @@
 import pandas as pd
 import time
+from collections import OrderedDict
 from core.exact_accounting import milli_to_money, money_to_milli
 from core.capital_policy import resolve_portfolio_sizing_equity
 from core.config import get_ev_calc_method
@@ -30,6 +31,127 @@ from core.portfolio_ops import (
     try_rotate_weakest_position,
 )
 
+
+BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
+_BENCHMARK_PERIOD_STATS_CACHE = OrderedDict()
+
+
+def _make_benchmark_period_cache_key(*, benchmark_data, sorted_dates, start_idx):
+    if benchmark_data is None or not sorted_dates or start_idx >= len(sorted_dates):
+        return None
+    first_date = sorted_dates[start_idx]
+    last_date = sorted_dates[-1]
+    return (id(benchmark_data), len(sorted_dates), int(start_idx), first_date, last_date)
+
+
+def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
+    benchmark_start_price, benchmark_anchor_date = get_fast_close_on_or_before(benchmark_data, sorted_dates[start_idx])
+    if benchmark_start_price is None:
+        return {
+            'benchmark_start_price': None,
+            'bm_ret_pct': 0.0,
+            'bm_max_drawdown': 0.0,
+            'bm_annual_return_pct': 0.0,
+            'bm_r_squared': 0.0,
+            'bm_monthly_win_rate': 0.0,
+            'bm_full_year_count': 0,
+            'bm_min_full_year_return_pct': 0.0,
+            'bm_yearly_return_rows': [],
+        }
+
+    current_bm_px = benchmark_start_price if benchmark_anchor_date == sorted_dates[start_idx] else None
+    yesterday_bm_px = current_bm_px
+    bm_peak_price = benchmark_start_price
+    bm_max_drawdown = 0.0
+    bm_ret_pct = 0.0
+    bm_monthly_equities = [benchmark_start_price]
+    current_month = sorted_dates[start_idx].month
+
+    for today in sorted_dates[start_idx:]:
+        if has_fast_date(benchmark_data, today):
+            current_bm_px = get_fast_close(benchmark_data, date=today)
+            bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100 if benchmark_start_price > 0 else 0.0
+            if current_bm_px > bm_peak_price:
+                bm_peak_price = current_bm_px
+            current_bm_drawdown = (bm_peak_price - current_bm_px) / bm_peak_price * 100 if bm_peak_price > 0 else 0.0
+            if current_bm_drawdown > bm_max_drawdown:
+                bm_max_drawdown = current_bm_drawdown
+
+        if today.month != current_month:
+            if yesterday_bm_px is not None:
+                bm_monthly_equities.append(yesterday_bm_px)
+            current_month = today.month
+        yesterday_bm_px = current_bm_px
+
+    if current_bm_px is not None:
+        bm_monthly_equities.append(current_bm_px)
+
+    sim_years = calc_sim_years(sorted_dates, start_idx)
+    bm_end_value = benchmark_start_price * (1.0 + bm_ret_pct / 100.0) if benchmark_start_price > 0 else 0.0
+    bm_annual_return_pct = calc_annual_return_pct(benchmark_start_price, bm_end_value, sim_years)
+    bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
+
+    benchmark_yearly_rows = []
+    year_market_bounds = {}
+    for dt in sorted_dates[start_idx:]:
+        year = dt.year
+        if year not in year_market_bounds:
+            year_market_bounds[year] = {'first': dt, 'last': dt}
+        else:
+            year_market_bounds[year]['last'] = dt
+
+    for year, bounds in sorted(year_market_bounds.items()):
+        if not has_fast_date(benchmark_data, bounds['first']) or not has_fast_date(benchmark_data, bounds['last']):
+            continue
+        start_value = get_fast_close(benchmark_data, date=bounds['first'])
+        end_value = get_fast_close(benchmark_data, date=bounds['last'])
+        if start_value is None or end_value is None or start_value <= 0:
+            continue
+        benchmark_yearly_rows.append({
+            'year': int(year),
+            'year_return_pct': float((end_value / start_value - 1.0) * 100.0),
+            'is_full_year': True,
+            'start_date': bounds['first'].strftime('%Y-%m-%d'),
+            'end_date': bounds['last'].strftime('%Y-%m-%d'),
+        })
+    bm_min_full_year_return_pct = min((row['year_return_pct'] for row in benchmark_yearly_rows), default=0.0)
+
+    return {
+        'benchmark_start_price': float(benchmark_start_price),
+        'bm_ret_pct': float(bm_ret_pct),
+        'bm_max_drawdown': float(bm_max_drawdown),
+        'bm_annual_return_pct': float(bm_annual_return_pct),
+        'bm_r_squared': float(bm_r_squared),
+        'bm_monthly_win_rate': float(bm_monthly_win_rate),
+        'bm_full_year_count': int(len(benchmark_yearly_rows)),
+        'bm_min_full_year_return_pct': float(bm_min_full_year_return_pct),
+        'bm_yearly_return_rows': benchmark_yearly_rows,
+    }
+
+
+def _get_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
+    cache_key = _make_benchmark_period_cache_key(
+        benchmark_data=benchmark_data,
+        sorted_dates=sorted_dates,
+        start_idx=start_idx,
+    )
+    if cache_key is None:
+        return None
+    cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
+    if cached is not None:
+        _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
+        return cached
+    stats = _build_benchmark_period_stats(
+        benchmark_data=benchmark_data,
+        sorted_dates=sorted_dates,
+        start_idx=start_idx,
+    )
+    _BENCHMARK_PERIOD_STATS_CACHE[cache_key] = stats
+    _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
+    while len(_BENCHMARK_PERIOD_STATS_CACHE) > BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS:
+        _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)
+    return stats
+
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
@@ -45,6 +167,14 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     start_idx = find_sim_start_idx(sorted_dates, start_year)
+    benchmark_period_stats = None
+    use_benchmark_period_cache = bool(is_training and replay_counts is None and benchmark_data is not None and start_idx < len(sorted_dates))
+    if use_benchmark_period_cache:
+        benchmark_period_stats = _get_benchmark_period_stats(
+            benchmark_data=benchmark_data,
+            sorted_dates=sorted_dates,
+            start_idx=start_idx,
+        )
     if profile_timing_enabled:
         ticker_dates_sec = time.perf_counter() - t0
 
@@ -80,15 +210,21 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     current_bm_px = None
     benchmark_start_price = None
     bm_peak_price = None
-    if benchmark_data and start_idx < len(sorted_dates):
+    benchmark_loop_enabled = bool(benchmark_data and start_idx < len(sorted_dates) and benchmark_period_stats is None)
+    if benchmark_period_stats is not None:
+        benchmark_start_price = benchmark_period_stats.get('benchmark_start_price')
+        bm_ret_pct = float(benchmark_period_stats.get('bm_ret_pct', 0.0))
+        bm_max_drawdown = float(benchmark_period_stats.get('bm_max_drawdown', 0.0))
+    elif benchmark_loop_enabled:
         benchmark_start_price, benchmark_anchor_date = get_fast_close_on_or_before(benchmark_data, sorted_dates[start_idx])
         if benchmark_start_price is not None:
             bm_peak_price = benchmark_start_price
             bm_monthly_equities.append(benchmark_start_price)
             if benchmark_anchor_date == sorted_dates[start_idx]:
                 current_bm_px = benchmark_start_price
-
-    yesterday_bm_px, bm_max_drawdown, bm_ret_pct = current_bm_px, 0.0, 0.0
+        yesterday_bm_px, bm_max_drawdown, bm_ret_pct = current_bm_px, 0.0, 0.0
+    else:
+        yesterday_bm_px, bm_max_drawdown, bm_ret_pct = None, 0.0, 0.0
 
     if replay_counts is not None:
         for ticker, bucket in replay_counts.items():
@@ -280,7 +416,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         strategy_ret_pct = (current_equity_money - initial_capital) / initial_capital * 100
 
-        if benchmark_data and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
+        if benchmark_loop_enabled and benchmark_start_price is not None and has_fast_date(benchmark_data, today):
             current_bm_px = get_fast_close(benchmark_data, date=today)
             bm_ret_pct = (current_bm_px - benchmark_start_price) / benchmark_start_price * 100 if benchmark_start_price > 0 else 0.0
 
@@ -293,12 +429,13 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         if today.month != current_month:
             monthly_equities.append(yesterday_equity)
-            if yesterday_bm_px is not None:
+            if benchmark_loop_enabled and yesterday_bm_px is not None:
                 bm_monthly_equities.append(yesterday_bm_px)
             current_month = today.month
 
         yesterday_equity = current_equity_money
-        yesterday_bm_px = current_bm_px
+        if benchmark_loop_enabled:
+            yesterday_bm_px = current_bm_px
         year_end_equity[today.year] = current_equity_money
         year_last_sim_date[today.year] = pd.Timestamp(today)
 
@@ -360,7 +497,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     if len(sorted_dates) > start_idx:
         monthly_equities.append(milli_to_money(today_equity))
-        if current_bm_px is not None:
+        if benchmark_loop_enabled and current_bm_px is not None:
             bm_monthly_equities.append(current_bm_px)
 
     final_equity_money = milli_to_money(today_equity)
@@ -374,7 +511,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
-    bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
+    if benchmark_period_stats is not None:
+        bm_r_squared = float(benchmark_period_stats.get('bm_r_squared', 0.0))
+        bm_monthly_win_rate = float(benchmark_period_stats.get('bm_monthly_win_rate', 0.0))
+    else:
+        bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
     curve_stats_sec = (time.perf_counter() - t0) if profile_timing_enabled else 0.0
 
     trade_count = len(closed_trades_stats)
@@ -408,7 +549,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
     bm_end_value = bm_start_value * (1.0 + bm_ret_pct / 100.0) if bm_start_value > 0 else 0.0
-    bm_annual_return_pct = calc_annual_return_pct(bm_start_value, bm_end_value, sim_years)
+    if benchmark_period_stats is not None:
+        bm_annual_return_pct = float(benchmark_period_stats.get('bm_annual_return_pct', 0.0))
+    else:
+        bm_annual_return_pct = calc_annual_return_pct(bm_start_value, bm_end_value, sim_years)
 
     yearly_stats = build_full_year_return_stats(
         sorted_dates=sorted_dates,
@@ -417,11 +561,23 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         year_first_sim_date=year_first_sim_date,
         year_last_sim_date=year_last_sim_date,
     )
-    bm_yearly_stats = build_benchmark_full_year_return_stats(
-        sorted_dates=sorted_dates,
-        benchmark_data=benchmark_data,
-        yearly_return_rows=yearly_stats['yearly_return_rows'],
-    )
+    if benchmark_period_stats is not None:
+        full_years = {int(row['year']) for row in yearly_stats['yearly_return_rows'] if row.get('is_full_year')}
+        bm_yearly_rows = [
+            row for row in benchmark_period_stats.get('bm_yearly_return_rows', [])
+            if int(row.get('year', -1)) in full_years
+        ]
+        bm_yearly_stats = {
+            'bm_full_year_count': int(len(bm_yearly_rows)),
+            'bm_min_full_year_return_pct': float(min((row['year_return_pct'] for row in bm_yearly_rows), default=0.0)),
+            'bm_yearly_return_rows': bm_yearly_rows,
+        }
+    else:
+        bm_yearly_stats = build_benchmark_full_year_return_stats(
+            sorted_dates=sorted_dates,
+            benchmark_data=benchmark_data,
+            yearly_return_rows=yearly_stats['yearly_return_rows'],
+        )
 
     if profile_stats is not None:
         profile_stats['portfolio_wall_sec'] = (time.perf_counter() - t_portfolio_start) if profile_timing_enabled else 0.0
