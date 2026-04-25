@@ -1,3 +1,4 @@
+import os
 from collections import OrderedDict
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
@@ -79,10 +80,19 @@ class OptimizerSession:
         self._trial_prep_executor_bundle = None
         self._optimizer_trial_milestone_inputs = {}
         self._prepared_trial_input_cache = OrderedDict()
-        self._prepared_trial_input_cache_max_items = 2
+        self._prepared_trial_input_cache_max_items = self._resolve_prepared_trial_input_cache_max_items()
         self.static_fast_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
+
+    
+    def _resolve_prepared_trial_input_cache_max_items(self):
+        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "4")
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = 4
+        return max(0, min(16, value))
 
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
         self.close_trial_prep_executor()

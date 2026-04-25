@@ -14,6 +14,19 @@ from core.strategy_params import strategy_params_to_dict
 
 
 SELECTION_POLICY_FIELDS = tuple(SELECTION_POLICY_PARAM_SPECS.keys())
+INFRASTRUCTURE_FIELDS = (
+    "optimizer_max_workers",
+)
+
+# Ignore disabled feature-family knobs when building expensive prep keys.  Those
+# fields do not affect generated signals/trade paths while their switch is off,
+# so treating them as distinct only wastes optimizer prep.  Future strategy/ML
+# adapters can extend this table without touching portfolio/backtest rules.
+_CONDITIONAL_INACTIVE_FIELD_GROUPS = (
+    ("use_bb", ("bb_len", "bb_mult")),
+    ("use_kc", ("kc_len", "kc_mult")),
+    ("use_vol", ("vol_short_len", "vol_long_len")),
+)
 
 
 def _normalize_cache_value(value: Any):
@@ -26,18 +39,28 @@ def _normalize_cache_value(value: Any):
     return value
 
 
-def canonical_param_items(params, *, omit_fields: Iterable[str] = ()):
+def _params_to_payload(params) -> dict:
     if isinstance(params, dict):
-        payload = dict(params)
-    elif is_dataclass(params):
-        payload = strategy_params_to_dict(params)
-    else:
-        payload = {
-            field_name: getattr(params, field_name)
-            for field_name in dir(params)
-            if not field_name.startswith("_") and not callable(getattr(params, field_name))
-        }
+        return dict(params)
+    if is_dataclass(params):
+        return strategy_params_to_dict(params)
+    return {
+        field_name: getattr(params, field_name)
+        for field_name in dir(params)
+        if not field_name.startswith("_") and not callable(getattr(params, field_name))
+    }
 
+
+def _inactive_conditional_fields(payload: dict) -> tuple[str, ...]:
+    inactive_fields = []
+    for switch_field, dependent_fields in _CONDITIONAL_INACTIVE_FIELD_GROUPS:
+        if switch_field in payload and not bool(payload.get(switch_field)):
+            inactive_fields.extend(field for field in dependent_fields if field in payload)
+    return tuple(inactive_fields)
+
+
+def canonical_param_items(params, *, omit_fields: Iterable[str] = ()): 
+    payload = _params_to_payload(params)
     omitted = set(omit_fields)
     return tuple(
         (field_name, _normalize_cache_value(payload[field_name]))
@@ -51,10 +74,17 @@ def build_prep_cache_key(params):
 
     Selection-policy thresholds are intentionally omitted because they only
     decide whether an already-computed history record is usable in portfolio
-    selection.  They must not force regeneration of signals or PIT trade paths.
+    selection.  Inactive feature-family fields and infrastructure knobs are
+    also omitted because they do not affect the prepared artifacts.
     """
 
-    return ("prep", canonical_param_items(params, omit_fields=SELECTION_POLICY_FIELDS))
+    payload = _params_to_payload(params)
+    omitted_fields = (
+        *SELECTION_POLICY_FIELDS,
+        *INFRASTRUCTURE_FIELDS,
+        *_inactive_conditional_fields(payload),
+    )
+    return ("prep", canonical_param_items(payload, omit_fields=omitted_fields))
 
 
 def build_full_evaluation_cache_key(params, *, objective_mode, train_start_year, search_train_end_year, max_positions, enable_rotation):
