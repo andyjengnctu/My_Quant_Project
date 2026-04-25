@@ -139,7 +139,7 @@ class OptimizerProfileRecorder:
             summary["avg"][field] = (sum(values) / len(values)) if values else 0.0
         return summary
 
-    def print_summary(self):
+    def print_summary(self, *, emit_console: bool = True):
         if not self.enabled:
             return
 
@@ -149,27 +149,12 @@ class OptimizerProfileRecorder:
         with open(self.summary_path, "w", encoding="utf-8") as handle:
             json.dump(summary, handle, ensure_ascii=False, indent=2)
 
-        if not self.rows:
+        if not self.rows or not emit_console:
             return
 
         avg = summary["avg"]
+        avg_trial_sec = float(avg.get("trial_total_wall_sec", 0.0))
         print(
-            f"{C_CYAN}📊 Profiling 平均摘要（{summary['trial_count']} trials）:{C_RESET}\n"
-            f"{C_GRAY}   objective={avg.get('objective_wall_sec', 0.0):.3f}s | "
-            f"prep_wall={avg.get('prep_wall_sec', 0.0):.3f}s | "
-            f"portfolio_wall={avg.get('portfolio_wall_sec', 0.0):.3f}s | "
-            f"worker_generate_sum={avg.get('prep_worker_generate_signals_sum_sec', 0.0):.3f}s | "
-            f"worker_backtest_sum={avg.get('prep_worker_run_backtest_sum_sec', 0.0):.3f}s | "
-            f"to_dict_sum={avg.get('prep_worker_to_dict_sum_sec', 0.0):.3f}s | "
-            f"outer_nonobj={avg.get('outer_nonobjective_sec', 0.0):.3f}s | "
-            f"callback={avg.get('callback_wall_sec', 0.0):.3f}s | "
-            f"cb_best={avg.get('callback_best_lookup_sec', 0.0):.3f}s | "
-            f"cb_status={avg.get('callback_status_line_sec', 0.0):.3f}s | "
-            f"cb_milestone={avg.get('callback_milestone_dashboard_sec', 0.0):.3f}s | "
-            f"cb_payload={avg.get('callback_milestone_payload_sec', 0.0):.3f}s | "
-            f"cb_wf={avg.get('callback_milestone_candidate_wf_sec', 0.0):.3f}s | "
-            f"cb_render={avg.get('callback_milestone_render_sec', 0.0):.3f}s | "
-            f"pf_day_loop={avg.get('portfolio_day_loop_sec', 0.0):.3f}s{C_RESET}"
+            f"{C_CYAN}📊 Profiling 摘要（{summary['trial_count']} trials）:{C_RESET} "
+            f"{C_GRAY}每 trial 平均訓練時間={avg_trial_sec:.3f}s{C_RESET}"
         )
-        print(f"{C_GRAY}   CSV: {self.csv_path}{C_RESET}")
-        print(f"{C_GRAY}   摘要: {self.summary_path}{C_RESET}")

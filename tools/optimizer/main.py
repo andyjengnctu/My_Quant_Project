@@ -645,7 +645,7 @@ def main(argv=None, environ=None):
 
         optimize_wall_sec = max(0.0, time.perf_counter() - optimize_started_at)
         print()
-        session.profile_recorder.print_summary()
+        session.profile_recorder.print_summary(emit_console=not timing_mode)
         session.print_optimizer_prep_summary()
         should_export, export_policy = resolve_training_session_export_policy(
             requested_n_trials=session.n_trials,
@@ -671,7 +671,6 @@ def main(argv=None, environ=None):
                 payload=timing_payload,
             )
             print_timing_summary(payload=timing_payload)
-            print(f"{C_GRAY}   測時摘要: {timing_summary_path}{C_RESET}")
         elif should_export:
             finalists, best_trial = print_local_min_score_finalist_review(
                 study,

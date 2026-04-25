@@ -73,48 +73,15 @@ def write_timing_summary(*, output_dir: str, session_ts: str, payload: dict[str,
 
 
 def print_timing_summary(*, payload: dict[str, Any]):
-    avg = payload.get("avg", {}) or {}
-    first = payload.get("first_trial", {}) or {}
+    completed_trials = int(payload.get("completed_trials") or 0)
+    total_wall_sec = float(payload.get("total_wall_sec", 0.0))
+    raw_data_load_sec = float(payload.get("raw_data_load_sec", 0.0))
+    optimize_wall_sec = float(payload.get("optimize_wall_sec", 0.0))
+    avg_training_sec = (optimize_wall_sec / completed_trials) if completed_trials > 0 else 0.0
     print("📏 Optimizer 測時摘要")
     print(
         "   "
-        f"raw_data_load={float(payload.get('raw_data_load_sec', 0.0)):.3f}s | "
-        f"first_trial_done={float(payload.get('first_trial_completed_wall_sec') or 0.0):.3f}s | "
-        f"optimize_wall={float(payload.get('optimize_wall_sec', 0.0)):.3f}s | "
-        f"total_wall={float(payload.get('total_wall_sec', 0.0)):.3f}s | "
-        f"trial_sum={float(payload.get('profile_trial_total_sum_sec', 0.0)):.3f}s | "
-        f"trial+raw={float(payload.get('profile_trial_plus_raw_sum_sec', 0.0)):.3f}s | "
-        f"opt-gap(obj)={float(payload.get('optimize_minus_profile_objective_sec', 0.0)):.3f}s | "
-        f"opt-gap(trial)={float(payload.get('optimize_minus_profile_trial_total_sec', 0.0)):.3f}s | "
-        f"total-gap(trial+raw)={float(payload.get('total_minus_profile_trial_plus_raw_sec', 0.0)):.3f}s"
+        f"總時間={total_wall_sec:.3f}s "
+        f"（前處理={raw_data_load_sec:.3f}s + 訓練={optimize_wall_sec:.3f}s）"
     )
-    print(
-        "   first_trial | "
-        f"objective={float(first.get('objective_wall_sec', 0.0)):.3f}s | "
-        f"prep={float(first.get('prep_wall_sec', 0.0)):.3f}s | "
-        f"portfolio={float(first.get('portfolio_wall_sec', 0.0)):.3f}s | "
-        f"worker_generate_sum={float(first.get('prep_worker_generate_signals_sum_sec', 0.0)):.3f}s | "
-        f"worker_backtest_sum={float(first.get('prep_worker_run_backtest_sum_sec', 0.0)):.3f}s | "
-        f"to_dict_sum={float(first.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
-        f"build_trade_index={float(first.get('portfolio_build_trade_index_sec', 0.0)):.3f}s | "
-        f"day_loop={float(first.get('portfolio_day_loop_sec', 0.0)):.3f}s"
-    )
-    print(
-        "   avg_per_trial | "
-        f"objective={float(avg.get('objective_wall_sec', 0.0)):.3f}s | "
-        f"prep={float(avg.get('prep_wall_sec', 0.0)):.3f}s | "
-        f"portfolio={float(avg.get('portfolio_wall_sec', 0.0)):.3f}s | "
-        f"worker_generate_sum={float(avg.get('prep_worker_generate_signals_sum_sec', 0.0)):.3f}s | "
-        f"worker_backtest_sum={float(avg.get('prep_worker_run_backtest_sum_sec', 0.0)):.3f}s | "
-        f"to_dict_sum={float(avg.get('prep_worker_to_dict_sum_sec', 0.0)):.3f}s | "
-        f"outer_nonobj={float(avg.get('outer_nonobjective_sec', 0.0)):.3f}s | "
-        f"callback={float(avg.get('callback_wall_sec', 0.0)):.3f}s | "
-        f"cb_best={float(avg.get('callback_best_lookup_sec', 0.0)):.3f}s | "
-        f"cb_status={float(avg.get('callback_status_line_sec', 0.0)):.3f}s | "
-        f"cb_milestone={float(avg.get('callback_milestone_dashboard_sec', 0.0)):.3f}s | "
-        f"cb_payload={float(avg.get('callback_milestone_payload_sec', 0.0)):.3f}s | "
-        f"cb_wf={float(avg.get('callback_milestone_candidate_wf_sec', 0.0)):.3f}s | "
-        f"cb_render={float(avg.get('callback_milestone_render_sec', 0.0)):.3f}s | "
-        f"build_trade_index={float(avg.get('portfolio_build_trade_index_sec', 0.0)):.3f}s | "
-        f"day_loop={float(avg.get('portfolio_day_loop_sec', 0.0)):.3f}s"
-    )
+    print(f"   每 trial 平均訓練時間={avg_training_sec:.3f}s（{completed_trials} trials）")
