@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from numbers import Integral
+import math
 from functools import lru_cache
 from typing import Any, Dict
 
@@ -29,6 +30,16 @@ def _price_text_to_milli_cached(price_text: str) -> int:
 
 
 def price_to_milli(price) -> int:
+    price_type = type(price)
+    if price_type is int:
+        return price * MILLI_SCALE
+    if price_type is float or price_type.__module__ == "numpy":
+        value = float(price)
+        if math.isfinite(value):
+            scaled = value * MILLI_SCALE
+            if scaled >= 0.0:
+                return int(math.floor(scaled + 0.5))
+            return int(math.ceil(scaled - 0.5))
     if isinstance(price, Decimal):
         return _round_decimal_to_int(price * _DECIMAL_THOUSAND)
     return _price_text_to_milli_cached(str(price))
@@ -38,7 +49,7 @@ money_to_milli = price_to_milli
 
 
 def milli_to_price(price_milli: int) -> float:
-    return float(Decimal(int(price_milli)) / _DECIMAL_THOUSAND)
+    return int(price_milli) / MILLI_SCALE
 
 
 milli_to_money = milli_to_price
@@ -61,6 +72,16 @@ def restore_money_like_from_milli(value_milli: int, template):
 
 
 def rate_to_ppm(rate) -> int:
+    rate_type = type(rate)
+    if rate_type is int:
+        return rate * PPM_SCALE
+    if rate_type is float or rate_type.__module__ == "numpy":
+        value = float(rate)
+        if math.isfinite(value):
+            scaled = value * PPM_SCALE
+            if scaled >= 0.0:
+                return int(math.floor(scaled + 0.5))
+            return int(math.ceil(scaled - 0.5))
     return _round_decimal_to_int(_to_decimal(rate) * _DECIMAL_PPM)
 
 
@@ -294,6 +315,40 @@ def tv_round_int(number: int, denominator: int) -> int:
     return (number + denominator // 2) // denominator
 
 
+def _tick_rule_for_profile(tick_profile: str):
+    if tick_profile == _TICK_PROFILE_FUND:
+        return FUND_MILLI_TICK_LADDER, _FUND_DEFAULT_TICK_MILLI
+    return STOCK_MILLI_TICK_LADDER, _STOCK_DEFAULT_TICK_MILLI
+
+
+def _round_price_to_tick_milli_numeric(value: float, direction: str, tick_profile: str):
+    if not math.isfinite(value):
+        return None
+    tick_ladder, default_tick_milli = _tick_rule_for_profile(tick_profile)
+    for threshold_milli, tick_milli in tick_ladder:
+        threshold_value = threshold_milli / MILLI_SCALE
+        if abs(value - threshold_value) <= 1e-12:
+            return None
+        if value < threshold_value:
+            break
+    else:
+        tick_milli = default_tick_milli
+
+    scaled = value * MILLI_SCALE
+    ratio = scaled / tick_milli
+    if direction == "up":
+        rounded_ratio = math.ceil(ratio - 1e-12)
+    elif direction == "down":
+        rounded_ratio = math.floor(ratio + 1e-12)
+    else:
+        lower = math.floor(ratio)
+        fraction = ratio - lower
+        if abs(fraction - 0.5) <= 1e-12:
+            return None
+        rounded_ratio = math.floor(ratio + 0.5)
+    return int(rounded_ratio) * int(tick_milli)
+
+
 def round_price_milli_to_tick(price_milli: int, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
     tick_milli = get_tick_milli(
         price_milli,
@@ -336,16 +391,26 @@ def _round_price_to_tick_milli_cached(price_text: str, direction: str, tick_prof
 
 def round_price_to_tick_milli(price, direction: str = "nearest", *, ticker=None, security_profile=None, cfi_code=None, security_name=None) -> int:
     resolved_profile = resolve_security_profile(security_profile, ticker=ticker, cfi_code=cfi_code, security_name=security_name)
-    return _round_price_to_tick_milli_cached(str(price), direction, resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK))
+    tick_profile = resolved_profile.get("tick_profile", _TICK_PROFILE_STOCK)
+    price_type = type(price)
+    if price_type is int:
+        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        if numeric_result is not None:
+            return numeric_result
+    elif price_type is float or price_type.__module__ == "numpy":
+        numeric_result = _round_price_to_tick_milli_numeric(float(price), direction, tick_profile)
+        if numeric_result is not None:
+            return numeric_result
+    return _round_price_to_tick_milli_cached(str(price), direction, tick_profile)
 
 
 def calc_fee_milli(gross_milli: int, fee_ppm: int, min_fee_milli: int) -> int:
-    fee_milli = _round_decimal_to_int(Decimal(gross_milli) * Decimal(fee_ppm) / _DECIMAL_PPM)
-    return max(fee_milli, int(min_fee_milli))
+    fee_milli = (int(gross_milli) * int(fee_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
+    return max(int(fee_milli), int(min_fee_milli))
 
 
 def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
-    return _round_decimal_to_int(Decimal(gross_milli) * Decimal(tax_ppm) / _DECIMAL_PPM)
+    return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
 def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
@@ -437,7 +502,7 @@ def calc_average_price_from_total_milli(total_milli: int, qty: int) -> float:
     qty = int(qty)
     if qty <= 0:
         return 0.0
-    return float(Decimal(int(total_milli)) / Decimal(qty) / _DECIMAL_THOUSAND)
+    return int(total_milli) / qty / MILLI_SCALE
 
 
 def build_buy_ledger_from_price(fill_price, qty: int, params) -> Dict[str, int]:
@@ -531,7 +596,7 @@ def round_money_for_display(value) -> float:
 def calc_risk_budget_milli(cap, risk_pct) -> int:
     cap_milli = coerce_money_like_to_milli(cap)
     risk_ppm = rate_to_ppm(risk_pct)
-    return _round_decimal_to_int(Decimal(int(cap_milli)) * Decimal(int(risk_ppm)) / _DECIMAL_PPM)
+    return (int(cap_milli) * int(risk_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
 def calc_ratio_from_milli(numerator_milli: int, denominator_milli: int) -> float:
