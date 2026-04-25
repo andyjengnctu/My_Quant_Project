@@ -9,20 +9,23 @@ from multiprocessing import get_context
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
+from core.feature_bank import DEFAULT_FEATURE_BANK_MAX_ITEMS, FeatureBank
 from core.log_utils import format_exception_summary
 from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
 _WORKER_RAW_DATA_CACHE = None
+_WORKER_FEATURE_BANK = None
 
 
 def init_worker_raw_data_cache(raw_data_cache):
-    global _WORKER_RAW_DATA_CACHE
+    global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_BANK
     _WORKER_RAW_DATA_CACHE = raw_data_cache
+    _WORKER_FEATURE_BANK = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
 
 
-def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False):
+def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None):
     worker_start = time.perf_counter()
     profile_stats = {}
     try:
@@ -53,6 +56,7 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
             ticker=ticker,
             include_trade_logs=include_trade_logs,
             include_pit_stats_index=include_pit_stats_index,
+            feature_bank=feature_bank,
         )
         pack_sec = float(profile_stats.get('to_dict_sec', 0.0))
         return {
@@ -99,14 +103,14 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
 
 
 def worker_prep_data_from_cache(ticker, params, include_trade_logs=True, include_pit_stats_index=False):
-    global _WORKER_RAW_DATA_CACHE
+    global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_BANK
     if _WORKER_RAW_DATA_CACHE is None:
         raise RuntimeError("optimizer worker raw_data_cache 尚未初始化")
     try:
         df = _WORKER_RAW_DATA_CACHE[ticker]
     except KeyError as exc:
         raise RuntimeError(f"optimizer worker 找不到 ticker={ticker} 的快取資料") from exc
-    return worker_prep_data(ticker, df, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index)
+    return worker_prep_data(ticker, df, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index, feature_bank=_WORKER_FEATURE_BANK)
 
 
 def merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, static_fast_cache):
@@ -156,7 +160,18 @@ def _build_thread_pool_executor(max_workers):
 
 
 def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, include_pit_stats_index=False):
-    return [worker_prep_data(ticker, raw_data_cache[ticker], params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index) for ticker in tickers]
+    feature_bank = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
+    return [
+        worker_prep_data(
+            ticker,
+            raw_data_cache[ticker],
+            params,
+            include_trade_logs=include_trade_logs,
+            include_pit_stats_index=include_pit_stats_index,
+            feature_bank=feature_bank,
+        )
+        for ticker in tickers
+    ]
 
 
 def worker_prep_batch_from_cache(tickers, params, include_trade_logs=True, include_pit_stats_index=False):
@@ -262,8 +277,16 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             "ok_count": 0,
             "fail_count": 0,
         }
+        sequential_feature_bank = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
         for ticker, df in raw_data_cache.items():
-            result = worker_prep_data(ticker, df, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index)
+            result = worker_prep_data(
+                ticker,
+                df,
+                params,
+                include_trade_logs=include_trade_logs,
+                include_pit_stats_index=include_pit_stats_index,
+                feature_bank=sequential_feature_bank,
+            )
             merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache)
 
     prep_wall_sec = time.perf_counter() - prep_wall_start

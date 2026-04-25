@@ -167,7 +167,7 @@ def build_normal_setup_index(all_dfs_fast):
     return setup_index
 
 
-def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False):
+def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None):
     t_total_start = time.perf_counter() if profile_stats is not None else None
     resolved_ticker = ticker or df.attrs.get('ticker')
 
@@ -176,7 +176,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['assign_columns_sec'] = 0.0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    precomputed_signals = generate_signals(df, params, ticker=resolved_ticker)
+    precomputed_signals = generate_signals(df, params, ticker=resolved_ticker, feature_bank=feature_bank)
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 

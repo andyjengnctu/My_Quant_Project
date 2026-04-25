@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
 from tools.optimizer.trial_inputs import _build_process_pool_executor
@@ -77,6 +78,8 @@ class OptimizerSession:
         )
         self._trial_prep_executor_bundle = None
         self._optimizer_trial_milestone_inputs = {}
+        self._prepared_trial_input_cache = OrderedDict()
+        self._prepared_trial_input_cache_max_items = 2
         self.static_fast_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
@@ -89,6 +92,7 @@ class OptimizerSession:
             output_dir=self.output_dir,
         )
         self.raw_data_cache_data_dir = data_dir
+        self._prepared_trial_input_cache.clear()
         self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
         self.master_dates = set()
         for fast_df in self.static_fast_cache.values():
@@ -114,6 +118,50 @@ class OptimizerSession:
 
     def discard_trial_milestone_inputs(self, trial_number):
         self._optimizer_trial_milestone_inputs.pop(int(trial_number), None)
+
+    def get_prepared_trial_inputs_from_cache(self, cache_key):
+        cached = self._prepared_trial_input_cache.get(cache_key)
+        if cached is None:
+            return None
+        self._prepared_trial_input_cache.move_to_end(cache_key)
+        return {
+            "all_dfs_fast": cached["all_dfs_fast"],
+            "all_trade_logs": cached["all_trade_logs"],
+            "all_pit_stats_index": cached["all_pit_stats_index"],
+            "master_dates": cached["master_dates"],
+            "prep_failures": cached["prep_failures"],
+            "prep_profile": {
+                "worker_total_sum_sec": 0.0,
+                "prep_total_sum_sec": 0.0,
+                "copy_sum_sec": 0.0,
+                "generate_signals_sum_sec": 0.0,
+                "assign_sum_sec": 0.0,
+                "run_backtest_sum_sec": 0.0,
+                "to_dict_sum_sec": 0.0,
+                "ok_count": int(cached["ok_count"]),
+                "fail_count": int(cached["fail_count"]),
+            },
+            "prep_mode": "cache_hit",
+            "pool_start_method": "cache",
+            "pool_error_text": None,
+            "prep_wall_sec": 0.0,
+        }
+
+    def cache_prepared_trial_inputs(self, cache_key, prep_result):
+        if cache_key is None:
+            return
+        self._prepared_trial_input_cache[cache_key] = {
+            "all_dfs_fast": prep_result["all_dfs_fast"],
+            "all_trade_logs": prep_result["all_trade_logs"],
+            "all_pit_stats_index": prep_result.get("all_pit_stats_index"),
+            "master_dates": prep_result["master_dates"],
+            "prep_failures": tuple(prep_result.get("prep_failures", ())),
+            "ok_count": int(prep_result.get("prep_profile", {}).get("ok_count", 0)),
+            "fail_count": int(prep_result.get("prep_profile", {}).get("fail_count", 0)),
+        }
+        self._prepared_trial_input_cache.move_to_end(cache_key)
+        while len(self._prepared_trial_input_cache) > int(self._prepared_trial_input_cache_max_items):
+            self._prepared_trial_input_cache.popitem(last=False)
 
     def get_trial_prep_executor_bundle(self, max_workers):
         try:

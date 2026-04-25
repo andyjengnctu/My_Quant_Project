@@ -9,6 +9,7 @@ from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.objective_filters import apply_filter_rules
 from core.walk_forward_policy import filter_search_train_dates
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
+from tools.optimizer.param_cache import build_prep_cache_key
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
@@ -212,17 +213,24 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
     ai_params = build_trial_params(session, trial)
-    prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=ai_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=False,
-        include_pit_stats_index=True,
-    )
+    prep_cache_key = build_prep_cache_key(ai_params)
+    get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
+    prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+    if prep_result is None:
+        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+        )
+        cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+        if callable(cache_prep):
+            cache_prep(prep_cache_key, prep_result)
     trial.set_user_attr("prep_mode", prep_result["prep_mode"])
     trial.set_user_attr("prep_start_method", prep_result["pool_start_method"] or "default")
     if prep_result["pool_error_text"] is not None:
