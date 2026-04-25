@@ -163,6 +163,14 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             continue
 
         pos_start_of_current_bar = position['qty']
+        if (
+            not collect_stats
+            and pos_start_of_current_bar == 0
+            and active_extended_signal is None
+            and not bool(buyCondition[j - 1])
+        ):
+            continue
+
         if pos_start_of_current_bar > 0:
             if collect_stats:
                 total_bars_held += 1
@@ -204,11 +212,12 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             elif 'MISSED_SELL' in events and collect_stats:
                 missedSellCount += 1
 
-        isSetup_prev = buyCondition[j - 1] and (pos_start_of_current_bar == 0)
+        isSetup_prev = bool(buyCondition[j - 1]) and (pos_start_of_current_bar == 0)
         buyTriggered = False
-        sizing_cap = resolve_single_backtest_sizing_capital(params, milli_to_money(currentCapital_milli))
+        sizing_cap = None
 
         if isSetup_prev:
+            sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
             signal_state = create_signal_tracking_state(
                 buy_limits[j - 1],
                 ATR_main[j - 1],
@@ -259,6 +268,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
+            sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
             entry_plan = build_extended_entry_plan_from_signal(
                 active_extended_signal,
                 sizing_cap,
@@ -290,39 +300,46 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             elif entry_result['count_as_missed_buy'] and collect_stats:
                 missedBuyCount += 1
 
-        if not buyTriggered and position['qty'] == 0 and should_clear_extended_signal(
-            active_extended_signal,
-            L[j],
-            H[j],
-            t_open=O[j],
-            t_close=C[j],
-            t_volume=V[j],
-            y_close=C[j - 1],
-            y_high=H[j - 1],
-            y_atr=ATR_main[j - 1],
-            y_ind_sell=sellCondition[j - 1],
-            sizing_capital=sizing_cap,
-            current_date=Dates[j],
-            params=params,
-        ):
-            active_extended_signal = None
+        if not buyTriggered and position['qty'] == 0 and active_extended_signal is not None:
+            if sizing_cap is None:
+                sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            if should_clear_extended_signal(
+                active_extended_signal,
+                L[j],
+                H[j],
+                t_open=O[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j - 1],
+                y_high=H[j - 1],
+                y_atr=ATR_main[j - 1],
+                y_ind_sell=sellCondition[j - 1],
+                sizing_capital=sizing_cap,
+                current_date=Dates[j],
+                params=params,
+            ):
+                active_extended_signal = None
 
-        if collect_stats and should_clear_extended_signal(
-            scanner_extended_signal,
-            L[j],
-            H[j],
-            t_open=O[j],
-            t_close=C[j],
-            t_volume=V[j],
-            y_close=C[j - 1],
-            y_high=H[j - 1],
-            y_atr=ATR_main[j - 1],
-            y_ind_sell=sellCondition[j - 1],
-            sizing_capital=sizing_cap,
-            current_date=Dates[j],
-            params=params,
-        ):
-            scanner_extended_signal = None
+        if collect_stats and scanner_extended_signal is not None:
+            if sizing_cap is None:
+                sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            should_clear_scanner_extended = should_clear_extended_signal(
+                scanner_extended_signal,
+                L[j],
+                H[j],
+                t_open=O[j],
+                t_close=C[j],
+                t_volume=V[j],
+                y_close=C[j - 1],
+                y_high=H[j - 1],
+                y_atr=ATR_main[j - 1],
+                y_ind_sell=sellCondition[j - 1],
+                sizing_capital=sizing_cap,
+                current_date=Dates[j],
+                params=params,
+            )
+            if should_clear_scanner_extended:
+                scanner_extended_signal = None
 
         if collect_stats:
             currentEquity_milli = currentCapital_milli
