@@ -91,6 +91,7 @@ def _collect_normal_candidates(
     all_dfs_fast,
     active_extended_signals,
     pit_stats_index,
+    pit_stats_cursor,
     today,
     sizing_equity,
     params,
@@ -114,7 +115,7 @@ def _collect_normal_candidates(
         security_profile = get_fast_security_profile(fast_df)
 
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params
+            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
         if not is_candidate:
             continue
@@ -183,6 +184,7 @@ def track_normal_setup_signals_for_day(
     all_dfs_fast,
     active_extended_signals,
     pit_stats_index,
+    pit_stats_cursor,
     today,
     params,
 ):
@@ -201,7 +203,7 @@ def track_normal_setup_signals_for_day(
         security_profile = get_fast_security_profile(fast_df)
 
         is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params
+            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
         if not is_candidate:
             continue
@@ -225,6 +227,7 @@ def _collect_extended_candidates(
     normal_setup_tickers_today,
     all_dfs_fast,
     pit_stats_index,
+    pit_stats_cursor,
     today,
     sizing_equity,
     params,
@@ -247,7 +250,7 @@ def _collect_extended_candidates(
         y_pos = t_pos - 1
 
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-            pit_stats_index[ticker], today, params
+            pit_stats_index[ticker], today, params, cursor_state=pit_stats_cursor, ticker=ticker
         )
         if not is_candidate:
             continue
@@ -317,6 +320,7 @@ def build_daily_candidates(
     sold_today,
     all_dfs_fast,
     pit_stats_index,
+    pit_stats_cursor=None,
     today,
     sizing_equity,
     params,
@@ -329,6 +333,7 @@ def build_daily_candidates(
         all_dfs_fast=all_dfs_fast,
         active_extended_signals=active_extended_signals,
         pit_stats_index=pit_stats_index,
+        pit_stats_cursor=pit_stats_cursor,
         today=today,
         sizing_equity=sizing_equity,
         params=params,
@@ -341,6 +346,7 @@ def build_daily_candidates(
         normal_setup_tickers_today=normal_setup_tickers_today,
         all_dfs_fast=all_dfs_fast,
         pit_stats_index=pit_stats_index,
+        pit_stats_cursor=pit_stats_cursor,
         today=today,
         sizing_equity=sizing_equity,
         params=params,

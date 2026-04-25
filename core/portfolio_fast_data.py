@@ -334,8 +334,7 @@ def build_trade_stats_index(trade_logs):
     }
 
 
-def get_pit_stats_from_index(stats_index, current_date, params):
-    cutoff = bisect.bisect_left(stats_index['exit_dates'], current_date)
+def _evaluate_pit_stats_at_cutoff(stats_index, cutoff, params):
     if cutoff <= 0:
         is_candidate, expected_value, history_win_rate, history_trade_count = evaluate_history_candidate_metrics(
             0,
@@ -363,6 +362,32 @@ def get_pit_stats_from_index(stats_index, current_date, params):
     )
     asset_growth_pct = (pnl_sum / float(params.initial_capital) * 100.0) if float(params.initial_capital) > 0 else 0.0
     return is_candidate, expected_value, history_win_rate, history_trade_count, asset_growth_pct
+
+
+def get_pit_stats_from_index(stats_index, current_date, params, *, cursor_state=None, ticker=None):
+    exit_dates = stats_index['exit_dates']
+    if cursor_state is None or ticker is None:
+        cutoff = bisect.bisect_left(exit_dates, current_date)
+        return _evaluate_pit_stats_at_cutoff(stats_index, cutoff, params)
+
+    stats_index_id = id(stats_index)
+    state = cursor_state.get(ticker)
+    if (
+        isinstance(state, dict)
+        and state.get('stats_index_id') == stats_index_id
+        and state.get('last_date') is not None
+        and current_date >= state.get('last_date')
+    ):
+        cutoff = bisect.bisect_left(exit_dates, current_date, int(state.get('cutoff', 0)))
+    else:
+        cutoff = bisect.bisect_left(exit_dates, current_date)
+
+    cursor_state[ticker] = {
+        'stats_index_id': stats_index_id,
+        'last_date': current_date,
+        'cutoff': int(cutoff),
+    }
+    return _evaluate_pit_stats_at_cutoff(stats_index, cutoff, params)
 
 
 def is_extended_entry_type(entry_type):

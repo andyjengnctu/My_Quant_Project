@@ -226,6 +226,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     else:
         yesterday_bm_px, bm_max_drawdown, bm_ret_pct = None, 0.0, 0.0
 
+    pit_stats_cursor = {}
+
     if replay_counts is not None:
         for ticker, bucket in replay_counts.items():
             if not isinstance(bucket, dict):
@@ -278,6 +280,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         all_dfs_fast=all_dfs_fast,
                         active_extended_signals=active_extended_signals,
                         pit_stats_index=pit_stats_index,
+                        pit_stats_cursor=pit_stats_cursor,
                         today=today,
                         params=params,
                     )
@@ -293,6 +296,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     sold_today=sold_today,
                     all_dfs_fast=all_dfs_fast,
                     pit_stats_index=pit_stats_index,
+                    pit_stats_cursor=pit_stats_cursor,
                     today=today,
                     sizing_equity=sizing_equity,
                     params=params,
