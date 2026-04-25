@@ -31,7 +31,8 @@ from core.portfolio_ops import (
 )
 
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
-    t_portfolio_start = time.perf_counter() if profile_stats is not None else None
+    profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
+    t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
     rotation_sec = 0.0
@@ -42,12 +43,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     ticker_dates_sec = 0.0
     closeout_sec = 0.0
 
-    t0 = time.perf_counter() if profile_stats is not None else None
+    t0 = time.perf_counter() if profile_timing_enabled else None
     start_idx = find_sim_start_idx(sorted_dates, start_year)
-    if profile_stats is not None:
+    if profile_timing_enabled:
         ticker_dates_sec = time.perf_counter() - t0
 
-    t0 = time.perf_counter() if profile_stats is not None else None
+    t0 = time.perf_counter() if profile_timing_enabled else None
     if pit_stats_index is None:
         pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
     else:
@@ -57,7 +58,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 if pit_stats_index.get(ticker) is None:
                     pit_stats_index[ticker] = build_trade_stats_index(logs)
     normal_setup_index = build_normal_setup_index(all_dfs_fast)
-    if profile_stats is not None:
+    if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
 
     initial_capital = params.initial_capital
@@ -99,7 +100,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             bucket.setdefault("trade_rows", [])
 
     for i in range(start_idx, len(sorted_dates)):
-        t_day_start = time.perf_counter() if profile_stats is not None else None
+        t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
         today = sorted_dates[i]
 
@@ -122,7 +123,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params)
 
-            t0 = time.perf_counter() if profile_stats is not None else None
+            t0 = time.perf_counter() if profile_timing_enabled else None
             candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
                 normal_setup_index=normal_setup_index,
                 active_extended_signals=active_extended_signals,
@@ -135,7 +136,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 params=params,
                 collect_all_candidates=replay_counts is not None,
             )
-            if profile_stats is not None:
+            if profile_timing_enabled:
                 candidate_scan_sec += time.perf_counter() - t0
 
             if replay_counts is not None:
@@ -153,7 +154,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             else:
                 before_trade_rows = -1
 
-            t0 = time.perf_counter() if profile_stats is not None else None
+            t0 = time.perf_counter() if profile_timing_enabled else None
             cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
                 portfolio=portfolio,
                 orderable_candidates_today=orderable_candidates_today,
@@ -171,10 +172,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 normal_trade_count=normal_trade_count,
                 extended_trade_count=extended_trade_count,
             )
-            if profile_stats is not None:
+            if profile_timing_enabled:
                 rotation_sec += time.perf_counter() - t0
 
-            t0 = time.perf_counter() if profile_stats is not None else None
+            t0 = time.perf_counter() if profile_timing_enabled else None
             cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
                 portfolio=portfolio,
                 sold_today=sold_today,
@@ -189,10 +190,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 normal_trade_count=normal_trade_count,
                 extended_trade_count=extended_trade_count,
             )
-            if profile_stats is not None:
+            if profile_timing_enabled:
                 settle_sec += time.perf_counter() - t0
 
-            t0 = time.perf_counter() if profile_stats is not None else None
+            t0 = time.perf_counter() if profile_timing_enabled else None
             cash, total_missed_buys = execute_reserved_entries_for_day(
                 portfolio=portfolio,
                 active_extended_signals=active_extended_signals,
@@ -208,7 +209,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 is_training=is_training,
                 total_missed_buys=total_missed_buys,
             )
-            if profile_stats is not None:
+            if profile_timing_enabled:
                 buy_sec += time.perf_counter() - t0
 
             cleanup_extended_signals_for_day(
@@ -224,14 +225,14 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         else:
             before_trade_rows = -1
 
-        t0 = time.perf_counter() if profile_stats is not None else None
+        t0 = time.perf_counter() if profile_timing_enabled else None
         if portfolio:
             today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
         else:
             today_equity = cash
         today_equity_money = milli_to_money(today_equity)
         cash_money = milli_to_money(cash)
-        if profile_stats is not None:
+        if profile_timing_enabled:
             equity_mark_sec += time.perf_counter() - t0
 
         current_equity = today_equity
@@ -289,12 +290,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 if bucket is not None:
                     bucket["trade_rows"].append(row)
 
-        if profile_stats is not None:
+        if profile_timing_enabled:
             day_loop_sec += time.perf_counter() - t_day_start
 
     # # (AI註: 月底權益應以期末強制結算後的真實 final equity 為準，故移到 closeout 後再 append)
 
-    t0 = time.perf_counter() if profile_stats is not None else None
+    t0 = time.perf_counter() if profile_timing_enabled else None
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
     today_equity, normal_trade_count, extended_trade_count = closeout_open_positions(
         portfolio=portfolio,
@@ -308,7 +309,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         last_date=last_date,
     )
 
-    if profile_stats is not None:
+    if profile_timing_enabled:
         closeout_sec = time.perf_counter() - t0
 
     final_cash = today_equity
@@ -336,10 +337,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         equity_curve[-1]['Invested_Amount'] = 0.0
         equity_curve[-1]['Exposure_Pct'] = 0.0
 
-    t0 = time.perf_counter() if profile_stats is not None else None
+    t0 = time.perf_counter() if profile_timing_enabled else None
     r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
     bm_r_squared, bm_monthly_win_rate = calc_curve_stats(bm_monthly_equities)
-    curve_stats_sec = (time.perf_counter() - t0) if profile_stats is not None else 0.0
+    curve_stats_sec = (time.perf_counter() - t0) if profile_timing_enabled else 0.0
 
     trade_count = len(closed_trades_stats)
     if trade_count > 0:
@@ -388,7 +389,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     )
 
     if profile_stats is not None:
-        profile_stats['portfolio_wall_sec'] = time.perf_counter() - t_portfolio_start
+        profile_stats['portfolio_wall_sec'] = (time.perf_counter() - t_portfolio_start) if profile_timing_enabled else 0.0
         profile_stats['portfolio_ticker_dates_sec'] = ticker_dates_sec
         profile_stats['portfolio_build_trade_index_sec'] = build_trade_index_sec
         profile_stats['portfolio_day_loop_sec'] = day_loop_sec

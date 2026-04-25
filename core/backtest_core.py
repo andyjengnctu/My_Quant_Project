@@ -115,6 +115,10 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     trade_logs = []
     currentEquity_milli = currentCapital_milli
     collect_stats = bool(collect_stats)
+    optimizer_setup_entry_positions = None
+    if not collect_stats:
+        valid_setup_mask = np.asarray(buyCondition[:-1], dtype=bool) & ~np.isnan(np.asarray(ATR_main[:-1], dtype=np.float64))
+        optimizer_setup_entry_positions = np.flatnonzero(valid_setup_mask) + 1
 
     if len(C) == 0:
         stats_dict = build_backtest_stats(
@@ -153,13 +157,15 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             return (stats_dict if collect_stats else None), trade_logs
         return stats_dict if collect_stats else None
 
-    for j in range(1, len(C)):
+    j = 1
+    while j < len(C):
         if np.isnan(ATR_main[j - 1]):
             if collect_stats:
                 currentEquity_milli = currentCapital_milli
                 peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
                 currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
                 maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
+            j += 1
             continue
 
         pos_start_of_current_bar = position['qty']
@@ -169,7 +175,11 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             and active_extended_signal is None
             and not bool(buyCondition[j - 1])
         ):
-            continue
+            next_setup_cursor = np.searchsorted(optimizer_setup_entry_positions, j + 1) if optimizer_setup_entry_positions is not None else 0
+            if optimizer_setup_entry_positions is not None and next_setup_cursor < len(optimizer_setup_entry_positions):
+                j = int(optimizer_setup_entry_positions[next_setup_cursor])
+                continue
+            break
 
         if pos_start_of_current_bar > 0:
             if collect_stats:
@@ -358,6 +368,8 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             peakCapital_milli = max(peakCapital_milli, currentEquity_milli)
             currentDrawdownPct = ((peakCapital_milli - currentEquity_milli) / peakCapital_milli) * 100 if peakCapital_milli > 0 else 0.0
             maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
+
+        j += 1
 
     final_state = finalize_open_position_at_end(
         position=position,

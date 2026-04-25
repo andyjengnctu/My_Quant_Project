@@ -120,7 +120,7 @@ def _evaluate_single_holdout_period(
     if not test_dates:
         return None
     benchmark_data = all_dfs_fast.get(str(benchmark_ticker), None)
-    pf_profile = {}
+    pf_profile = {"_timing_enabled": False}
     (
         ret_pct,
         mdd,
