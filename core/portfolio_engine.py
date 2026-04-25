@@ -107,117 +107,128 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             year_start_equity[today.year] = milli_to_money(current_equity)
             year_first_sim_date[today.year] = pd.Timestamp(today)
 
-        available_cash = cash
         current_equity_money = milli_to_money(current_equity)
         cash_money = milli_to_money(cash)
-        sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params)
 
         sold_today = set()
+        normal_setup_entries_today = normal_setup_index.get(today, [])
+        has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
 
         if verbose and (not is_training) and i % 20 == 0:
             exp = ((current_equity_money - cash_money) / current_equity_money) * 100 if current_equity_money > 0 else 0
             print(f"\033[90m⏳ 推進中: {today.strftime('%Y-%m')} | 資產: {current_equity_money:,.0f} | 水位: {exp:>5.1f}%...\033[0m", end="\r", flush=True)
 
-        t0 = time.perf_counter() if profile_stats is not None else None
-        candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
-            normal_setup_index=normal_setup_index,
-            active_extended_signals=active_extended_signals,
-            portfolio=portfolio,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            pit_stats_index=pit_stats_index,
-            today=today,
-            sizing_equity=sizing_equity,
-            params=params,
-            collect_all_candidates=replay_counts is not None,
-        )
-        if profile_stats is not None:
-            candidate_scan_sec += time.perf_counter() - t0
+        if has_portfolio_work_today:
+            available_cash = cash
+            sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params)
 
-        if replay_counts is not None:
-            for candidate in candidates_today:
-                ticker = str(candidate.get("ticker", ""))
-                bucket = replay_counts.get(ticker)
-                if bucket is not None:
-                    bucket["candidate_dates"].append(today)
-            for candidate in orderable_candidates_today:
-                ticker = str(candidate.get("ticker", ""))
-                bucket = replay_counts.get(ticker)
-                if bucket is not None:
-                    bucket["orderable_dates"].append(today)
+            t0 = time.perf_counter() if profile_stats is not None else None
+            candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
+                normal_setup_index=normal_setup_index,
+                active_extended_signals=active_extended_signals,
+                portfolio=portfolio,
+                sold_today=sold_today,
+                all_dfs_fast=all_dfs_fast,
+                pit_stats_index=pit_stats_index,
+                today=today,
+                sizing_equity=sizing_equity,
+                params=params,
+                collect_all_candidates=replay_counts is not None,
+            )
+            if profile_stats is not None:
+                candidate_scan_sec += time.perf_counter() - t0
+
+            if replay_counts is not None:
+                for candidate in candidates_today:
+                    ticker = str(candidate.get("ticker", ""))
+                    bucket = replay_counts.get(ticker)
+                    if bucket is not None:
+                        bucket["candidate_dates"].append(today)
+                for candidate in orderable_candidates_today:
+                    ticker = str(candidate.get("ticker", ""))
+                    bucket = replay_counts.get(ticker)
+                    if bucket is not None:
+                        bucket["orderable_dates"].append(today)
+                before_trade_rows = len(trade_history)
+            else:
+                before_trade_rows = -1
+
+            t0 = time.perf_counter() if profile_stats is not None else None
+            cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
+                portfolio=portfolio,
+                orderable_candidates_today=orderable_candidates_today,
+                max_positions=max_positions,
+                enable_rotation=enable_rotation,
+                sold_today=sold_today,
+                all_dfs_fast=all_dfs_fast,
+                today=today,
+                pit_stats_index=pit_stats_index,
+                params=params,
+                cash=cash,
+                closed_trades_stats=closed_trades_stats,
+                trade_history=trade_history,
+                is_training=is_training,
+                normal_trade_count=normal_trade_count,
+                extended_trade_count=extended_trade_count,
+            )
+            if profile_stats is not None:
+                rotation_sec += time.perf_counter() - t0
+
+            t0 = time.perf_counter() if profile_stats is not None else None
+            cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
+                portfolio=portfolio,
+                sold_today=sold_today,
+                all_dfs_fast=all_dfs_fast,
+                today=today,
+                params=params,
+                cash=cash,
+                closed_trades_stats=closed_trades_stats,
+                trade_history=trade_history,
+                is_training=is_training,
+                total_missed_sells=total_missed_sells,
+                normal_trade_count=normal_trade_count,
+                extended_trade_count=extended_trade_count,
+            )
+            if profile_stats is not None:
+                settle_sec += time.perf_counter() - t0
+
+            t0 = time.perf_counter() if profile_stats is not None else None
+            cash, total_missed_buys = execute_reserved_entries_for_day(
+                portfolio=portfolio,
+                active_extended_signals=active_extended_signals,
+                orderable_candidates_today=orderable_candidates_today,
+                sold_today=sold_today,
+                all_dfs_fast=all_dfs_fast,
+                today=today,
+                params=params,
+                cash=cash,
+                available_cash=available_cash,
+                max_positions=max_positions,
+                trade_history=trade_history,
+                is_training=is_training,
+                total_missed_buys=total_missed_buys,
+            )
+            if profile_stats is not None:
+                buy_sec += time.perf_counter() - t0
+
+            cleanup_extended_signals_for_day(
+                active_extended_signals=active_extended_signals,
+                portfolio=portfolio,
+                all_dfs_fast=all_dfs_fast,
+                today=today,
+                params=params,
+                sizing_capital=sizing_equity,
+            )
+        elif replay_counts is not None:
             before_trade_rows = len(trade_history)
         else:
             before_trade_rows = -1
 
         t0 = time.perf_counter() if profile_stats is not None else None
-        cash, normal_trade_count, extended_trade_count = try_rotate_weakest_position(
-            portfolio=portfolio,
-            orderable_candidates_today=orderable_candidates_today,
-            max_positions=max_positions,
-            enable_rotation=enable_rotation,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            pit_stats_index=pit_stats_index,
-            params=params,
-            cash=cash,
-            closed_trades_stats=closed_trades_stats,
-            trade_history=trade_history,
-            is_training=is_training,
-            normal_trade_count=normal_trade_count,
-            extended_trade_count=extended_trade_count,
-        )
-        if profile_stats is not None:
-            rotation_sec += time.perf_counter() - t0
-
-        t0 = time.perf_counter() if profile_stats is not None else None
-        cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
-            portfolio=portfolio,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            params=params,
-            cash=cash,
-            closed_trades_stats=closed_trades_stats,
-            trade_history=trade_history,
-            is_training=is_training,
-            total_missed_sells=total_missed_sells,
-            normal_trade_count=normal_trade_count,
-            extended_trade_count=extended_trade_count,
-        )
-        if profile_stats is not None:
-            settle_sec += time.perf_counter() - t0
-
-        t0 = time.perf_counter() if profile_stats is not None else None
-        cash, total_missed_buys = execute_reserved_entries_for_day(
-            portfolio=portfolio,
-            active_extended_signals=active_extended_signals,
-            orderable_candidates_today=orderable_candidates_today,
-            sold_today=sold_today,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            params=params,
-            cash=cash,
-            available_cash=available_cash,
-            max_positions=max_positions,
-            trade_history=trade_history,
-            is_training=is_training,
-            total_missed_buys=total_missed_buys,
-        )
-        if profile_stats is not None:
-            buy_sec += time.perf_counter() - t0
-
-        cleanup_extended_signals_for_day(
-            active_extended_signals=active_extended_signals,
-            portfolio=portfolio,
-            all_dfs_fast=all_dfs_fast,
-            today=today,
-            params=params,
-            sizing_capital=sizing_equity,
-        )
-
-        t0 = time.perf_counter() if profile_stats is not None else None
-        today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+        if portfolio:
+            today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+        else:
+            today_equity = cash
         today_equity_money = milli_to_money(today_equity)
         cash_money = milli_to_money(cash)
         if profile_stats is not None:

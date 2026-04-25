@@ -19,10 +19,26 @@ _WORKER_RAW_DATA_CACHE = None
 _WORKER_FEATURE_BANK = None
 
 
+def _resolve_optimizer_feature_bank_max_items():
+    raw_value = os.environ.get("OPTIMIZER_FEATURE_BANK_MAX_ITEMS", "0")
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        resolved = 0
+    return max(0, resolved)
+
+
+def _build_optimizer_feature_bank():
+    max_items = _resolve_optimizer_feature_bank_max_items()
+    if max_items <= 0:
+        return None
+    return FeatureBank(max_items)
+
+
 def init_worker_raw_data_cache(raw_data_cache):
     global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_BANK
     _WORKER_RAW_DATA_CACHE = raw_data_cache
-    _WORKER_FEATURE_BANK = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
+    _WORKER_FEATURE_BANK = _build_optimizer_feature_bank()
 
 
 def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None):
@@ -160,7 +176,7 @@ def _build_thread_pool_executor(max_workers):
 
 
 def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, include_pit_stats_index=False):
-    feature_bank = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
+    feature_bank = _build_optimizer_feature_bank()
     return [
         worker_prep_data(
             ticker,
@@ -277,7 +293,7 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             "ok_count": 0,
             "fail_count": 0,
         }
-        sequential_feature_bank = FeatureBank(DEFAULT_FEATURE_BANK_MAX_ITEMS)
+        sequential_feature_bank = _build_optimizer_feature_bank()
         for ticker, df in raw_data_cache.items():
             result = worker_prep_data(
                 ticker,
