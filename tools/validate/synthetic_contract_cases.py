@@ -2846,7 +2846,7 @@ def validate_gui_workbench_contract_case(base_params):
 
     panel_specs = workbench_spec.get("panels", [])
     panel_ids = [panel.get("panel_id") for panel in panel_specs]
-    add_check(results, "output_contract", case_id, "gui_workbench_panel_ids", ["single_stock_backtest_inspector"], panel_ids)
+    add_check(results, "output_contract", case_id, "gui_workbench_panel_ids", ["single_stock_backtest_inspector", "portfolio_backtest_inspector"], panel_ids)
     if panel_specs:
         panel_spec = panel_specs[0]
         add_check(results, "output_contract", case_id, "gui_workbench_panel_tab_label", "單股回測檢視", panel_spec.get("tab_label"))
@@ -2854,6 +2854,12 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
+
+    if len(panel_specs) > 1:
+        portfolio_panel_spec = panel_specs[1]
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_panel_tab_label", "投組回測檢視", portfolio_panel_spec.get("tab_label"))
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_backend_runner", "tools.portfolio_sim.simulation_runner.run_portfolio_simulation_prepared", portfolio_panel_spec.get("backend_runner"))
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_artifact_keys", ["dashboard_html_path", "report_xlsx_path"], portfolio_panel_spec.get("artifact_keys"))
 
     inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")

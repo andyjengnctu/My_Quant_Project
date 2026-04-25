@@ -7,16 +7,21 @@ import threading
 import time
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
+from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 import tkinter as tk
 
 import numpy as np
 import pandas as pd
 
+from core.buy_sort import calc_buy_sort_value, format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
-from core.portfolio_fast_data import get_fast_dates
+from core.entry_plans import build_position_from_entry_fill
+from core.portfolio_fast_data import build_trade_stats_index, get_fast_close, get_fast_dates, get_fast_pos, get_fast_value, get_pit_stats_from_index
+from core.position_step import execute_bar_step
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
@@ -32,6 +37,8 @@ from tools.trade_analysis.charting import (
     build_debug_chart_payload,
     create_debug_chart_context,
     create_matplotlib_trade_chart_figure,
+    record_active_levels,
+    record_signal_annotation,
     record_trade_marker,
     scroll_chart_to_latest,
 )
@@ -66,6 +73,34 @@ PORTFOLIO_CONSOLE_COLORS = {
     "90": "#9aa7b6",
     "94": "#7fb3ff",
 }
+
+
+SIDEBAR_SIGNAL_CHIP_TEXT = "出現買入訊號"
+SIDEBAR_HISTORY_CHIP_TEXT = "符合歷史績效"
+SIDEBAR_CHIP_ACTIVE_BG = "#2090ff"
+SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
+SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
+PERFORMANCE_STRATEGY_COLOR = "#ff3333"
+PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
+COMBOBOX_WIDTH_RULES = {
+    "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
+    "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
+    "start_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
+    "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
+    "ticker": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
+}
+PORTFOLIO_DROPDOWN_KIND_LABELS = {
+    "normal": "新訊號",
+    "extended": "延續",
+    "extended_shadow": "延續",
+}
+PORTFOLIO_DROPDOWN_SORT_LABELS = {
+    "EV": "EV",
+    "預估投入": "投入",
+    "勝率×次數": "勝×次",
+    "資產成長": "成長",
+}
+PORTFOLIO_BUY_EV_PATTERN = re.compile(r"EV:([+-]?\d+(?:\.\d+)?)R")
 
 
 class _PortfolioConsoleWriter(io.TextIOBase):
@@ -168,9 +203,228 @@ def _resolve_marker_price(price_df, row, action):
     return float(price_df.loc[date, "Close"])
 
 
-def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df):
+
+
+def _is_buy_trade_row(row):
+    return _normalize_trade_action(row) in {"買進", "買進(延續候選)"}
+
+
+def _is_full_exit_trade_row(row):
+    return _normalize_trade_action(row) in {"停損殺出", "指標賣出", "期末強制結算"}
+
+
+def _resolve_valid_float(value):
+    numeric = _coerce_float(value)
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def _resolve_valid_int(value):
+    numeric = _coerce_int(value, default=0)
+    return int(numeric) if numeric > 0 else None
+
+
+def _safe_fast_pos(fast_data, date_value):
+    try:
+        return int(get_fast_pos(fast_data, pd.Timestamp(date_value)))
+    except (TypeError, ValueError, KeyError):
+        return -1
+
+
+def _safe_fast_value(fast_data, field, *, pos):
+    try:
+        return _coerce_float(get_fast_value(fast_data, field, pos=pos))
+    except (TypeError, ValueError, KeyError, IndexError):
+        return np.nan
+
+
+def _safe_fast_close(fast_data, *, pos):
+    try:
+        return _coerce_float(get_fast_close(fast_data, pos=pos))
+    except (TypeError, ValueError, KeyError, IndexError):
+        return np.nan
+
+
+def _resolve_buy_limit_from_row(row, fast_data):
+    explicit_limit = _resolve_valid_float(row.get("買入限價"))
+    if explicit_limit is not None:
+        return explicit_limit
+    buy_date = pd.Timestamp(row.get("Date"))
+    buy_pos = _safe_fast_pos(fast_data, buy_date)
+    if buy_pos > 0:
+        fast_limit = _resolve_valid_float(_safe_fast_value(fast_data, "buy_limit", pos=buy_pos - 1))
+        if fast_limit is not None:
+            return fast_limit
+    entry_price = _resolve_valid_float(row.get("成交價"))
+    return np.nan if entry_price is None else entry_price
+
+
+def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
+    buy_date = pd.Timestamp(row.get("Date"))
+    buy_pos = _safe_fast_pos(fast_data, buy_date)
+    if buy_pos < 0:
+        return None
+    buy_price = _resolve_valid_float(row.get("成交價"))
+    qty = _resolve_valid_int(row.get("股數"))
+    if buy_price is None or qty is None:
+        return None
+
+    y_pos = buy_pos - 1
+    entry_atr = _safe_fast_value(fast_data, "ATR", pos=y_pos) if y_pos >= 0 else np.nan
+    limit_price = _resolve_buy_limit_from_row(row, fast_data)
+    init_sl = _resolve_valid_float(row.get("初始停損價"))
+    if init_sl is None:
+        init_sl = _resolve_valid_float(row.get("停損價"))
+    init_trail = _resolve_valid_float(row.get("初始移動停損價"))
+    if init_trail is None:
+        init_trail = init_sl
+    target_price = _resolve_valid_float(row.get("半倉停利價"))
+    try:
+        return build_position_from_entry_fill(
+            buy_price=buy_price,
+            qty=qty,
+            init_sl=init_sl,
+            init_trail=init_trail,
+            params=params,
+            entry_type=str(row.get("進場類型", "normal") or "normal"),
+            target_price=target_price,
+            limit_price=limit_price,
+            entry_atr=entry_atr,
+            ticker=str(row.get("Ticker", "") or ""),
+            security_profile=(fast_data or {}).get("security_profile"),
+            trade_date=buy_date,
+        )
+    except (TypeError, ValueError, KeyError, RuntimeError):
+        return None
+
+
+def _record_portfolio_trade_annotations(chart_context, *, price_df, row, action, sort_text, win_rate_text, trade_count_text):
+    trade_date = pd.Timestamp(row.get("Date"))
+    if trade_date not in price_df.index:
+        return
+    if action in {"買進", "買進(延續候選)"}:
+        anchor_price = float(price_df.loc[trade_date, "Low"])
+        title = "投組買進"
+        detail_lines = [
+            f"類型: {PORTFOLIO_DROPDOWN_KIND_LABELS.get(str(row.get('進場類型', '') or 'normal'), str(row.get('進場類型', '') or 'normal'))}",
+            f"排序: {sort_text}",
+            f"勝率: {win_rate_text}",
+            f"次數: {trade_count_text}",
+        ]
+        record_signal_annotation(
+            chart_context,
+            current_date=trade_date,
+            signal_type="buy",
+            anchor_price=anchor_price,
+            title=title,
+            detail_lines=detail_lines,
+            meta={
+                "qty": _coerce_int(row.get("股數"), default=0),
+                "reserved_capital": _coerce_float(row.get("投入總金額"), default=np.nan),
+                "current_capital": None,
+            },
+        )
+        return
+    if action in {"停損殺出", "指標賣出", "期末強制結算"}:
+        anchor_price = float(price_df.loc[trade_date, "Low"])
+        pnl = row.get("該筆總損益", row.get("單筆損益", None))
+        pnl_text = "-" if pnl is None or pd.isna(pnl) else f"{float(pnl):,.0f}"
+        record_signal_annotation(
+            chart_context,
+            current_date=trade_date,
+            signal_type="sell",
+            anchor_price=anchor_price,
+            title="投組賣出",
+            detail_lines=[f"原因: {row.get('Type', '-')}", f"總損益: {pnl_text}"],
+        )
+
+
+def _record_portfolio_active_level_segments(chart_context, *, fast_data, ticker_trades_df, params):
+    buy_rows = [row for row in ticker_trades_df.to_dict("records") if _is_buy_trade_row(row)]
+    if not buy_rows:
+        return
+    full_exit_rows = [row for row in ticker_trades_df.to_dict("records") if _is_full_exit_trade_row(row)]
+    fast_dates = pd.DatetimeIndex(pd.to_datetime(get_fast_dates(fast_data)))
+
+    for buy_idx, buy_row in enumerate(buy_rows):
+        buy_date = pd.Timestamp(buy_row.get("Date"))
+        buy_pos = _safe_fast_pos(fast_data, buy_date)
+        if buy_pos < 0:
+            continue
+        next_buy_date = pd.Timestamp(buy_rows[buy_idx + 1].get("Date")) if buy_idx + 1 < len(buy_rows) else None
+        exit_date = None
+        for exit_row in full_exit_rows:
+            candidate_exit_date = pd.Timestamp(exit_row.get("Date"))
+            if candidate_exit_date < buy_date:
+                continue
+            if next_buy_date is not None and candidate_exit_date >= next_buy_date:
+                continue
+            exit_date = candidate_exit_date
+            break
+
+        end_pos = len(fast_dates) - 1 if exit_date is None else _safe_fast_pos(fast_data, exit_date)
+        if end_pos < buy_pos:
+            continue
+
+        position = _build_position_from_portfolio_buy_row(buy_row, fast_data=fast_data, params=params)
+        if position is None:
+            continue
+
+        for pos in range(buy_pos, end_pos + 1):
+            current_date = fast_dates[pos]
+            if pos > buy_pos:
+                y_pos = pos - 1
+                try:
+                    position, _freed_cash, _pnl, _events = execute_bar_step(
+                        position,
+                        _safe_fast_value(fast_data, "ATR", pos=y_pos),
+                        bool(_safe_fast_value(fast_data, "ind_sell_signal", pos=y_pos)),
+                        _safe_fast_close(fast_data, pos=y_pos),
+                        _safe_fast_value(fast_data, "Open", pos=pos),
+                        _safe_fast_value(fast_data, "High", pos=pos),
+                        _safe_fast_value(fast_data, "Low", pos=pos),
+                        _safe_fast_close(fast_data, pos=pos),
+                        _safe_fast_value(fast_data, "Volume", pos=pos),
+                        params,
+                        current_date=current_date,
+                        y_high=_safe_fast_value(fast_data, "High", pos=y_pos),
+                        return_milli=False,
+                        record_exec_contexts=False,
+                        sync_display_fields=True,
+                    )
+                except (TypeError, ValueError, KeyError, IndexError, RuntimeError):
+                    break
+            if int(position.get("qty", 0) or 0) <= 0:
+                break
+            record_active_levels(
+                chart_context,
+                current_date=current_date,
+                stop_price=position.get("sl", np.nan),
+                tp_half_price=position.get("tp_half", np.nan),
+                limit_price=position.get("limit_price", np.nan),
+                entry_price=position.get("pure_buy_price", np.nan),
+            )
+            if exit_date is not None and current_date >= exit_date:
+                break
+
+
+def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None):
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
+    dropdown_stats = dict(ticker_dropdown_stats or {})
+    sort_text = str(dropdown_stats.get("sort_text") or "-")
+    win_rate_text = str(dropdown_stats.get("win_rate_text") or "-")
+    trade_count_text = str(dropdown_stats.get("trade_count_text") or "-")
+
+    if params is not None:
+        _record_portfolio_active_level_segments(
+            chart_context,
+            fast_data=fast_data,
+            ticker_trades_df=ticker_trades_df,
+            params=params,
+        )
+
     for row in ticker_trades_df.to_dict("records"):
         action = _normalize_trade_action(row)
         if not action:
@@ -189,6 +443,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         pnl = row.get("該筆總損益", row.get("單筆損益", None))
         if pnl is not None and not pd.isna(pnl):
             note_parts.append(f"損益 {float(pnl):,.0f}")
+        buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
         record_trade_marker(
             chart_context,
             current_date=trade_date,
@@ -196,13 +451,31 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             price=marker_price,
             qty=qty,
             note=" | ".join(part for part in note_parts if part),
-            meta={"portfolio_view": True},
+            meta={
+                "portfolio_view": True,
+                "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
+            },
         )
+        _record_portfolio_trade_annotations(
+            chart_context,
+            price_df=price_df,
+            row=row,
+            action=action,
+            sort_text=sort_text,
+            win_rate_text=win_rate_text,
+            trade_count_text=trade_count_text,
+        )
+
+    buy_count = int(sum(1 for row in ticker_trades_df.to_dict("records") if _is_buy_trade_row(row)))
+    exit_count = int(sum(1 for row in ticker_trades_df.to_dict("records") if _is_full_exit_trade_row(row)))
     chart_context["summary_box"] = [
         "投組實際成交",
-        f"{ticker} 共 {len(ticker_trades_df)} 筆事件",
+        f"{ticker} 買進 {buy_count} 次",
+        f"完整出場 {exit_count} 次",
+        f"排序 {sort_text}",
+        f"勝率 {win_rate_text} | 次 {trade_count_text}",
     ]
-    chart_context["status_box"] = {"lines": ["投組成交檢視"], "ok": True}
+    chart_context["status_box"] = {"lines": [SIDEBAR_SIGNAL_CHIP_TEXT, SIDEBAR_HISTORY_CHIP_TEXT], "ok": True}
     return build_debug_chart_payload(price_df, chart_context)
 
 
@@ -232,6 +505,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._console_stream_mode = "line"
         self._console_live_progress_start = None
         self._console_current_tag = "default"
+        self._ticker_dropdown_stats = {}
+        self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)
+        self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)
+        self._sidebar_summary_var = tk.StringVar(value="-")
+        self._selected_date_var = tk.StringVar(value="選取日: -")
+        self._selected_open_var = tk.StringVar(value="開: -")
+        self._selected_high_var = tk.StringVar(value="高: -")
+        self._selected_low_var = tk.StringVar(value="低: -")
+        self._selected_close_var = tk.StringVar(value="收: -")
+        self._selected_volume_var = tk.StringVar(value="量: -")
+        self._selected_tp_var = tk.StringVar(value="停利: -")
+        self._selected_limit_var = tk.StringVar(value="限價: -")
+        self._selected_entry_var = tk.StringVar(value="成交: -")
+        self._selected_stop_var = tk.StringVar(value="停損: -")
+        self._selected_actual_spend_var = tk.StringVar(value="實支: -")
         self._build_ui()
 
     def destroy(self):
@@ -247,33 +535,47 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         pady = (2, 2)
 
         ttk.Label(controls_bar, text="參數", style="Workbench.TLabel").grid(row=0, column=0, padx=(0, 6), pady=pady, sticky="w")
-        ttk.Combobox(
+        self._param_source_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
             width=20,
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
             values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
-        ).grid(row=0, column=1, padx=(0, 10), pady=pady, sticky="w")
+        )
+        self._autosize_combobox(self._param_source_combo, values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()), current_text=self._param_source_display_var.get(), rule_key="param_source")
+        self._param_source_combo.grid(row=0, column=1, padx=(0, 10), pady=pady, sticky="w")
 
         ttk.Label(controls_bar, text="汰弱換股", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=pady, sticky="w")
-        ttk.Combobox(
+        self._rotation_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
             width=14,
             textvariable=self._rotation_display_var,
             style="Workbench.TCombobox",
             values=list(ROTATION_LABEL_TO_BOOL.keys()),
-        ).grid(row=0, column=3, padx=(0, 10), pady=pady, sticky="w")
+        )
+        self._autosize_combobox(self._rotation_combo, values=list(ROTATION_LABEL_TO_BOOL.keys()), current_text=self._rotation_display_var.get(), rule_key="rotation")
+        self._rotation_combo.grid(row=0, column=3, padx=(0, 10), pady=pady, sticky="w")
 
         ttk.Label(controls_bar, text="最大持股", style="Workbench.TLabel").grid(row=0, column=4, padx=(0, 6), pady=pady, sticky="w")
         ttk.Entry(controls_bar, textvariable=self._max_positions_var, width=5, style="Workbench.TEntry").grid(row=0, column=5, padx=(0, 10), pady=pady, sticky="w")
 
         ttk.Label(controls_bar, text="起始年", style="Workbench.TLabel").grid(row=0, column=6, padx=(0, 6), pady=pady, sticky="w")
-        ttk.Entry(controls_bar, textvariable=self._start_year_var, width=7, style="Workbench.TEntry").grid(row=0, column=7, padx=(0, 10), pady=pady, sticky="w")
+        start_year_values = self._build_start_year_options()
+        self._start_year_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=7,
+            textvariable=self._start_year_var,
+            style="Workbench.TCombobox",
+            values=start_year_values,
+        )
+        self._autosize_combobox(self._start_year_combo, values=start_year_values, current_text=self._start_year_var.get(), rule_key="start_year")
+        self._start_year_combo.grid(row=0, column=7, padx=(0, 10), pady=pady, sticky="w")
 
         ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=8, padx=(0, 6), pady=pady, sticky="w")
-        risk_combo = ttk.Combobox(
+        self._risk_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
             width=7,
@@ -281,8 +583,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             style="Workbench.TCombobox",
             values=FIXED_RISK_LABELS,
         )
-        risk_combo.grid(row=0, column=9, padx=(0, 6), pady=pady, sticky="w")
-        risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
+        self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
+        self._risk_combo.grid(row=0, column=9, padx=(0, 6), pady=pady, sticky="w")
+        self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
         self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
         self._custom_fixed_risk_entry.grid(row=0, column=10, padx=(0, 10), pady=pady, sticky="w")
         self._custom_fixed_risk_entry.state(["disabled"])
@@ -291,6 +594,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=12, padx=(0, 6), pady=pady, sticky="w")
         self._ticker_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._ticker_display_var, style="Workbench.TCombobox", values=[])
+        self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
         self._ticker_combo.grid(row=0, column=13, padx=(0, 8), pady=pady, sticky="w")
         self._ticker_combo.bind("<<ComboboxSelected>>", self._on_ticker_selected)
 
@@ -309,10 +613,44 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         kline_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         kline_tab.rowconfigure(0, weight=1)
         kline_tab.columnconfigure(0, weight=1)
+        kline_tab.columnconfigure(1, weight=0)
         notebook.add(kline_tab, text="K 線圖")
         self._kline_host = tk.Frame(kline_tab, bg="#000000", highlightthickness=0, bd=0)
         self._kline_host.grid(row=0, column=0, sticky="nsew")
         self._kline_placeholder = self._make_placeholder(self._kline_host, "請先執行投組回測；選擇有成交過的股票後會顯示 K 線結果。")
+
+        sidebar_outer = ttk.Frame(kline_tab, padding=(4, 4, 2, 4), width=188, style="Workbench.TFrame")
+        sidebar_outer.grid(row=0, column=1, sticky="ns")
+        sidebar_outer.grid_propagate(False)
+        kline_tab.grid_columnconfigure(1, minsize=188)
+
+        sidebar = ttk.Frame(sidebar_outer, padding=(2, 2), style="Workbench.TFrame")
+        sidebar.pack(fill="both", expand=True)
+        sidebar.columnconfigure(0, weight=1)
+        sidebar_chip_font = ("Microsoft JhengHei", 13, "bold")
+        sidebar_header_font = ("Microsoft JhengHei", 13, "bold")
+        sidebar_body_font = ("Microsoft JhengHei", 12)
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=168).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=7, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
+        sidebar.rowconfigure(18, weight=1)
 
         performance_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         performance_tab.rowconfigure(0, weight=1)
@@ -353,6 +691,115 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         )
         label.pack(fill="both", expand=True)
         return label
+
+    def _get_workbench_combobox_font(self):
+        if hasattr(self, "_workbench_combobox_font"):
+            return self._workbench_combobox_font
+        font_spec = ttk.Style(self).lookup("Workbench.TCombobox", "font") or ("Microsoft JhengHei", 11)
+        try:
+            self._workbench_combobox_font = tkfont.Font(font=font_spec)
+        except tk.TclError:
+            self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
+        return self._workbench_combobox_font
+
+    def _autosize_combobox(self, combo, *, values, current_text, rule_key):
+        rule = COMBOBOX_WIDTH_RULES[rule_key]
+        font_obj = self._get_workbench_combobox_font()
+        text_candidates = [str(value or "") for value in list(values or [])]
+        text_candidates.append(str(current_text or ""))
+        try:
+            live_text = combo.get()
+        except tk.TclError:
+            live_text = ""
+        text_candidates.append(str(live_text or ""))
+        longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
+        average_char_px = max(font_obj.measure("0"), 1)
+        text_px = font_obj.measure(longest_text) + int(rule.get("extra_px") or 0)
+        width_chars = max(int(rule.get("min_chars") or 0), (text_px + average_char_px - 1) // average_char_px)
+        width_chars = min(width_chars, int(rule.get("max_chars") or width_chars))
+        combo.configure(width=width_chars)
+
+    def _build_start_year_options(self):
+        default_year = int(_resolve_default_portfolio_start_year_hint())
+        current_year = max(default_year, datetime.now().year)
+        first_year = max(2000, default_year - 6)
+        return [str(year) for year in range(first_year, current_year + 1)]
+
+    def _format_sidebar_line_value(self, label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
+
+    def _format_sidebar_amount_value(self, label, value):
+        return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):,.0f}"
+
+    def _format_sidebar_ohlcv_value(self, label, value, *, volume=False):
+        if value is None or pd.isna(value):
+            return f"{label}: -"
+        if volume:
+            return f"{label}: {float(value) / 1_000_000:.2f}M"
+        return f"{label}: {float(value):.2f}"
+
+    def _update_selected_value_sidebar(self, snapshot):
+        if not snapshot:
+            self._selected_date_var.set("選取日: -")
+            self._selected_open_var.set("開: -")
+            self._selected_high_var.set("高: -")
+            self._selected_low_var.set("低: -")
+            self._selected_close_var.set("收: -")
+            self._selected_volume_var.set("量: -")
+            self._selected_tp_var.set("停利: -")
+            self._selected_limit_var.set("限價: -")
+            self._selected_entry_var.set("成交: -")
+            self._selected_stop_var.set("停損: -")
+            self._selected_actual_spend_var.set("實支: -")
+            return
+        self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
+        self._selected_open_var.set(self._format_sidebar_ohlcv_value("開", snapshot.get("open")))
+        self._selected_high_var.set(self._format_sidebar_ohlcv_value("高", snapshot.get("high")))
+        self._selected_low_var.set(self._format_sidebar_ohlcv_value("低", snapshot.get("low")))
+        self._selected_close_var.set(self._format_sidebar_ohlcv_value("收", snapshot.get("close")))
+        self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
+        self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))
+        self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
+        self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
+        self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
+        self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
+
+    def _apply_sidebar_chip_styles(self, signal_active, history_active):
+        self._signal_chip.configure(bg=SIDEBAR_CHIP_ACTIVE_BG if bool(signal_active) else SIDEBAR_CHIP_INACTIVE_BG)
+        self._history_chip.configure(bg=SIDEBAR_HISTORY_CHIP_ACTIVE_BG if bool(history_active) else SIDEBAR_CHIP_INACTIVE_BG)
+
+    @staticmethod
+    def _resolve_sidebar_chip_states(status_lines):
+        normalized_lines = [str(line).strip() for line in status_lines if str(line).strip()]
+        signal_active = any(line == SIDEBAR_SIGNAL_CHIP_TEXT for line in normalized_lines)
+        history_active = any(line in {SIDEBAR_HISTORY_CHIP_TEXT, "歷史績效符合", "歷績門檻符合"} for line in normalized_lines)
+        return signal_active, history_active
+
+    def _update_sidebar_from_chart_payload(self, chart_payload):
+        chart_payload = dict(chart_payload or {})
+        status_lines = list(((chart_payload.get("status_box") or {}).get("lines") or []))
+        signal_active, history_active = self._resolve_sidebar_chip_states(status_lines)
+        self._sidebar_signal_var.set(SIDEBAR_SIGNAL_CHIP_TEXT)
+        self._sidebar_history_var.set(SIDEBAR_HISTORY_CHIP_TEXT)
+        self._sidebar_summary_var.set("\n".join(str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()) or "-")
+        self._apply_sidebar_chip_styles(signal_active, history_active)
+        dates = chart_payload.get("date_labels") or []
+        if dates:
+            idx = int((chart_payload.get("default_view") or {}).get("end_idx", len(dates) - 1))
+            idx = max(0, min(idx, len(dates) - 1))
+            self._update_selected_value_sidebar(build_chart_hover_snapshot(chart_payload, idx))
+        else:
+            self._update_selected_value_sidebar(None)
+
+    def _build_gui_chart_payload(self, chart_payload):
+        gui_payload = dict(chart_payload or {})
+        gui_payload["summary_box"] = []
+        gui_payload["status_box"] = {}
+        return gui_payload
+
+    def _move_kline_chart_to_latest(self):
+        if self._chart_figure is not None:
+            scroll_chart_to_latest(self._chart_figure, redraw=True)
 
     def _configure_console_tags(self):
         self._console_text.tag_configure("default", foreground="#f7fbff")
@@ -658,36 +1105,103 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._run_thread = None
         self._report_runtime_exception("run_portfolio_backtest", exc, status_prefix="投組回測失敗")
 
+    def _resolve_ticker_dropdown_stats(self, *, ticker, first_buy_row, result_payload):
+        params = result_payload.get("params")
+        context = result_payload.get("context") or {}
+        standalone_logs = (context.get("all_trade_logs") or {}).get(ticker) or []
+        stats_index = build_trade_stats_index(standalone_logs)
+        trade_date = pd.Timestamp(first_buy_row.get("Date"))
+        try:
+            _is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(stats_index, trade_date, params, ticker=ticker)
+        except (TypeError, ValueError, KeyError, IndexError):
+            ev = self._extract_ev_from_buy_type(first_buy_row.get("Type"))
+            win_rate = np.nan
+            trade_count = 0
+            asset_growth_pct = np.nan
+
+        sort_method = get_buy_sort_method()
+        raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
+        sort_metric_label = PORTFOLIO_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
+        projected_cost = _coerce_float(first_buy_row.get("投入總金額"), default=0.0)
+        sort_value = calc_buy_sort_value(
+            sort_method,
+            ev,
+            projected_cost,
+            win_rate if not pd.isna(win_rate) else 0.0,
+            trade_count,
+            asset_growth_pct if not pd.isna(asset_growth_pct) else 0.0,
+        )
+        sort_value_text = format_buy_sort_metric_value(sort_value, sort_method)
+        win_rate_pct = None if pd.isna(win_rate) else (float(win_rate) * 100.0 if float(win_rate) <= 1.0 else float(win_rate))
+        win_rate_text = "-" if win_rate_pct is None else f"{win_rate_pct:.1f}%"
+        trade_count_text = "-" if int(trade_count or 0) <= 0 else str(int(trade_count))
+        return {
+            "sort_metric_label": sort_metric_label,
+            "sort_value": float(sort_value),
+            "sort_value_text": sort_value_text,
+            "sort_text": f"{sort_metric_label} {sort_value_text}",
+            "win_rate_text": win_rate_text,
+            "trade_count_text": trade_count_text,
+            "win_rate": win_rate_pct,
+            "trade_count": int(trade_count or 0),
+        }
+
+    @staticmethod
+    def _extract_ev_from_buy_type(type_text):
+        match = PORTFOLIO_BUY_EV_PATTERN.search(str(type_text or ""))
+        if not match:
+            return 0.0
+        return _coerce_float(match.group(1), default=0.0)
+
+    def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
+        entry_type = str(first_buy_row.get("進場類型", "normal") or "normal")
+        kind_label = PORTFOLIO_DROPDOWN_KIND_LABELS.get(entry_type, entry_type or "-")
+        return (
+            f"{ticker}|{kind_label}|{stats.get('sort_text', '-')}"
+            f"|勝率 {stats.get('win_rate_text', '-')}"
+            f"|次 {stats.get('trade_count_text', '-')}"
+        )
+
     def _refresh_trade_ticker_dropdown(self, result_payload):
         df_tr = result_payload.get("df_tr")
         if df_tr is None or df_tr.empty or "Ticker" not in df_tr.columns:
             self._ticker_map.clear()
+            self._ticker_dropdown_stats.clear()
             self._ticker_combo.configure(values=[])
             self._ticker_display_var.set("")
+            self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
             return
+
         trade_rows = df_tr[df_tr.apply(_is_actual_trade_row, axis=1)].copy()
-        if trade_rows.empty:
-            values = []
-        else:
-            order = []
-            counts = {}
-            for row in trade_rows.to_dict("records"):
-                ticker = str(row.get("Ticker", "") or "").strip()
-                if not ticker:
-                    continue
-                if ticker not in counts:
-                    order.append(ticker)
-                    counts[ticker] = 0
-                counts[ticker] += 1
-            values = [f"{ticker}|成交 {counts[ticker]}" for ticker in order]
-        self._ticker_map = {label: label.split("|", 1)[0].strip() for label in values}
+        buy_rows = trade_rows[trade_rows.apply(_is_buy_trade_row, axis=1)].copy() if not trade_rows.empty else pd.DataFrame()
+        values = []
+        label_to_ticker = {}
+        label_stats = {}
+        seen = set()
+        for row in buy_rows.to_dict("records"):
+            ticker = str(row.get("Ticker", "") or "").strip()
+            if not ticker or ticker in seen:
+                continue
+            seen.add(ticker)
+            stats = self._resolve_ticker_dropdown_stats(ticker=ticker, first_buy_row=row, result_payload=result_payload)
+            label = self._format_ticker_dropdown_label(ticker=ticker, first_buy_row=row, stats=stats)
+            values.append(label)
+            label_to_ticker[label] = ticker
+            label_stats[label] = stats
+
+        self._ticker_map = label_to_ticker
+        self._ticker_dropdown_stats = label_stats
         self._ticker_combo.configure(values=values)
+        self._autosize_combobox(self._ticker_combo, values=values, current_text=values[0] if values else "", rule_key="ticker")
         if values:
             self._ticker_display_var.set(values[0])
             self._render_selected_ticker_chart(values[0])
         else:
             self._ticker_display_var.set("")
             self._clear_kline_chart()
+            self._update_selected_value_sidebar(None)
+            self._sidebar_summary_var.set("-")
+            self._apply_sidebar_chip_styles(False, False)
             self._kline_placeholder.configure(text="投組回測完成，但沒有可顯示的成交股票。")
 
     def _on_ticker_selected(self, _event=None):
@@ -700,7 +1214,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _render_selected_ticker_chart(self, display_label):
         if self._result is None:
             return
-        ticker = self._ticker_map.get(str(display_label or "").strip())
+        display_key = str(display_label or "").strip()
+        ticker = self._ticker_map.get(display_key)
         if not ticker:
             return
         df_tr = self._result.get("df_tr")
@@ -714,6 +1229,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             ticker=ticker,
             fast_data=fast_data,
             ticker_trades_df=ticker_trades,
+            params=self._result.get("params"),
+            ticker_dropdown_stats=self._ticker_dropdown_stats.get(display_key),
         )
         self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload})
 
@@ -726,9 +1243,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return backend_error_text
         ticker = result.get("ticker", "")
         chart_payload = result.get("chart_payload")
+        self._update_sidebar_from_chart_payload(chart_payload)
         try:
             figure = create_matplotlib_trade_chart_figure(
-                chart_payload=chart_payload,
+                chart_payload=self._build_gui_chart_payload(chart_payload),
                 ticker=f"{ticker} 投組",
                 show_volume=bool(self._show_volume_var.get()),
             )
@@ -742,7 +1260,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             bind_matplotlib_chart_navigation(figure, canvas)
             state = getattr(figure, "_stock_chart_navigation_state", None)
             if isinstance(state, dict):
-                state["external_hover_callback"] = lambda snapshot: None if snapshot is None else build_chart_hover_snapshot(chart_payload, int(snapshot.get("index", 0))) if isinstance(snapshot, dict) and "index" in snapshot else None
+                state["external_hover_callback"] = self._update_selected_value_sidebar
             canvas.draw()
             widget = canvas.get_tk_widget()
             widget.configure(background="#02050a", highlightthickness=0, bd=0, takefocus=1)
@@ -759,7 +1277,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._chart_canvas = canvas
         self._chart_figure = figure
         self._notebook.select(0)
-        scroll_chart_to_latest(self._chart_figure, redraw=True)
+        self._move_kline_chart_to_latest()
         return ""
 
     def _render_performance_chart(self, result_payload):
@@ -791,9 +1309,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         figure.subplots_adjust(left=0.055, right=0.985, top=0.94, bottom=0.08)
         axis.set_facecolor("#000000")
         axis.grid(True, color="#0a1824", alpha=0.22, linewidth=0.7)
-        axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=2.5, label="V16 尊爵系統報酬 (%)")
+        axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
         if bm_col in df_eq.columns:
-            axis.plot(dates, df_eq[bm_col].astype(float), linewidth=1.8, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.88)
+            axis.plot(dates, df_eq[bm_col].astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
         axis.set_title(f"V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤 ({options.get('start_year', '-') } 至今)", color="#f7fbff", fontproperties=title_font)
         axis.set_xlabel("日期", color="#f7fbff", fontproperties=font_prop)
         axis.set_ylabel("累積報酬率 (%)", color="#f7fbff", fontproperties=font_prop)
