@@ -171,6 +171,49 @@ def _collect_normal_candidates(
     return candidates_today, orderable_candidates_today, normal_setup_tickers_today
 
 
+# # (AI註: 滿倉且關閉 rotation 時，portfolio 仍需承接新 setup 為延續狀態；但不需要建立可買候選、排序或預估投入成本)
+def track_normal_setup_signals_for_day(
+    *,
+    normal_setup_entries,
+    portfolio,
+    sold_today,
+    all_dfs_fast,
+    active_extended_signals,
+    pit_stats_index,
+    today,
+    params,
+):
+    normal_setup_tickers_today = set()
+    for ticker, y_pos, _t_pos in sorted(normal_setup_entries, key=lambda x: x[0]):
+        normal_setup_tickers_today.add(ticker)
+        if ticker in portfolio or ticker in sold_today:
+            continue
+
+        # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；若 history filter 不合格則不續掛)
+        active_extended_signals.pop(ticker, None)
+
+        fast_df = all_dfs_fast[ticker]
+        y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
+        y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        security_profile = get_fast_security_profile(fast_df)
+
+        is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
+            pit_stats_index[ticker], today, params
+        )
+        if not is_candidate:
+            continue
+
+        signal_state = create_signal_tracking_state(
+            y_buy_limit,
+            y_atr,
+            params,
+            ticker=ticker,
+            security_profile=security_profile,
+        )
+        if signal_state is not None:
+            active_extended_signals[ticker] = signal_state
+    return normal_setup_tickers_today
+
 def _collect_extended_candidates(
     *,
     active_extended_signals,
