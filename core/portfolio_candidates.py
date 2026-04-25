@@ -141,6 +141,9 @@ def _collect_normal_candidates(
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
 
+        if (not collect_all_candidates) and (not bool(candidate_plan['is_orderable'])):
+            continue
+
         candidate_row = _make_candidate_row(
             ticker=ticker,
             candidate_type='normal',
@@ -268,6 +271,9 @@ def _collect_extended_candidates(
             y_close,
             ticker=ticker,
         )
+
+        if (not collect_all_candidates) and (not bool(today_orderable)):
+            continue
 
         candidate_row = _make_candidate_row(
             ticker=ticker,

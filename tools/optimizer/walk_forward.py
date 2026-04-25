@@ -217,13 +217,15 @@ def evaluate_walk_forward(
     train_start_year: int | None = None,
     oos_start_year: int | None = None,
     pit_stats_index=None,
+    holdout_period: dict | None = None,
 ):
-    holdout_period = build_test_holdout_period(
-        sorted_dates,
-        min_train_years=min_train_years,
-        train_start_year=train_start_year,
-        oos_start_year=oos_start_year,
-    )
+    if holdout_period is None:
+        holdout_period = build_test_holdout_period(
+            sorted_dates,
+            min_train_years=min_train_years,
+            train_start_year=train_start_year,
+            oos_start_year=oos_start_year,
+        )
     period_metrics = None
     if holdout_period is not None:
         period_metrics = _evaluate_single_holdout_period(

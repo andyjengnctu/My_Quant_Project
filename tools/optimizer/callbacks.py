@@ -37,7 +37,7 @@ from tools.optimizer.study_utils import (
     is_qualified_trial_value,
     normalize_objective_mode,
 )
-from tools.optimizer.walk_forward import build_test_period_metrics, evaluate_walk_forward
+from tools.optimizer.walk_forward import build_test_holdout_period, build_test_period_metrics, evaluate_walk_forward
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -501,6 +501,7 @@ def _compute_reference_console_cache(session):
                 all_dfs_fast=prep_result["all_dfs_fast"],
                 all_trade_logs=prep_result["all_trade_logs"],
                 sorted_dates=sorted(prep_result["master_dates"]),
+                holdout_period=_get_cached_walk_forward_holdout_period(session, sorted(prep_result["master_dates"])),
                 params=params,
                 max_positions=session.train_max_positions,
                 enable_rotation=session.train_enable_rotation,
@@ -523,6 +524,32 @@ def _get_reference_console_cache(session):
         setattr(session, "_optimizer_console_reference_cache", cache)
     return cache
 
+
+
+def _get_cached_walk_forward_holdout_period(session, sorted_dates):
+    sorted_dates = list(sorted_dates or [])
+    if not sorted_dates:
+        return None
+    key = (
+        len(sorted_dates),
+        sorted_dates[0],
+        sorted_dates[-1],
+        int(session.walk_forward_policy["train_start_year"]),
+        int(session.walk_forward_policy["min_train_years"]),
+        session.walk_forward_policy.get("oos_start_year"),
+    )
+    cache = getattr(session, "_optimizer_wf_holdout_period_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        setattr(session, "_optimizer_wf_holdout_period_cache", cache)
+    if key not in cache:
+        cache[key] = build_test_holdout_period(
+            sorted_dates,
+            train_start_year=key[3],
+            min_train_years=key[4],
+            oos_start_year=key[5],
+        )
+    return cache.get(key)
 
 
 
@@ -591,6 +618,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 all_dfs_fast=(cached_trial_inputs.get("all_dfs_fast") or session.static_fast_cache),
                 all_trade_logs={},
                 sorted_dates=list(cached_trial_inputs.get("sorted_master_dates") or []),
+                holdout_period=_get_cached_walk_forward_holdout_period(session, cached_trial_inputs.get("sorted_master_dates") or []),
                 params=params,
                 max_positions=session.train_max_positions,
                 enable_rotation=session.train_enable_rotation,
@@ -615,6 +643,7 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 all_dfs_fast=prep_result["all_dfs_fast"],
                 all_trade_logs=prep_result["all_trade_logs"],
                 sorted_dates=sorted(prep_result["master_dates"]),
+                holdout_period=_get_cached_walk_forward_holdout_period(session, sorted(prep_result["master_dates"])),
                 params=params,
                 max_positions=session.train_max_positions,
                 enable_rotation=session.train_enable_rotation,
