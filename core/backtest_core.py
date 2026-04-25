@@ -238,7 +238,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             if 'STOP' in events or 'IND_SELL' in events:
                 total_pnl_milli = int(position.get('realized_pnl_milli', 0) or 0)
                 total_pnl = position['realized_pnl'] if (collect_stats or return_logs) else milli_to_money(total_pnl_milli)
-                trade_r_mult = calc_ratio_from_milli(total_pnl_milli, position.get('initial_risk_total_milli', 0))
+                trade_r_mult = calc_ratio_from_milli(position['realized_pnl_milli'], position.get('initial_risk_total_milli', 0))
                 if collect_stats:
                     total_r_multiple += trade_r_mult
                     tradeCount += 1

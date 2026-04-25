@@ -274,7 +274,7 @@ def settle_portfolio_positions(
         if 'STOP' in events or 'IND_SELL' in events:
             total_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0)
             total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
-            total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
+            total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
             closed_trades_stats.append(
                 {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
             )
