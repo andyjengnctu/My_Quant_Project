@@ -28,7 +28,14 @@ from core.output_paths import ensure_output_dir
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.scanner_display import build_scanner_sort_probe_text
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
-from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
+from tools.trade_analysis.charting import (
+    bind_matplotlib_chart_navigation,
+    build_chart_hover_snapshot,
+    create_matplotlib_trade_chart_figure,
+    extract_trade_marker_indexes,
+    scroll_chart_to_index,
+    scroll_chart_to_latest,
+)
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 
@@ -419,6 +426,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._columns = []
         self._chart_canvas = None
         self._chart_figure = None
+        self._current_chart_trade_indexes = []
+        self._current_chart_trade_cursor_index = None
         self._console_writer = _ConsoleWriter(self)
         self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)
         self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)
@@ -562,7 +571,13 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
         ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
-        sidebar.rowconfigure(18, weight=1)
+        trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
+        trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.columnconfigure(0, weight=1)
+        trade_nav.columnconfigure(1, weight=1)
+        ttk.Button(trade_nav, text="前交易", command=self._move_chart_to_previous_trade, style="Workbench.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ttk.Button(trade_nav, text="後交易", command=self._move_chart_to_next_trade, style="Workbench.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        sidebar.rowconfigure(19, weight=1)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         notebook.add(table_tab, text="交易明細")
@@ -1305,7 +1320,38 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _move_chart_to_latest(self):
         if self._chart_figure is None:
             return
-        scroll_chart_to_latest(self._chart_figure, redraw=True)
+        if scroll_chart_to_latest(self._chart_figure, redraw=True):
+            state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+            if isinstance(state, dict):
+                self._current_chart_trade_cursor_index = int(state.get("hover_last_index", 0) or 0)
+
+    def _move_chart_to_previous_trade(self):
+        self._move_chart_to_trade(direction=-1)
+
+    def _move_chart_to_next_trade(self):
+        self._move_chart_to_trade(direction=1)
+
+    def _move_chart_to_trade(self, *, direction):
+        if self._chart_figure is None or not self._current_chart_trade_indexes:
+            return False
+        state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+        current_index = self._current_chart_trade_cursor_index
+        if current_index is None and isinstance(state, dict):
+            current_index = state.get("hover_last_index")
+        if current_index is None:
+            current_index = self._current_chart_trade_indexes[-1]
+        current_index = int(current_index)
+
+        if int(direction) < 0:
+            candidates = [idx for idx in self._current_chart_trade_indexes if idx < current_index]
+            target_index = candidates[-1] if candidates else self._current_chart_trade_indexes[0]
+        else:
+            candidates = [idx for idx in self._current_chart_trade_indexes if idx > current_index]
+            target_index = candidates[0] if candidates else self._current_chart_trade_indexes[-1]
+        if scroll_chart_to_index(self._chart_figure, target_index, redraw=True):
+            self._current_chart_trade_cursor_index = int(target_index)
+            return True
+        return False
 
     def _render_embedded_chart(self, result):
         chart_payload = result.get("chart_payload")
@@ -1322,6 +1368,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
             self._status_var.set(backend_error_text)
             return backend_error_text
+        self._current_chart_trade_indexes = extract_trade_marker_indexes(chart_payload)
+        self._current_chart_trade_cursor_index = None
         payload_bar_count = 0
         payload_dates = chart_payload.get("date_labels") if isinstance(chart_payload, dict) else None
         if payload_dates is not None:
@@ -1376,6 +1424,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if self._chart_figure is not None:
             self._chart_figure.clear()
             self._chart_figure = None
+        self._current_chart_trade_indexes = []
+        self._current_chart_trade_cursor_index = None
         if not self._chart_placeholder.winfo_ismapped():
             self._chart_placeholder.pack(fill="both", expand=True)
 

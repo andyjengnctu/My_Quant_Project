@@ -665,6 +665,24 @@ def build_chart_hover_snapshot(chart_payload, index):
 
 
 
+
+
+def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
+    default_trace_names = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
+    allowed_trace_names = default_trace_names if trace_names is None else {str(name) for name in trace_names}
+    marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
+    indexes = []
+    for trace_name, markers in marker_groups.items():
+        if str(trace_name) not in allowed_trace_names:
+            continue
+        for marker in markers or []:
+            try:
+                indexes.append(int(marker.get("x")))
+            except (TypeError, ValueError):
+                continue
+    return sorted(set(indexes))
+
+
 def _build_hover_snapshot(chart_payload, index):
     return build_chart_hover_snapshot(chart_payload, index)
 

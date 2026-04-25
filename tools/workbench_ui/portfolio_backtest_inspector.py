@@ -6,6 +6,7 @@ import re
 import threading
 import time
 import traceback
+import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 from tkinter import font as tkfont
@@ -37,6 +38,7 @@ from tools.trade_analysis.charting import (
     build_debug_chart_payload,
     create_debug_chart_context,
     create_matplotlib_trade_chart_figure,
+    extract_trade_marker_indexes,
     record_active_levels,
     record_signal_annotation,
     record_trade_marker,
@@ -102,6 +104,10 @@ PORTFOLIO_DROPDOWN_SORT_LABELS = {
     "資產成長": "成長",
 }
 PORTFOLIO_BUY_EV_PATTERN = re.compile(r"EV:([+-]?\d+(?:\.\d+)?)R")
+
+
+def _warn_gui_fallback(action, exc):
+    warnings.warn(f"GUI fallback {action}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
 class _PortfolioConsoleWriter(io.TextIOBase):
@@ -280,6 +286,27 @@ def _estimate_sell_capital(row):
     return float(price) * int(qty)
 
 
+def _resolve_previous_trade_date(fast_data, trade_date):
+    pos = _safe_fast_pos(fast_data, trade_date)
+    if pos <= 0:
+        return pd.Timestamp(trade_date)
+    dates = pd.DatetimeIndex(pd.to_datetime(get_fast_dates(fast_data)))
+    if pos >= len(dates):
+        return pd.Timestamp(trade_date)
+    return pd.Timestamp(dates[pos - 1])
+
+
+def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
+    enriched = dict(meta or {})
+    trade_count = _coerce_int((actual_stats or {}).get("trade_count"), default=0)
+    win_rate_pct = (actual_stats or {}).get("win_rate_pct")
+    if trade_count > 0:
+        enriched["trade_count"] = int(trade_count)
+    if win_rate_pct is not None and not pd.isna(win_rate_pct):
+        enriched["win_rate"] = float(win_rate_pct)
+    return enriched
+
+
 def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     if df_tr is None or df_tr.empty or "Ticker" not in df_tr.columns:
         return {
@@ -362,7 +389,7 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
     return meta
 
 
-def _build_portfolio_sell_marker_meta(row, active_entry):
+def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
     pnl_value = _resolve_valid_float(row.get("單筆損益"))
     total_pnl = _resolve_valid_float(row.get("該筆總損益"))
     sell_capital = _estimate_sell_capital(row)
@@ -377,22 +404,11 @@ def _build_portfolio_sell_marker_meta(row, active_entry):
         meta["pnl_pct"] = float(pnl_pct)
     if sell_capital is not None:
         meta["sell_capital"] = float(sell_capital)
-    return meta
+    return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
 
 
 def _extract_trade_marker_indexes(chart_payload):
-    trade_trace_names = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
-    marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
-    indexes = []
-    for trace_name, markers in marker_groups.items():
-        if trace_name not in trade_trace_names:
-            continue
-        for marker in markers:
-            try:
-                indexes.append(int(marker.get("x")))
-            except (TypeError, ValueError):
-                continue
-    return sorted(set(indexes))
+    return extract_trade_marker_indexes(chart_payload)
 
 
 def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
@@ -434,44 +450,53 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
         return None
 
 
-def _record_portfolio_trade_annotations(chart_context, *, price_df, row, action, sort_text, win_rate_text, trade_count_text):
+def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, row, action, marker_meta):
     trade_date = pd.Timestamp(row.get("Date"))
-    if trade_date not in price_df.index:
-        return
     if action in {"買進", "買進(延續候選)"}:
-        anchor_price = float(price_df.loc[trade_date, "Low"])
-        title = "投組買進"
-        detail_lines = [
-            f"類型: {PORTFOLIO_DROPDOWN_KIND_LABELS.get(str(row.get('進場類型', '') or 'normal'), str(row.get('進場類型', '') or 'normal'))}",
-            f"排序: {sort_text}",
-            f"勝率: {win_rate_text}",
-            f"次數: {trade_count_text}",
-        ]
+        signal_date = _resolve_previous_trade_date(fast_data, trade_date)
+        if signal_date not in price_df.index:
+            return
+        limit_price = marker_meta.get("limit_price")
+        reserved_capital = marker_meta.get("buy_capital")
+        detail_lines = []
+        qty = _coerce_int(row.get("股數"), default=0)
+        if qty > 0:
+            detail_lines.append(f"股數: {qty:,}")
+        if limit_price is not None and not pd.isna(limit_price):
+            detail_lines.append(f"限價: {float(limit_price):.2f}")
+        if reserved_capital is not None and not pd.isna(reserved_capital):
+            detail_lines.append(f"預留: {float(reserved_capital):,.0f}")
         record_signal_annotation(
             chart_context,
-            current_date=trade_date,
+            current_date=signal_date,
             signal_type="buy",
-            anchor_price=anchor_price,
-            title=title,
+            anchor_price=float(price_df.loc[signal_date, "Low"]),
+            title="買訊",
             detail_lines=detail_lines,
             meta={
-                "qty": _coerce_int(row.get("股數"), default=0),
-                "reserved_capital": _coerce_float(row.get("投入總金額"), default=np.nan),
+                "qty": qty,
+                "reserved_capital": reserved_capital,
                 "current_capital": None,
+                "entry_price": marker_meta.get("entry_price"),
+                "limit_price": limit_price,
             },
         )
         return
-    if action in {"停損殺出", "指標賣出", "期末強制結算"}:
-        anchor_price = float(price_df.loc[trade_date, "Low"])
-        pnl = row.get("該筆總損益", row.get("單筆損益", None))
-        pnl_text = "-" if pnl is None or pd.isna(pnl) else f"{float(pnl):,.0f}"
+    if action == "指標賣出":
+        signal_date = _resolve_previous_trade_date(fast_data, trade_date)
+        if signal_date not in price_df.index:
+            return
         record_signal_annotation(
             chart_context,
-            current_date=trade_date,
+            current_date=signal_date,
             signal_type="sell",
-            anchor_price=anchor_price,
-            title="投組賣出",
-            detail_lines=[f"原因: {row.get('Type', '-')}", f"總損益: {pnl_text}"],
+            anchor_price=float(price_df.loc[signal_date, "Low"]),
+            title="賣訊",
+            detail_lines=[],
+            meta={
+                "profit_pct": marker_meta.get("pnl_pct"),
+                "max_drawdown": marker_meta.get("max_drawdown", 0.0),
+            },
         )
 
 
@@ -588,10 +613,18 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                 "date": trade_date,
             }
         else:
-            marker_meta = _build_portfolio_sell_marker_meta(row, active_entry)
+            marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats)
             if action in {"停損殺出", "指標賣出", "期末強制結算"}:
                 active_entry = None
 
+        _record_portfolio_trade_annotations(
+            chart_context,
+            price_df=price_df,
+            fast_data=fast_data,
+            row=row,
+            action=action,
+            marker_meta=marker_meta,
+        )
         record_trade_marker(
             chart_context,
             current_date=trade_date,
@@ -650,6 +683,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._console_current_tag = "default"
         self._ticker_dropdown_stats = {}
         self._current_chart_trade_indexes = []
+        self._current_chart_trade_cursor_index = None
         self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)
         self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var = tk.StringVar(value="-")
@@ -848,7 +882,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         font_spec = ttk.Style(self).lookup("Workbench.TCombobox", "font") or ("Microsoft JhengHei", 11)
         try:
             self._workbench_combobox_font = tkfont.Font(font=font_spec)
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback('tkfont.Font(font=Workbench.TCombobox)', exc)
             self._workbench_combobox_font = tkfont.nametofont("TkDefaultFont")
         return self._workbench_combobox_font
 
@@ -859,7 +894,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         text_candidates.append(str(current_text or ""))
         try:
             live_text = combo.get()
-        except tk.TclError:
+        except tk.TclError as exc:
+            _warn_gui_fallback('combobox.get() during autosize', exc)
             live_text = ""
         text_candidates.append(str(live_text or ""))
         longest_text = max(text_candidates, key=lambda text: font_obj.measure(text), default="")
@@ -948,8 +984,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return gui_payload
 
     def _move_kline_chart_to_latest(self):
-        if self._chart_figure is not None:
-            scroll_chart_to_latest(self._chart_figure, redraw=True)
+        if self._chart_figure is None:
+            return
+        if scroll_chart_to_latest(self._chart_figure, redraw=True):
+            state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+            if isinstance(state, dict):
+                self._current_chart_trade_cursor_index = int(state.get("hover_last_index", 0) or 0)
 
     def _move_kline_chart_to_previous_trade(self):
         self._move_kline_chart_to_trade(direction=-1)
@@ -961,22 +1001,23 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if self._chart_figure is None or not self._current_chart_trade_indexes:
             return False
         state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
-        current_index = None if not isinstance(state, dict) else state.get("hover_last_index")
+        current_index = self._current_chart_trade_cursor_index
+        if current_index is None and isinstance(state, dict):
+            current_index = state.get("hover_last_index")
         if current_index is None:
-            chart_payload = None if not isinstance(state, dict) else state.get("chart_payload")
-            if isinstance(chart_payload, dict):
-                current_index = int((chart_payload.get("default_view") or {}).get("end_idx", self._current_chart_trade_indexes[-1]))
-            else:
-                current_index = self._current_chart_trade_indexes[-1]
-
+            current_index = self._current_chart_trade_indexes[-1]
         current_index = int(current_index)
+
         if int(direction) < 0:
             candidates = [idx for idx in self._current_chart_trade_indexes if idx < current_index]
             target_index = candidates[-1] if candidates else self._current_chart_trade_indexes[0]
         else:
             candidates = [idx for idx in self._current_chart_trade_indexes if idx > current_index]
             target_index = candidates[0] if candidates else self._current_chart_trade_indexes[-1]
-        return scroll_chart_to_index(self._chart_figure, target_index, redraw=True)
+        if scroll_chart_to_index(self._chart_figure, target_index, redraw=True):
+            self._current_chart_trade_cursor_index = int(target_index)
+            return True
+        return False
 
     def _configure_console_tags(self):
         self._console_text.tag_configure("default", foreground="#f7fbff")
@@ -1346,9 +1387,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         trade_rows = df_tr[df_tr.apply(_is_actual_trade_row, axis=1)].copy()
         buy_rows = trade_rows[trade_rows.apply(_is_buy_trade_row, axis=1)].copy() if not trade_rows.empty else pd.DataFrame()
-        values = []
-        label_to_ticker = {}
-        label_stats = {}
+        dropdown_entries = []
         seen = set()
         for row in buy_rows.to_dict("records"):
             ticker = str(row.get("Ticker", "") or "").strip()
@@ -1357,9 +1396,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             seen.add(ticker)
             stats = self._resolve_ticker_dropdown_stats(ticker=ticker, first_buy_row=row, result_payload=result_payload)
             label = self._format_ticker_dropdown_label(ticker=ticker, first_buy_row=row, stats=stats)
-            values.append(label)
-            label_to_ticker[label] = ticker
-            label_stats[label] = stats
+            dropdown_entries.append((float(stats.get("sort_value", 0.0) or 0.0), ticker, label, stats))
+
+        dropdown_entries.sort(key=lambda item: (-item[0], item[1]))
+        values = [label for _sort_value, _ticker, label, _stats in dropdown_entries]
+        label_to_ticker = {label: ticker for _sort_value, ticker, label, _stats in dropdown_entries}
+        label_stats = {label: stats for _sort_value, _ticker, label, stats in dropdown_entries}
 
         self._ticker_map = label_to_ticker
         self._ticker_dropdown_stats = label_stats
@@ -1416,6 +1458,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ticker = result.get("ticker", "")
         chart_payload = result.get("chart_payload")
         self._current_chart_trade_indexes = _extract_trade_marker_indexes(chart_payload)
+        self._current_chart_trade_cursor_index = None
         self._update_sidebar_from_chart_payload(chart_payload)
         try:
             figure = create_matplotlib_trade_chart_figure(
@@ -1516,6 +1559,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if self._chart_figure is not None:
             self._chart_figure.clear()
             self._chart_figure = None
+        self._current_chart_trade_indexes = []
+        self._current_chart_trade_cursor_index = None
         if hasattr(self, "_kline_placeholder") and not self._kline_placeholder.winfo_ismapped():
             self._kline_placeholder.pack(fill="both", expand=True)
 
