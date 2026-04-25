@@ -26,6 +26,7 @@ import pandas as pd
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
+from core.scanner_display import build_scanner_sort_probe_text
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
@@ -92,6 +93,7 @@ SCAN_DROPDOWN_SORT_LABELS = {
 }
 SCAN_DROPDOWN_WIN_RATE_PATTERN = re.compile(r"勝率\s+(-?\d+(?:\.\d+)?)%")
 SCAN_DROPDOWN_TRADE_COUNT_PATTERN = re.compile(r"交易\s+([0-9]+)")
+SCAN_DROPDOWN_ASSET_GROWTH_PATTERN = re.compile(r"資產成長\s+(-?\d+(?:\.\d+)?)%")
 
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
@@ -958,6 +960,28 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             trade_count = self._extract_optional_int(SCAN_DROPDOWN_TRADE_COUNT_PATTERN, item.get("text"))
         return trade_count
 
+    def _resolve_scan_dropdown_asset_growth_pct(self, item):
+        asset_growth = self._coerce_optional_float(item.get("asset_growth"))
+        if asset_growth is None:
+            asset_growth = self._extract_optional_float(SCAN_DROPDOWN_ASSET_GROWTH_PATTERN, item.get("text"))
+        return asset_growth
+
+    def _resolve_scan_dropdown_sort_probe_text(self, item, *, sort_method, sort_value, win_rate, trade_count):
+        expected_value = self._coerce_optional_float(item.get("expected_value"))
+        if expected_value is None:
+            expected_value = self._coerce_optional_float(item.get("ev"))
+        asset_growth = self._resolve_scan_dropdown_asset_growth_pct(item)
+        if any(value is None for value in (expected_value, win_rate, trade_count, asset_growth, sort_value)):
+            return ""
+        return build_scanner_sort_probe_text(
+            ev=expected_value,
+            win_rate=win_rate,
+            trade_count=trade_count,
+            asset_growth_pct=asset_growth,
+            sort_value=sort_value,
+            method=sort_method,
+        )
+
     def _format_scan_dropdown_label(self, item):
         ticker = str(item.get("ticker") or "").strip()
         kind = str(item.get("kind") or "candidate").strip()
@@ -966,11 +990,24 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
         sort_metric_label = SCAN_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
         sort_value = self._coerce_optional_float(item.get("sort_value"))
-        sort_value_text = "-" if sort_value is None else format_buy_sort_metric_value(sort_value, sort_method)
         win_rate = self._resolve_scan_dropdown_win_rate_pct(item)
-        win_rate_text = "-" if win_rate is None else f"{win_rate:.1f}%"
         trade_count = self._resolve_scan_dropdown_trade_count(item)
+        sort_probe_text = self._resolve_scan_dropdown_sort_probe_text(
+            item,
+            sort_method=sort_method,
+            sort_value=sort_value,
+            win_rate=win_rate,
+            trade_count=trade_count,
+        )
+        sort_value_text = "-" if sort_value is None else format_buy_sort_metric_value(sort_value, sort_method)
+        win_rate_text = "-" if win_rate is None else f"{win_rate:.1f}%"
         trade_count_text = "-" if trade_count is None else str(trade_count)
+        if sort_probe_text:
+            sort_probe_payload = {"text": sort_probe_text}
+            probe_win_rate = self._resolve_scan_dropdown_win_rate_pct(sort_probe_payload)
+            probe_trade_count = self._resolve_scan_dropdown_trade_count(sort_probe_payload)
+            win_rate_text = "-" if probe_win_rate is None else f"{probe_win_rate:.1f}%"
+            trade_count_text = "-" if probe_trade_count is None else str(probe_trade_count)
         return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
