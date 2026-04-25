@@ -372,9 +372,12 @@ def get_pit_stats_from_index(stats_index, current_date, params, *, cursor_state=
 
     stats_index_id = id(stats_index)
     state = cursor_state.get(ticker)
-    if (
+    state_matches_index = (
         isinstance(state, dict)
         and state.get('stats_index_id') == stats_index_id
+    )
+    if (
+        state_matches_index
         and state.get('last_date') is not None
         and current_date >= state.get('last_date')
     ):
@@ -382,12 +385,23 @@ def get_pit_stats_from_index(stats_index, current_date, params, *, cursor_state=
     else:
         cutoff = bisect.bisect_left(exit_dates, current_date)
 
+    eval_cache = state.get('eval_cache') if state_matches_index else None
+    if not isinstance(eval_cache, dict):
+        eval_cache = {}
+
+    cutoff_key = int(cutoff)
+    cached_result = eval_cache.get(cutoff_key)
+    if cached_result is None:
+        cached_result = _evaluate_pit_stats_at_cutoff(stats_index, cutoff_key, params)
+        eval_cache[cutoff_key] = cached_result
+
     cursor_state[ticker] = {
         'stats_index_id': stats_index_id,
         'last_date': current_date,
-        'cutoff': int(cutoff),
+        'cutoff': cutoff_key,
+        'eval_cache': eval_cache,
     }
-    return _evaluate_pit_stats_at_cutoff(stats_index, cutoff, params)
+    return cached_result
 
 
 def is_extended_entry_type(entry_type):

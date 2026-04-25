@@ -424,15 +424,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             maxDrawdownPct = max(maxDrawdownPct, currentDrawdownPct)
 
         j += 1
-    if not collect_stats and int(position.get('qty', 0) or 0) <= 0:
-        pit_stats_index = _finalize_pit_stats_index(pit_stats_builder) if return_pit_stats_index else None
-        if return_pit_stats_index:
-            if return_logs:
-                return None, trade_logs, pit_stats_index
-            return None, pit_stats_index
-        if return_logs:
-            return None, trade_logs
-        return None
+
     final_state = finalize_open_position_at_end(
         position=position,
         ticker=resolved_ticker,
