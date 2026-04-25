@@ -22,7 +22,7 @@ def _row_get_float(row: dict[str, Any] | None, key: str, default: float = 0.0) -
         return float(default)
 
 
-def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: str, selected_model_mode: str, db_file: str, raw_data_load_sec: float, optimize_wall_sec: float, total_wall_sec: float, optimizer_seed: int | None = None, timing_sampler_kind: str | None = None) -> dict[str, Any]:
+def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: str, selected_model_mode: str, db_file: str, raw_data_load_sec: float, startup_total_sec: float, optimize_wall_sec: float, total_wall_sec: float, optimizer_seed: int | None = None, timing_sampler_kind: str | None = None) -> dict[str, Any]:
     profile_summary = session.profile_recorder.build_summary_payload()
     first_row = session.profile_recorder.rows[0] if session.profile_recorder.rows else None
     completed_trials = int(getattr(session, "current_session_trial", 0))
@@ -41,8 +41,10 @@ def build_timing_summary(*, session, dataset_label: str, dataset_profile_key: st
         "requested_trials": int(getattr(session, "n_trials", 0)),
         "completed_trials": completed_trials,
         "raw_data_load_sec": float(raw_data_load_sec),
+        "startup_total_sec": float(startup_total_sec),
         "optimize_wall_sec": float(optimize_wall_sec),
         "total_wall_sec": float(total_wall_sec),
+        "total_accounting_sum_sec": float(startup_total_sec) + float(profile_trial_total_sum_sec),
         "first_trial_completed_wall_sec": profile_summary.get("first_trial_completed_wall_sec"),
         "profile_csv_path": session.profile_recorder.csv_path,
         "profile_summary_path": session.profile_recorder.summary_path,
@@ -76,14 +78,14 @@ def write_timing_summary(*, output_dir: str, session_ts: str, payload: dict[str,
 
 def print_timing_summary(*, payload: dict[str, Any]):
     completed_trials = int(payload.get("completed_trials") or 0)
-    total_wall_sec = float(payload.get("total_wall_sec", 0.0))
-    raw_data_load_sec = float(payload.get("raw_data_load_sec", 0.0))
-    optimize_wall_sec = float(payload.get("optimize_wall_sec", 0.0))
-    avg_training_sec = (optimize_wall_sec / completed_trials) if completed_trials > 0 else 0.0
+    startup_total_sec = float(payload.get("startup_total_sec", payload.get("raw_data_load_sec", 0.0)) or 0.0)
+    trial_sum_sec = float(payload.get("profile_trial_total_sum_sec", payload.get("optimize_wall_sec", 0.0)) or 0.0)
+    total_accounting_sec = float(payload.get("total_accounting_sum_sec", startup_total_sec + trial_sum_sec) or 0.0)
+    avg_training_sec = (trial_sum_sec / completed_trials) if completed_trials > 0 else 0.0
     print(
         "📏 Optimizer 測時摘要｜"
-        f"{C_CYAN}總時間 : {total_wall_sec:.3f}s{C_RESET}"
-        f"（前處理 : {raw_data_load_sec:.3f}s + 訓練 : {optimize_wall_sec:.3f}s）｜"
+        f"{C_CYAN}總時間 : {total_accounting_sec:.3f}s{C_RESET}"
+        f"（前處理 : {startup_total_sec:.3f}s + 訓練 : {trial_sum_sec:.3f}s）｜"
         f"{C_CYAN}平均時間 : {avg_training_sec:.3f} s/trial{C_RESET}"
         f"（{completed_trials} trials）"
     )

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import time
 
@@ -745,28 +747,38 @@ def run_optimizer_monitoring_callback(session, study, trial):
     )
 
     if is_new_best:
-        pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
-        callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
         milestone_started_at = time.perf_counter()
-        print()
-        milestone_stats = print_optimizer_trial_milestone_dashboard(
-            session,
-            trial,
-            title="績效與風險對比表",
-            milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
-        )
+        dashboard_buffer = io.StringIO()
+        with contextlib.redirect_stdout(dashboard_buffer):
+            milestone_stats = print_optimizer_trial_milestone_dashboard(
+                session,
+                trial,
+                title="績效與風險對比表",
+                milestone_title=f"🏆 破紀錄！發現更強的投資組合參數！ (累積第 {trial.number + 1} 次測試)",
+            )
+        dashboard_text = dashboard_buffer.getvalue()
         callback_milestone_dashboard_sec = max(0.0, time.perf_counter() - milestone_started_at)
         callback_milestone_payload_sec = float((milestone_stats or {}).get("payload_sec", 0.0))
         callback_milestone_candidate_wf_sec = float((milestone_stats or {}).get("candidate_wf_sec", 0.0))
         callback_milestone_render_sec = float((milestone_stats or {}).get("render_sec", 0.0))
 
-    else:
+        # 先完成本 trial 的破紀錄報表計算，再印狀態列。
+        # 狀態列耗時 = 該 trial objective + 該 trial callback 已完成工作；不是 optimizer 累積 wall time。
         pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
         callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
+        if not bool(getattr(session, "timing_mode", False)):
+            print()
+        if dashboard_text:
+            print(dashboard_text, end="", flush=True)
 
+    else:
         discard_trial_milestone_inputs = getattr(session, "discard_trial_milestone_inputs", None)
         if callable(discard_trial_milestone_inputs):
             discard_trial_milestone_inputs(trial.number)
+
+        pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
+        callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
+
     callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
     trial_total_wall_sec = float(duration) + float(callback_wall_sec)
     session.profile_recorder.patch_row(

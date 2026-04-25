@@ -612,6 +612,7 @@ def main(argv=None, environ=None):
 
     overall_started_at = time.perf_counter()
     raw_data_load_sec = 0.0
+    startup_total_sec = 0.0
     optimize_wall_sec = 0.0
     try:
         raw_data_load_started_at = time.perf_counter()
@@ -630,6 +631,8 @@ def main(argv=None, environ=None):
 
         session.profile_recorder.init_output_files()
 
+        startup_total_sec = max(0.0, time.perf_counter() - overall_started_at)
+        print(f"{C_CYAN}⏱️ 前置完成：raw_data_load={raw_data_load_sec:.3f}s | startup_total={startup_total_sec:.3f}s | 即將進入第 1 輪{C_RESET}")
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         session.profile_recorder.mark_run_started()
         optimize_started_at = time.perf_counter()
@@ -657,6 +660,7 @@ def main(argv=None, environ=None):
                 selected_model_mode=selected_model_mode,
                 db_file=db_file,
                 raw_data_load_sec=raw_data_load_sec,
+                startup_total_sec=startup_total_sec,
                 optimize_wall_sec=optimize_wall_sec,
                 total_wall_sec=max(0.0, time.perf_counter() - overall_started_at),
                 optimizer_seed=optimizer_seed,
