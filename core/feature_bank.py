@@ -35,6 +35,7 @@ class FeatureBank:
 
         if key in self._cache:
             self.hits += 1
+            self._cache.move_to_end(key)
             return self._cache[key]
 
         self.misses += 1

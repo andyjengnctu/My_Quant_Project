@@ -20,11 +20,11 @@ _WORKER_FEATURE_BANK = None
 
 
 def _resolve_optimizer_feature_bank_max_items():
-    raw_value = os.environ.get("OPTIMIZER_FEATURE_BANK_MAX_ITEMS", "0")
+    raw_value = os.environ.get("OPTIMIZER_FEATURE_BANK_MAX_ITEMS", "8192")
     try:
         resolved = int(raw_value)
     except (TypeError, ValueError):
-        resolved = 0
+        resolved = 8192
     return max(0, resolved)
 
 
