@@ -25,7 +25,7 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
-from core.scanner_display import build_scanner_sort_probe_text
+from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from tools.trade_analysis.charting import bind_matplotlib_chart_navigation, build_chart_hover_snapshot, create_matplotlib_trade_chart_figure, scroll_chart_to_latest
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
@@ -74,10 +74,24 @@ PARAM_SOURCE_LABEL_TO_KEY = {
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
-    "candidate": {"min_chars": 18, "max_chars": 28, "extra_px": 36},
-    "history": {"min_chars": 28, "max_chars": 52, "extra_px": 40},
+    "candidate": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
+    "history": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
 }
+SCAN_DROPDOWN_KIND_LABELS = {
+    "buy": "新訊號",
+    "extended": "延續",
+    "extended_tbd": "延續TBD",
+    "candidate": "歷績",
+}
+SCAN_DROPDOWN_SORT_LABELS = {
+    "EV": "EV",
+    "預估投入": "投入",
+    "勝率×次數": "勝×次",
+    "資產成長": "成長",
+}
+SCAN_DROPDOWN_WIN_RATE_PATTERN = re.compile(r"勝率\s+(-?\d+(?:\.\d+)?)%")
+SCAN_DROPDOWN_TRADE_COUNT_PATTERN = re.compile(r"交易\s+([0-9]+)")
 
 OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     {
@@ -895,34 +909,76 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if hasattr(self, "_sidebar_canvas"):
             self._sidebar_canvas.configure(scrollregion=self._sidebar_canvas.bbox("all"))
 
-    def _format_history_display_label(self, item):
+    @staticmethod
+    def _coerce_optional_float(value):
+        if value is None:
+            return None
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            return None
+        if pd.isna(numeric_value):
+            return None
+        return numeric_value
+
+    @staticmethod
+    def _coerce_optional_int(value):
+        numeric_value = SingleStockBacktestInspectorPanel._coerce_optional_float(value)
+        if numeric_value is None:
+            return None
+        return int(numeric_value)
+
+    @staticmethod
+    def _extract_optional_float(pattern, text):
+        match = pattern.search(str(text or ""))
+        if not match:
+            return None
+        return SingleStockBacktestInspectorPanel._coerce_optional_float(match.group(1))
+
+    @staticmethod
+    def _extract_optional_int(pattern, text):
+        numeric_value = SingleStockBacktestInspectorPanel._extract_optional_float(pattern, text)
+        if numeric_value is None:
+            return None
+        return int(numeric_value)
+
+    def _resolve_scan_dropdown_win_rate_pct(self, item):
+        win_rate = self._coerce_optional_float(item.get("win_rate"))
+        if win_rate is None:
+            win_rate = self._extract_optional_float(SCAN_DROPDOWN_WIN_RATE_PATTERN, item.get("text"))
+        if win_rate is None:
+            return None
+        if win_rate <= 1.0:
+            return win_rate * 100.0
+        return win_rate
+
+    def _resolve_scan_dropdown_trade_count(self, item):
+        trade_count = self._coerce_optional_int(item.get("trade_count"))
+        if trade_count is None:
+            trade_count = self._extract_optional_int(SCAN_DROPDOWN_TRADE_COUNT_PATTERN, item.get("text"))
+        return trade_count
+
+    def _format_scan_dropdown_label(self, item):
         ticker = str(item.get("ticker") or "").strip()
         kind = str(item.get("kind") or "candidate").strip()
-        if kind == "buy":
-            kind_label = "新訊號"
-        elif kind == "extended":
-            kind_label = "延續候選"
-        elif kind == "extended_tbd":
-            kind_label = "延續候選(TBD)"
-        else:
-            kind_label = ""
-        probe_text = build_scanner_sort_probe_text(
-            ev=float(item.get("expected_value") or 0.0),
-            win_rate=float(item.get("win_rate") or 0.0),
-            trade_count=int(item.get("trade_count") or 0),
-            asset_growth_pct=float(item.get("asset_growth") or 0.0),
-            sort_value=float(item.get("sort_value") or 0.0),
-        )
-        if kind_label:
-            return f"{ticker} | {kind_label} | {probe_text}"
-        return f"{ticker} | {probe_text}"
+        kind_label = SCAN_DROPDOWN_KIND_LABELS.get(kind, kind or "-")
+        sort_method = get_buy_sort_method()
+        raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
+        sort_metric_label = SCAN_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
+        sort_value = self._coerce_optional_float(item.get("sort_value"))
+        sort_value_text = "-" if sort_value is None else format_buy_sort_metric_value(sort_value, sort_method)
+        win_rate = self._resolve_scan_dropdown_win_rate_pct(item)
+        win_rate_text = "-" if win_rate is None else f"{win_rate:.1f}%"
+        trade_count = self._resolve_scan_dropdown_trade_count(item)
+        trade_count_text = "-" if trade_count is None else str(trade_count)
+        return f"{ticker}|{kind_label}|{sort_metric_label} {sort_value_text}|勝率 {win_rate_text}|次 {trade_count_text}"
 
     def _apply_scan_dropdown(self, *, combo, value_var, mapping, display_values, rule_key):
         mapping.clear()
         combo.configure(values=display_values)
         if display_values:
             value_var.set(display_values[0])
-            mapping.update({label: label.split(" | ", 1)[0].strip() for label in display_values})
+            mapping.update({label: label.split("|", 1)[0].strip() for label in display_values})
             self._ticker_var.set(mapping[display_values[0]])
             self._autosize_combobox(combo, values=display_values, current_text=display_values[0], rule_key=rule_key)
             return
@@ -978,10 +1034,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if mode == "candidate":
             candidate_rows = list((scan_result or {}).get("candidate_rows") or [])
             candidate_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
-            display_values = [
-                f"{item.get('ticker', '')} | {('新訊號' if item.get('kind') == 'buy' else ('延續候選(TBD)' if item.get('kind') == 'extended_tbd' else '延續候選'))}"
-                for item in candidate_rows
-            ]
+            display_values = [self._format_scan_dropdown_label(item) for item in candidate_rows]
             self._apply_scan_dropdown(
                 combo=self._candidate_combo,
                 value_var=self._candidate_display_var,
@@ -994,7 +1047,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         history_rows = list((scan_result or {}).get("history_qualified_rows") or [])
         history_rows.sort(key=lambda item: (item.get("sort_value") or 0.0, item.get("ticker") or ""), reverse=True)
-        display_values = [self._format_history_display_label(item) for item in history_rows]
+        display_values = [self._format_scan_dropdown_label(item) for item in history_rows]
         self._apply_scan_dropdown(
             combo=self._history_combo,
             value_var=self._history_display_var,
