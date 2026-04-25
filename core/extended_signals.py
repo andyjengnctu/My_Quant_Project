@@ -78,14 +78,14 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
     }
 
 
-def _sync_signal_shadow_fields(signal_state, shadow_position):
+def _sync_signal_shadow_fields(signal_state, shadow_position, *, copy_shadow_position=True):
     if signal_state is None:
         return None
     if shadow_position is None or int(shadow_position.get("qty", 0) or 0) <= 0:
         signal_state["shadow_position"] = None
         return signal_state
 
-    signal_state["shadow_position"] = copy.deepcopy(shadow_position)
+    signal_state["shadow_position"] = copy.deepcopy(shadow_position) if copy_shadow_position else shadow_position
     signal_state["entry_ref_price"] = shadow_position.get("entry_fill_price", np.nan)
     signal_state["continuation_invalidation_barrier"] = shadow_position.get("sl", np.nan)
     signal_state["continuation_completion_barrier"] = shadow_position.get("tp_half", np.nan)
@@ -105,6 +105,7 @@ def ensure_extended_signal_counterfactual_anchor(
     sizing_capital=None,
     params,
     current_date=None,
+    copy_shadow_position=True,
 ):
     if signal_state is None or params is None or sizing_capital is None:
         return signal_state
@@ -140,7 +141,7 @@ def ensure_extended_signal_counterfactual_anchor(
     if shadow_position is None:
         return signal_state
 
-    return _sync_signal_shadow_fields(signal_state, shadow_position)
+    return _sync_signal_shadow_fields(signal_state, shadow_position, copy_shadow_position=copy_shadow_position)
 
 
 # # (AI註: 單一真理來源 - 延續 shadow trade 每日只用同一套 execute_bar_step 推進，不可再疊另一套 barrier 規則)
@@ -158,13 +159,15 @@ def update_extended_tbd_shadow_trade_for_bar(
     t_volume,
     params,
     current_date=None,
+    copy_shadow_position=True,
 ):
     if tbd_state is None:
         return None
 
     from core.position_step import execute_bar_step
 
-    shadow_position = copy.deepcopy(_resolve_shadow_position(tbd_state))
+    resolved_shadow_position = _resolve_shadow_position(tbd_state)
+    shadow_position = copy.deepcopy(resolved_shadow_position) if copy_shadow_position else resolved_shadow_position
     if shadow_position is None:
         return tbd_state
 
@@ -185,7 +188,7 @@ def update_extended_tbd_shadow_trade_for_bar(
     if int(shadow_position.get("qty", 0) or 0) <= 0:
         return None
 
-    return _sync_signal_shadow_fields(tbd_state, shadow_position)
+    return _sync_signal_shadow_fields(tbd_state, shadow_position, copy_shadow_position=copy_shadow_position)
 
 
 # # (AI註: 單一真理來源 - 延續候選盤後狀態推進與失效統一由此處理；若啟動當日已跌破影子初始停損，則當日盤後直接失效)
@@ -204,6 +207,7 @@ def should_clear_extended_signal(
     sizing_capital=None,
     current_date=None,
     params=None,
+    copy_shadow_position=True,
 ):
     if signal_state is None:
         return False
@@ -222,6 +226,7 @@ def should_clear_extended_signal(
             t_volume=t_volume,
             params=params,
             current_date=current_date,
+            copy_shadow_position=copy_shadow_position,
         )
         if updated_state is None:
             signal_state["shadow_position"] = None
@@ -239,6 +244,7 @@ def should_clear_extended_signal(
         sizing_capital=sizing_capital,
         params=params,
         current_date=current_date,
+        copy_shadow_position=copy_shadow_position,
     )
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is None:

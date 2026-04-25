@@ -327,6 +327,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 sizing_capital=sizing_cap,
                 current_date=Dates[j],
                 params=params,
+                copy_shadow_position=collect_stats,
             ):
                 active_extended_signal = None
 
