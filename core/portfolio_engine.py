@@ -152,7 +152,7 @@ def _get_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
         _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)
     return stats
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
+def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None, normal_setup_index=None):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
     candidate_scan_sec = 0.0
@@ -187,7 +187,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             for ticker, logs in all_standalone_logs.items():
                 if pit_stats_index.get(ticker) is None:
                     pit_stats_index[ticker] = build_trade_stats_index(logs)
-    normal_setup_index = build_normal_setup_index(all_dfs_fast)
+    if normal_setup_index is None:
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
 

@@ -11,7 +11,7 @@ import pandas as pd
 from core.data_utils import get_required_min_rows
 from core.feature_bank import DEFAULT_FEATURE_BANK_MAX_ITEMS, FeatureBank
 from core.log_utils import format_exception_summary
-from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
+from core.portfolio_fast_data import build_normal_setup_index, merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
 from tools.optimizer.raw_cache import is_insufficient_data_error, resolve_optimizer_max_workers
 
@@ -305,9 +305,11 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             )
             merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache)
 
+    normal_setup_index = build_normal_setup_index(all_dfs_fast)
     prep_wall_sec = time.perf_counter() - prep_wall_start
     return {
         "all_dfs_fast": all_dfs_fast,
+        "normal_setup_index": normal_setup_index,
         "all_trade_logs": all_trade_logs,
         "all_pit_stats_index": all_pit_stats_index,
         "master_dates": master_dates,

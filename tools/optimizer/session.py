@@ -109,7 +109,7 @@ class OptimizerSession:
             self.master_dates.update(get_fast_dates(fast_df))
         self.sorted_master_dates = sorted(self.master_dates)
 
-    def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None):
+    def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None, normal_setup_index=None):
         if all_pit_stats_index is None and all_dfs_fast is None:
             return
         cache = self._optimizer_trial_milestone_inputs
@@ -117,6 +117,7 @@ class OptimizerSession:
             'sorted_master_dates': tuple(sorted_master_dates or ()),
             'all_pit_stats_index': all_pit_stats_index,
             'all_dfs_fast': all_dfs_fast,
+            'normal_setup_index': normal_setup_index,
         }
         if len(cache) > 3:
             oldest_trial = sorted(cache.keys())[0]
@@ -138,6 +139,7 @@ class OptimizerSession:
             "all_dfs_fast": cached["all_dfs_fast"],
             "all_trade_logs": cached["all_trade_logs"],
             "all_pit_stats_index": cached["all_pit_stats_index"],
+            "normal_setup_index": cached.get("normal_setup_index"),
             "master_dates": cached["master_dates"],
             "prep_failures": cached["prep_failures"],
             "prep_profile": {
@@ -164,6 +166,7 @@ class OptimizerSession:
             "all_dfs_fast": prep_result["all_dfs_fast"],
             "all_trade_logs": prep_result["all_trade_logs"],
             "all_pit_stats_index": prep_result.get("all_pit_stats_index"),
+            "normal_setup_index": prep_result.get("normal_setup_index"),
             "master_dates": prep_result["master_dates"],
             "prep_failures": tuple(prep_result.get("prep_failures", ())),
             "ok_count": int(prep_result.get("prep_profile", {}).get("ok_count", 0)),

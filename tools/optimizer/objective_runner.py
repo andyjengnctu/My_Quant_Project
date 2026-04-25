@@ -120,6 +120,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         profile_stats=pf_profile,
         verbose=False,
         pit_stats_index=all_pit_stats_index,
+        normal_setup_index=prep_result.get("normal_setup_index"),
     )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
@@ -339,6 +340,7 @@ def run_optimizer_objective(session, trial):
             sorted_master_dates=sorted(prep_result["master_dates"]),
             all_pit_stats_index=prep_result.get("all_pit_stats_index"),
             all_dfs_fast=prep_result.get("all_dfs_fast"),
+            normal_setup_index=prep_result.get("normal_setup_index"),
         )
 
     final_score = float(evaluation["base_score"])
