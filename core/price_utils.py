@@ -191,22 +191,44 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
         max_position_cap_milli // max(est_entry_unit_milli, 1),
     ))
 
-    while qty > 0:
-        exact_entry_cost_milli = calc_buy_net_total_milli_from_milli(buy_price_milli, qty, params)
+    def _is_valid_qty(test_qty):
+        exact_entry_cost_milli = calc_buy_net_total_milli_from_milli(buy_price_milli, test_qty, params)
         exact_exit_net_milli = calc_sell_net_total_milli_from_milli(
             stop_price_milli,
-            qty,
+            test_qty,
             params,
             ticker=ticker,
             security_profile=security_profile,
             trade_date=trade_date,
         )
         actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
+        return (
+            exact_entry_cost_milli <= cap_milli
+            and exact_entry_cost_milli <= max_position_cap_milli
+            and actual_risk_milli <= max_risk_milli
+        )
 
-        if exact_entry_cost_milli <= cap_milli and exact_entry_cost_milli <= max_position_cap_milli and actual_risk_milli <= max_risk_milli:
-            return qty
-        qty -= 1
-    return 0
+    if qty <= 0:
+        return 0
+    if _is_valid_qty(qty):
+        return qty
+
+    probe_qty = qty
+    for _ in range(8):
+        probe_qty -= 1
+        if probe_qty <= 0:
+            return 0
+        if _is_valid_qty(probe_qty):
+            return probe_qty
+
+    lo, hi = 0, probe_qty - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _is_valid_qty(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
 
 # # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
