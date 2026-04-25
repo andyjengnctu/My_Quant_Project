@@ -8,6 +8,7 @@ from core.exact_accounting import (
     build_buy_ledger_from_price,
     build_sell_ledger_from_price,
     calc_average_price_from_total_milli,
+    calc_buy_net_total_milli_from_milli,
     calc_entry_total_cost,
     calc_exit_net_total,
     calc_initial_risk_total_milli,
@@ -15,6 +16,7 @@ from core.exact_accounting import (
     calc_limit_down_price_milli,
     calc_limit_up_price_milli,
     calc_risk_budget_milli,
+    calc_sell_net_total_milli_from_milli,
     get_tick_milli_from_price,
     infer_security_profile,
     milli_to_money,
@@ -190,17 +192,15 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
     ))
 
     while qty > 0:
-        buy_ledger = build_buy_ledger_from_price(bPrice, qty, params)
-        sell_ledger = build_sell_ledger_from_price(
-            stopPrice,
+        exact_entry_cost_milli = calc_buy_net_total_milli_from_milli(buy_price_milli, qty, params)
+        exact_exit_net_milli = calc_sell_net_total_milli_from_milli(
+            stop_price_milli,
             qty,
             params,
             ticker=ticker,
             security_profile=security_profile,
             trade_date=trade_date,
         )
-        exact_entry_cost_milli = buy_ledger["net_buy_total_milli"]
-        exact_exit_net_milli = sell_ledger["net_sell_total_milli"]
         actual_risk_milli = exact_entry_cost_milli - exact_exit_net_milli
 
         if exact_entry_cost_milli <= cap_milli and exact_entry_cost_milli <= max_position_cap_milli and actual_risk_milli <= max_risk_milli:

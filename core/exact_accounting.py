@@ -433,6 +433,38 @@ def _resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, t
     return buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rate_to_ppm(params.fixed_risk)
 
 
+def resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
+    return _resolve_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+
+
+def calc_buy_net_total_milli_from_milli(fill_price_milli: int, qty: int, params) -> int:
+    buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
+    gross_buy_milli = int(fill_price_milli) * int(qty)
+    return gross_buy_milli + calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli)
+
+
+def calc_sell_net_total_milli_from_milli(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> int:
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
+    gross_sell_milli = int(exec_price_milli) * int(qty)
+    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli)
+    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm)
+    return gross_sell_milli - sell_fee_milli - tax_milli
+
+
 def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
     buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, fixed_risk_ppm = _resolve_fee_schedule_tuple(
         params,
