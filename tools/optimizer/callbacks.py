@@ -471,7 +471,6 @@ def _compute_reference_console_cache(session):
             profile_stats=pf_profile,
             verbose=False,
             pit_stats_index=prep_result.get("all_pit_stats_index"),
-            normal_setup_index=prep_result.get("normal_setup_index"),
         )
         cache = {
             "pf_return": float(ret_pct),
@@ -511,7 +510,6 @@ def _compute_reference_console_cache(session):
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
                 pit_stats_index=prep_result.get("all_pit_stats_index"),
-                normal_setup_index=prep_result.get("normal_setup_index"),
             )
         return cache
     except Exception as exc:
@@ -629,7 +627,6 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
                 pit_stats_index=cached_trial_inputs.get("all_pit_stats_index"),
-                normal_setup_index=cached_trial_inputs.get("normal_setup_index"),
             )
         else:
             prep_result = prepare_trial_inputs(
@@ -655,7 +652,6 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
                 pit_stats_index=prep_result.get("all_pit_stats_index"),
-                normal_setup_index=prep_result.get("normal_setup_index"),
             )
         candidate_wf_elapsed = max(0.0, time.perf_counter() - candidate_wf_started_at)
         if isinstance(timing_breakdown, dict):

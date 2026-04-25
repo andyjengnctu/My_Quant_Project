@@ -69,24 +69,13 @@ def canonical_param_items(params, *, omit_fields: Iterable[str] = ()):
     )
 
 
-def _normalize_scope_date(value):
-    if value is None:
-        return None
-    if hasattr(value, "date"):
-        return str(value.date())
-    return str(value)[:10]
-
-
-def build_prep_cache_key(params, *, max_date=None):
+def build_prep_cache_key(params):
     """Key for signal/execution artifacts.
 
     Selection-policy thresholds are intentionally omitted because they only
     decide whether an already-computed history record is usable in portfolio
     selection.  Inactive feature-family fields and infrastructure knobs are
     also omitted because they do not affect the prepared artifacts.
-
-    ``max_date`` is part of the key because a train-only artifact and a full
-    artifact have different date coverage even when strategy parameters match.
     """
 
     payload = _params_to_payload(params)
@@ -95,7 +84,7 @@ def build_prep_cache_key(params, *, max_date=None):
         *INFRASTRUCTURE_FIELDS,
         *_inactive_conditional_fields(payload),
     )
-    return ("prep", ("max_date", _normalize_scope_date(max_date)), canonical_param_items(payload, omit_fields=omitted_fields))
+    return ("prep", canonical_param_items(payload, omit_fields=omitted_fields))
 
 
 def build_full_evaluation_cache_key(params, *, objective_mode, train_start_year, search_train_end_year, max_positions, enable_rotation):

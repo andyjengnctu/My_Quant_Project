@@ -276,7 +276,6 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         min_train_years=int(walk_forward_policy["min_train_years"]),
         oos_start_year=walk_forward_policy.get("oos_start_year"),
         pit_stats_index=prep_result.get("all_pit_stats_index"),
-        normal_setup_index=prep_result.get("normal_setup_index"),
     )
     report_paths = write_walk_forward_report(
         output_dir=session.output_dir,

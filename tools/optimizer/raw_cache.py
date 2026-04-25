@@ -1,4 +1,3 @@
-import gc
 import hashlib
 import json
 import os
@@ -63,17 +62,11 @@ def _load_persisted_raw_cache(paths, expected_signature):
         return None
     if int(meta.get("schema_version", 0) or 0) != RAW_CACHE_SCHEMA_VERSION:
         return None
-    gc_was_enabled = gc.isenabled()
     try:
-        if gc_was_enabled:
-            gc.disable()
         with open(payload_path, "rb") as handle:
             payload = pickle.load(handle)
     except (OSError, pickle.PickleError, EOFError, AttributeError, ValueError, TypeError):
         return None
-    finally:
-        if gc_was_enabled:
-            gc.enable()
     if not isinstance(payload, dict):
         return None
     if str(payload.get("signature", "")) != str(expected_signature):

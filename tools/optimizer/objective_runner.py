@@ -120,7 +120,6 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         profile_stats=pf_profile,
         verbose=False,
         pit_stats_index=all_pit_stats_index,
-        normal_setup_index=prep_result.get("normal_setup_index"),
     )
 
     full_year_count = int(pf_profile.get("full_year_count", 0))
@@ -211,21 +210,10 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     }
 
 
-def _resolve_split_train_prep_max_date(search_scope: dict[str, Any]):
-    if str(search_scope.get("mode")) != OBJECTIVE_MODE_SPLIT_TRAIN_ROMD:
-        return None
-    search_train_dates = list(search_scope.get("search_train_dates") or [])
-    if not search_train_dates:
-        return None
-    return search_train_dates[-1]
-
-
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
     ai_params = build_trial_params(session, trial)
-    search_scope = resolve_search_train_scope(session, session.master_dates)
-    prep_max_date = _resolve_split_train_prep_max_date(search_scope)
-    prep_cache_key = build_prep_cache_key(ai_params, max_date=prep_max_date)
+    prep_cache_key = build_prep_cache_key(ai_params)
     get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if prep_result is None:
@@ -239,7 +227,6 @@ def run_optimizer_objective(session, trial):
             static_master_dates=session.master_dates,
             include_trade_logs=False,
             include_pit_stats_index=True,
-            max_date=prep_max_date,
         )
         cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
         if callable(cache_prep):
@@ -255,6 +242,7 @@ def run_optimizer_objective(session, trial):
         session.record_optimizer_prep_failures(insufficient_failures)
 
     profile_row = build_initial_profile_row(trial.number, prep_result["prep_wall_sec"], prep_result["prep_profile"])
+    search_scope = resolve_search_train_scope(session, prep_result["master_dates"])
     mode = str(search_scope["mode"])
     profile_row["objective_mode"] = mode
     profile_row["search_train_end_year"] = int(search_scope["effective_search_train_end_year"])
@@ -345,13 +333,12 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("bm_m_win_rate", evaluation["bm_m_win_rate"])
 
     cache_trial_milestone_inputs = getattr(session, "cache_trial_milestone_inputs", None)
-    if callable(cache_trial_milestone_inputs) and prep_max_date is None:
+    if callable(cache_trial_milestone_inputs):
         cache_trial_milestone_inputs(
             trial.number,
             sorted_master_dates=sorted(prep_result["master_dates"]),
             all_pit_stats_index=prep_result.get("all_pit_stats_index"),
             all_dfs_fast=prep_result.get("all_dfs_fast"),
-            normal_setup_index=prep_result.get("normal_setup_index"),
         )
 
     final_score = float(evaluation["base_score"])
