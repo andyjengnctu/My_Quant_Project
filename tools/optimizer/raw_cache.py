@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from core.data_utils import discover_unique_csv_inputs, sanitize_ohlcv_dataframe
-from core.display import C_CYAN, C_GRAY, C_GREEN, C_RESET, C_YELLOW
+from core.display import C_GRAY, C_GREEN, C_RESET, C_YELLOW
 from core.log_utils import format_exception_summary, write_issue_log
 from core.dataset_profiles import (
     build_empty_dataset_dir_message,
@@ -120,14 +120,16 @@ def _write_load_issues_if_needed(load_issues, *, output_dir):
 
 
 def _print_load_summary(*, fresh_raw_data_cache, totals, load_issues, issue_path, cache_hit):
-    source_text = "磁碟快取" if cache_hit else "記憶體快取"
+    source_text = "磁碟快取命中" if cache_hit else "記憶體快取建立完成"
+    dropped_rows = int(totals.get('total_dropped_rows', 0))
+    invalid_rows = int(totals.get('total_invalid_rows', 0))
+    duplicate_dates = int(totals.get('total_duplicate_dates', 0))
     print(
-        f"\n{C_GREEN}✅ {source_text}完成！共載入 {len(fresh_raw_data_cache)} 檔標的，"
-        f"移除 {int(totals.get('total_dropped_rows', 0))} 列資料 "
-        f"(異常OHLCV={int(totals.get('total_invalid_rows', 0))}, 重複日期={int(totals.get('total_duplicate_dates', 0))})。{C_RESET}\n"
+        f"{C_GREEN}📦 歷史資料：{source_text}｜標的={len(fresh_raw_data_cache)}｜"
+        f"清洗移除={dropped_rows}列（異常OHLCV={invalid_rows}, 重複日期={duplicate_dates}）{C_RESET}"
     )
     if load_issues and issue_path:
-        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入: {issue_path}{C_RESET}")
+        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入 issue log{C_RESET}")
 
 def is_insufficient_data_message(message):
     return isinstance(message, str) and ("有效資料不足" in message)
@@ -151,7 +153,6 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir):
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
 
-    print(f"{C_CYAN}📦 正在將歷史數據載入記憶體快取 (僅需執行一次)...{C_RESET}")
     csv_inputs, duplicate_file_issue_lines = discover_unique_csv_inputs(data_dir)
     if not csv_inputs:
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
@@ -167,7 +168,6 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir):
         load_issues.extend(str(x) for x in persisted_payload.get("load_issues", []))
         totals = dict(persisted_payload.get("totals", {}))
         issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
-        print(f"{C_GRAY}   命中磁碟快取: {cache_paths['payload_path']}{C_RESET}")
         _print_load_summary(
             fresh_raw_data_cache=fresh_raw_data_cache,
             totals=totals,

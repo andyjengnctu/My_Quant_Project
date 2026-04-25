@@ -50,6 +50,7 @@ DEFAULT_OPTIMIZER_MAX_WORKERS = min(8, max(1, (os.cpu_count() or 1))) if os.name
 ENABLE_OPTIMIZER_PROFILING = True
 ENABLE_PROFILE_CONSOLE_PRINT = False
 PROFILE_PRINT_EVERY_N_TRIALS = 1
+START_BANNER_POLICY_LABEL = "Train/Test policy:"
 
 COLORS = {
     "cyan": C_CYAN,
@@ -570,13 +571,10 @@ def main(argv=None, environ=None):
     configure_optuna_logging()
     print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     if timing_mode:
-        print(f"{C_YELLOW}⏱️ CLI 測時模式已啟用：不覆寫 candidate_best / run_best，記憶庫改寫到 outputs/ml_optimizer，並以固定 seed 的 RandomSampler 重播同一組 trial 組合，並保留逐 trial 時間輸出，方便對照真實訓練進度。{C_RESET}")
+        print(f"{C_GRAY}⏱️ 測時模式：固定 seed RandomSampler；不覆寫 candidate_best / run_best{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
-    print(f"{C_GRAY}📁 使用資料集: {dataset_label} | 來源: {dataset_source} | 路徑: {selected_data_dir}{C_RESET}")
-    print(f"{C_GRAY}🗃️ Optimizer 記憶庫: {db_file}{C_RESET}")
-    print(f"{C_GRAY}🎲 Optimizer seed: {optimizer_seed if optimizer_seed is not None else '未設定'} | 來源: {seed_source}{C_RESET}")
     selection_start_year = int(walk_forward_policy.get('selection_start_year', walk_forward_policy['train_start_year']))
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
@@ -589,11 +587,11 @@ def main(argv=None, environ=None):
         scope_text = 'selection=all_data | oos=disabled'
     inline_override_fields = list(walk_forward_policy.get("inline_override_fields", []) or [])
     override_text = "" if not inline_override_fields else f" | override={','.join(inline_override_fields)}"
+    seed_text = str(optimizer_seed) if optimizer_seed is not None else "未設定"
     print(
-        f"{C_GRAY}🧭 訓練模式: {selected_model_mode} | 來源: {model_mode_source} | "
-        f"設定: {walk_forward_policy.get('policy_path', 'config/training_policy.py')}{override_text} | {scope_text}{C_RESET}"
+        f"{C_GRAY}📌 設定｜資料集={dataset_label}｜模式={selected_model_mode}{override_text}｜"
+        f"{scope_text}｜trials={session.n_trials}｜seed={seed_text}{C_RESET}"
     )
-    print(f"{C_GRAY}Train/Test policy: {scope_text}{C_RESET}")
 
     try:
         if not timing_mode:
@@ -629,10 +627,6 @@ def main(argv=None, environ=None):
 
         session.profile_recorder.init_output_files()
 
-        startup_total_sec = max(0.0, time.perf_counter() - overall_started_at)
-        print(
-            f"{C_GRAY}⏱️ 前置完成：raw_data_load={raw_data_load_sec:.3f}s | startup_total={startup_total_sec:.3f}s | 即將進入第 1 輪{C_RESET}"
-        )
         print(f"\n{C_CYAN}🚀 開始優化...{C_RESET}\n")
         session.profile_recorder.mark_run_started()
         optimize_started_at = time.perf_counter()

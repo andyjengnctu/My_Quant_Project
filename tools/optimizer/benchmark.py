@@ -2,6 +2,8 @@ import json
 import os
 from typing import Any
 
+from core.display_common import C_CYAN, C_RESET
+
 OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS = 3
 
 
@@ -78,10 +80,10 @@ def print_timing_summary(*, payload: dict[str, Any]):
     raw_data_load_sec = float(payload.get("raw_data_load_sec", 0.0))
     optimize_wall_sec = float(payload.get("optimize_wall_sec", 0.0))
     avg_training_sec = (optimize_wall_sec / completed_trials) if completed_trials > 0 else 0.0
-    print("📏 Optimizer 測時摘要")
     print(
-        "   "
-        f"總時間={total_wall_sec:.3f}s "
-        f"（前處理={raw_data_load_sec:.3f}s + 訓練={optimize_wall_sec:.3f}s）"
+        "📏 Optimizer 測時摘要｜"
+        f"{C_CYAN}總時間={total_wall_sec:.3f}s{C_RESET}"
+        f"（前處理={raw_data_load_sec:.3f}s + 訓練={optimize_wall_sec:.3f}s）｜"
+        f"{C_CYAN}平均時間={avg_training_sec:.3f}s/trial{C_RESET}"
+        f"（{completed_trials} trials）"
     )
-    print(f"   每 trial 平均訓練時間={avg_training_sec:.3f}s（{completed_trials} trials）")
