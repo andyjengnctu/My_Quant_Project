@@ -413,7 +413,7 @@ def calc_tax_milli(gross_milli: int, tax_ppm: int) -> int:
     return (int(gross_milli) * int(tax_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
 
 
-def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
+def _resolve_fee_schedule_tuple(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None):
     resolved_profile = resolve_security_profile(
         security_profile,
         ticker=ticker,
@@ -430,20 +430,32 @@ def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_d
         resolved_profile.get("broad_type", _SECURITY_BROAD_STOCK),
         None if trade_day is None else trade_day.toordinal(),
     )
+    return buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, rate_to_ppm(params.fixed_risk)
+
+
+def _resolve_fee_schedule(params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
+    buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, fixed_risk_ppm = _resolve_fee_schedule_tuple(
+        params,
+        ticker=ticker,
+        security_profile=security_profile,
+        trade_date=trade_date,
+        cfi_code=cfi_code,
+        security_name=security_name,
+    )
     return {
         "buy_fee_ppm": buy_fee_ppm,
         "sell_fee_ppm": sell_fee_ppm,
         "tax_ppm": tax_ppm,
         "min_fee_milli": min_fee_milli,
-        "fixed_risk_ppm": rate_to_ppm(params.fixed_risk),
+        "fixed_risk_ppm": fixed_risk_ppm,
     }
 
 
 def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
-    schedule = _resolve_fee_schedule(params)
+    buy_fee_ppm, _sell_fee_ppm, _tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(params)
     qty = int(qty)
     gross_buy_milli = int(fill_price_milli) * qty
-    buy_fee_milli = calc_fee_milli(gross_buy_milli, schedule["buy_fee_ppm"], schedule["min_fee_milli"])
+    buy_fee_milli = calc_fee_milli(gross_buy_milli, buy_fee_ppm, min_fee_milli)
     net_buy_total_milli = gross_buy_milli + buy_fee_milli
     return {
         "fill_price_milli": int(fill_price_milli),
@@ -455,7 +467,7 @@ def build_buy_ledger(fill_price_milli: int, qty: int, params) -> Dict[str, int]:
 
 
 def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, security_profile=None, trade_date=None, cfi_code=None, security_name=None) -> Dict[str, int]:
-    schedule = _resolve_fee_schedule(
+    _buy_fee_ppm, sell_fee_ppm, tax_ppm, min_fee_milli, _fixed_risk_ppm = _resolve_fee_schedule_tuple(
         params,
         ticker=ticker,
         security_profile=security_profile,
@@ -465,8 +477,8 @@ def build_sell_ledger(exec_price_milli: int, qty: int, params, *, ticker=None, s
     )
     qty = int(qty)
     gross_sell_milli = int(exec_price_milli) * qty
-    sell_fee_milli = calc_fee_milli(gross_sell_milli, schedule["sell_fee_ppm"], schedule["min_fee_milli"])
-    tax_milli = calc_tax_milli(gross_sell_milli, schedule["tax_ppm"])
+    sell_fee_milli = calc_fee_milli(gross_sell_milli, sell_fee_ppm, min_fee_milli)
+    tax_milli = calc_tax_milli(gross_sell_milli, tax_ppm)
     net_sell_total_milli = gross_sell_milli - sell_fee_milli - tax_milli
     return {
         "exec_price_milli": int(exec_price_milli),
@@ -482,10 +494,8 @@ def calc_initial_risk_total_milli(net_buy_total_milli: int, stop_net_sell_total_
     init_risk_milli = int(net_buy_total_milli) - int(stop_net_sell_total_milli)
     if init_risk_milli > 0:
         return init_risk_milli
-    return max(
-        _round_decimal_to_int(Decimal(int(net_buy_total_milli)) * Decimal(int(fixed_risk_ppm)) / _DECIMAL_PPM),
-        0,
-    )
+    risk_milli = (int(net_buy_total_milli) * int(fixed_risk_ppm) + (PPM_SCALE // 2)) // PPM_SCALE
+    return max(risk_milli, 0)
 
 
 def allocate_cost_basis_milli(total_cost_basis_milli: int, total_qty: int, sell_qty: int) -> int:
@@ -571,16 +581,49 @@ def calc_net_sell_price_from_total(exec_price, qty: int, params, *, ticker=None,
     return calc_average_price_from_total_milli(ledger["net_sell_total_milli"], qty)
 
 
+def _get_tick_milli_for_ratio(numerator_milli: int, denominator: int, *, ticker=None, security_profile=None) -> int:
+    tick_ladder, default_tick_milli, _resolved_profile = _resolve_tick_rule(
+        security_profile=security_profile,
+        ticker=ticker,
+    )
+    denominator = int(denominator)
+    for threshold_milli, tick_milli in tick_ladder:
+        if int(numerator_milli) < int(threshold_milli) * denominator:
+            return tick_milli
+    return default_tick_milli
+
+
+def _round_ratio_price_milli_to_tick(numerator_milli: int, denominator: int, direction: str, *, ticker=None, security_profile=None) -> int:
+    tick_milli = _get_tick_milli_for_ratio(
+        numerator_milli,
+        denominator,
+        ticker=ticker,
+        security_profile=security_profile,
+    )
+    step = int(denominator) * int(tick_milli)
+    if direction == "up":
+        return ((int(numerator_milli) + step - 1) // step) * int(tick_milli)
+    return (int(numerator_milli) // step) * int(tick_milli)
+
+
 def calc_limit_up_price_milli(reference_price_milli: int, *, ticker=None, security_profile=None) -> int:
-    reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
-    raw_limit_price = reference_price * Decimal(110) / Decimal(100)
-    return round_price_to_tick_milli(raw_limit_price, direction="down", ticker=ticker, security_profile=security_profile)
+    return _round_ratio_price_milli_to_tick(
+        int(reference_price_milli) * 110,
+        100,
+        "down",
+        ticker=ticker,
+        security_profile=security_profile,
+    )
 
 
 def calc_limit_down_price_milli(reference_price_milli: int, *, ticker=None, security_profile=None) -> int:
-    reference_price = Decimal(int(reference_price_milli)) / _DECIMAL_THOUSAND
-    raw_limit_price = reference_price * Decimal(90) / Decimal(100)
-    return round_price_to_tick_milli(raw_limit_price, direction="up", ticker=ticker, security_profile=security_profile)
+    return _round_ratio_price_milli_to_tick(
+        int(reference_price_milli) * 90,
+        100,
+        "up",
+        ticker=ticker,
+        security_profile=security_profile,
+    )
 
 
 def is_same_price_milli(a, b) -> bool:
@@ -603,7 +646,7 @@ def calc_ratio_from_milli(numerator_milli: int, denominator_milli: int) -> float
     denominator = int(denominator_milli)
     if denominator <= 0:
         return 0.0
-    return float(Decimal(int(numerator_milli)) / Decimal(denominator))
+    return int(numerator_milli) / denominator
 
 
 def get_display_realized_pnl_sum(position: Dict[str, Any]) -> float:
