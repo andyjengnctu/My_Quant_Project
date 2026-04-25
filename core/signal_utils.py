@@ -4,6 +4,8 @@ import pandas as pd
 from core.price_utils import adjust_long_buy_limit_array
 from core.feature_bank import coerce_feature_bank
 
+OPTIMIZER_TRUE_RANGE_ATTR = '_optimizer_true_range'
+
 
 def tv_rma(source, length):
     source = np.asarray(source, dtype=np.float64)
@@ -31,7 +33,7 @@ def tv_rma(source, length):
     return rma
 
 
-def tv_atr(high, low, close, length):
+def tv_true_range(high, low, close):
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     close = np.asarray(close, dtype=np.float64)
@@ -41,8 +43,15 @@ def tv_atr(high, low, close, length):
     tr2 = np.abs(high - np.roll(close, 1))
     tr3 = np.abs(low - np.roll(close, 1))
     tr2[0], tr3[0] = np.nan, np.nan
-    tr = np.nanmax([tr1, tr2, tr3], axis=0)
-    return tv_rma(tr, length)
+    return np.nanmax([tr1, tr2, tr3], axis=0)
+
+
+def tv_atr_from_true_range(true_range, length):
+    return tv_rma(true_range, length)
+
+
+def tv_atr(high, low, close, length):
+    return tv_atr_from_true_range(tv_true_range(high, low, close), length)
 
 
 def tv_ema(source, length):
@@ -128,7 +137,18 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
             return builder()
         return feature_cache.get_or_compute((resolved_ticker, feature_name, tuple(feature_args)), builder)
 
-    ATR_main = _feature('atr', (atr_len,), lambda: tv_atr(H, L, C, atr_len))
+    precomputed_true_range = df.attrs.get(OPTIMIZER_TRUE_RANGE_ATTR)
+    if precomputed_true_range is not None:
+        precomputed_true_range = np.asarray(precomputed_true_range, dtype=np.float64)
+        if precomputed_true_range.shape != C.shape:
+            precomputed_true_range = None
+
+    TrueRange = _feature(
+        'true_range',
+        (),
+        lambda: precomputed_true_range if precomputed_true_range is not None else tv_true_range(H, L, C),
+    )
+    ATR_main = _feature('atr', (atr_len,), lambda: tv_atr_from_true_range(TrueRange, atr_len))
 
     HighN = _feature(
         'rolling_high_shift1',
@@ -194,7 +214,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
 
     if use_kc:
         kc_len = int(params.kc_len)
-        ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr(H, L, C, kc_len))
+        ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr_from_true_range(TrueRange, kc_len))
         KC_Mid = _feature('ema_close', (kc_len,), lambda: tv_ema(C, kc_len))
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
         prev_kc_lower = np.empty_like(KC_Lower)

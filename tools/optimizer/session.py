@@ -5,6 +5,7 @@ from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
 from tools.optimizer.trial_inputs import _build_process_pool_executor
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
+from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
 
 
 def close_study_storage(study):
@@ -105,6 +106,18 @@ class OptimizerSession:
             value = 512
         return max(0, min(4096, value))
 
+    def _precompute_optimizer_true_range(self):
+        for df in self.raw_data_cache.values():
+            if df is None or len(df) == 0:
+                continue
+            if OPTIMIZER_TRUE_RANGE_ATTR in getattr(df, 'attrs', {}):
+                continue
+            df.attrs[OPTIMIZER_TRUE_RANGE_ATTR] = tv_true_range(
+                df['High'].to_numpy(dtype='float64', copy=False),
+                df['Low'].to_numpy(dtype='float64', copy=False),
+                df['Close'].to_numpy(dtype='float64', copy=False),
+            )
+
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
         self.close_trial_prep_executor()
         self.raw_data_cache = load_all_raw_data(
@@ -112,6 +125,7 @@ class OptimizerSession:
             required_min_rows=required_min_rows,
             output_dir=self.output_dir,
         )
+        self._precompute_optimizer_true_range()
         self.raw_data_cache_data_dir = data_dir
         self._prepared_trial_input_cache.clear()
         self._full_evaluation_cache.clear()
