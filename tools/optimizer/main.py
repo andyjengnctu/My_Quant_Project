@@ -367,6 +367,9 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
     if cli_value:
         normalized = cli_value.strip().lower()
         source = 'CLI:--model'
+    elif _has_cli_flag(argv, '--timing'):
+        normalized = 'split'
+        source = 'TIMING_DEFAULT:split'
     else:
         env_value = str((environ or {}).get('V16_OPTIMIZER_MODEL', '')).strip()
         if env_value:
@@ -569,9 +572,8 @@ def main(argv=None, environ=None):
         return 1
 
     configure_optuna_logging()
-    print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
-    if timing_mode:
-        print(f"{C_GRAY}⏱️ 測時模式：固定 seed RandomSampler；不覆寫 candidate_best / run_best{C_RESET}")
+    if not timing_mode:
+        print_resolved_trial_count(session, trial_source=trial_source, colors=COLORS)
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"⚙️ {C_YELLOW}V16 端到端投資組合 AI 訓練引擎啟動{C_RESET}")
     print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -587,11 +589,12 @@ def main(argv=None, environ=None):
         scope_text = 'selection=all_data | oos=disabled'
     inline_override_fields = list(walk_forward_policy.get("inline_override_fields", []) or [])
     override_text = "" if not inline_override_fields else f" | override={','.join(inline_override_fields)}"
-    seed_text = str(optimizer_seed) if optimizer_seed is not None else "未設定"
     print(
         f"{C_GRAY}📌 設定｜資料集={dataset_label}｜模式={selected_model_mode}{override_text}｜"
-        f"{scope_text}｜trials={session.n_trials}｜seed={seed_text}{C_RESET}"
+        f"{scope_text}｜trials={session.n_trials}{C_RESET}"
     )
+    seed_text = str(optimizer_seed) if optimizer_seed is not None else "未設定"
+    print(f"{C_GRAY}🎲 Optimizer seed: {seed_text} | 來源: {seed_source}{C_RESET}")
 
     try:
         if not timing_mode:

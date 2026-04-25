@@ -760,14 +760,13 @@ def run_optimizer_monitoring_callback(session, study, trial):
         callback_milestone_candidate_wf_sec = float((milestone_stats or {}).get("candidate_wf_sec", 0.0))
         callback_milestone_render_sec = float((milestone_stats or {}).get("render_sec", 0.0))
 
-    pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
-    callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
+    else:
+        pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
+        callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
 
-    if not is_new_best:
         discard_trial_milestone_inputs = getattr(session, "discard_trial_milestone_inputs", None)
         if callable(discard_trial_milestone_inputs):
             discard_trial_milestone_inputs(trial.number)
-
     callback_wall_sec = max(0.0, time.perf_counter() - callback_started_at)
     trial_total_wall_sec = float(duration) + float(callback_wall_sec)
     session.profile_recorder.patch_row(

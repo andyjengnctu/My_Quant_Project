@@ -82,8 +82,8 @@ def print_timing_summary(*, payload: dict[str, Any]):
     avg_training_sec = (optimize_wall_sec / completed_trials) if completed_trials > 0 else 0.0
     print(
         "📏 Optimizer 測時摘要｜"
-        f"{C_CYAN}總時間={total_wall_sec:.3f}s{C_RESET}"
-        f"（前處理={raw_data_load_sec:.3f}s + 訓練={optimize_wall_sec:.3f}s）｜"
-        f"{C_CYAN}平均時間={avg_training_sec:.3f}s/trial{C_RESET}"
+        f"{C_CYAN}總時間 : {total_wall_sec:.3f}s{C_RESET}"
+        f"（前處理 : {raw_data_load_sec:.3f}s + 訓練 : {optimize_wall_sec:.3f}s）｜"
+        f"{C_CYAN}平均時間 : {avg_training_sec:.3f} s/trial{C_RESET}"
         f"（{completed_trials} trials）"
     )

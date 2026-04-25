@@ -1,6 +1,7 @@
 # 常用指令
 
-python apps/ml_optimizer.py --timing --trials 5 `效能驗證`
+python apps/ml_optimizer.py --dataset full --timing --trials 10 `效能驗證`
+
 
 ## 環境 / 測試
 
