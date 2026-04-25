@@ -1372,7 +1372,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 backend_error_text = f"{backend_error_text} {FIGURE_CANVAS_TKAGG_IMPORT_ERROR}"
             self._status_var.set(backend_error_text)
             return backend_error_text
-        self._current_chart_trade_indexes = extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
+        trade_indexes = extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
+        self._current_chart_trade_indexes = trade_indexes
         self._current_chart_trade_cursor_index = None
         payload_bar_count = 0
         payload_dates = chart_payload.get("date_labels") if isinstance(chart_payload, dict) else None
@@ -1416,6 +1417,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         self._chart_canvas = canvas
         self._chart_figure = figure
+        self._current_chart_trade_indexes = trade_indexes
+        self._current_chart_trade_cursor_index = None
         self._notebook.select(0)
         self._move_chart_to_latest()
         return ""

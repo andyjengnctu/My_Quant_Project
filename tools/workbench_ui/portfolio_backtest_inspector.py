@@ -1461,7 +1461,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return backend_error_text
         ticker = result.get("ticker", "")
         chart_payload = result.get("chart_payload")
-        self._current_chart_trade_indexes = _extract_trade_marker_indexes(chart_payload)
+        trade_indexes = _extract_trade_marker_indexes(chart_payload)
+        self._current_chart_trade_indexes = trade_indexes
         self._current_chart_trade_cursor_index = None
         self._update_sidebar_from_chart_payload(chart_payload)
         try:
@@ -1496,6 +1497,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         self._chart_canvas = canvas
         self._chart_figure = figure
+        self._current_chart_trade_indexes = trade_indexes
+        self._current_chart_trade_cursor_index = None
         self._notebook.select(0)
         self._move_kline_chart_to_latest()
         return ""

@@ -24,6 +24,10 @@ from tools.local_regression.meta_quality_targets import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+HEADLESS_COVERAGE_OMIT_PATTERNS = [
+    str(PROJECT_ROOT / "apps" / "workbench.py"),
+    str(PROJECT_ROOT / "tools" / "workbench_ui" / "*.py"),
+]
 
 
 def _ratio_percent(numerator: Any, denominator: Any) -> float:
@@ -469,7 +473,12 @@ def build_coverage_summary(
         else:
             import coverage
 
-            cov = coverage.Coverage(data_file=str(data_file), branch=True, source=[str(PROJECT_ROOT)])
+            cov = coverage.Coverage(
+                data_file=str(data_file),
+                branch=True,
+                source=[str(PROJECT_ROOT)],
+                omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
+            )
             try:
                 base_params = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
                 cov.start()
