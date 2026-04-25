@@ -1,3 +1,4 @@
+import copy
 import os
 from collections import OrderedDict
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
@@ -81,18 +82,28 @@ class OptimizerSession:
         self._optimizer_trial_milestone_inputs = {}
         self._prepared_trial_input_cache = OrderedDict()
         self._prepared_trial_input_cache_max_items = self._resolve_prepared_trial_input_cache_max_items()
+        self._full_evaluation_cache = OrderedDict()
+        self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
         self.master_dates = set()
         self.sorted_master_dates = []
 
     
     def _resolve_prepared_trial_input_cache_max_items(self):
-        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "4")
+        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "16")
         try:
             value = int(raw_value)
         except (TypeError, ValueError):
-            value = 4
-        return max(0, min(16, value))
+            value = 16
+        return max(0, min(64, value))
+
+    def _resolve_full_evaluation_cache_max_items(self):
+        raw_value = os.environ.get("OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS", "512")
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = 512
+        return max(0, min(4096, value))
 
     def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
         self.close_trial_prep_executor()
@@ -103,6 +114,7 @@ class OptimizerSession:
         )
         self.raw_data_cache_data_dir = data_dir
         self._prepared_trial_input_cache.clear()
+        self._full_evaluation_cache.clear()
         self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
         self.master_dates = set()
         for fast_df in self.static_fast_cache.values():
@@ -172,6 +184,25 @@ class OptimizerSession:
         self._prepared_trial_input_cache.move_to_end(cache_key)
         while len(self._prepared_trial_input_cache) > int(self._prepared_trial_input_cache_max_items):
             self._prepared_trial_input_cache.popitem(last=False)
+
+    def get_full_evaluation_from_cache(self, cache_key):
+        if cache_key is None:
+            return None
+        cached = self._full_evaluation_cache.get(cache_key)
+        if cached is None:
+            return None
+        self._full_evaluation_cache.move_to_end(cache_key)
+        return copy.deepcopy(cached)
+
+    def cache_full_evaluation(self, cache_key, evaluation):
+        if cache_key is None or evaluation is None:
+            return
+        if int(self._full_evaluation_cache_max_items) <= 0:
+            return
+        self._full_evaluation_cache[cache_key] = copy.deepcopy(dict(evaluation))
+        self._full_evaluation_cache.move_to_end(cache_key)
+        while len(self._full_evaluation_cache) > int(self._full_evaluation_cache_max_items):
+            self._full_evaluation_cache.popitem(last=False)
 
     def get_trial_prep_executor_bundle(self, max_workers):
         try:

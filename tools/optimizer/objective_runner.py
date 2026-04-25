@@ -9,7 +9,7 @@ from core.strategy_params import build_runtime_param_raw_value
 from tools.optimizer.objective_filters import apply_filter_rules
 from core.walk_forward_policy import filter_search_train_dates
 from tools.optimizer.objective_profiles import build_initial_profile_row, build_trial_params
-from tools.optimizer.param_cache import build_prep_cache_key
+from tools.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
 from tools.optimizer.prep import is_insufficient_data_message, prepare_trial_inputs
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
@@ -260,16 +260,31 @@ def run_optimizer_objective(session, trial):
             objective_start=objective_start,
         )
 
+    full_evaluation_cache_key = build_full_evaluation_cache_key(
+        ai_params,
+        objective_mode=mode,
+        train_start_year=session.train_start_year,
+        search_train_end_year=int(search_scope["effective_search_train_end_year"]),
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+    )
+    get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
+    evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
+
     pf_profile = {}
     portfolio_start = time.perf_counter()
     score_start = time.perf_counter()
-    evaluation = evaluate_prepared_train_score(
-        session,
-        ai_params=ai_params,
-        prep_result=prep_result,
-        search_scope=search_scope,
-        profile_stats=pf_profile,
-    )
+    if evaluation is None:
+        evaluation = evaluate_prepared_train_score(
+            session,
+            ai_params=ai_params,
+            prep_result=prep_result,
+            search_scope=search_scope,
+            profile_stats=pf_profile,
+        )
+        cache_evaluation = getattr(session, "cache_full_evaluation", None)
+        if callable(cache_evaluation):
+            cache_evaluation(full_evaluation_cache_key, evaluation)
     profile_row["score_calc_sec"] = time.perf_counter() - score_start
     profile_row["portfolio_wall_sec"] = time.perf_counter() - portfolio_start
     profile_row["portfolio_total_sec"] = float(pf_profile.get("portfolio_wall_sec", 0.0))
