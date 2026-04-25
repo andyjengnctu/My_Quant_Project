@@ -143,6 +143,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
     currentEquity_milli = currentCapital_milli
     collect_stats = bool(collect_stats)
     optimizer_setup_entry_positions = None
+    optimizer_setup_entry_cursor = 0
     if not collect_stats:
         valid_setup_mask = np.asarray(buyCondition[:-1], dtype=bool) & ~np.isnan(np.asarray(ATR_main[:-1], dtype=np.float64))
         optimizer_setup_entry_positions = np.flatnonzero(valid_setup_mask) + 1
@@ -202,10 +203,15 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
             and active_extended_signal is None
             and not bool(buyCondition[j - 1])
         ):
-            next_setup_cursor = np.searchsorted(optimizer_setup_entry_positions, j + 1) if optimizer_setup_entry_positions is not None else 0
-            if optimizer_setup_entry_positions is not None and next_setup_cursor < len(optimizer_setup_entry_positions):
-                j = int(optimizer_setup_entry_positions[next_setup_cursor])
-                continue
+            if optimizer_setup_entry_positions is not None:
+                while (
+                    optimizer_setup_entry_cursor < len(optimizer_setup_entry_positions)
+                    and int(optimizer_setup_entry_positions[optimizer_setup_entry_cursor]) <= j
+                ):
+                    optimizer_setup_entry_cursor += 1
+                if optimizer_setup_entry_cursor < len(optimizer_setup_entry_positions):
+                    j = int(optimizer_setup_entry_positions[optimizer_setup_entry_cursor])
+                    continue
             break
 
         if pos_start_of_current_bar > 0:
