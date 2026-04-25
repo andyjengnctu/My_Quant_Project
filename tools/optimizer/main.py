@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import sys
@@ -31,6 +32,27 @@ warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
 warnings.filterwarnings("once", category=RuntimeWarning)
 
+
+
+def _print_profile_summary_compatible(profile_recorder, *, emit_console: bool):
+    print_summary = getattr(profile_recorder, "print_summary", None)
+    if print_summary is None:
+        return
+    try:
+        signature = inspect.signature(print_summary)
+    except (TypeError, ValueError):
+        print_summary()
+        return
+
+    params = signature.parameters.values()
+    supports_emit_console = (
+        "emit_console" in signature.parameters
+        or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params)
+    )
+    if supports_emit_console:
+        print_summary(emit_console=emit_console)
+        return
+    print_summary()
 
 def configure_optuna_logging():
     import optuna
@@ -645,7 +667,7 @@ def main(argv=None, environ=None):
 
         optimize_wall_sec = max(0.0, time.perf_counter() - optimize_started_at)
         print()
-        session.profile_recorder.print_summary(emit_console=not timing_mode)
+        _print_profile_summary_compatible(session.profile_recorder, emit_console=not timing_mode)
         session.print_optimizer_prep_summary()
         should_export, export_policy = resolve_training_session_export_policy(
             requested_n_trials=session.n_trials,
