@@ -1012,12 +1012,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         current_index = int(current_index)
 
         buy_indexes = sorted(set(int(idx) for idx in self._current_chart_trade_indexes))
+        if not buy_indexes:
+            return False
         if int(direction) < 0:
             candidates = [idx for idx in buy_indexes if idx < current_index]
-            target_index = candidates[-1] if candidates else buy_indexes[0]
+            target_index = candidates[-1] if candidates else buy_indexes[-1]
         else:
             candidates = [idx for idx in buy_indexes if idx > current_index]
-            target_index = candidates[0] if candidates else buy_indexes[-1]
+            target_index = candidates[0] if candidates else buy_indexes[0]
         if scroll_chart_to_index(self._chart_figure, target_index, redraw=True):
             self._current_chart_trade_cursor_index = int(target_index)
             return True

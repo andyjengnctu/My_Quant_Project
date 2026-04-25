@@ -29,6 +29,10 @@ OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "validate_consistency")
 DATA_DIR = get_dataset_dir(PROJECT_ROOT, DEFAULT_VALIDATE_DATASET_PROFILE)
 PARAMS_FILE = os.path.join(PROJECT_ROOT, "models", "run_best_params.json")
 MAX_CONSOLE_FAIL_PREVIEW = 20
+HEADLESS_COVERAGE_OMIT_PATTERNS = [
+    os.path.join(PROJECT_ROOT, "apps", "workbench.py"),
+    os.path.join(PROJECT_ROOT, "tools", "workbench_ui", "*.py"),
+]
 
 CSV_PATH_CACHE = None
 CSV_DUPLICATE_ISSUES = None
@@ -112,7 +116,12 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
     json_file = os.path.join(coverage_dir, "coverage_synthetic.json")
     run_info_file = os.path.join(coverage_dir, "coverage_run_info.json")
 
-    cov = coverage.Coverage(data_file=data_file, branch=True, source=[PROJECT_ROOT])
+    cov = coverage.Coverage(
+        data_file=data_file,
+        branch=True,
+        source=[PROJECT_ROOT],
+        omit=HEADLESS_COVERAGE_OMIT_PATTERNS,
+    )
     results = []
     summaries = []
     synthetic_fail_count = 0
