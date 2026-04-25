@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+import importlib
 import tkinter as tk
 import warnings
 from tkinter import ttk
-
-from tools.workbench_ui.portfolio_backtest_inspector import PortfolioBacktestInspectorPanel
-from tools.workbench_ui.single_stock_inspector import SingleStockBacktestInspectorPanel
 
 
 WORKBENCH_TITLE = "股票工具工作台"
@@ -41,6 +39,14 @@ def _warn_gui_fallback(action, exc):
     warnings.warn(f"GUI fallback {action}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
 
+def _load_panel_factory(factory_path):
+    module_name, _, attr_name = str(factory_path).partition(":")
+    if not module_name or not attr_name:
+        raise ValueError(f"不合法的 panel_factory_path: {factory_path!r}")
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)
+
+
 PANEL_SPECS = (
     {
         "panel_id": "single_stock_backtest_inspector",
@@ -49,7 +55,8 @@ PANEL_SPECS = (
         "artifact_keys": ("excel_path",),
         "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,
-        "panel_factory": SingleStockBacktestInspectorPanel,
+        "jump_to_trade_enabled": True,
+        "panel_factory_path": "tools.workbench_ui.single_stock_inspector:SingleStockBacktestInspectorPanel",
     },
     {
         "panel_id": "portfolio_backtest_inspector",
@@ -58,7 +65,8 @@ PANEL_SPECS = (
         "artifact_keys": ("dashboard_html_path", "report_xlsx_path"),
         "inline_chart_backend": "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure",
         "default_show_volume": False,
-        "panel_factory": PortfolioBacktestInspectorPanel,
+        "jump_to_trade_enabled": True,
+        "panel_factory_path": "tools.workbench_ui.portfolio_backtest_inspector:PortfolioBacktestInspectorPanel",
     },
 )
 
@@ -83,7 +91,7 @@ def build_workbench_spec():
                 "scanner_dropdown_enabled": True,
                 "console_tab_enabled": True,
                 "jump_to_latest_enabled": True,
-                "jump_to_trade_enabled": panel["panel_id"] == "portfolio_backtest_inspector",
+                "jump_to_trade_enabled": bool(panel.get("jump_to_trade_enabled", False)),
             }
             for panel in PANEL_SPECS
         ],
@@ -179,7 +187,8 @@ class StockToolsWorkbench:
         notebook.pack(fill="both", expand=True)
 
         for panel_spec in PANEL_SPECS:
-            panel = panel_spec["panel_factory"](notebook)
+            panel_factory = _load_panel_factory(panel_spec["panel_factory_path"])
+            panel = panel_factory(notebook)
             notebook.add(panel, text=panel_spec["tab_label"])
 
     def run(self):

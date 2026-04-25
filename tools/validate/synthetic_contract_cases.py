@@ -2854,6 +2854,7 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_artifact_keys", ["excel_path"], panel_spec.get("artifact_keys"))
         add_check(results, "output_contract", case_id, "gui_workbench_inline_chart_backend", "tools.trade_analysis.charting.create_matplotlib_trade_chart_figure", panel_spec.get("inline_chart_backend"))
         add_check(results, "output_contract", case_id, "gui_workbench_default_show_volume", False, panel_spec.get("default_show_volume"))
+        add_check(results, "output_contract", case_id, "gui_workbench_single_jump_to_trade_enabled", True, panel_spec.get("jump_to_trade_enabled"))
 
     if len(panel_specs) > 1:
         portfolio_panel_spec = panel_specs[1]
@@ -2863,7 +2864,11 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_jump_to_trade_enabled", True, portfolio_panel_spec.get("jump_to_trade_enabled"))
 
     inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
+    portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
+    add_check(results, "output_contract", case_id, "gui_workbench_registry_lazy_panel_imports", True, "from tools.workbench_ui.single_stock_inspector import" not in workbench_source and "from tools.workbench_ui.portfolio_backtest_inspector import" not in workbench_source)
+    add_check(results, "output_contract", case_id, "gui_single_trade_navigation_uses_buy_markers", True, "trace_names=BUY_TRADE_TRACE_NAMES" in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_portfolio_trade_navigation_uses_buy_markers", True, "trace_names=BUY_TRADE_TRACE_NAMES" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_runner", True, "run_ticker_analysis" in inspector_source and "run_debug_ticker_analysis" not in inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_data_dir_helper", True, "resolve_trade_analysis_data_dir" in inspector_source and "resolve_debug_data_dir" not in inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_chart_figure_alias", True, "create_matplotlib_trade_chart_figure" in inspector_source and "create_matplotlib_debug_chart_figure" not in inspector_source)

@@ -78,6 +78,7 @@ PORTFOLIO_CONSOLE_COLORS = {
 }
 
 
+BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)")
 SIDEBAR_SIGNAL_CHIP_TEXT = "出現買入訊號"
 SIDEBAR_HISTORY_CHIP_TEXT = "符合歷史績效"
 SIDEBAR_CHIP_ACTIVE_BG = "#2090ff"
@@ -408,7 +409,7 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
 
 
 def _extract_trade_marker_indexes(chart_payload):
-    return extract_trade_marker_indexes(chart_payload)
+    return extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
 
 
 def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
@@ -1001,19 +1002,22 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if self._chart_figure is None or not self._current_chart_trade_indexes:
             return False
         state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
-        current_index = self._current_chart_trade_cursor_index
-        if current_index is None and isinstance(state, dict):
+        current_index = None
+        if isinstance(state, dict):
             current_index = state.get("hover_last_index")
+        if current_index is None:
+            current_index = self._current_chart_trade_cursor_index
         if current_index is None:
             current_index = self._current_chart_trade_indexes[-1]
         current_index = int(current_index)
 
+        buy_indexes = sorted(set(int(idx) for idx in self._current_chart_trade_indexes))
         if int(direction) < 0:
-            candidates = [idx for idx in self._current_chart_trade_indexes if idx < current_index]
-            target_index = candidates[-1] if candidates else self._current_chart_trade_indexes[0]
+            candidates = [idx for idx in buy_indexes if idx < current_index]
+            target_index = candidates[-1] if candidates else buy_indexes[0]
         else:
-            candidates = [idx for idx in self._current_chart_trade_indexes if idx > current_index]
-            target_index = candidates[0] if candidates else self._current_chart_trade_indexes[-1]
+            candidates = [idx for idx in buy_indexes if idx > current_index]
+            target_index = candidates[0] if candidates else buy_indexes[-1]
         if scroll_chart_to_index(self._chart_figure, target_index, redraw=True):
             self._current_chart_trade_cursor_index = int(target_index)
             return True
