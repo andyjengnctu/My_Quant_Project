@@ -2,7 +2,7 @@ import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
 from core.capital_policy import resolve_single_backtest_sizing_capital
-from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli
+from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli, price_to_milli
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
 from core.price_utils import adjust_long_sell_fill_price
@@ -82,6 +82,33 @@ def _finalize_pit_stats_index(builder):
         'cum_total_r_sum': np.array(builder['cum_total_r_sum'], dtype=np.float64),
         'cum_pnl_sum': np.array(builder['cum_pnl_sum'], dtype=np.float64),
     }
+
+
+def _optimizer_limit_reachable_for_entry_day(t_low, t_open, t_volume, limit_price):
+    """Cheap no-fill guard for optimizer PIT mode.
+
+    The formal entry function remains the single source of truth for fills.
+    This guard only skips building full entry plans on days that cannot fill
+    because required bar fields are invalid or the day low never reaches the
+    plan limit. It is used only when collect_stats=False, so scanner/display
+    miss-buy accounting stays on the original full path.
+    """
+    if np.isnan(t_low) or np.isnan(t_open) or np.isnan(t_volume) or np.isnan(limit_price):
+        return False
+    if float(t_volume) <= 0.0:
+        return False
+    return price_to_milli(t_low) <= price_to_milli(limit_price)
+
+
+def _optimizer_extended_entry_limit(active_extended_signal):
+    if active_extended_signal is None:
+        return np.nan
+    shadow_position = active_extended_signal.get("shadow_position")
+    if shadow_position is not None and int(shadow_position.get("qty", 0) or 0) > 0:
+        if shadow_position.get("pending_exit_action") is not None:
+            return np.nan
+        return shadow_position.get("entry_fill_price", np.nan)
+    return active_extended_signal.get("orig_limit", np.nan)
 
 
 def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True, return_pit_stats_index=False):
@@ -246,68 +273,86 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                         security_profile=resolved_security_profile,
                     )
 
-            entry_plan = build_normal_entry_plan(
-                buy_limits[j - 1],
-                ATR_main[j - 1],
-                sizing_cap,
-                params,
-                ticker=resolved_ticker,
-                security_profile=resolved_security_profile,
-                trade_date=Dates[j],
+            should_try_normal_entry = collect_stats or _optimizer_limit_reachable_for_entry_day(
+                L[j], O[j], V[j], buy_limits[j - 1]
             )
-            entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
-                t_open=O[j],
-                t_high=H[j],
-                t_low=L[j],
-                t_close=C[j],
-                t_volume=V[j],
-                y_close=C[j - 1],
-                params=params,
-                entry_type='normal',
-                ticker=resolved_ticker,
-                trade_date=Dates[j],
-            )
-            if entry_result['filled']:
+            if should_try_normal_entry:
+                entry_plan = build_normal_entry_plan(
+                    buy_limits[j - 1],
+                    ATR_main[j - 1],
+                    sizing_cap,
+                    params,
+                    ticker=resolved_ticker,
+                    security_profile=resolved_security_profile,
+                    trade_date=Dates[j],
+                )
+                entry_result = execute_pre_market_entry_plan(
+                    entry_plan=entry_plan,
+                    t_open=O[j],
+                    t_high=H[j],
+                    t_low=L[j],
+                    t_close=C[j],
+                    t_volume=V[j],
+                    y_close=C[j - 1],
+                    params=params,
+                    entry_type='normal',
+                    ticker=resolved_ticker,
+                    trade_date=Dates[j],
+                )
+                entry_filled = bool(entry_result['filled'])
+                entry_count_as_missed_buy = bool(entry_result['count_as_missed_buy'])
+            else:
+                entry_filled = False
+                entry_count_as_missed_buy = False
+            if entry_filled:
                 filled_signal_state = active_extended_signal
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
-            elif entry_result['count_as_missed_buy'] and collect_stats:
+            elif entry_count_as_missed_buy and collect_stats:
                 missedBuyCount += 1
 
         elif active_extended_signal is not None and pos_start_of_current_bar == 0:
             sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
-            entry_plan = build_extended_entry_plan_from_signal(
-                active_extended_signal,
-                sizing_cap,
-                params,
-                y_close=C[j - 1],
-                ticker=resolved_ticker,
-                security_profile=active_extended_signal.get('security_profile'),
-                trade_date=Dates[j],
+            should_try_extended_entry = collect_stats or _optimizer_limit_reachable_for_entry_day(
+                L[j], O[j], V[j], _optimizer_extended_entry_limit(active_extended_signal)
             )
-            entry_result = execute_pre_market_entry_plan(
-                entry_plan=entry_plan,
-                t_open=O[j],
-                t_high=H[j],
-                t_low=L[j],
-                t_close=C[j],
-                t_volume=V[j],
-                y_close=C[j - 1],
-                params=params,
-                entry_type='extended',
-                ticker=resolved_ticker,
-                trade_date=Dates[j],
-            )
-            if entry_result['filled']:
+            if should_try_extended_entry:
+                entry_plan = build_extended_entry_plan_from_signal(
+                    active_extended_signal,
+                    sizing_cap,
+                    params,
+                    y_close=C[j - 1],
+                    ticker=resolved_ticker,
+                    security_profile=active_extended_signal.get('security_profile'),
+                    trade_date=Dates[j],
+                )
+                entry_result = execute_pre_market_entry_plan(
+                    entry_plan=entry_plan,
+                    t_open=O[j],
+                    t_high=H[j],
+                    t_low=L[j],
+                    t_close=C[j],
+                    t_volume=V[j],
+                    y_close=C[j - 1],
+                    params=params,
+                    entry_type='extended',
+                    ticker=resolved_ticker,
+                    trade_date=Dates[j],
+                )
+                entry_filled = bool(entry_result['filled'])
+                entry_count_as_missed_buy = bool(entry_result['count_as_missed_buy'])
+            else:
+                entry_filled = False
+                entry_count_as_missed_buy = False
+            if entry_filled:
                 filled_signal_state = active_extended_signal
                 position = entry_result['position']
                 currentCapital_milli -= position['net_buy_total_milli']
                 buyTriggered = True
                 active_extended_signal = None
-            elif entry_result['count_as_missed_buy'] and collect_stats:
+            elif entry_count_as_missed_buy and collect_stats:
                 missedBuyCount += 1
 
         if not buyTriggered and position['qty'] == 0 and active_extended_signal is not None:
