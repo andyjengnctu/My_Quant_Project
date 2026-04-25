@@ -18,6 +18,7 @@ from core.portfolio_fast_data import (
 
 def _make_candidate_row(
     *,
+    buy_sort_method,
     ticker,
     candidate_type,
     est_limit_px,
@@ -50,7 +51,7 @@ def _make_candidate_row(
     else:
         est_cost_milli = 0
         est_cost = 0.0
-    sort_value = calc_buy_sort_value(get_buy_sort_method(), ev, est_cost, win_rate, trade_count, asset_growth_pct)
+    sort_value = calc_buy_sort_value(buy_sort_method, ev, est_cost, win_rate, trade_count, asset_growth_pct)
     row = {
         'ticker': ticker,
         'type': candidate_type,
@@ -92,6 +93,7 @@ def _collect_normal_candidates(
     active_extended_signals,
     pit_stats_index,
     pit_stats_cursor,
+    buy_sort_method,
     today,
     sizing_equity,
     params,
@@ -146,6 +148,7 @@ def _collect_normal_candidates(
             continue
 
         candidate_row = _make_candidate_row(
+            buy_sort_method=buy_sort_method,
             ticker=ticker,
             candidate_type='normal',
             est_limit_px=candidate_plan['limit_price'],
@@ -228,6 +231,7 @@ def _collect_extended_candidates(
     all_dfs_fast,
     pit_stats_index,
     pit_stats_cursor,
+    buy_sort_method,
     today,
     sizing_equity,
     params,
@@ -279,6 +283,7 @@ def _collect_extended_candidates(
             continue
 
         candidate_row = _make_candidate_row(
+            buy_sort_method=buy_sort_method,
             ticker=ticker,
             candidate_type='extended',
             est_limit_px=candidate_plan['limit_price'],
@@ -326,6 +331,7 @@ def build_daily_candidates(
     params,
     collect_all_candidates=True,
 ):
+    buy_sort_method = get_buy_sort_method()
     normal_candidates, normal_orderable, normal_setup_tickers_today = _collect_normal_candidates(
         normal_setup_entries=normal_setup_index.get(today, []),
         portfolio=portfolio,
@@ -334,6 +340,7 @@ def build_daily_candidates(
         active_extended_signals=active_extended_signals,
         pit_stats_index=pit_stats_index,
         pit_stats_cursor=pit_stats_cursor,
+        buy_sort_method=buy_sort_method,
         today=today,
         sizing_equity=sizing_equity,
         params=params,
@@ -347,6 +354,7 @@ def build_daily_candidates(
         all_dfs_fast=all_dfs_fast,
         pit_stats_index=pit_stats_index,
         pit_stats_cursor=pit_stats_cursor,
+        buy_sort_method=buy_sort_method,
         today=today,
         sizing_equity=sizing_equity,
         params=params,

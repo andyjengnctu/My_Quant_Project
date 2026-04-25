@@ -102,6 +102,7 @@ def tv_supertrend(high, low, close, atr, multiplier):
     return direction
 
 
+
 def generate_signals(df, params, ticker=None, feature_bank=None):
     resolved_ticker = ticker or df.attrs.get('ticker')
     if len(df) == 0:
@@ -115,25 +116,29 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     V = df['Volume'].to_numpy(dtype=np.float64, copy=False)
     is_tradable_bar = V > 0
     feature_cache = coerce_feature_bank(feature_bank)
+    atr_len = int(params.atr_len)
+    high_len = int(params.high_len)
+    atr_times_trail = float(params.atr_times_trail)
+    use_bb = bool(getattr(params, 'use_bb', True))
+    use_vol = bool(getattr(params, 'use_vol', True))
+    use_kc = bool(getattr(params, 'use_kc', True))
 
     def _feature(feature_name, feature_args, builder):
         if feature_cache is None or resolved_ticker is None:
             return builder()
         return feature_cache.get_or_compute((resolved_ticker, feature_name, tuple(feature_args)), builder)
 
-    ATR_main = _feature('atr', (int(params.atr_len),), lambda: tv_atr(H, L, C, params.atr_len))
+    ATR_main = _feature('atr', (atr_len,), lambda: tv_atr(H, L, C, atr_len))
 
-    close_series = pd.Series(C)
-    volume_series = pd.Series(V)
     HighN = _feature(
         'rolling_high_shift1',
-        (int(params.high_len),),
-        lambda: pd.Series(H).shift(1).rolling(params.high_len, min_periods=params.high_len).max().values,
+        (high_len,),
+        lambda: pd.Series(H).shift(1).rolling(high_len, min_periods=high_len).max().values,
     )
     SuperTrend_Dir = _feature(
         'supertrend_dir',
-        (int(params.atr_len), float(params.atr_times_trail)),
-        lambda: tv_supertrend(H, L, C, ATR_main, params.atr_times_trail),
+        (atr_len, atr_times_trail),
+        lambda: tv_supertrend(H, L, C, ATR_main, atr_times_trail),
     )
 
     prev_supertrend = np.empty_like(SuperTrend_Dir)
@@ -151,40 +156,46 @@ def generate_signals(df, params, ticker=None, feature_bank=None):
     isPriceCrossover = (C > HighN) & (prev_close <= prev_highn)
     isPriceCrossover[0] = False
 
-    if getattr(params, 'use_bb', True):
+    if use_bb:
+        bb_len = int(params.bb_len)
+        close_series = pd.Series(C)
         BB_Mid = _feature(
             'close_rolling_mean',
-            (int(params.bb_len),),
-            lambda: close_series.rolling(params.bb_len).mean().values,
+            (bb_len,),
+            lambda: close_series.rolling(bb_len).mean().values,
         )
         BB_Std = _feature(
             'close_rolling_std0',
-            (int(params.bb_len),),
-            lambda: close_series.rolling(params.bb_len).std(ddof=0).values,
+            (bb_len,),
+            lambda: close_series.rolling(bb_len).std(ddof=0).values,
         )
         BB_Upper = BB_Mid + params.bb_mult * BB_Std
         bbCondition = C > BB_Upper
     else:
         bbCondition = np.ones_like(C, dtype=bool)
 
-    if getattr(params, 'use_vol', True):
+    if use_vol:
+        vol_short_len = int(params.vol_short_len)
+        vol_long_len = int(params.vol_long_len)
+        volume_series = pd.Series(V)
         VolS = _feature(
             'volume_rolling_mean',
-            (int(params.vol_short_len),),
-            lambda: volume_series.rolling(params.vol_short_len).mean().values,
+            (vol_short_len,),
+            lambda: volume_series.rolling(vol_short_len).mean().values,
         )
         VolL = _feature(
             'volume_rolling_mean',
-            (int(params.vol_long_len),),
-            lambda: volume_series.rolling(params.vol_long_len).mean().values,
+            (vol_long_len,),
+            lambda: volume_series.rolling(vol_long_len).mean().values,
         )
         volCondition = np.isnan(V) | (VolS > VolL)
     else:
         volCondition = np.ones_like(C, dtype=bool)
 
-    if getattr(params, 'use_kc', True):
-        ATR_kc = ATR_main if params.kc_len == params.atr_len else _feature('atr', (int(params.kc_len),), lambda: tv_atr(H, L, C, params.kc_len))
-        KC_Mid = _feature('ema_close', (int(params.kc_len),), lambda: tv_ema(C, params.kc_len))
+    if use_kc:
+        kc_len = int(params.kc_len)
+        ATR_kc = ATR_main if kc_len == atr_len else _feature('atr', (kc_len,), lambda: tv_atr(H, L, C, kc_len))
+        KC_Mid = _feature('ema_close', (kc_len,), lambda: tv_ema(C, kc_len))
         KC_Lower = KC_Mid - ATR_kc * params.kc_mult
         prev_kc_lower = np.empty_like(KC_Lower)
         prev_kc_lower[0] = KC_Lower[0]
