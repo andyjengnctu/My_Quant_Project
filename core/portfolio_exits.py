@@ -232,7 +232,7 @@ def settle_portfolio_positions(
             continue
         y_pos = t_pos - 1
 
-        pos, _freed_cash, _pnl_realized, events = execute_bar_step(
+        pos, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
             pos,
             get_fast_value(fast_df, 'ATR', pos=y_pos),
             get_fast_value(fast_df, 'ind_sell_signal', pos=y_pos),
@@ -245,9 +245,13 @@ def settle_portfolio_positions(
             params,
             current_date=today,
             y_high=get_fast_value(fast_df, 'High', pos=y_pos),
+            return_milli=is_training,
+            record_exec_contexts=not is_training,
+            sync_display_fields=not is_training,
         )
-        freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
-        cash += freed_cash_milli
+        if not is_training:
+            freed_cash_milli = sum(int(ctx.get('net_total_milli', 0)) for ctx in pos.get('_last_exec_contexts', []))
+        cash += int(freed_cash_milli)
 
         tp_context = _first_exec_context(pos, 'TP_HALF')
         stop_context = _first_exec_context(pos, 'STOP')
@@ -268,8 +272,9 @@ def settle_portfolio_positions(
                 register_display_realized_pnl(pos, round_money_for_display(tp_context['pnl']))
 
         if 'STOP' in events or 'IND_SELL' in events:
-            total_pnl = pos['realized_pnl']
-            total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
+            total_pnl_milli = int(pos.get('realized_pnl_milli', 0) or 0)
+            total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
+            total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
             closed_trades_stats.append(
                 {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
             )

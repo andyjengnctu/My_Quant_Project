@@ -63,7 +63,7 @@ def sum_last_exec_contexts_milli(position):
     return freed_cash_milli, pnl_realized_milli
 
 
-def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True):
+def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred=False, trigger_price=None, trade_date=None, record_exec_contexts=True, sync_display_fields=True):
     sell_ledger = build_sell_ledger_from_price(
         exec_price,
         sell_qty,
@@ -82,27 +82,29 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
     if position['qty'] <= 0:
         position['qty'] = 0
         position['remaining_cost_basis_milli'] = 0
-    sync_position_display_fields(position)
+    if sync_display_fields:
+        sync_position_display_fields(position)
 
-    avg_net_price = calc_average_price_from_total_milli(freed_cash_milli, sell_qty)
-    _record_exec_context(
-        position,
-        event=event,
-        exec_price=exec_price,
-        net_price=avg_net_price,
-        qty=sell_qty,
-        pnl=milli_to_money(pnl_milli),
-        deferred=deferred,
-        trigger_price=trigger_price,
-        net_total_milli=freed_cash_milli,
-        allocated_cost_milli=allocated_cost_milli,
-        pnl_milli=pnl_milli,
-        enabled=record_exec_contexts,
-    )
+    if record_exec_contexts:
+        avg_net_price = calc_average_price_from_total_milli(freed_cash_milli, sell_qty)
+        _record_exec_context(
+            position,
+            event=event,
+            exec_price=exec_price,
+            net_price=avg_net_price,
+            qty=sell_qty,
+            pnl=milli_to_money(pnl_milli),
+            deferred=deferred,
+            trigger_price=trigger_price,
+            net_total_milli=freed_cash_milli,
+            allocated_cost_milli=allocated_cost_milli,
+            pnl_milli=pnl_milli,
+            enabled=True,
+        )
     return freed_cash_milli, pnl_milli
 
 
-def _update_trailing_stop(position, *, y_high, y_atr, params):
+def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
     if pd.isna(y_atr):
         return
 
@@ -110,9 +112,8 @@ def _update_trailing_stop(position, *, y_high, y_atr, params):
     if not pd.isna(y_high):
         highest_high_milli = max(highest_high_milli, price_to_milli(y_high))
     position['highest_high_since_entry_milli'] = highest_high_milli
-    position['highest_high_since_entry'] = milli_to_money(highest_high_milli)
 
-    trail_reference = milli_to_money(highest_high_milli)
+    trail_reference = highest_high_milli / 1000.0
     candidate_trail = adjust_long_stop_price(
         trail_reference - (y_atr * params.atr_times_trail),
         ticker=position.get('ticker'),
@@ -121,11 +122,13 @@ def _update_trailing_stop(position, *, y_high, y_atr, params):
     candidate_trail_milli = price_to_milli(candidate_trail)
     position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
     position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
-    position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
-    position['sl'] = milli_to_money(position['sl_milli'])
+    if sync_display_fields:
+        position['highest_high_since_entry'] = milli_to_money(highest_high_milli)
+        position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
+        position['sl'] = milli_to_money(position['sl_milli'])
 
 
-def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True):
+def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True):
     pending_action = position.get('pending_exit_action')
     if pending_action is None or position.get('qty', 0) <= 0:
         return False, 0, 0, []
@@ -146,6 +149,7 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             trigger_price=position.get('pending_exit_trigger_price'),
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
+            sync_display_fields=sync_display_fields,
         )
         position['pending_exit_action'] = None
         position['pending_exit_trigger_price'] = float('nan')
@@ -167,6 +171,7 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
             trigger_price=position.get('pending_exit_trigger_price'),
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
+            sync_display_fields=sync_display_fields,
         )
         position['sold_half'] = True
         position['pending_exit_action'] = None
@@ -176,7 +181,7 @@ def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_lo
     return False, 0, 0, []
 
 
-def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True):
+def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, y_high=None, return_milli=False, record_exec_contexts=True, sync_display_fields=True):
     freed_cash_milli, pnl_realized_milli = 0, 0
     events = []
     _reset_exec_contexts(position, enabled=record_exec_contexts)
@@ -200,6 +205,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         params=params,
         current_date=current_date,
         record_exec_contexts=record_exec_contexts,
+        sync_display_fields=sync_display_fields,
     )
     if pending_consumed:
         freed_cash_milli += pending_freed_cash_milli
@@ -208,7 +214,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
         if position['qty'] <= 0 or 'MISSED_SELL' in pending_events:
             return _finish()
 
-    _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params)
+    _update_trailing_stop(position, y_high=y_high, y_atr=y_atr, params=params, sync_display_fields=sync_display_fields)
 
     if y_ind_sell:
         sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
@@ -223,6 +229,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 deferred=False,
                 trade_date=current_date,
                 record_exec_contexts=record_exec_contexts,
+                sync_display_fields=sync_display_fields,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
@@ -250,6 +257,7 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
             trigger_price=position['tp_half'],
             trade_date=current_date,
             record_exec_contexts=record_exec_contexts,
+            sync_display_fields=sync_display_fields,
         )
         freed_cash_milli += leg_freed_cash_milli
         pnl_realized_milli += leg_pnl_milli
@@ -259,7 +267,8 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
     if is_stop_hit and position['qty'] > 0:
         sell_block_reason = get_exit_sell_block_reason(t_open, t_high, t_low, t_close, t_volume, y_close, ticker=position.get("ticker"))
         if sell_block_reason is None:
-            exec_price = adjust_long_sell_fill_price(min(position['sl'], t_open), ticker=position.get('ticker'))
+            stop_price = position['sl'] if sync_display_fields else milli_to_money(position['sl_milli'])
+            exec_price = adjust_long_sell_fill_price(min(stop_price, t_open), ticker=position.get('ticker'))
             leg_freed_cash_milli, leg_pnl_milli = _execute_sell_leg(
                 position,
                 event='STOP',
@@ -267,9 +276,10 @@ def execute_bar_step(position, y_atr, y_ind_sell, y_close, t_open, t_high, t_low
                 sell_qty=position['qty'],
                 params=params,
                 deferred=False,
-                trigger_price=position['sl'],
+                trigger_price=stop_price,
                 trade_date=current_date,
                 record_exec_contexts=record_exec_contexts,
+                sync_display_fields=sync_display_fields,
             )
             freed_cash_milli += leg_freed_cash_milli
             pnl_realized_milli += leg_pnl_milli
