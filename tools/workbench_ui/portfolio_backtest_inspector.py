@@ -20,7 +20,7 @@ from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from core.entry_plans import build_position_from_entry_fill
-from core.portfolio_fast_data import build_trade_stats_index, get_fast_close, get_fast_dates, get_fast_pos, get_fast_value, get_pit_stats_from_index
+from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.position_step import execute_bar_step
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
@@ -40,6 +40,7 @@ from tools.trade_analysis.charting import (
     record_active_levels,
     record_signal_annotation,
     record_trade_marker,
+    scroll_chart_to_index,
     scroll_chart_to_latest,
 )
 
@@ -260,6 +261,140 @@ def _resolve_buy_limit_from_row(row, fast_data):
     return np.nan if entry_price is None else entry_price
 
 
+def _calc_pct_from_capital(pnl_value, capital_value):
+    pnl = _coerce_float(pnl_value)
+    capital = _coerce_float(capital_value)
+    if pd.isna(pnl) or pd.isna(capital) or capital <= 0:
+        return None
+    return float(pnl) * 100.0 / float(capital)
+
+
+def _estimate_sell_capital(row):
+    explicit_total = _resolve_valid_float(row.get("賣出總金額"))
+    if explicit_total is not None:
+        return explicit_total
+    price = _resolve_valid_float(row.get("成交價"))
+    qty = _resolve_valid_int(row.get("股數"))
+    if price is None or qty is None:
+        return None
+    return float(price) * int(qty)
+
+
+def _build_portfolio_ticker_actual_stats(df_tr, ticker):
+    if df_tr is None or df_tr.empty or "Ticker" not in df_tr.columns:
+        return {
+            "buy_count": 0,
+            "exit_count": 0,
+            "event_count": 0,
+            "win_count": 0,
+            "win_rate_pct": None,
+            "trade_count": 0,
+            "total_buy_capital": 0.0,
+            "total_pnl": 0.0,
+            "asset_growth_pct": 0.0,
+        }
+
+    ticker_rows = df_tr[df_tr["Ticker"].astype(str) == str(ticker)].copy()
+    actual_rows = ticker_rows[ticker_rows.apply(_is_actual_trade_row, axis=1)].copy() if not ticker_rows.empty else pd.DataFrame()
+    if actual_rows.empty:
+        return {
+            "buy_count": 0,
+            "exit_count": 0,
+            "event_count": 0,
+            "win_count": 0,
+            "win_rate_pct": None,
+            "trade_count": 0,
+            "total_buy_capital": 0.0,
+            "total_pnl": 0.0,
+            "asset_growth_pct": 0.0,
+        }
+
+    records = actual_rows.to_dict("records")
+    buy_records = [row for row in records if _is_buy_trade_row(row)]
+    exit_records = [row for row in records if _is_full_exit_trade_row(row)]
+    win_count = sum(1 for row in exit_records if _coerce_float(row.get("該筆總損益"), default=0.0) > 0)
+    exit_count = len(exit_records)
+    win_rate_pct = None if exit_count <= 0 else float(win_count) * 100.0 / float(exit_count)
+    total_buy_capital = sum(_coerce_float(row.get("投入總金額"), default=0.0) for row in buy_records)
+    total_pnl = sum(_coerce_float(row.get("該筆總損益"), default=0.0) for row in exit_records)
+    asset_growth_pct = 0.0 if total_buy_capital <= 0 else float(total_pnl) * 100.0 / float(total_buy_capital)
+    return {
+        "buy_count": int(len(buy_records)),
+        "exit_count": int(exit_count),
+        "event_count": int(len(records)),
+        "win_count": int(win_count),
+        "win_rate_pct": win_rate_pct,
+        "trade_count": int(exit_count),
+        "total_buy_capital": float(total_buy_capital),
+        "total_pnl": float(total_pnl),
+        "asset_growth_pct": float(asset_growth_pct),
+    }
+
+
+def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
+    buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
+    meta = {
+        "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
+    }
+    position = _build_position_from_portfolio_buy_row(row, fast_data=fast_data, params=params)
+    if position is None:
+        limit_price = _resolve_buy_limit_from_row(row, fast_data)
+        entry_price = _resolve_valid_float(row.get("成交價"))
+        if not pd.isna(limit_price):
+            meta["limit_price"] = float(limit_price)
+        if entry_price is not None:
+            meta["entry_price"] = float(entry_price)
+        return meta
+
+    for source_key, target_key in (
+        ("limit_price", "limit_price"),
+        ("pure_buy_price", "entry_price"),
+        ("initial_stop", "stop_price"),
+        ("tp_half", "tp_price"),
+    ):
+        value = position.get(source_key)
+        if value is not None and not pd.isna(value):
+            meta[target_key] = float(value)
+
+    entry_price = _resolve_valid_float(row.get("成交價"))
+    if entry_price is not None:
+        meta["entry_price"] = float(entry_price)
+    return meta
+
+
+def _build_portfolio_sell_marker_meta(row, active_entry):
+    pnl_value = _resolve_valid_float(row.get("單筆損益"))
+    total_pnl = _resolve_valid_float(row.get("該筆總損益"))
+    sell_capital = _estimate_sell_capital(row)
+    entry_capital = None if active_entry is None else active_entry.get("buy_capital")
+    pnl_pct = _calc_pct_from_capital(total_pnl if total_pnl is not None else pnl_value, entry_capital)
+    meta = {}
+    if pnl_value is not None:
+        meta["pnl_value"] = float(pnl_value)
+    if total_pnl is not None:
+        meta["total_pnl"] = float(total_pnl)
+    if pnl_pct is not None:
+        meta["pnl_pct"] = float(pnl_pct)
+    if sell_capital is not None:
+        meta["sell_capital"] = float(sell_capital)
+    return meta
+
+
+def _extract_trade_marker_indexes(chart_payload):
+    trade_trace_names = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
+    marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
+    indexes = []
+    for trace_name, markers in marker_groups.items():
+        if trace_name not in trade_trace_names:
+            continue
+        for marker in markers:
+            try:
+                indexes.append(int(marker.get("x")))
+            except (TypeError, ValueError):
+                continue
+    return sorted(set(indexes))
+
+
 def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
     buy_date = pd.Timestamp(row.get("Date"))
     buy_pos = _safe_fast_pos(fast_data, buy_date)
@@ -414,8 +549,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     chart_context = create_debug_chart_context(price_df)
     dropdown_stats = dict(ticker_dropdown_stats or {})
     sort_text = str(dropdown_stats.get("sort_text") or "-")
-    win_rate_text = str(dropdown_stats.get("win_rate_text") or "-")
-    trade_count_text = str(dropdown_stats.get("trade_count_text") or "-")
+    actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
 
     if params is not None:
         _record_portfolio_active_level_segments(
@@ -425,7 +559,12 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             params=params,
         )
 
-    for row in ticker_trades_df.to_dict("records"):
+    active_entry = None
+    sorted_records = sorted(
+        ticker_trades_df.to_dict("records"),
+        key=lambda row: (pd.Timestamp(row.get("Date")), 0 if _is_buy_trade_row(row) else 1),
+    )
+    for row in sorted_records:
         action = _normalize_trade_action(row)
         if not action:
             continue
@@ -438,45 +577,49 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         marker_price = _resolve_marker_price(price_df, row, action)
         if pd.isna(marker_price):
             continue
+
         qty = _coerce_int(row.get("股數"), default=0)
-        note_parts = [str(row.get("Type", "") or "").strip()]
-        pnl = row.get("該筆總損益", row.get("單筆損益", None))
-        if pnl is not None and not pd.isna(pnl):
-            note_parts.append(f"損益 {float(pnl):,.0f}")
-        buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
+        note = str(row.get("Type", "") or "").strip()
+        if action in {"買進", "買進(延續候選)"}:
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            active_entry = {
+                "buy_capital": marker_meta.get("buy_capital"),
+                "qty": qty,
+                "date": trade_date,
+            }
+        else:
+            marker_meta = _build_portfolio_sell_marker_meta(row, active_entry)
+            if action in {"停損殺出", "指標賣出", "期末強制結算"}:
+                active_entry = None
+
         record_trade_marker(
             chart_context,
             current_date=trade_date,
             action=action,
             price=marker_price,
             qty=qty,
-            note=" | ".join(part for part in note_parts if part),
-            meta={
-                "portfolio_view": True,
-                "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
-            },
-        )
-        _record_portfolio_trade_annotations(
-            chart_context,
-            price_df=price_df,
-            row=row,
-            action=action,
-            sort_text=sort_text,
-            win_rate_text=win_rate_text,
-            trade_count_text=trade_count_text,
+            note=note,
+            meta=marker_meta,
         )
 
-    buy_count = int(sum(1 for row in ticker_trades_df.to_dict("records") if _is_buy_trade_row(row)))
-    exit_count = int(sum(1 for row in ticker_trades_df.to_dict("records") if _is_full_exit_trade_row(row)))
+    buy_count = int(actual_stats.get("buy_count", 0) or 0)
+    exit_count = int(actual_stats.get("exit_count", 0) or 0)
+    event_count = int(actual_stats.get("event_count", 0) or 0)
+    total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
+    win_rate_pct = actual_stats.get("win_rate_pct")
+    win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
     chart_context["summary_box"] = [
         "投組實際成交",
         f"{ticker} 買進 {buy_count} 次",
         f"完整出場 {exit_count} 次",
+        f"交易事件 {event_count} 筆",
+        f"投組勝率 {win_rate_text}",
+        f"投組總損益 {total_pnl:+,.0f}",
         f"排序 {sort_text}",
-        f"勝率 {win_rate_text} | 次 {trade_count_text}",
     ]
     chart_context["status_box"] = {"lines": [SIDEBAR_SIGNAL_CHIP_TEXT, SIDEBAR_HISTORY_CHIP_TEXT], "ok": True}
     return build_debug_chart_payload(price_df, chart_context)
+
 
 
 class PortfolioBacktestInspectorPanel(ttk.Frame):
@@ -506,6 +649,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._console_live_progress_start = None
         self._console_current_tag = "default"
         self._ticker_dropdown_stats = {}
+        self._current_chart_trade_indexes = []
         self._sidebar_signal_var = tk.StringVar(value=SIDEBAR_SIGNAL_CHIP_TEXT)
         self._sidebar_history_var = tk.StringVar(value=SIDEBAR_HISTORY_CHIP_TEXT)
         self._sidebar_summary_var = tk.StringVar(value="-")
@@ -650,7 +794,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
         ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
-        sidebar.rowconfigure(18, weight=1)
+        trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
+        trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.columnconfigure(0, weight=1)
+        trade_nav.columnconfigure(1, weight=1)
+        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        sidebar.rowconfigure(19, weight=1)
 
         performance_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         performance_tab.rowconfigure(0, weight=1)
@@ -800,6 +950,33 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _move_kline_chart_to_latest(self):
         if self._chart_figure is not None:
             scroll_chart_to_latest(self._chart_figure, redraw=True)
+
+    def _move_kline_chart_to_previous_trade(self):
+        self._move_kline_chart_to_trade(direction=-1)
+
+    def _move_kline_chart_to_next_trade(self):
+        self._move_kline_chart_to_trade(direction=1)
+
+    def _move_kline_chart_to_trade(self, *, direction):
+        if self._chart_figure is None or not self._current_chart_trade_indexes:
+            return False
+        state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+        current_index = None if not isinstance(state, dict) else state.get("hover_last_index")
+        if current_index is None:
+            chart_payload = None if not isinstance(state, dict) else state.get("chart_payload")
+            if isinstance(chart_payload, dict):
+                current_index = int((chart_payload.get("default_view") or {}).get("end_idx", self._current_chart_trade_indexes[-1]))
+            else:
+                current_index = self._current_chart_trade_indexes[-1]
+
+        current_index = int(current_index)
+        if int(direction) < 0:
+            candidates = [idx for idx in self._current_chart_trade_indexes if idx < current_index]
+            target_index = candidates[-1] if candidates else self._current_chart_trade_indexes[0]
+        else:
+            candidates = [idx for idx in self._current_chart_trade_indexes if idx > current_index]
+            target_index = candidates[0] if candidates else self._current_chart_trade_indexes[-1]
+        return scroll_chart_to_index(self._chart_figure, target_index, redraw=True)
 
     def _configure_console_tags(self):
         self._console_text.tag_configure("default", foreground="#f7fbff")
@@ -1106,35 +1283,28 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._report_runtime_exception("run_portfolio_backtest", exc, status_prefix="投組回測失敗")
 
     def _resolve_ticker_dropdown_stats(self, *, ticker, first_buy_row, result_payload):
-        params = result_payload.get("params")
-        context = result_payload.get("context") or {}
-        standalone_logs = (context.get("all_trade_logs") or {}).get(ticker) or []
-        stats_index = build_trade_stats_index(standalone_logs)
-        trade_date = pd.Timestamp(first_buy_row.get("Date"))
-        try:
-            _is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(stats_index, trade_date, params, ticker=ticker)
-        except (TypeError, ValueError, KeyError, IndexError):
-            ev = self._extract_ev_from_buy_type(first_buy_row.get("Type"))
-            win_rate = np.nan
-            trade_count = 0
-            asset_growth_pct = np.nan
-
+        df_tr = result_payload.get("df_tr")
+        actual_stats = _build_portfolio_ticker_actual_stats(df_tr, ticker)
         sort_method = get_buy_sort_method()
         raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
         sort_metric_label = PORTFOLIO_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
+        ev = self._extract_ev_from_buy_type(first_buy_row.get("Type"))
         projected_cost = _coerce_float(first_buy_row.get("投入總金額"), default=0.0)
+        trade_count = int(actual_stats.get("trade_count", 0) or 0)
+        win_rate_pct = actual_stats.get("win_rate_pct")
+        win_rate_fraction = 0.0 if win_rate_pct is None else float(win_rate_pct) / 100.0
+        asset_growth_pct = float(actual_stats.get("asset_growth_pct", 0.0) or 0.0)
         sort_value = calc_buy_sort_value(
             sort_method,
             ev,
             projected_cost,
-            win_rate if not pd.isna(win_rate) else 0.0,
+            win_rate_fraction,
             trade_count,
-            asset_growth_pct if not pd.isna(asset_growth_pct) else 0.0,
+            asset_growth_pct,
         )
         sort_value_text = format_buy_sort_metric_value(sort_value, sort_method)
-        win_rate_pct = None if pd.isna(win_rate) else (float(win_rate) * 100.0 if float(win_rate) <= 1.0 else float(win_rate))
-        win_rate_text = "-" if win_rate_pct is None else f"{win_rate_pct:.1f}%"
-        trade_count_text = "-" if int(trade_count or 0) <= 0 else str(int(trade_count))
+        win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
+        trade_count_text = "-" if trade_count <= 0 else str(trade_count)
         return {
             "sort_metric_label": sort_metric_label,
             "sort_value": float(sort_value),
@@ -1143,8 +1313,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "win_rate_text": win_rate_text,
             "trade_count_text": trade_count_text,
             "win_rate": win_rate_pct,
-            "trade_count": int(trade_count or 0),
+            "trade_count": trade_count,
+            "portfolio_actual_stats": actual_stats,
         }
+
 
     @staticmethod
     def _extract_ev_from_buy_type(type_text):
@@ -1243,6 +1415,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return backend_error_text
         ticker = result.get("ticker", "")
         chart_payload = result.get("chart_payload")
+        self._current_chart_trade_indexes = _extract_trade_marker_indexes(chart_payload)
         self._update_sidebar_from_chart_payload(chart_payload)
         try:
             figure = create_matplotlib_trade_chart_figure(

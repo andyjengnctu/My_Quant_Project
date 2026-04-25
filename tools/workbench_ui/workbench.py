@@ -83,6 +83,7 @@ def build_workbench_spec():
                 "scanner_dropdown_enabled": True,
                 "console_tab_enabled": True,
                 "jump_to_latest_enabled": True,
+                "jump_to_trade_enabled": panel["panel_id"] == "portfolio_backtest_inspector",
             }
             for panel in PANEL_SPECS
         ],

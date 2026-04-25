@@ -2860,6 +2860,7 @@ def validate_gui_workbench_contract_case(base_params):
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_panel_tab_label", "投組回測檢視", portfolio_panel_spec.get("tab_label"))
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_backend_runner", "tools.portfolio_sim.simulation_runner.run_portfolio_simulation_prepared", portfolio_panel_spec.get("backend_runner"))
         add_check(results, "output_contract", case_id, "gui_workbench_portfolio_artifact_keys", ["dashboard_html_path", "report_xlsx_path"], portfolio_panel_spec.get("artifact_keys"))
+        add_check(results, "output_contract", case_id, "gui_workbench_portfolio_jump_to_trade_enabled", True, portfolio_panel_spec.get("jump_to_trade_enabled"))
 
     inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
@@ -2886,6 +2887,7 @@ def validate_gui_workbench_contract_case(base_params):
     charting_module = importlib.import_module("tools.trade_analysis.charting")
     add_check(results, "output_contract", case_id, "trade_log_exposes_canonical_trade_analysis_data_dir_helper", True, hasattr(debug_module, "resolve_trade_analysis_data_dir"))
     add_check(results, "output_contract", case_id, "charting_exposes_canonical_trade_chart_alias", True, hasattr(charting_module, "create_matplotlib_trade_chart_figure"))
+    add_check(results, "output_contract", case_id, "charting_exposes_index_navigation_helper", True, hasattr(charting_module, "scroll_chart_to_index"))
     legacy_df = debug_module.run_debug_backtest(clean_df.copy(), ticker, case["params"], export_excel=False, verbose=False)
     with tempfile.TemporaryDirectory(prefix="gui_workbench_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(

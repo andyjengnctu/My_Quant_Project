@@ -1271,6 +1271,54 @@ def scroll_chart_to_latest(figure, *, redraw=True):
     return True
 
 
+def scroll_chart_to_index(figure, target_index, *, redraw=True):
+    state = getattr(figure, "_stock_chart_navigation_state", None)
+    if state is None:
+        return False
+    axis_price = state["axis_price"]
+    chart_payload = state["chart_payload"]
+    total_points = int(state["total_points"])
+    if total_points <= 0:
+        return False
+
+    target_index = int(np.clip(int(target_index), 0, total_points - 1))
+    left, right = axis_price.get_xlim()
+    current_width = max(float(right) - float(left), float(MATPLOTLIB_MIN_VISIBLE_BARS))
+    default_view = chart_payload.get("default_view") or {"start_idx": 0, "end_idx": max(0, total_points - 1)}
+    default_width = float(default_view.get("end_idx", total_points - 1)) - float(default_view.get("start_idx", 0)) + 2.0
+    window_width = max(current_width, min(default_width, float(total_points)), float(MATPLOTLIB_MIN_VISIBLE_BARS))
+    target_left = float(target_index) - window_width * 0.46
+    target_right = target_left + window_width
+    next_left, next_right = _clamp_chart_xlim(target_left, target_right, total_points=total_points)
+
+    axis_price.set_xlim(next_left, next_right, emit=False)
+    axis_volume = state.get("axis_volume")
+    if axis_volume is not None:
+        axis_volume.set_xlim(next_left, next_right, emit=False)
+    sync_visible_ranges = state.get("sync_visible_ranges")
+    if callable(sync_visible_ranges):
+        sync_visible_ranges(force=True, redraw=redraw)
+
+    hover_text_artist = state.get("hover_text_artist")
+    crosshair_vline = state.get("crosshair_vline")
+    crosshair_hline = state.get("crosshair_hline")
+    state["hover_last_index"] = target_index
+    if hover_text_artist is not None:
+        hover_text_artist.set_text(_build_hover_text(chart_payload, target_index))
+    if crosshair_vline is not None:
+        crosshair_vline.set_xdata([target_index, target_index])
+    if crosshair_hline is not None:
+        close_price = float(chart_payload["close"][target_index])
+        crosshair_hline.set_ydata([close_price, close_price])
+    external_hover_callback = state.get("external_hover_callback")
+    if callable(external_hover_callback):
+        external_hover_callback(_build_hover_snapshot(chart_payload, target_index))
+    if redraw and figure.canvas is not None:
+        figure.canvas.draw_idle()
+    return True
+
+
+
 def bind_matplotlib_chart_navigation(figure, canvas):
     state = getattr(figure, "_stock_chart_navigation_state", None)
     if state is None:
