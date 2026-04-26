@@ -351,33 +351,40 @@ def build_extended_tbd_candidate_plan_from_state(tbd_state, sizing_capital, para
 
 
 # # (AI註: 單一真理來源 - 延續訊號今日能否掛單；若 shadow 已進入待出場狀態，則不得再掛)
-def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):
+def has_extended_signal_orderable_context_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):
     if signal_state is None or candidate_plan is None:
-        return False
-    if candidate_plan.get("qty", 0) <= 0:
         return False
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is not None and shadow_position.get("pending_exit_action") is not None:
         return False
     resolved_ticker = ticker or candidate_plan.get("ticker") or signal_state.get("ticker")
     resolved_security_profile = security_profile or candidate_plan.get("security_profile") or signal_state.get("security_profile")
-    return is_limit_buy_price_reachable_for_day(candidate_plan["limit_price"], y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
+    return is_limit_buy_price_reachable_for_day(candidate_plan.get("limit_price"), y_close, ticker=resolved_ticker, security_profile=resolved_security_profile)
 
 
-def is_extended_tbd_orderable_for_day(tbd_state, candidate_plan, y_close, ticker=None, security_profile=None):
+def is_extended_signal_orderable_for_day(signal_state, candidate_plan, y_close, ticker=None, security_profile=None):
+    if not has_extended_signal_orderable_context_for_day(signal_state, candidate_plan, y_close, ticker=ticker, security_profile=security_profile):
+        return False
+    return candidate_plan.get("qty", 0) > 0
+
+
+def has_extended_tbd_orderable_context_for_day(tbd_state, candidate_plan, y_close, ticker=None, security_profile=None):
     if tbd_state is None or not is_extended_tbd_shadow_alive(tbd_state):
         return False
-    shadow_position = _resolve_tbd_shadow_position(tbd_state)
-    if shadow_position is not None and shadow_position.get("pending_exit_action") is not None:
-        return False
     signal_state = _resolve_tbd_signal_state(tbd_state)
-    return is_extended_signal_orderable_for_day(
+    return has_extended_signal_orderable_context_for_day(
         signal_state,
         candidate_plan,
         y_close,
         ticker=ticker or tbd_state.get("ticker"),
         security_profile=security_profile or tbd_state.get("security_profile"),
     )
+
+
+def is_extended_tbd_orderable_for_day(tbd_state, candidate_plan, y_close, ticker=None, security_profile=None):
+    if not has_extended_tbd_orderable_context_for_day(tbd_state, candidate_plan, y_close, ticker=ticker, security_profile=security_profile):
+        return False
+    return candidate_plan.get("qty", 0) > 0
 
 
 # # (AI註: 單一真理來源 - 延續單實際掛單規格；若已啟動 shadow，實際成交後直接繼承 shadow 管理狀態)

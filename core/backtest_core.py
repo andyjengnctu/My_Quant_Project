@@ -1,7 +1,7 @@
 import numpy as np
 
 from core.backtest_finalize import build_backtest_stats, finalize_open_position_at_end
-from core.capital_policy import resolve_single_backtest_sizing_capital
+from core.capital_policy import resolve_scanner_live_capital, resolve_single_backtest_sizing_capital
 from core.exact_accounting import build_sell_ledger_from_price, calc_ratio_from_milli, milli_to_money, money_to_milli, price_to_milli
 from core.strategy_params import V16StrategyParams
 from core.position_step import execute_bar_step
@@ -385,8 +385,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 active_extended_signal = None
 
         if collect_stats and scanner_extended_signal is not None:
-            if sizing_cap is None:
-                sizing_cap = resolve_single_backtest_sizing_capital(params, currentCapital_milli / 1000.0)
+            scanner_sizing_cap = resolve_scanner_live_capital(params)
             should_clear_scanner_extended = should_clear_extended_signal(
                 scanner_extended_signal,
                 L[j],
@@ -398,7 +397,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 y_high=H[j - 1],
                 y_atr=ATR_main[j - 1],
                 y_ind_sell=sellCondition[j - 1],
-                sizing_capital=sizing_cap,
+                sizing_capital=scanner_sizing_cap,
                 current_date=Dates[j],
                 params=params,
             )

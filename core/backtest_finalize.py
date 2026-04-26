@@ -10,8 +10,8 @@ from core.trade_plans import (
     build_extended_candidate_plan_from_signal,
     build_extended_tbd_candidate_plan_from_state,
     evaluate_history_candidate_metrics,
-    is_extended_signal_orderable_for_day,
-    is_extended_tbd_orderable_for_day,
+    has_extended_signal_orderable_context_for_day,
+    has_extended_tbd_orderable_context_for_day,
 )
 from core.extended_signals import is_extended_tbd_display_day, is_extended_tbd_shadow_alive
 
@@ -185,8 +185,8 @@ def build_backtest_stats(
     # # 因此不可用單股路徑的 current_position / hasOpenPositionAtEnd 直接整體封鎖；
     # # 否則凡是單股已買進且仍在倉的情境，TBD 會被全部吞掉。
     has_terminal_position = bool(had_open_position_at_end) or current_position > 0
-    display_extended_signal = active_extended_signal
-    display_extended_tbd_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
+    display_extended_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
+    display_extended_tbd_signal = display_extended_signal
     shadow_active_today = is_extended_tbd_shadow_alive(display_extended_tbd_signal)
     tbd_display_today = has_terminal_position and display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
     extended_candidate_today = None
@@ -202,7 +202,7 @@ def build_backtest_stats(
             security_profile=resolved_security_profile,
             trade_date=final_date,
         )
-        extended_orderable_today = is_extended_signal_orderable_for_day(
+        extended_orderable_today = has_extended_signal_orderable_context_for_day(
             display_extended_signal,
             extended_candidate_today,
             close_last,
@@ -232,13 +232,13 @@ def build_backtest_stats(
                 security_profile=resolved_security_profile,
                 trade_date=final_date,
             )
-        extended_tbd_orderable_today = is_extended_tbd_orderable_for_day(
+        extended_tbd_orderable_today = has_extended_tbd_orderable_context_for_day(
             display_extended_tbd_signal,
             extended_candidate_tbd_today,
             close_last,
             ticker=resolved_ticker,
             security_profile=resolved_security_profile,
-        ) if shadow_active_today else is_extended_signal_orderable_for_day(
+        ) if shadow_active_today else has_extended_signal_orderable_context_for_day(
             display_extended_tbd_signal,
             extended_candidate_tbd_today,
             close_last,
