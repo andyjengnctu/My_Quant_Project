@@ -47,6 +47,9 @@ from tools.trade_analysis.charting import (
 )
 from tools.workbench_ui.workbench import (
     WORKBENCH_ACCENT,
+    WORKBENCH_RIGHT_SIDEBAR_BODY_FONT,
+    WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT,
+    WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT,
     WORKBENCH_RIGHT_SIDEBAR_WIDTH,
     WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH,
     WORKBENCH_SURFACE_ALT,
@@ -840,9 +843,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
-        sidebar_chip_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_header_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_body_font = ("Microsoft JhengHei", 14)
+        sidebar_chip_font = WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT
+        sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
+        sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
         self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
@@ -1618,12 +1621,48 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return button
 
     def _refresh_performance_tab_close_buttons(self, _event=None):
+        notebook = getattr(self, "_notebook", None)
+        if notebook is None:
+            return None
+
+        live_tab_ids = {str(item.get("tab_id")) for item in getattr(self, "_performance_tabs", [])}
         for tab_id, button in list(getattr(self, "_performance_tab_close_buttons", {}).items()):
+            if str(tab_id) in live_tab_ids:
+                continue
             try:
                 button.destroy()
             except tk.TclError as exc:
                 _warn_gui_fallback("performance_tab.close_button.destroy", exc)
             self._performance_tab_close_buttons.pop(str(tab_id), None)
+
+        notebook_tabs = [str(tab_id) for tab_id in notebook.tabs()]
+        for item in list(getattr(self, "_performance_tabs", [])):
+            tab_id = str(item.get("tab_id"))
+            if tab_id not in notebook_tabs:
+                self._destroy_performance_close_button(tab_id)
+                continue
+            try:
+                tab_index = notebook_tabs.index(tab_id)
+                bbox = notebook.bbox(tab_index)
+            except tk.TclError as exc:
+                _warn_gui_fallback("performance_tab.close_button.bbox", exc)
+                self._destroy_performance_close_button(tab_id)
+                continue
+            if not bbox:
+                self._destroy_performance_close_button(tab_id)
+                continue
+
+            left, top, width, height = [int(value) for value in bbox]
+            button = self._get_or_create_performance_close_button(tab_id)
+            button_size = int(PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX)
+            button_x = left + width - int(PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX) - button_size
+            button_y = top + max(0, (height - button_size) // 2)
+            try:
+                button.place(x=button_x, y=button_y, width=button_size, height=button_size)
+                button.lift()
+            except tk.TclError as exc:
+                _warn_gui_fallback("performance_tab.close_button.place", exc)
+                self._destroy_performance_close_button(tab_id)
         return None
 
     def _destroy_performance_close_button(self, tab_id):

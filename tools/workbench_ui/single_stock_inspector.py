@@ -38,7 +38,13 @@ from tools.trade_analysis.charting import (
 )
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
-from tools.workbench_ui.workbench import WORKBENCH_RIGHT_SIDEBAR_WIDTH, WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH
+from tools.workbench_ui.workbench import (
+    WORKBENCH_RIGHT_SIDEBAR_BODY_FONT,
+    WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT,
+    WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT,
+    WORKBENCH_RIGHT_SIDEBAR_WIDTH,
+    WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH,
+)
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -560,9 +566,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
-        sidebar_chip_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_header_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_body_font = ("Microsoft JhengHei", 14)
+        sidebar_chip_font = WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT
+        sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
+        sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
         self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")

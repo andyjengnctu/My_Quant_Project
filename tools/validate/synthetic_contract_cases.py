@@ -2877,6 +2877,9 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "gui_trade_navigation_uses_compact_center_window", True, "window_width = max(" in charting_source and "min(current_width" in charting_source)
     add_check(results, "output_contract", case_id, "gui_single_trade_navigation_uses_buy_markers", True, "trace_names=BUY_TRADE_TRACE_NAMES" in inspector_source)
     add_check(results, "output_contract", case_id, "gui_portfolio_trade_navigation_uses_buy_markers", True, "trace_names=BUY_TRADE_TRACE_NAMES" in portfolio_inspector_source)
+    portfolio_tab_close_block = portfolio_inspector_source.split("    def _refresh_performance_tab_close_buttons(", 1)[1].split("    def _destroy_performance_close_button", 1)[0]
+    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_button_is_positioned", True, "button.place(" in portfolio_tab_close_block and "button.lift()" in portfolio_tab_close_block)
+    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_refresh_preserves_live_buttons", True, "if str(tab_id) in live_tab_ids:" in portfolio_tab_close_block and "continue" in portfolio_tab_close_block)
     add_check(results, "output_contract", case_id, "gui_single_trade_indexes_survive_chart_clear", True, "trade_indexes = extract_trade_marker_indexes" in inspector_source and "self._current_chart_trade_indexes = trade_indexes" in inspector_source)
     add_check(results, "output_contract", case_id, "gui_portfolio_trade_indexes_survive_chart_clear", True, "trade_indexes = _extract_trade_marker_indexes" in portfolio_inspector_source and "self._current_chart_trade_indexes = trade_indexes" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_runner", True, "run_ticker_analysis" in inspector_source and "run_debug_ticker_analysis" not in inspector_source)
