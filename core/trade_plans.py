@@ -1,5 +1,6 @@
 from core.entry_plans import (
     build_cash_capped_entry_plan,
+    entry_notional_meets_minimum,
     build_normal_candidate_plan,
     build_normal_entry_plan,
     build_position_from_entry_fill,
@@ -30,6 +31,7 @@ __all__ = [
     "evaluate_history_candidate_metrics",
     "resize_candidate_plan_to_capital",
     "build_cash_capped_entry_plan",
+    "entry_notional_meets_minimum",
     "build_normal_candidate_plan",
     "build_normal_entry_plan",
     "should_count_miss_buy",

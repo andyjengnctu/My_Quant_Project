@@ -24,6 +24,29 @@ from core.price_utils import (
 )
 
 
+def calc_entry_notional_milli(limit_price, qty):
+    if qty is None or pd.isna(limit_price):
+        return 0
+    try:
+        qty_int = int(qty)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if qty_int <= 0:
+        return 0
+    return price_to_milli(limit_price) * qty_int
+
+
+def get_min_entry_notional_milli(params):
+    return money_to_milli(float(getattr(params, "min_entry_notional", 0.0) or 0.0))
+
+
+def entry_notional_meets_minimum(limit_price, qty, params):
+    min_notional_milli = get_min_entry_notional_milli(params)
+    if min_notional_milli <= 0:
+        return True
+    return calc_entry_notional_milli(limit_price, qty) >= min_notional_milli
+
+
 def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
     if max_qty <= 0 or available_cash_milli <= 0:
         return 0, 0
@@ -51,6 +74,9 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
             break
         candidate_qty = next_qty
         reserved_cost_milli = next_cost_milli
+
+    if not entry_notional_meets_minimum(limit_price, candidate_qty, params):
+        return 0, 0
 
     return candidate_qty, reserved_cost_milli
 

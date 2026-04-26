@@ -136,6 +136,7 @@ class V16StrategyParams:
     sell_fee: float = EXECUTION_POLICY_PARAM_SPECS["sell_fee"]["default"]
     tax_rate: float = EXECUTION_POLICY_PARAM_SPECS["tax_rate"]["default"]
     min_fee: float = EXECUTION_POLICY_PARAM_SPECS["min_fee"]["default"]
+    min_entry_notional: float = EXECUTION_POLICY_PARAM_SPECS["min_entry_notional"]["default"]
     use_compounding: bool = EXECUTION_POLICY_PARAM_SPECS["use_compounding"]["default"]
 
     def __post_init__(self):

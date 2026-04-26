@@ -379,6 +379,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     params=params,
                     cash=cash,
                     available_cash=available_cash,
+                    sizing_equity=sizing_equity,
                     max_positions=max_positions,
                     trade_history=trade_history,
                     is_training=is_training,

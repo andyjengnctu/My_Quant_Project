@@ -14,6 +14,7 @@ EXECUTION_POLICY_PARAM_SPECS = {
     "sell_fee": {"type": float, "default": DEFAULT_FEE_RATE, "min_value": 0.0},  # 賣出手續費率，預設券商手續費 × 折扣
     "tax_rate": {"type": float, "default": 0.003, "min_value": 0.0},  # 賣出交易稅率
     "min_fee": {"type": float, "default": 20.0, "min_value": 0.0},  # 最低手續費金額
+    "min_entry_notional": {"type": float, "default": 50_126.0, "min_value": 0.0},  # 單筆買進最低成交名目金額，避免最低手續費扭曲零碎單
     "use_compounding": {"type": bool, "default": True},  # 是否使用複利資金口徑
 }
 

@@ -16,6 +16,8 @@ PARAM_FIELDS = tuple(fields(V16StrategyParams))
 PARAM_FIELD_TYPES = {field.name: field.type for field in PARAM_FIELDS}
 PARAM_FIELD_NAMES = tuple(field.name for field in PARAM_FIELDS)
 RUNTIME_PARAM_NAMES = tuple(RUNTIME_PARAM_DEFAULTS)
+PARAM_FIELD_DEFAULTS = {field.name: field.default for field in PARAM_FIELDS}
+PARAM_COMPAT_DEFAULT_FIELDS = {"min_entry_notional"}
 
 
 # # (AI註: 參數載入時先做型別收斂，避免錯型別延後到回測/優化流程才爆炸)
@@ -82,7 +84,11 @@ def _validate_param_payload(data):
     if unknown_keys:
         raise ValueError(f"參數檔含未知欄位: {unknown_keys}")
 
-    missing_keys = [field_name for field_name in PARAM_FIELD_NAMES if field_name not in data]
+    missing_keys = [
+        field_name
+        for field_name in PARAM_FIELD_NAMES
+        if field_name not in data and field_name not in PARAM_COMPAT_DEFAULT_FIELDS
+    ]
     if missing_keys:
         raise ValueError(f"參數檔缺少必要欄位: {missing_keys}")
 
@@ -95,9 +101,10 @@ def build_params_from_mapping(data):
     _validate_param_payload(data)
     coerced_values = {}
     for field_name in PARAM_FIELD_NAMES:
+        raw_value = data[field_name] if field_name in data else PARAM_FIELD_DEFAULTS[field_name]
         coerced_values[field_name] = _coerce_param_value(
             field_name,
-            data[field_name],
+            raw_value,
             PARAM_FIELD_TYPES[field_name],
         )
     validate_strategy_param_ranges(coerced_values)

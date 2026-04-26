@@ -3,13 +3,17 @@ from core.config import get_buy_sort_method
 from core.exact_accounting import coerce_money_like_to_milli, milli_to_money, restore_money_like_from_milli
 from core.trade_plans import (
     build_cash_capped_entry_plan,
+    entry_notional_meets_minimum,
     execute_pre_market_entry_plan,
     should_clear_extended_signal,
 )
 from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
 
 
-def _build_candidate_plan_seed(candidate_row):
+def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
+    sizing_capital = candidate_row.get('sizing_capital')
+    if (sizing_capital is None or sizing_capital != sizing_capital) and sizing_equity is not None:
+        sizing_capital = sizing_equity
     return {
         'limit_price': candidate_row['limit_px'],
         'init_sl': candidate_row['init_sl'],
@@ -19,17 +23,19 @@ def _build_candidate_plan_seed(candidate_row):
         'ticker': candidate_row.get('ticker'),
         'security_profile': candidate_row.get('security_profile'),
         'trade_date': candidate_row.get('trade_date'),
-        'sizing_capital': candidate_row.get('sizing_capital'),
+        'sizing_capital': sizing_capital,
     }
 
 
-def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash_milli):
+def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash_milli, params, sizing_equity=None):
     qty = int(candidate_row.get('qty', 0) or 0)
     reserved_cost_milli = int(candidate_row.get('proj_cost_milli', 0) or 0)
     if qty <= 0 or reserved_cost_milli <= 0 or reserved_cost_milli > int(available_cash_milli):
         return None
+    if not entry_notional_meets_minimum(candidate_row.get('limit_px'), qty, params):
+        return None
 
-    entry_plan = _build_candidate_plan_seed(candidate_row)
+    entry_plan = _build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity)
     entry_plan['qty'] = qty
     entry_plan['is_orderable'] = True
     entry_plan['reserved_cost_milli'] = reserved_cost_milli
@@ -37,12 +43,17 @@ def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash
     return entry_plan
 
 
-def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params):
-    full_entry_plan = _build_candidate_full_entry_plan_if_affordable(candidate_row, effective_entry_budget_milli)
+def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params, sizing_equity):
+    full_entry_plan = _build_candidate_full_entry_plan_if_affordable(
+        candidate_row,
+        effective_entry_budget_milli,
+        params,
+        sizing_equity=sizing_equity,
+    )
     if full_entry_plan is not None:
         return full_entry_plan
     return build_cash_capped_entry_plan(
-        _build_candidate_plan_seed(candidate_row),
+        _build_candidate_plan_seed(candidate_row, sizing_equity=sizing_equity),
         effective_entry_budget,
         params,
     )
@@ -58,6 +69,7 @@ def execute_reserved_entries_for_day(
     params,
     cash,
     available_cash,
+    sizing_equity,
     max_positions,
     trade_history,
     is_training,
@@ -90,6 +102,8 @@ def execute_reserved_entries_for_day(
                 probe_entry_plan = _build_candidate_full_entry_plan_if_affordable(
                     probe_cand,
                     effective_entry_budget_milli,
+                    params,
+                    sizing_equity=sizing_equity,
                 )
                 if probe_entry_plan is not None:
                     chosen_key = int(probe_entry_plan['reserved_cost_milli'])
@@ -98,7 +112,7 @@ def execute_reserved_entries_for_day(
                     break
 
                 probe_entry_plan = build_cash_capped_entry_plan(
-                    _build_candidate_plan_seed(probe_cand),
+                    _build_candidate_plan_seed(probe_cand, sizing_equity=sizing_equity),
                     effective_entry_budget,
                     params,
                 )
@@ -123,6 +137,7 @@ def execute_reserved_entries_for_day(
                 effective_entry_budget,
                 effective_entry_budget_milli,
                 params,
+                sizing_equity,
             )
             if chosen_entry_plan is None:
                 continue
