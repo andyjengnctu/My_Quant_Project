@@ -88,7 +88,7 @@ SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
 SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
-PERFORMANCE_TAB_CLOSE_HITBOX_PX = 24
+PERFORMANCE_TAB_CLOSE_HITBOX_PX = 12
 COMBOBOX_WIDTH_RULES = {
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
@@ -807,6 +807,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
+        notebook.bind("<Button-1>", self._on_performance_tab_click, add="+")
 
         kline_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         kline_tab.rowconfigure(0, weight=1)
@@ -817,20 +818,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._kline_host.grid(row=0, column=0, sticky="nsew")
         self._kline_placeholder = self._make_placeholder(self._kline_host, "請先執行投組回測；選擇有成交過的股票後會顯示 K 線結果。")
 
-        sidebar_outer = ttk.Frame(kline_tab, padding=(4, 4, 2, 4), width=WORKBENCH_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
+        sidebar_outer = ttk.Frame(kline_tab, padding=(0, 3, 0, 3), width=WORKBENCH_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
         sidebar_outer.grid(row=0, column=1, sticky="ns")
         sidebar_outer.grid_propagate(False)
+        sidebar_outer.pack_propagate(False)
         kline_tab.grid_columnconfigure(1, minsize=WORKBENCH_RIGHT_SIDEBAR_WIDTH)
 
-        sidebar = ttk.Frame(sidebar_outer, padding=(2, 2), style="Workbench.TFrame")
+        sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
-        sidebar_chip_font = ("Microsoft JhengHei", 13, "bold")
-        sidebar_header_font = ("Microsoft JhengHei", 13, "bold")
-        sidebar_body_font = ("Microsoft JhengHei", 12)
-        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        sidebar_chip_font = ("Microsoft JhengHei", 11, "bold")
+        sidebar_header_font = ("Microsoft JhengHei", 11, "bold")
+        sidebar_body_font = ("Microsoft JhengHei", 10)
+        self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
+        self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
@@ -847,31 +849,26 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
         trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
-        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
-        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
         sidebar.rowconfigure(19, weight=1)
 
         performance_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         performance_tab.rowconfigure(0, weight=1)
         performance_tab.columnconfigure(0, weight=1)
         notebook.add(performance_tab, text="績效圖")
-        self._performance_notebook = ttk.Notebook(performance_tab, style="Workbench.TNotebook")
-        self._performance_notebook.grid(row=0, column=0, sticky="nsew")
-        self._performance_notebook.bind("<Button-1>", self._on_performance_tab_click, add="+")
-        self._performance_placeholder_tab = ttk.Frame(self._performance_notebook, padding=0, style="Workbench.TFrame")
-        self._performance_placeholder_tab.rowconfigure(0, weight=1)
-        self._performance_placeholder_tab.columnconfigure(0, weight=1)
-        self._performance_placeholder_host = tk.Frame(self._performance_placeholder_tab, bg="#000000", highlightthickness=0, bd=0)
+        self._performance_placeholder_tab = performance_tab
+        self._performance_placeholder_host = tk.Frame(performance_tab, bg="#000000", highlightthickness=0, bd=0)
         self._performance_placeholder_host.grid(row=0, column=0, sticky="nsew")
-        self._performance_placeholder = self._make_placeholder(self._performance_placeholder_host, "請先執行投組回測；每次新的績效圖會開成新分頁，可點分頁右側 × 關閉。")
-        self._performance_notebook.add(self._performance_placeholder_tab, text="績效圖")
+        self._performance_placeholder = self._make_placeholder(self._performance_placeholder_host, "請先執行投組回測；每次新的績效圖會在此列同階新增分頁，可點分頁右側 × 關閉。")
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
+        self._console_tab = console_tab
         console_tab.rowconfigure(0, weight=1)
         console_tab.columnconfigure(0, weight=1)
         notebook.add(console_tab, text="Console")
@@ -1570,53 +1567,90 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         end_year_label = "至今" if options.get("end_year") is None else f"至{options.get('end_year')}"
         return f"績效圖 {self._performance_tab_seq} {timestamp} {options.get('start_year', '-')} {end_year_label} ×"
 
+    def _get_workbench_notebook_font(self):
+        if hasattr(self, "_workbench_notebook_font"):
+            return self._workbench_notebook_font
+        font_spec = ttk.Style(self).lookup("Workbench.TNotebook.Tab", "font") or ("Microsoft JhengHei", 11)
+        try:
+            self._workbench_notebook_font = tkfont.Font(font=font_spec)
+        except tk.TclError as exc:
+            _warn_gui_fallback("tkfont.Font(font=Workbench.TNotebook.Tab)", exc)
+            self._workbench_notebook_font = tkfont.nametofont("TkDefaultFont")
+        return self._workbench_notebook_font
+
+    def _find_performance_tab_record(self, tab_id):
+        for item in list(self._performance_tabs):
+            if str(item.get("tab_id")) == str(tab_id):
+                return item
+        return None
+
+    def _is_performance_close_hit(self, *, notebook, tab_index, event, bbox):
+        if not bbox:
+            return False
+        try:
+            tab_id = notebook.tabs()[int(tab_index)]
+        except (IndexError, TypeError, ValueError):
+            return False
+        if self._find_performance_tab_record(tab_id) is None:
+            return False
+        font_obj = self._get_workbench_notebook_font()
+        close_hitbox_px = max(PERFORMANCE_TAB_CLOSE_HITBOX_PX, font_obj.measure("×") + 6)
+        left = int(bbox[0]) + int(bbox[2]) - close_hitbox_px
+        right = int(bbox[0]) + int(bbox[2])
+        return left <= int(event.x) <= right
+
     def _on_performance_tab_click(self, event):
-        notebook = getattr(self, "_performance_notebook", None)
+        notebook = getattr(self, "_notebook", None)
         if notebook is None:
             return None
         try:
             tab_index = notebook.index(f"@{event.x},{event.y}")
             bbox = notebook.bbox(tab_index)
-            tab_text = str(notebook.tab(tab_index, "text") or "")
         except tk.TclError:
             return None
-        if not tab_text.rstrip().endswith("×"):
-            return None
-        if bbox and event.x >= int(bbox[0]) + int(bbox[2]) - PERFORMANCE_TAB_CLOSE_HITBOX_PX:
+        if self._is_performance_close_hit(notebook=notebook, tab_index=tab_index, event=event, bbox=bbox):
             self._close_performance_tab_by_index(tab_index)
             return "break"
         return None
 
     def _close_performance_tab_by_index(self, tab_index):
-        notebook = getattr(self, "_performance_notebook", None)
+        notebook = getattr(self, "_notebook", None)
         if notebook is None:
             return
         try:
             tab_id = notebook.tabs()[int(tab_index)]
         except (IndexError, TypeError, ValueError):
             return
-        record = None
-        for item in list(self._performance_tabs):
-            if str(item.get("tab_id")) == str(tab_id):
-                record = item
-                break
-        if record is not None:
-            self._performance_tabs.remove(record)
-            canvas = record.get("canvas")
-            figure = record.get("figure")
-            if canvas is not None:
-                canvas.get_tk_widget().destroy()
-            if figure is not None:
-                figure.clear()
+        record = self._find_performance_tab_record(tab_id)
+        if record is None:
+            return
+        self._performance_tabs.remove(record)
+        canvas = record.get("canvas")
+        figure = record.get("figure")
+        if canvas is not None:
+            canvas.get_tk_widget().destroy()
+        if figure is not None:
+            figure.clear()
         try:
             notebook.forget(tab_id)
         except tk.TclError as exc:
-            _warn_gui_fallback("performance_notebook.forget", exc)
+            _warn_gui_fallback("performance_tab.forget", exc)
         if not self._performance_tabs:
             try:
                 notebook.select(self._performance_placeholder_tab)
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_notebook.select(placeholder)", exc)
+                _warn_gui_fallback("performance_tab.select(placeholder)", exc)
+
+    def _resolve_performance_tab_insert_index(self):
+        notebook = getattr(self, "_notebook", None)
+        console_tab = getattr(self, "_console_tab", None)
+        if notebook is None or console_tab is None:
+            return "end"
+        try:
+            return notebook.index(console_tab)
+        except tk.TclError as exc:
+            _warn_gui_fallback("performance_tab.index(console)", exc)
+            return "end"
 
     def _render_performance_chart(self, result_payload):
         df_eq = result_payload.get("df_eq")
@@ -1624,9 +1658,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if df_eq is None or df_eq.empty:
             self._performance_placeholder.configure(text="投組回測完成，但沒有績效曲線資料。")
             try:
-                self._performance_notebook.select(self._performance_placeholder_tab)
+                self._notebook.select(self._performance_placeholder_tab)
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_notebook.select(placeholder)", exc)
+                _warn_gui_fallback("performance_tab.select(placeholder)", exc)
             return
         if FigureCanvasTkAgg is None:
             self._status_var.set("缺少 matplotlib TkAgg backend，無法內嵌績效圖。")
@@ -1668,7 +1702,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             for text in legend.get_texts():
                 text.set_color("#f7fbff")
 
-        tab_frame = ttk.Frame(self._performance_notebook, padding=0, style="Workbench.TFrame")
+        tab_frame = ttk.Frame(self._notebook, padding=0, style="Workbench.TFrame")
         tab_frame.rowconfigure(0, weight=1)
         tab_frame.columnconfigure(0, weight=1)
         host = tk.Frame(tab_frame, bg="#000000", highlightthickness=0, bd=0)
@@ -1678,10 +1712,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         widget = canvas.get_tk_widget()
         widget.configure(background="#02050a", highlightthickness=0, bd=0)
         widget.pack(fill="both", expand=True)
-        self._performance_notebook.add(tab_frame, text=self._resolve_performance_tab_title(options))
-        tab_id = self._performance_notebook.tabs()[-1]
+        tab_title = self._resolve_performance_tab_title(options)
+        self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
+        tab_id = str(tab_frame)
         self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure})
-        self._performance_notebook.select(tab_frame)
+        self._notebook.select(tab_frame)
 
     def _clear_kline_chart(self):
         if self._chart_canvas is not None:
@@ -1696,7 +1731,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._kline_placeholder.pack(fill="both", expand=True)
 
     def _clear_all_performance_tabs(self):
-        notebook = getattr(self, "_performance_notebook", None)
+        notebook = getattr(self, "_notebook", None)
         for item in list(getattr(self, "_performance_tabs", [])):
             canvas = item.get("canvas")
             figure = item.get("figure")
@@ -1708,10 +1743,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 try:
                     notebook.forget(item.get("tab_id"))
                 except tk.TclError as exc:
-                    _warn_gui_fallback("performance_notebook.forget", exc)
+                    _warn_gui_fallback("performance_tab.forget", exc)
         self._performance_tabs = []
         if notebook is not None:
             try:
                 notebook.select(self._performance_placeholder_tab)
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_notebook.select(placeholder)", exc)
+                _warn_gui_fallback("performance_tab.select(placeholder)", exc)

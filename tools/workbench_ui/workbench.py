@@ -31,6 +31,7 @@ WORKBENCH_SIDEBAR_GATE_STYLE = "Workbench.SidebarGate.TLabel"
 WORKBENCH_SIDEBAR_HEADER_STYLE = "Workbench.SidebarHeader.TLabel"
 WORKBENCH_SIDEBAR_SUMMARY_STYLE = "Workbench.SidebarSummary.TLabel"
 WORKBENCH_SIDEBAR_VALUE_STYLE = "Workbench.SidebarValue.TLabel"
+WORKBENCH_SIDEBAR_BUTTON_STYLE = "Workbench.Sidebar.TButton"
 WORKBENCH_UI_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_NOTEBOOK_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_RIGHT_SIDEBAR_WIDTH = 125
@@ -125,6 +126,8 @@ def configure_workbench_theme(root):
     style.configure(WORKBENCH_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
     style.configure(WORKBENCH_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4), font=WORKBENCH_UI_FONT)
     style.map(WORKBENCH_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
+    style.configure(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(2, 3), font=("Microsoft JhengHei", 10))
+    style.map(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
     style.configure(WORKBENCH_CHECK_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT, padding=(0, 2))
     style.map(WORKBENCH_CHECK_STYLE, foreground=[("active", WORKBENCH_TEXT)])
     style.configure(WORKBENCH_ENTRY_STYLE, fieldbackground=WORKBENCH_SURFACE, foreground=WORKBENCH_TEXT, insertcolor=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
