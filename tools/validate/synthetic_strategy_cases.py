@@ -1121,8 +1121,8 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         results,
         "strategy_contract",
         case_id,
-        "local_min_score_finalist_top_k_minimum_is_5",
-        5,
+        "local_min_score_finalist_top_k_uses_2pct_without_minimum_floor",
+        2,
         training_policy.resolve_optimizer_local_min_score_finalist_top_k(100),
     )
     add_check(
