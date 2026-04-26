@@ -1138,6 +1138,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._console_live_progress_start = None
         self._console_text.see("end")
 
+    def _prepare_console_for_new_task(self):
+        self._flush_console_live_progress(force_newline=True)
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
+        self._console_current_tag = "default"
+        if self._console_text.compare("end-1c", ">", "1.0"):
+            if self._console_text.get("end-2c", "end-1c") != "\n":
+                self._console_text.insert("end", "\n", self._console_current_tag)
+            self._console_text.insert("end", "\n" + ("=" * 80) + "\n", self._console_current_tag)
+        self._console_text.see("end")
+
     def _clear_console(self):
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
@@ -1169,7 +1181,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         self._active_token += 1
         request_token = self._active_token
-        self._clear_console()
+        self._prepare_console_for_new_task()
         self._notebook.select(2)
         self._status_var.set("執行中：投組回測")
         self._append_console_text("[portfolio] 執行中：投組回測\n")

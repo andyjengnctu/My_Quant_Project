@@ -2884,6 +2884,15 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "workbench_panel_registry_omits_legacy_debug_runner_alias", False, "run_debug_ticker_analysis" in workbench_source)
     add_check(results, "output_contract", case_id, "workbench_panel_registry_omits_legacy_debug_chart_alias", False, "create_matplotlib_debug_chart_figure" in workbench_source)
 
+    single_start_scanner_block = inspector_source.split("    def _start_scanner(", 1)[1].split("    def _finish_scanner_success", 1)[0]
+    single_prepare_console_block = inspector_source.split("    def _prepare_console_for_new_task(", 1)[1].split("    def _clear_console", 1)[0]
+    portfolio_run_backtest_block = portfolio_inspector_source.split("    def _run_portfolio_backtest(", 1)[1].split("    def _run_portfolio_worker", 1)[0]
+    portfolio_prepare_console_block = portfolio_inspector_source.split("    def _prepare_console_for_new_task(", 1)[1].split("    def _clear_console", 1)[0]
+    add_check(results, "output_contract", case_id, "gui_single_new_scanner_task_preserves_console_history", True, "_prepare_console_for_new_task()" in single_start_scanner_block and "_clear_console()" not in single_start_scanner_block)
+    add_check(results, "output_contract", case_id, "gui_single_prepare_console_task_does_not_delete_history", False, '.delete("1.0", "end")' in single_prepare_console_block)
+    add_check(results, "output_contract", case_id, "gui_portfolio_new_backtest_task_preserves_console_history", True, "_prepare_console_for_new_task()" in portfolio_run_backtest_block and "_clear_console()" not in portfolio_run_backtest_block)
+    add_check(results, "output_contract", case_id, "gui_portfolio_prepare_console_task_does_not_delete_history", False, '.delete("1.0", "end")' in portfolio_prepare_console_block)
+
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):
             exit_code = tools_gui.main(["apps/workbench.py", "--help"])

@@ -853,6 +853,17 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._console_live_progress_start = None
         self._console_text.see("end")
 
+    def _prepare_console_for_new_task(self):
+        self._flush_console_live_progress(force_newline=True)
+        self._console_stream_buffer = ""
+        self._console_stream_mode = "line"
+        self._console_live_progress_start = None
+        if self._console_text.compare("end-1c", ">", "1.0"):
+            if self._console_text.get("end-2c", "end-1c") != "\n":
+                self._console_text.insert("end", "\n")
+            self._console_text.insert("end", "\n" + ("=" * 80) + "\n")
+        self._console_text.see("end")
+
     def _clear_console(self):
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
@@ -1061,7 +1072,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._scanner_active_token += 1
         request_token = self._scanner_active_token
         params_path = self._get_selected_params_path()
-        self._clear_console()
+        self._prepare_console_for_new_task()
         self._notebook.select(2)
         param_source = self._get_selected_param_source_label()
         status_text = (
