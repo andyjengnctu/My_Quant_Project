@@ -157,13 +157,53 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
     }
 
 
+def _summary_policy_signature(summary: dict | None):
+    if not isinstance(summary, dict):
+        return None
+    return (
+        str(summary.get("objective_mode", "")),
+        summary.get("train_start_year"),
+        summary.get("search_train_end_year"),
+        summary.get("oos_start_year"),
+    )
+
+
+def _format_summary_policy_signature(summary: dict | None) -> str:
+    signature = _summary_policy_signature(summary)
+    if signature is None:
+        return "N/A"
+    objective_mode, train_start_year, search_train_end_year, oos_start_year = signature
+    return (
+        f"objective={objective_mode or 'N/A'}"
+        f", train_start={train_start_year if train_start_year is not None else 'N/A'}"
+        f", search_end={search_train_end_year if search_train_end_year is not None else 'N/A'}"
+        f", oos_start={oos_start_year if oos_start_year is not None else 'N/A'}"
+    )
+
+
+def _summaries_have_compatible_policy(*, candidate_summary: dict, run_best_summary: dict | None) -> bool:
+    if run_best_summary is None:
+        return False
+    return _summary_policy_signature(candidate_summary) == _summary_policy_signature(run_best_summary)
+
+
 def _print_candidate_vs_run_best_summary(*, candidate_summary: dict, run_best_summary: dict | None):
     print(f"{C_GRAY}{'-' * 96}{C_RESET}")
-    print(f"      candidate | base={float(candidate_summary.get('base_score', 0.0)):.3f} | local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} | retention={float(candidate_summary.get('retention', 0.0)):.3f}")
+    print(
+        f"      candidate | base={float(candidate_summary.get('base_score', 0.0)):.3f} "
+        f"| local_min={float(candidate_summary.get('local_min_score', 0.0)):.3f} "
+        f"| retention={float(candidate_summary.get('retention', 0.0)):.3f} "
+        f"| policy=({_format_summary_policy_signature(candidate_summary)})"
+    )
     if run_best_summary is None:
         print(f"      run_best  | 尚無 summary，視同未建立 promote 基線")
     else:
-        print(f"      run_best  | base={float(run_best_summary.get('base_score', 0.0)):.3f} | local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} | retention={float(run_best_summary.get('retention', 0.0)):.3f}")
+        print(
+            f"      run_best  | base={float(run_best_summary.get('base_score', 0.0)):.3f} "
+            f"| local_min={float(run_best_summary.get('local_min_score', 0.0)):.3f} "
+            f"| retention={float(run_best_summary.get('retention', 0.0)):.3f} "
+            f"| policy=({_format_summary_policy_signature(run_best_summary)})"
+        )
     print(f"{C_GRAY}{'-' * 96}{C_RESET}")
 
 
@@ -177,6 +217,8 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
         return False, "candidate.base_score <= 0"
     if run_best_summary is None:
         return True, "run_best summary 缺失，視同首次 promote"
+    if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
+        return True, "run_best summary effective policy 與 candidate 不一致，視同舊基準重新 promote"
     run_best_retention = float(run_best_summary.get("retention", float("-inf")))
     if candidate_retention > run_best_retention:
         return True, "candidate.retention > run_best.retention"

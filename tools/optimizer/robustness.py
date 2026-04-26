@@ -266,16 +266,12 @@ def compute_local_min_score(
 
     neighbor_payloads = _build_neighbor_candidates(session, trial)
     if not neighbor_payloads:
-        base_score = trial.user_attrs.get("base_score", trial.value)
-        try:
-            local_min_score = float(base_score)
-        except (TypeError, ValueError):
-            local_min_score = float(INVALID_TRIAL_VALUE)
+        local_min_score = float(INVALID_TRIAL_VALUE)
         cache[cache_key] = {"score": float(local_min_score), "total_neighbors": 0, "evaluated_neighbors": 0, "early_stopped": False}
         if on_finish is not None:
             on_finish(0, 0, float(local_min_score), False)
         elif progress_label:
-            _print_progress_line(session, f"✅ {progress_label}: 無合法鄰點，local_min_score={float(local_min_score):.3f}")
+            _print_progress_line(session, f"❌ {progress_label}: 無合法鄰點，local_min_score={float(local_min_score):.3f} | gate=FAIL")
         return float(local_min_score)
 
     total_neighbors = len(neighbor_payloads)

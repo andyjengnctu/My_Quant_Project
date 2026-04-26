@@ -1039,7 +1039,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "export_best_params_failure_does_not_create_payload", False, failure_export_path.exists())
 
     canonical_model_files = [
-        Path("models/run_best_params.json"),
+        Path("models/candidate_best_params.json"),
         Path("models/run_best_params.json"),
     ]
     canonical_field_names = set(_optimizer_export_canonical_decimal_places()) | {"buy_fee", "sell_fee"}
@@ -1065,6 +1065,39 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         expected_shipped_repr_map,
         shipped_repr_map,
     )
+
+    optimizer_main = importlib.import_module("tools.optimizer.main")
+    incompatible_candidate_summary = {
+        "base_score": 10.0,
+        "local_min_score": 7.0,
+        "retention": 0.7,
+        "objective_mode": "split_train_romd",
+        "train_start_year": 2016,
+        "search_train_end_year": 2020,
+        "oos_start_year": 2021,
+    }
+    stale_run_best_summary = {
+        "base_score": 9.0,
+        "local_min_score": 8.0,
+        "retention": 0.8,
+        "objective_mode": "split_train_romd",
+        "train_start_year": 2023,
+        "search_train_end_year": 2024,
+        "oos_start_year": 2025,
+    }
+    should_promote_stale_policy, stale_policy_reason = optimizer_main._should_promote_candidate(
+        candidate_summary=incompatible_candidate_summary,
+        run_best_summary=stale_run_best_summary,
+    )
+    add_check(results, "strategy_contract", case_id, "optimizer_promote_ignores_stale_run_best_policy_baseline", True, should_promote_stale_policy)
+    add_check(results, "strategy_contract", case_id, "optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
+
+    robustness = importlib.import_module("tools.optimizer.robustness")
+    no_neighbor_session = SimpleNamespace()
+    no_neighbor_trial = SimpleNamespace(number=99, user_attrs={"base_score": 42.0}, value=42.0)
+    with patch.object(robustness, "_build_neighbor_candidates", return_value=[]):
+        no_neighbor_local_min = robustness.compute_local_min_score(no_neighbor_session, no_neighbor_trial)
+    add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_fails_gate_conservatively", INVALID_TRIAL_VALUE, no_neighbor_local_min)
 
     summary["success_export_key_count"] = len(exported_payload)
     summary["registry_contract_checks"] = len(results)

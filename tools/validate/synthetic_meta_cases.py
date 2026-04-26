@@ -405,7 +405,7 @@ def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     models_dir = PROJECT_ROOT / "models"
 
     required_tree_fragments = [
-        "│  ├─ run_best_params.json           # 本輪訓練最佳參數檔",
+        "│  ├─ candidate_best_params.json     # 本輪訓練最佳候選參數檔",
         "│  └─ run_best_params.json           # 目前正式現役參數檔",
     ]
     stale_tree_fragments = [
@@ -419,11 +419,13 @@ def _validate_architecture_models_run_best_params_file_tree_sync(_base_params):
     for stale_idx, fragment in enumerate(stale_tree_fragments, start=1):
         add_check(results, "meta_architecture_contract", case_id, f"architecture_models_file_tree_omits_stale_params_artifact_{stale_idx}", False, fragment in architecture_text)
 
+    add_check(results, "meta_architecture_contract", case_id, "repo_ships_candidate_best_params", True, (models_dir / "candidate_best_params.json").exists())
     add_check(results, "meta_architecture_contract", case_id, "repo_ships_run_best_params", True, (models_dir / "run_best_params.json").exists())
 
     summary["required_tree_fragments"] = required_tree_fragments
     summary["source_paths"] = [
         "doc/ARCHITECTURE.md",
+        "models/candidate_best_params.json",
         "models/run_best_params.json",
     ]
     return results, summary
