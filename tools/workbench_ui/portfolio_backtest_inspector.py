@@ -42,7 +42,7 @@ from tools.trade_analysis.charting import (
     record_active_levels,
     record_signal_annotation,
     record_trade_marker,
-    scroll_chart_to_index,
+    scroll_chart_to_adjacent_trade,
     scroll_chart_to_latest,
 )
 
@@ -999,29 +999,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._move_kline_chart_to_trade(direction=1)
 
     def _move_kline_chart_to_trade(self, *, direction):
-        if self._chart_figure is None or not self._current_chart_trade_indexes:
+        if self._chart_figure is None:
             return False
-        state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
-        current_index = None
-        if isinstance(state, dict):
-            current_index = state.get("hover_last_index")
-        if current_index is None:
-            current_index = self._current_chart_trade_cursor_index
-        if current_index is None:
-            current_index = self._current_chart_trade_indexes[-1]
-        current_index = int(current_index)
-
-        buy_indexes = sorted(set(int(idx) for idx in self._current_chart_trade_indexes))
-        if not buy_indexes:
-            return False
-        if int(direction) < 0:
-            candidates = [idx for idx in buy_indexes if idx < current_index]
-            target_index = candidates[-1] if candidates else buy_indexes[-1]
-        else:
-            candidates = [idx for idx in buy_indexes if idx > current_index]
-            target_index = candidates[0] if candidates else buy_indexes[0]
-        if scroll_chart_to_index(self._chart_figure, target_index, redraw=True):
-            self._current_chart_trade_cursor_index = int(target_index)
+        trade_indexes = list(self._current_chart_trade_indexes or [])
+        if not trade_indexes:
+            state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+            chart_payload = state.get("chart_payload") if isinstance(state, dict) else None
+            trade_indexes = _extract_trade_marker_indexes(chart_payload)
+            self._current_chart_trade_indexes = trade_indexes
+        if scroll_chart_to_adjacent_trade(self._chart_figure, trade_indexes, direction=direction, redraw=True):
+            state = getattr(self._chart_figure, "_stock_chart_navigation_state", None)
+            if isinstance(state, dict):
+                self._current_chart_trade_cursor_index = int(state.get("hover_last_index", 0) or 0)
             return True
         return False
 

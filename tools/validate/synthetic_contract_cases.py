@@ -2902,6 +2902,11 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "trade_log_exposes_canonical_trade_analysis_data_dir_helper", True, hasattr(debug_module, "resolve_trade_analysis_data_dir"))
     add_check(results, "output_contract", case_id, "charting_exposes_canonical_trade_chart_alias", True, hasattr(charting_module, "create_matplotlib_trade_chart_figure"))
     add_check(results, "output_contract", case_id, "charting_exposes_index_navigation_helper", True, hasattr(charting_module, "scroll_chart_to_index"))
+    add_check(results, "output_contract", case_id, "charting_exposes_adjacent_trade_navigation_helper", True, hasattr(charting_module, "scroll_chart_to_adjacent_trade"))
+    add_check(results, "output_contract", case_id, "charting_adjacent_trade_prev_from_latest", 12, charting_module.resolve_adjacent_trade_index(19, [4, 12], direction=-1))
+    add_check(results, "output_contract", case_id, "charting_adjacent_trade_next_wraps_from_latest", 4, charting_module.resolve_adjacent_trade_index(19, [4, 12], direction=1))
+    add_check(results, "output_contract", case_id, "charting_adjacent_trade_next_from_first", 12, charting_module.resolve_adjacent_trade_index(4, [4, 12], direction=1))
+    add_check(results, "output_contract", case_id, "charting_adjacent_trade_empty_returns_none", None, charting_module.resolve_adjacent_trade_index(4, [], direction=1))
     legacy_df = debug_module.run_debug_backtest(clean_df.copy(), ticker, case["params"], export_excel=False, verbose=False)
     with tempfile.TemporaryDirectory(prefix="gui_workbench_contract_") as temp_dir:
         analysis_result = debug_module.run_debug_analysis(

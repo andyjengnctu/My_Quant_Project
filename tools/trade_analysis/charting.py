@@ -1344,6 +1344,36 @@ def scroll_chart_to_index(figure, target_index, *, redraw=True):
     return True
 
 
+def resolve_adjacent_trade_index(current_index, trade_indexes, *, direction):
+    normalized_indexes = sorted({int(idx) for idx in trade_indexes if idx is not None})
+    if not normalized_indexes:
+        return None
+
+    try:
+        cursor = int(current_index)
+    except (TypeError, ValueError):
+        cursor = normalized_indexes[-1]
+
+    if int(direction) < 0:
+        candidates = [idx for idx in normalized_indexes if idx < cursor]
+        return candidates[-1] if candidates else normalized_indexes[-1]
+
+    candidates = [idx for idx in normalized_indexes if idx > cursor]
+    return candidates[0] if candidates else normalized_indexes[0]
+
+
+def scroll_chart_to_adjacent_trade(figure, trade_indexes, *, direction, redraw=True):
+    if figure is None:
+        return False
+    state = getattr(figure, "_stock_chart_navigation_state", None)
+    current_index = None
+    if isinstance(state, dict):
+        current_index = state.get("hover_last_index")
+    target_index = resolve_adjacent_trade_index(current_index, trade_indexes, direction=direction)
+    if target_index is None:
+        return False
+    return scroll_chart_to_index(figure, target_index, redraw=redraw)
+
 
 def bind_matplotlib_chart_navigation(figure, canvas):
     state = getattr(figure, "_stock_chart_navigation_state", None)
