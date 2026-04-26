@@ -819,8 +819,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
-        notebook.bind("<Button-1>", self._on_performance_tab_click)
-        notebook.bind("<ButtonRelease-1>", self._on_performance_tab_click)
         notebook.bind("<Configure>", self._refresh_performance_tab_close_buttons, add="+")
         notebook.bind("<Map>", self._refresh_performance_tab_close_buttons, add="+")
         notebook.bind("<<NotebookTabChanged>>", self._refresh_performance_tab_close_buttons, add="+")
@@ -1573,7 +1571,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._performance_tab_seq += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
         end_year_label = "至今" if options.get("end_year") is None else f"至{options.get('end_year')}"
-        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}  ×"
+        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}"
 
     def _get_workbench_notebook_font(self):
         if hasattr(self, "_workbench_notebook_font"):
@@ -1601,12 +1599,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         record = self._find_performance_tab_record(tab_id)
         if record is None:
             return None
-        tab_frame = record.get("frame")
-        if tab_frame is None:
+        close_host = record.get("close_host") or record.get("frame")
+        if close_host is None:
             return None
 
         button = tk.Button(
-            tab_frame,
+            close_host,
             text="×",
             command=lambda target_tab_id=tab_id: self._close_performance_tab_by_id(target_tab_id),
             bg="#243040",
@@ -1614,7 +1612,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             fg="#ffffff",
             activeforeground="#ffffff",
             cursor="hand2",
-            font=("Microsoft JhengHei", 13, "bold"),
+            font=("Microsoft JhengHei", 12, "bold"),
             bd=0,
             relief="flat",
             highlightthickness=0,
@@ -1651,10 +1649,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if button is None:
                 continue
             try:
-                button.place(relx=1.0, x=-10, y=10, width=28, height=28, anchor="ne")
+                button.place(relx=1.0, x=-8, y=8, width=24, height=24, anchor="ne")
                 button.lift()
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.place_in_tab", exc)
+                _warn_gui_fallback("performance_tab.close_button.place_in_chart", exc)
                 self._destroy_performance_close_button(tab_id)
         return None
 
@@ -1856,7 +1854,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         tab_title = self._resolve_performance_tab_title(options)
         self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
         tab_id = self._notebook.tabs()[self._notebook.index(tab_frame)]
-        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure})
+        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "close_host": host, "canvas": canvas, "figure": figure})
         self._get_or_create_performance_close_button(tab_id)
         self._notebook.select(tab_frame)
         self.after_idle(self._refresh_performance_tab_close_buttons)

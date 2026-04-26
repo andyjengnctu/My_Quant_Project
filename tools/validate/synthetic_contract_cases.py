@@ -2160,7 +2160,7 @@ def validate_gui_single_stock_refined_visual_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "single_stock_hover_overlay_no_longer_repeats_top_left_text_box", True, 'hover_text_artist.set_visible(False)' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sell_trade_label_includes_max_drawdown", True, '最大回撤:' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_entry_preview_lines_start_next_day_before_fill", True, '_record_entry_plan_preview_levels(' in entry_flow_source and 'record_active_levels(' in entry_flow_source)
-    add_check(results, "output_contract", case_id, "single_stock_sidebar_fonts_enlarged", True, 'font=("Microsoft JhengHei", 16, "bold")' in workbench_source and 'font=("Microsoft JhengHei", 14)' in workbench_source)
+    add_check(results, "output_contract", case_id, "single_stock_sidebar_fonts_scaled_10_percent", True, "WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.90" in workbench_source and "WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT" in workbench_source and "WORKBENCH_RIGHT_SIDEBAR_BODY_FONT" in workbench_source)
     return results, summary
 
 
@@ -2881,8 +2881,10 @@ def validate_gui_workbench_contract_case(base_params):
     close_button_factory_block = portfolio_inspector_source.split("    def _get_or_create_performance_close_button(", 1)[1].split("    def _refresh_performance_tab_close_buttons", 1)[0]
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_button_is_positioned", True, "button.place(" in portfolio_tab_close_block and "button.lift()" in portfolio_tab_close_block)
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_button_is_real_button", True, "tk.Button(" in close_button_factory_block and "command=lambda" in close_button_factory_block)
-    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_button_is_in_tab_overlay", True, "tk.Button(\n            tab_frame," in close_button_factory_block and 'button.place(relx=1.0, x=-10, y=10, width=28, height=28, anchor="ne")' in portfolio_tab_close_block)
+    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_button_is_chart_overlay", True, "close_host = record.get(\"close_host\")" in close_button_factory_block and 'button.place(relx=1.0, x=-8, y=8, width=24, height=24, anchor="ne")' in portfolio_tab_close_block)
     add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_close_refresh_preserves_live_buttons", True, "if str(tab_id) in live_tab_ids:" in portfolio_tab_close_block and "continue" in portfolio_tab_close_block)
+    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_title_omits_legacy_x", False, "end_year_label}  ×" in portfolio_inspector_source)
+    add_check(results, "output_contract", case_id, "gui_portfolio_performance_tab_header_click_close_unbound", False, 'notebook.bind("<Button-1>", self._on_performance_tab_click)' in portfolio_inspector_source or 'notebook.bind("<ButtonRelease-1>", self._on_performance_tab_click)' in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "gui_single_trade_indexes_survive_chart_clear", True, "trade_indexes = extract_trade_marker_indexes" in inspector_source and "self._current_chart_trade_indexes = trade_indexes" in inspector_source)
     add_check(results, "output_contract", case_id, "gui_portfolio_trade_indexes_survive_chart_clear", True, "trade_indexes = _extract_trade_marker_indexes" in portfolio_inspector_source and "self._current_chart_trade_indexes = trade_indexes" in portfolio_inspector_source)
     add_check(results, "output_contract", case_id, "inspector_prefers_canonical_trade_analysis_runner", True, "run_ticker_analysis" in inspector_source and "run_debug_ticker_analysis" not in inspector_source)
