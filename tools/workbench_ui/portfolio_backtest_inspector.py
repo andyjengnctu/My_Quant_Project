@@ -1597,27 +1597,25 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if button is not None and button.winfo_exists():
             return button
 
-        def close_current_tab(_event=None, target_tab_id=str(tab_id)):
-            self._close_performance_tab_by_id(target_tab_id)
-            return "break"
-
-        button = tk.Label(
-            self._notebook,
+        target_tab_id = str(tab_id)
+        button = tk.Button(
+            self,
             text="×",
+            command=lambda target_tab_id=target_tab_id: self._close_performance_tab_by_id(target_tab_id),
             bg=WORKBENCH_SURFACE_ALT,
+            activebackground=WORKBENCH_ACCENT,
             fg="#ffffff",
+            activeforeground="#ffffff",
             cursor="hand2",
-            font=("Microsoft JhengHei", 12, "bold"),
+            font=("Microsoft JhengHei", 11, "bold"),
             bd=0,
+            relief="flat",
             highlightthickness=0,
             padx=0,
             pady=0,
-            anchor="center",
             takefocus=0,
         )
-        button.bind("<Button-1>", close_current_tab)
-        button.bind("<ButtonRelease-1>", close_current_tab)
-        self._performance_tab_close_buttons[str(tab_id)] = button
+        self._performance_tab_close_buttons[target_tab_id] = button
         return button
 
     def _refresh_performance_tab_close_buttons(self, _event=None):
@@ -1655,10 +1653,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             left, top, width, height = [int(value) for value in bbox]
             button = self._get_or_create_performance_close_button(tab_id)
             button_size = int(PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX)
-            button_x = left + width - int(PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX) - button_size
-            button_y = top + max(0, (height - button_size) // 2)
+            notebook_x = int(notebook.winfo_rootx() - self.winfo_rootx())
+            notebook_y = int(notebook.winfo_rooty() - self.winfo_rooty())
+            button_x = notebook_x + left + width - int(PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX) - button_size
+            button_y = notebook_y + top + max(0, (height - button_size) // 2)
             try:
-                button.place(x=button_x, y=button_y, width=button_size, height=button_size)
+                button.place(in_=self, x=button_x, y=button_y, width=button_size, height=button_size)
                 button.lift()
             except tk.TclError as exc:
                 _warn_gui_fallback("performance_tab.close_button.place", exc)
