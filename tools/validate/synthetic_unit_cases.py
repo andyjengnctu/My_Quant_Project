@@ -319,6 +319,7 @@ def validate_exact_accounting_tick_limit_integer_case(_base_params):
 
 def validate_exact_accounting_cash_risk_boundary_case(_base_params):
     params = V16StrategyParams()
+    params.min_entry_notional = 0.0
     case_id = "UNIT_EXACT_CASH_RISK"
     results = []
     summary = {"ticker": case_id, "synthetic": True}

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from core.capital_policy import resolve_scanner_live_capital
+from core.order_lot_policy import apply_board_lot_preferred_qty
 from core.exact_accounting import (
     build_buy_ledger_from_price,
     build_sell_ledger_from_price,
@@ -233,7 +234,7 @@ def calc_position_size(bPrice, stopPrice, cap, riskPct, params, ticker=None, sec
 
 # # (AI註: scanner 參考投入 / 掛單股數統一使用 scanner_live_capital，避免顯示與實務下單資金來源分叉)
 def calc_reference_candidate_qty(bPrice, stopPrice, params, ticker=None, security_profile=None, trade_date=None):
-    return calc_position_size(
+    qty = calc_position_size(
         bPrice,
         stopPrice,
         resolve_scanner_live_capital(params),
@@ -243,6 +244,7 @@ def calc_reference_candidate_qty(bPrice, stopPrice, params, ticker=None, securit
         security_profile=security_profile,
         trade_date=trade_date,
     )
+    return apply_board_lot_preferred_qty(bPrice, qty, params)
 
 
 # # (AI註: 單一真理來源 - 半倉停利可執行股數統一由此計算，避免核心/掃描/除錯工具各自判斷)

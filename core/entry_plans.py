@@ -13,6 +13,12 @@ from core.exact_accounting import (
     rate_to_ppm,
     sync_position_display_fields,
 )
+from core.order_lot_policy import (
+    apply_board_lot_preferred_qty,
+    calc_entry_notional_milli,
+    entry_notional_meets_minimum,
+    get_min_entry_notional_milli,
+)
 from core.price_utils import (
     adjust_long_buy_fill_price,
     calc_half_take_profit_sell_qty,
@@ -23,28 +29,6 @@ from core.price_utils import (
     is_locked_limit_up_bar,
 )
 
-
-def calc_entry_notional_milli(limit_price, qty):
-    if qty is None or pd.isna(limit_price):
-        return 0
-    try:
-        qty_int = int(qty)
-    except (TypeError, ValueError, OverflowError):
-        return 0
-    if qty_int <= 0:
-        return 0
-    return price_to_milli(limit_price) * qty_int
-
-
-def get_min_entry_notional_milli(params):
-    return money_to_milli(float(getattr(params, "min_entry_notional", 0.0) or 0.0))
-
-
-def entry_notional_meets_minimum(limit_price, qty, params):
-    min_notional_milli = get_min_entry_notional_milli(params)
-    if min_notional_milli <= 0:
-        return True
-    return calc_entry_notional_milli(limit_price, qty) >= min_notional_milli
 
 
 def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
@@ -75,7 +59,12 @@ def _find_affordable_qty(limit_price, max_qty, available_cash_milli, params):
         candidate_qty = next_qty
         reserved_cost_milli = next_cost_milli
 
-    if not entry_notional_meets_minimum(limit_price, candidate_qty, params):
+    candidate_qty = apply_board_lot_preferred_qty(limit_price, candidate_qty, params)
+    if candidate_qty <= 0:
+        return 0, 0
+
+    reserved_cost_milli = build_buy_ledger(price_milli, candidate_qty, params)["net_buy_total_milli"]
+    if reserved_cost_milli > int(available_cash_milli):
         return 0, 0
 
     return candidate_qty, reserved_cost_milli
@@ -114,6 +103,7 @@ def resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params):
         security_profile=candidate_plan.get("security_profile"),
         trade_date=candidate_plan.get("trade_date"),
     )
+    qty = apply_board_lot_preferred_qty(limit_price, qty, params)
     resized_plan["qty"] = qty
     resized_plan["is_orderable"] = qty > 0
     resized_plan["sizing_capital"] = float(resolved_sizing_capital)

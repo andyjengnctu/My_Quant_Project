@@ -188,7 +188,7 @@ def build_backtest_stats(
     display_extended_signal = active_extended_signal_tbd if active_extended_signal_tbd is not None else active_extended_signal
     display_extended_tbd_signal = display_extended_signal
     shadow_active_today = is_extended_tbd_shadow_alive(display_extended_tbd_signal)
-    tbd_display_today = has_terminal_position and display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
+    tbd_display_today = display_extended_tbd_signal is not None and is_extended_tbd_display_day(display_extended_tbd_signal, low_last)
     extended_candidate_today = None
     extended_orderable_today = False
     sizing_capital = resolve_single_backtest_sizing_capital(params, current_capital)

@@ -1,9 +1,7 @@
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.exact_accounting import (
-    build_buy_ledger,
     coerce_money_like_to_milli,
     milli_to_money,
-    price_to_milli,
     restore_money_like_from_milli,
 )
 from core.trade_plans import (
@@ -48,35 +46,6 @@ def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash
     return entry_plan
 
 
-TAIWAN_BOARD_LOT_SHARES = 1000
-
-
-def _apply_board_lot_qty(entry_plan, params):
-    if entry_plan is None:
-        return None
-
-    board_lot_qty = (int(entry_plan.get('qty', 0) or 0) // TAIWAN_BOARD_LOT_SHARES) * TAIWAN_BOARD_LOT_SHARES
-    if board_lot_qty <= 0:
-        return None
-    if not entry_notional_meets_minimum(entry_plan.get('limit_price'), board_lot_qty, params):
-        return None
-
-    price_milli = price_to_milli(entry_plan.get('limit_price'))
-    if price_milli <= 0:
-        return None
-
-    board_lot_plan = dict(entry_plan)
-    reserved_cost_milli = int(build_buy_ledger(price_milli, board_lot_qty, params)["net_buy_total_milli"])
-    if reserved_cost_milli > int(entry_plan.get('reserved_cost_milli', 0) or 0):
-        return None
-
-    board_lot_plan['qty'] = board_lot_qty
-    board_lot_plan['is_orderable'] = True
-    board_lot_plan['reserved_cost_milli'] = reserved_cost_milli
-    board_lot_plan['reserved_cost'] = milli_to_money(reserved_cost_milli)
-    return board_lot_plan
-
-
 def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params, sizing_equity):
     full_entry_plan = _build_candidate_full_entry_plan_if_affordable(
         candidate_row,
@@ -91,17 +60,6 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
         effective_entry_budget,
         params,
     )
-
-
-def _build_board_lot_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params, sizing_equity):
-    cash_capped_plan = _build_cash_capped_entry_plan_for_candidate(
-        candidate_row,
-        effective_entry_budget,
-        effective_entry_budget_milli,
-        params,
-        sizing_equity,
-    )
-    return _apply_board_lot_qty(cash_capped_plan, params)
 
 
 def execute_reserved_entries_for_day(
@@ -138,21 +96,13 @@ def execute_reserved_entries_for_day(
         if cand.get('is_orderable') is False:
             continue
 
-        chosen_entry_plan = _build_board_lot_entry_plan_for_candidate(
+        chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
             cand,
             effective_entry_budget,
             effective_entry_budget_milli,
             params,
             sizing_equity,
         )
-        if chosen_entry_plan is None:
-            chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
-                cand,
-                effective_entry_budget,
-                effective_entry_budget_milli,
-                params,
-                sizing_equity,
-            )
         if chosen_entry_plan is None:
             continue
 
