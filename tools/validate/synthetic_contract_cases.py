@@ -1178,15 +1178,17 @@ def validate_atomic_write_contract_case(_base_params):
         with patch.object(local_common.os, "replace", side_effect=OSError("simulated atomic replace failure")):
             try:
                 local_common.write_json(json_path, {"status": "new", "count": 2})
-            except OSError:
-                pass
+            except OSError as exc:
+                if "simulated atomic replace failure" not in str(exc):
+                    raise
             else:
                 raise AssertionError("write_json should raise when os.replace fails")
 
             try:
                 local_common.write_text(text_path, "new-text\n")
-            except OSError:
-                pass
+            except OSError as exc:
+                if "simulated atomic replace failure" not in str(exc):
+                    raise
             else:
                 raise AssertionError("write_text should raise when os.replace fails")
 
