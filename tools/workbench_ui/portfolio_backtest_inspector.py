@@ -67,6 +67,7 @@ ROTATION_LABEL_TO_BOOL = {
 }
 DEFAULT_ROTATION_LABEL = "關閉 (穩定鎖倉)"
 FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
+END_YEAR_LATEST_LABEL = "最新"
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 PORTFOLIO_CONSOLE_COLORS = {
     "91": "#ff6174",
@@ -90,6 +91,7 @@ COMBOBOX_WIDTH_RULES = {
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
     "start_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
+    "end_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
     "ticker": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
 }
@@ -668,6 +670,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._rotation_display_var = tk.StringVar(value=DEFAULT_ROTATION_LABEL)
         self._max_positions_var = tk.StringVar(value="10")
         self._start_year_var = tk.StringVar(value=str(_resolve_default_portfolio_start_year_hint()))
+        self._end_year_display_var = tk.StringVar(value=END_YEAR_LATEST_LABEL)
         self._fixed_risk_display_var = tk.StringVar(value="0.01")
         self._custom_fixed_risk_var = tk.StringVar(value="0.01")
         self._ticker_display_var = tk.StringVar()
@@ -752,8 +755,22 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         )
         self._autosize_combobox(self._start_year_combo, values=start_year_values, current_text=self._start_year_var.get(), rule_key="start_year")
         self._start_year_combo.grid(row=0, column=7, padx=(0, 10), pady=pady, sticky="w")
+        self._start_year_combo.bind("<<ComboboxSelected>>", self._on_start_year_selected)
 
-        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=8, padx=(0, 6), pady=pady, sticky="w")
+        ttk.Label(controls_bar, text="結束年", style="Workbench.TLabel").grid(row=0, column=8, padx=(0, 6), pady=pady, sticky="w")
+        end_year_values = self._build_end_year_options()
+        self._end_year_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=7,
+            textvariable=self._end_year_display_var,
+            style="Workbench.TCombobox",
+            values=end_year_values,
+        )
+        self._autosize_combobox(self._end_year_combo, values=end_year_values, current_text=self._end_year_display_var.get(), rule_key="end_year")
+        self._end_year_combo.grid(row=0, column=9, padx=(0, 10), pady=pady, sticky="w")
+
+        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo = ttk.Combobox(
             controls_bar,
             state="readonly",
@@ -763,18 +780,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             values=FIXED_RISK_LABELS,
         )
         self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
-        self._risk_combo.grid(row=0, column=9, padx=(0, 6), pady=pady, sticky="w")
+        self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=pady, sticky="w")
         self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
         self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
-        self._custom_fixed_risk_entry.grid(row=0, column=10, padx=(0, 10), pady=pady, sticky="w")
+        self._custom_fixed_risk_entry.grid(row=0, column=12, padx=(0, 10), pady=pady, sticky="w")
         self._custom_fixed_risk_entry.state(["disabled"])
 
-        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=11, padx=(0, 10), pady=pady, sticky="w")
+        ttk.Button(controls_bar, text="執行投組回測", command=self._run_portfolio_backtest, style="Workbench.TButton").grid(row=0, column=13, padx=(0, 10), pady=pady, sticky="w")
 
-        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=12, padx=(0, 6), pady=pady, sticky="w")
+        ttk.Label(controls_bar, text="K線股票", style="Workbench.TLabel").grid(row=0, column=14, padx=(0, 6), pady=pady, sticky="w")
         self._ticker_combo = ttk.Combobox(controls_bar, state="readonly", width=22, textvariable=self._ticker_display_var, style="Workbench.TCombobox", values=[])
         self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
-        self._ticker_combo.grid(row=0, column=13, padx=(0, 8), pady=pady, sticky="w")
+        self._ticker_combo.grid(row=0, column=15, padx=(0, 8), pady=pady, sticky="w")
         self._ticker_combo.bind("<<ComboboxSelected>>", self._on_ticker_selected)
 
         ttk.Checkbutton(
@@ -783,7 +800,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             variable=self._show_volume_var,
             command=self._rerender_selected_ticker_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=0, column=14, padx=(0, 0), pady=pady, sticky="w")
+        ).grid(row=0, column=16, padx=(0, 0), pady=pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -911,6 +928,33 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         current_year = max(default_year, datetime.now().year)
         first_year = max(2000, default_year - 6)
         return [str(year) for year in range(first_year, current_year + 1)]
+
+    def _build_end_year_options(self):
+        start_year = parse_int_strict(self._start_year_var.get().strip(), "開始回測年份", min_value=1900)
+        current_year = max(start_year, datetime.now().year)
+        return [END_YEAR_LATEST_LABEL] + [str(year) for year in range(start_year, current_year + 1)]
+
+    def _on_start_year_selected(self, _event=None):
+        if not hasattr(self, "_end_year_combo"):
+            return
+        try:
+            end_year_values = self._build_end_year_options()
+        except ValueError:
+            return
+        current_end_year = self._end_year_display_var.get().strip()
+        if current_end_year not in end_year_values:
+            self._end_year_display_var.set(END_YEAR_LATEST_LABEL)
+        self._end_year_combo.configure(values=end_year_values)
+        self._autosize_combobox(self._end_year_combo, values=end_year_values, current_text=self._end_year_display_var.get(), rule_key="end_year")
+
+    def _resolve_end_year(self, start_year):
+        selected = self._end_year_display_var.get().strip()
+        if selected == END_YEAR_LATEST_LABEL:
+            return None
+        end_year = parse_int_strict(selected, "結束回測年份", min_value=1900)
+        if end_year < int(start_year):
+            raise ValueError("結束回測年份不可早於開始回測年份")
+        return end_year
 
     def _format_sidebar_line_value(self, label, value):
         return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
@@ -1042,12 +1086,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _resolve_user_options(self):
         max_positions = parse_int_strict(self._max_positions_var.get().strip(), "最大持倉數量", min_value=1)
         start_year = parse_int_strict(self._start_year_var.get().strip(), "開始回測年份", min_value=1900)
+        end_year = self._resolve_end_year(start_year)
         return {
             "params_path": self._get_selected_params_path(),
             "param_source": self._get_selected_param_source(),
             "enable_rotation": ROTATION_LABEL_TO_BOOL.get(self._rotation_display_var.get().strip(), False),
             "max_positions": max_positions,
             "start_year": start_year,
+            "end_year": end_year,
             "fixed_risk": self._resolve_fixed_risk(),
             "benchmark_ticker": PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
         }
@@ -1228,6 +1274,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             max_positions=options["max_positions"],
             enable_rotation=options["enable_rotation"],
             start_year=options["start_year"],
+            end_year=options["end_year"],
             benchmark_ticker=options["benchmark_ticker"],
             verbose=True,
         )
@@ -1245,8 +1292,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
         bm_min_full_year_return_pct = pf_profile.get("bm_min_full_year_return_pct", 0.0)
 
+        end_year_label = "最新資料" if options.get("end_year") is None else f"{options['end_year']} 年"
         print(f"\n{C_CYAN}================================================================================{C_RESET}")
-        print(f"📊 【投資組合實戰模擬報告 (自 {options['start_year']} 年起算)】")
+        print(f"📊 【投資組合實戰模擬報告 ({options['start_year']} 年 ~ {end_year_label})】")
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"回測總耗時: {end_time - start_time:.2f} 秒")
 
@@ -1296,7 +1344,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 f"年化報酬率: {annual_return_pct:.2f}%{C_RESET}"
             )
 
-        export_portfolio_reports(df_eq, df_tr, df_yearly, options["benchmark_ticker"], options["start_year"])
+        export_portfolio_reports(df_eq, df_tr, df_yearly, options["benchmark_ticker"], options["start_year"], end_year=options["end_year"])
         return {
             "df_eq": df_eq,
             "df_tr": df_tr,
@@ -1538,7 +1586,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
         if bm_col in df_eq.columns:
             axis.plot(dates, df_eq[bm_col].astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
-        axis.set_title(f"V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤 ({options.get('start_year', '-') } 至今)", color="#f7fbff", fontproperties=title_font)
+        end_year_label = "至今" if options.get("end_year") is None else f"至 {options.get('end_year')}"
+        axis.set_title(f"V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤 ({options.get('start_year', '-')} {end_year_label})", color="#f7fbff", fontproperties=title_font)
         axis.set_xlabel("日期", color="#f7fbff", fontproperties=font_prop)
         axis.set_ylabel("累積報酬率 (%)", color="#f7fbff", fontproperties=font_prop)
         axis.tick_params(axis="x", colors="#f7fbff", labelsize=10)

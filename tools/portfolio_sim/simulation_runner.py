@@ -51,6 +51,20 @@ def resolve_default_portfolio_start_year(data_dir: str | None = None) -> int:
     return fallback_year
 
 
+def _filter_market_dates_by_end_year(sorted_dates, *, start_year=None, end_year=None):
+    resolved_dates = [] if sorted_dates is None else list(sorted_dates)
+    if end_year is None:
+        return resolved_dates
+    resolved_end_year = int(end_year)
+    if resolved_end_year < 1900:
+        raise ValueError("結束回測年份不可小於 1900")
+    if start_year is not None and resolved_end_year < int(start_year):
+        raise ValueError("結束回測年份不可早於開始回測年份")
+    filtered_dates = [dt for dt in resolved_dates if pd.Timestamp(dt).year <= resolved_end_year]
+    if not filtered_dates:
+        raise ValueError("結束回測年份早於資料起始年，沒有可回測日期")
+    return filtered_dates
+
 def load_portfolio_market_context(data_dir, params, *, verbose=True):
     ensure_runtime_dirs()
     if not data_dir:
@@ -146,8 +160,9 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
     return {"all_dfs_fast": all_dfs_fast, "all_trade_logs": all_trade_logs, "sorted_dates": sorted_dates}
 
 
-def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
+def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
     resolved_start_year = resolve_default_portfolio_start_year() if start_year is None else int(start_year)
+    resolved_sorted_dates = _filter_market_dates_by_end_year(sorted_dates, start_year=resolved_start_year, end_year=end_year)
     benchmark_data = all_dfs_fast.get(benchmark_ticker, None)
     if verbose:
         print(" " * 120, end="\r")
@@ -156,7 +171,7 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
     result = run_portfolio_timeline(
         all_dfs_fast,
         all_trade_logs,
-        sorted_dates,
+        resolved_sorted_dates,
         resolved_start_year,
         params,
         max_positions,
@@ -170,7 +185,7 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
     return (*result, pf_profile)
 
 
-def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
+def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
     context = load_portfolio_market_context(data_dir, params, verbose=verbose)
     return run_portfolio_simulation_prepared(
         context["all_dfs_fast"],
@@ -180,6 +195,7 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         max_positions=max_positions,
         enable_rotation=enable_rotation,
         start_year=start_year,
+        end_year=end_year,
         benchmark_ticker=benchmark_ticker,
         verbose=verbose,
     )

@@ -65,7 +65,7 @@ def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=
 
 
 
-def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_year):
+def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_year, end_year=None):
     with pd.ExcelWriter(REPORT_XLSX_PATH) as writer:
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)
@@ -80,7 +80,8 @@ def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_ye
         bm_col = f"Benchmark_{benchmark_ticker}_Pct"
         if bm_col in df_eq.columns:
             fig.add_trace(go.Scatter(x=df_eq['Date'], y=df_eq[bm_col], mode='lines', name=f'同期大盤 {benchmark_ticker} (%)', line=dict(color='#4dabf5', width=2), opacity=0.8))
-        fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤</b> ({start_year} 至今)', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
+        end_label = "至今" if end_year is None else f"至 {int(end_year)}"
+        fig.update_layout(title=f'<b>V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤</b> ({start_year} {end_label})', xaxis_title='日期', yaxis_title='累積報酬率 (%)', template='plotly_dark', hovermode='x unified', legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)"), margin=dict(l=40, r=40, t=60, b=40))
         fig.write_html(DASHBOARD_HTML_PATH)
         print(f"{C_GREEN}📊 互動式網頁已生成: {DASHBOARD_HTML_PATH}{C_RESET}")
     except (ImportError, OSError, ValueError, RuntimeError, webbrowser.Error) as e:

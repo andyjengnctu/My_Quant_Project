@@ -154,7 +154,15 @@ OFFICIAL_COMPANY_NAME_SOURCE_SPECS = (
     },
 )
 SECURITY_CODE_PATTERN = re.compile(r"^[0-9A-Z]{4,7}$")
-ANSI_ESCAPE_SEQUENCE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+SCANNER_CONSOLE_COLORS = {
+    "91": "#ff6174",
+    "93": "#facc15",
+    "96": "#4fd1ff",
+    "92": "#5ee28a",
+    "90": "#9aa7b6",
+    "94": "#7fb3ff",
+}
 FALLBACK_REDUCED_STOCK_DISPLAY_NAME_MAP = {
     "0050": "元大台灣50",
     "00631L": "元大台灣50正2",
@@ -448,6 +456,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
         self._console_live_progress_start = None
+        self._console_current_tag = "default"
         self._analysis_thread = None
         self._analysis_pending_request = None
         self._analysis_active_token = 0
@@ -599,6 +608,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         notebook.add(console_tab, text="Console")
         self._console_text = tk.Text(console_tab, wrap="word", bg="#040a12", fg="#f7fbff", insertbackground="#f7fbff", relief="flat", bd=0, font=("Consolas", 10))
         self._console_text.grid(row=0, column=0, sticky="nsew")
+        self._configure_console_tags()
         console_scroll = ttk.Scrollbar(console_tab, orient="vertical", command=self._console_text.yview, style="Workbench.Vertical.TScrollbar")
         console_scroll.grid(row=0, column=1, sticky="ns")
         self._console_text.configure(yscrollcommand=console_scroll.set)
@@ -785,6 +795,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 f"仍查不到中文名稱：{', '.join(unresolved_tickers)}"
             )
 
+    def _configure_console_tags(self):
+        self._console_text.tag_configure("default", foreground="#f7fbff")
+        for code, color in SCANNER_CONSOLE_COLORS.items():
+            self._console_text.tag_configure(f"ansi_{code}", foreground=color)
+
     def _append_console_text(self, text):
         normalized_text = str(text or "")
         if not normalized_text:
@@ -793,11 +808,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self.after(0, self._append_console_text, normalized_text)
             return
         self._flush_console_live_progress(force_newline=True)
-        self._console_text.insert("end", normalized_text)
+        self._insert_ansi_text(normalized_text)
         self._console_text.see("end")
 
     def _append_console_stream(self, text):
-        normalized_text = ANSI_ESCAPE_SEQUENCE_PATTERN.sub("", str(text or "")).replace("\r\n", "\n")
+        normalized_text = str(text or "").replace("\r\n", "\n")
         if not normalized_text:
             return
         if threading.current_thread() is not self._ui_thread:
@@ -819,7 +834,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                     self._set_console_live_progress(current)
                     self._flush_console_live_progress(force_newline=True)
                 else:
-                    self._console_text.insert("end", current + "\n")
+                    self._insert_ansi_text(current + "\n")
                     self._console_text.see("end")
                 current = ""
                 mode = "line"
@@ -830,14 +845,32 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         if mode == "progress" and not ended_with_carriage_return:
             self._set_console_live_progress(current)
 
+    def _insert_ansi_text(self, text):
+        current_tag = self._console_current_tag
+        pos = 0
+        for match in ANSI_PATTERN.finditer(text):
+            if match.start() > pos:
+                self._console_text.insert("end", text[pos:match.start()], current_tag)
+            sequence = match.group(0)
+            codes = sequence[2:-1].split(";")
+            if not codes or codes == ["0"] or "0" in codes:
+                current_tag = "default"
+            else:
+                for code in codes:
+                    if code in SCANNER_CONSOLE_COLORS:
+                        current_tag = f"ansi_{code}"
+            pos = match.end()
+        if pos < len(text):
+            self._console_text.insert("end", text[pos:], current_tag)
+        self._console_current_tag = current_tag
+
     def _set_console_live_progress(self, text):
-        progress_text = str(text or "")
         if self._console_live_progress_start is None:
             self._console_live_progress_start = self._console_text.index("end-1c")
-            self._console_text.insert("end", progress_text)
+            self._insert_ansi_text(str(text or ""))
         else:
             self._console_text.delete(self._console_live_progress_start, "end-1c")
-            self._console_text.insert(self._console_live_progress_start, progress_text)
+            self._insert_ansi_text(str(text or ""))
         self._console_text.see("end")
 
     def _flush_console_live_progress(self, *, force_newline):
@@ -849,7 +882,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
                 f"{self._console_live_progress_start} lineend +1c",
             )
             if line_tail != "\n":
-                self._console_text.insert("end", "\n")
+                self._console_text.insert("end", "\n", self._console_current_tag)
         self._console_live_progress_start = None
         self._console_text.see("end")
 
@@ -858,16 +891,18 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
         self._console_live_progress_start = None
+        self._console_current_tag = "default"
         if self._console_text.compare("end-1c", ">", "1.0"):
             if self._console_text.get("end-2c", "end-1c") != "\n":
-                self._console_text.insert("end", "\n")
-            self._console_text.insert("end", "\n" + ("=" * 80) + "\n")
+                self._console_text.insert("end", "\n", self._console_current_tag)
+            self._console_text.insert("end", "\n" + ("=" * 80) + "\n", self._console_current_tag)
         self._console_text.see("end")
 
     def _clear_console(self):
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
         self._console_live_progress_start = None
+        self._console_current_tag = "default"
         self._console_text.delete("1.0", "end")
 
     def _report_runtime_exception(self, context, exc, *, status_prefix, show_dialog=True, switch_to_console=False):

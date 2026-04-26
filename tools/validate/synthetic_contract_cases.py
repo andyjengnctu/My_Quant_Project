@@ -2865,6 +2865,7 @@ def validate_gui_workbench_contract_case(base_params):
 
     inspector_source = build_project_absolute_path("tools", "workbench_ui", "single_stock_inspector.py").read_text(encoding="utf-8")
     portfolio_inspector_source = build_project_absolute_path("tools", "workbench_ui", "portfolio_backtest_inspector.py").read_text(encoding="utf-8")
+    portfolio_runner_source = build_project_absolute_path("tools", "portfolio_sim", "simulation_runner.py").read_text(encoding="utf-8")
     workbench_source = build_project_absolute_path("tools", "workbench_ui", "workbench.py").read_text(encoding="utf-8")
     meta_quality_coverage_source = build_project_absolute_path("tools", "local_regression", "meta_quality_coverage.py").read_text(encoding="utf-8")
     validate_main_source = build_project_absolute_path("tools", "validate", "main.py").read_text(encoding="utf-8")
@@ -2892,6 +2893,11 @@ def validate_gui_workbench_contract_case(base_params):
     add_check(results, "output_contract", case_id, "gui_single_prepare_console_task_does_not_delete_history", False, '.delete("1.0", "end")' in single_prepare_console_block)
     add_check(results, "output_contract", case_id, "gui_portfolio_new_backtest_task_preserves_console_history", True, "_prepare_console_for_new_task()" in portfolio_run_backtest_block and "_clear_console()" not in portfolio_run_backtest_block)
     add_check(results, "output_contract", case_id, "gui_portfolio_prepare_console_task_does_not_delete_history", False, '.delete("1.0", "end")' in portfolio_prepare_console_block)
+
+    add_check(results, "output_contract", case_id, "gui_single_scanner_console_preserves_scanner_ansi_colors", True, "SCANNER_CONSOLE_COLORS" in inspector_source and "_insert_ansi_text" in inspector_source and "ANSI_ESCAPE_SEQUENCE_PATTERN" not in inspector_source)
+    add_check(results, "output_contract", case_id, "gui_portfolio_has_end_year_dropdown", True, "END_YEAR_LATEST_LABEL" in portfolio_inspector_source and 'text="結束年"' in portfolio_inspector_source and "_end_year_combo" in portfolio_inspector_source)
+    add_check(results, "output_contract", case_id, "gui_portfolio_passes_end_year_to_backend", True, 'end_year=options["end_year"]' in portfolio_inspector_source and 'export_portfolio_reports(df_eq, df_tr, df_yearly, options["benchmark_ticker"], options["start_year"], end_year=options["end_year"])' in portfolio_inspector_source)
+    add_check(results, "output_contract", case_id, "portfolio_runner_filters_by_optional_end_year", True, "def _filter_market_dates_by_end_year" in portfolio_runner_source and "end_year=None" in portfolio_runner_source and "resolved_sorted_dates" in portfolio_runner_source)
 
     with io.StringIO() as stdout_buffer:
         with redirect_stdout(stdout_buffer):
