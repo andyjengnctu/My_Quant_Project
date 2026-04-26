@@ -94,7 +94,7 @@ SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
 SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
-PERFORMANCE_TAB_CLOSE_HITBOX_PX = 34
+PERFORMANCE_TAB_CLOSE_HITBOX_PX = 32
 PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX = 18
 PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX = 4
 COMBOBOX_WIDTH_RULES = {
@@ -840,9 +840,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
-        sidebar_chip_font = ("Microsoft JhengHei", 14, "bold")
-        sidebar_header_font = ("Microsoft JhengHei", 14, "bold")
-        sidebar_body_font = ("Microsoft JhengHei", 13)
+        sidebar_chip_font = ("Microsoft JhengHei", 15, "bold")
+        sidebar_header_font = ("Microsoft JhengHei", 15, "bold")
+        sidebar_body_font = ("Microsoft JhengHei", 14)
         self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
@@ -1570,7 +1570,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._performance_tab_seq += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
         end_year_label = "至今" if options.get("end_year") is None else f"至{options.get('end_year')}"
-        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}"
+        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}  ×"
 
     def _get_workbench_notebook_font(self):
         if hasattr(self, "_workbench_notebook_font"):
@@ -1618,41 +1618,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return button
 
     def _refresh_performance_tab_close_buttons(self, _event=None):
-        notebook = getattr(self, "_notebook", None)
-        if notebook is None:
-            return None
-        live_tab_ids = {str(tab_id) for tab_id in notebook.tabs()}
-        performance_tab_ids = {str(item.get("tab_id")) for item in getattr(self, "_performance_tabs", [])}
         for tab_id, button in list(getattr(self, "_performance_tab_close_buttons", {}).items()):
-            if str(tab_id) not in live_tab_ids or str(tab_id) not in performance_tab_ids:
-                try:
-                    button.destroy()
-                except tk.TclError as exc:
-                    _warn_gui_fallback("performance_tab.close_button.destroy", exc)
-                self._performance_tab_close_buttons.pop(str(tab_id), None)
-
-        for item in list(getattr(self, "_performance_tabs", [])):
-            tab_id = str(item.get("tab_id"))
-            if tab_id not in live_tab_ids:
-                continue
             try:
-                tab_index = notebook.index(tab_id)
-                bbox = notebook.bbox(tab_index)
+                button.destroy()
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.bbox", exc)
-                continue
-            if not bbox:
-                continue
-            left, top, width, height = [int(value) for value in bbox]
-            size = min(int(PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX), max(12, height - 4))
-            x_pos = left + width - size - int(PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX)
-            y_pos = top + max(1, (height - size) // 2)
-            button = self._get_or_create_performance_close_button(tab_id)
-            try:
-                button.place(x=x_pos, y=y_pos, width=size, height=size)
-                button.lift()
-            except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.place", exc)
+                _warn_gui_fallback("performance_tab.close_button.destroy", exc)
+            self._performance_tab_close_buttons.pop(str(tab_id), None)
         return None
 
     def _destroy_performance_close_button(self, tab_id):
@@ -1701,11 +1672,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if not (tab_top <= event_y <= tab_top + tab_height):
             return False
 
-        close_button = self._performance_tab_close_buttons.get(str(tab_id))
-        if close_button is None or not close_button.winfo_exists():
-            return False
-
-        close_width = max(PERFORMANCE_TAB_CLOSE_HITBOX_PX, 18)
+        close_width = max(int(PERFORMANCE_TAB_CLOSE_HITBOX_PX), 24)
         close_left = tab_left + tab_width - close_width
         close_right = tab_left + tab_width
         return close_left <= event_x <= close_right
