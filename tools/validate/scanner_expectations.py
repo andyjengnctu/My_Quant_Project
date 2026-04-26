@@ -29,6 +29,7 @@ def make_synthetic_validation_params(base_params, *, tp_percent=None):
     params.min_history_trades = 0
     params.min_history_ev = -1e9
     params.min_history_win_rate = 0.0
+    params.min_entry_notional = 0.0
     if tp_percent is not None:
         params.tp_percent = tp_percent
     return params

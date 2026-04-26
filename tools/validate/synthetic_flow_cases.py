@@ -750,9 +750,9 @@ def validate_synthetic_extended_miss_buy_case(base_params):
             precomputed_stats=scanner_ref_stats,
         )
         expected_payload = build_expected_scanner_payload(scanner_ref_stats, case["params"], ticker=primary_ticker, trade_date=scanner_ref_stats.get("trade_date"))
-        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_expected_status", "extended", expected_payload["status"])
-        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_tool_status", "extended", None if scanner_result is None else scanner_result["status"])
-        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "has_extended_candidate_today", True, bool(scanner_ref_stats.get("extended_candidate_today") is not None))
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_expected_status", "extended_tbd", expected_payload["status"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_tool_status", "extended_tbd", None if scanner_result is None else scanner_result["status"])
+        add_check(results, "synthetic_extended_miss_buy", case["case_id"], "has_extended_candidate_tbd_today", True, bool(scanner_ref_stats.get("extended_candidate_tbd_today") is not None))
 
     summary["extended_candidate"] = True
     summary["missed_buy"] = True

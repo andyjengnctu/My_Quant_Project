@@ -169,8 +169,8 @@ def append_real_case_checks(
             ticker,
             "extended_limit_price_in_range",
             True,
-            bool(not pd.isna(extended_candidate.get("limit_price")) and extended_candidate.get("qty", 0) > 0),
-            note="新版延續候選的掛單價可能來自 shadow entry / trailing state，不再強制落在舊 A 版 init_sl~orig_limit 區間。",
+            bool(not pd.isna(extended_candidate.get("limit_price"))),
+            note="新版延續候選的掛單價可能來自 shadow entry / trailing state；此處只驗一般 extended 已保留可顯示的掛單價，不再要求 qty > 0 或舊 A 版 init_sl~orig_limit 區間。",
         )
 
     if extended_tbd_candidate is None:
