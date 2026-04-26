@@ -100,6 +100,11 @@ PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
 PERFORMANCE_TAB_CLOSE_HITBOX_PX = 32
 PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX = 18
 PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX = 4
+PERFORMANCE_CHART_TITLE_FONT_SIZE = 12
+PERFORMANCE_CHART_TITLE_PAD_PX = 6
+PERFORMANCE_CHART_SUBPLOT_TOP = 0.945
+PERFORMANCE_CHART_CLOSE_BUTTON_SIZE_PX = 22
+PERFORMANCE_CHART_CLOSE_BUTTON_MARGIN_PX = 5
 COMBOBOX_WIDTH_RULES = {
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
@@ -1649,7 +1654,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if button is None:
                 continue
             try:
-                button.place(relx=1.0, x=-8, y=8, width=24, height=24, anchor="ne")
+                button.place(
+                    relx=1.0,
+                    x=-int(PERFORMANCE_CHART_CLOSE_BUTTON_MARGIN_PX),
+                    y=int(PERFORMANCE_CHART_CLOSE_BUTTON_MARGIN_PX),
+                    width=int(PERFORMANCE_CHART_CLOSE_BUTTON_SIZE_PX),
+                    height=int(PERFORMANCE_CHART_CLOSE_BUTTON_SIZE_PX),
+                    anchor="ne",
+                )
                 button.lift()
             except tk.TclError as exc:
                 _warn_gui_fallback("performance_tab.close_button.place_in_chart", exc)
@@ -1818,16 +1830,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         benchmark_ticker = options.get("benchmark_ticker", PORTFOLIO_DEFAULT_BENCHMARK_TICKER)
         bm_col = f"Benchmark_{benchmark_ticker}_Pct"
         font_prop = FontProperties(family="Microsoft JhengHei", size=11)
-        title_font = FontProperties(family="Microsoft JhengHei", weight="bold", size=16)
+        title_font = FontProperties(family="Microsoft JhengHei", weight="bold", size=PERFORMANCE_CHART_TITLE_FONT_SIZE)
         figure = Figure(figsize=(18.2, 10.6), dpi=96, facecolor="#000000")
         axis = figure.add_subplot(1, 1, 1)
-        figure.subplots_adjust(left=0.055, right=0.985, top=0.88, bottom=0.08)
+        figure.subplots_adjust(left=0.055, right=0.985, top=PERFORMANCE_CHART_SUBPLOT_TOP, bottom=0.08)
         axis.set_facecolor("#000000")
         axis.grid(True, color="#0a1824", alpha=0.22, linewidth=0.7)
         axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
         if bm_col in df_eq.columns:
             axis.plot(dates, df_eq[bm_col].astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
-        axis.set_title(self._build_performance_setting_title(options=options), color="#f7fbff", fontproperties=title_font, pad=22)
+        axis.set_title(
+            self._build_performance_setting_title(options=options),
+            color="#f7fbff",
+            fontproperties=title_font,
+            pad=PERFORMANCE_CHART_TITLE_PAD_PX,
+        )
         axis.set_xlabel("日期", color="#f7fbff", fontproperties=font_prop)
         axis.set_ylabel("累積報酬率 (%)", color="#f7fbff", fontproperties=font_prop)
         axis.tick_params(axis="x", colors="#f7fbff", labelsize=10)
