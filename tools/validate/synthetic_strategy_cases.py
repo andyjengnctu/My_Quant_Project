@@ -27,6 +27,7 @@ from tools.optimizer import callbacks as optimizer_callbacks
 from tools.portfolio_sim.reporting import print_yearly_return_report
 from tools.optimizer.runtime import export_best_params_if_requested
 from tools.optimizer.study_utils import (
+    DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_LEGACY_BASE_SCORE,
     OPTIMIZER_TP_PERCENT_SEARCH_SPEC,
@@ -1098,6 +1099,40 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     with patch.object(robustness, "_build_neighbor_candidates", return_value=[]):
         no_neighbor_local_min = robustness.compute_local_min_score(no_neighbor_session, no_neighbor_trial)
     add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_fails_gate_conservatively", INVALID_TRIAL_VALUE, no_neighbor_local_min)
+
+    training_policy = importlib.import_module("config.training_policy")
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "optimizer_default_interactive_trials_is_1000",
+        1000,
+        DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE,
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "local_min_score_finalist_top_k_defaults_to_2pct_of_1000_trials",
+        20,
+        training_policy.resolve_optimizer_local_min_score_finalist_top_k(1000),
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "local_min_score_finalist_top_k_minimum_is_5",
+        5,
+        training_policy.resolve_optimizer_local_min_score_finalist_top_k(100),
+    )
+    add_check(
+        results,
+        "strategy_contract",
+        case_id,
+        "local_min_score_finalist_top_k_uses_session_trial_count_by_default",
+        20,
+        robustness._resolve_local_min_score_finalist_top_k(SimpleNamespace(n_trials=1000)),
+    )
 
     summary["success_export_key_count"] = len(exported_payload)
     summary["registry_contract_checks"] = len(results)

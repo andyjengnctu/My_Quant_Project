@@ -473,7 +473,7 @@ def get_synthetic_validator_entries():
         _entry(validate_extended_tool_cli_contract_case, layer="cli_contract", cost_class="fast", impacted_modules=("apps/test_suite.py", "tools/optimizer/main.py", "tools/scanner/scan_runner.py")),
         _entry(validate_model_io_schema_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/study_utils.py", "tools/scanner/stock_processor.py")),
         _entry(validate_optimizer_interrupt_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/main.py", "tools/optimizer/runtime.py")),
-        _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py")),
+        _entry(validate_optimizer_objective_export_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/objective_runner.py", "tools/optimizer/runtime.py", "tools/optimizer/study_utils.py", "tools/optimizer/robustness.py", "config/training_policy.py")),
         _entry(validate_optimizer_session_milestone_cache_case, layer="strategy_contract", cost_class="fast", impacted_modules=("tools/optimizer/session.py", "tools/optimizer/callbacks.py", "tools/optimizer/objective_runner.py")),
         _entry(validate_optimizer_walk_forward_policy_contract_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/walk_forward_policy.py", "config/training_policy.py", "tools/optimizer/callbacks.py")),
         _entry(validate_ranking_scoring_sanity_case, layer="strategy_contract", cost_class="fast", impacted_modules=("core/buy_sort.py", "core/portfolio_stats.py")),

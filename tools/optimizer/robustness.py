@@ -5,7 +5,7 @@ import sys
 from typing import Callable
 
 
-from config.training_policy import OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K
+from config.training_policy import resolve_optimizer_local_min_score_finalist_top_k
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
@@ -367,13 +367,20 @@ def _build_display_finalists(sorted_trials, *, top_k: int, include_trial=None):
     ]
 
 
-def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K, include_trial=None, show_progress: bool = False):
+def _resolve_local_min_score_finalist_top_k(session, top_k=None):
+    if top_k is not None:
+        return max(1, int(top_k))
+    return resolve_optimizer_local_min_score_finalist_top_k(getattr(session, "n_trials", 0))
+
+
+def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k=None, include_trial=None, show_progress: bool = False):
+    resolved_top_k = _resolve_local_min_score_finalist_top_k(session, top_k)
     sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
     if not sorted_trials:
         return []
 
     _seed_payload_score_cache_from_study(session, study, objective_mode)
-    finalists = _build_display_finalists(sorted_trials, top_k=top_k, include_trial=include_trial)
+    finalists = _build_display_finalists(sorted_trials, top_k=resolved_top_k, include_trial=include_trial)
     progress_board = None
     if show_progress:
         progress_board = _FinalistProgressBoard(session, finalists)
@@ -424,7 +431,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     return enriched_finalists
 
 
-def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K):
+def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k=None):
     finalists = list_local_min_score_finalists(
         study,
         session=session,
@@ -472,9 +479,10 @@ def print_local_min_score_winner_summary(*, winner_trial, session, colors: dict)
     return None
 
 
-def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True, top_k: int = OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K):
+def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session, objective_mode: str, show_progress: bool = True, top_k=None):
+    resolved_top_k = _resolve_local_min_score_finalist_top_k(session, top_k)
     resolver_cache = _get_best_trial_resolver_cache(session)
-    cache_key = _build_best_trial_cache_key(study, objective_mode, top_k)
+    cache_key = _build_best_trial_cache_key(study, objective_mode, resolved_top_k)
     cached_trial = resolver_cache.get(cache_key)
     if cached_trial is not None:
         return cached_trial
@@ -483,7 +491,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
         study,
         session=session,
         objective_mode=objective_mode,
-        top_k=top_k,
+        top_k=resolved_top_k,
         include_trial=None,
         show_progress=show_progress,
     )
@@ -510,7 +518,7 @@ def build_local_min_score_best_trial_resolver(*, session, objective_mode: str) -
             session=session,
             objective_mode=objective_mode,
             show_progress=False,
-            top_k=OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K,
+            top_k=None,
         )
 
     return _resolver
