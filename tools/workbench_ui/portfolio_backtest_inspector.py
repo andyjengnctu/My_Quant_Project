@@ -858,15 +858,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
         sidebar.rowconfigure(19, weight=1)
 
-        performance_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
-        performance_tab.rowconfigure(0, weight=1)
-        performance_tab.columnconfigure(0, weight=1)
-        notebook.add(performance_tab, text="績效圖")
-        self._performance_placeholder_tab = performance_tab
-        self._performance_placeholder_host = tk.Frame(performance_tab, bg="#000000", highlightthickness=0, bd=0)
-        self._performance_placeholder_host.grid(row=0, column=0, sticky="nsew")
-        self._performance_placeholder = self._make_placeholder(self._performance_placeholder_host, "請先執行投組回測；每次新的績效圖會在此列同階新增分頁，可點分頁右側 × 關閉。")
-
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         self._console_tab = console_tab
         console_tab.rowconfigure(0, weight=1)
@@ -1214,7 +1205,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         trace_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
         self._append_console_text(f"[{context}]\n{trace_text}\n")
         self._status_var.set(error_text)
-        self._notebook.select(2)
+        self._notebook.select(self._console_tab)
         if show_dialog:
             messagebox.showerror("股票工具工作台", error_text)
         return error_text
@@ -1234,7 +1225,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._active_token += 1
         request_token = self._active_token
         self._prepare_console_for_new_task()
-        self._notebook.select(2)
+        self._notebook.select(self._console_tab)
         self._status_var.set("執行中：投組回測")
         self._append_console_text("[portfolio] 執行中：投組回測\n")
         run_thread = threading.Thread(
@@ -1377,7 +1368,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._render_performance_chart(result_payload)
         self._refresh_trade_ticker_dropdown(result_payload)
         self._status_var.set("完成：投組回測")
-        self._notebook.select(1)
 
     def _finish_portfolio_error(self, request_token, exc):
         if request_token != self._active_token:
@@ -1565,7 +1555,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._performance_tab_seq += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
         end_year_label = "至今" if options.get("end_year") is None else f"至{options.get('end_year')}"
-        return f"績效圖 {self._performance_tab_seq} {timestamp} {options.get('start_year', '-')} {end_year_label} ×"
+        return f"績效 {self._performance_tab_seq}｜{timestamp}｜{options.get('start_year', '-')} {end_year_label}  ×"
 
     def _get_workbench_notebook_font(self):
         if hasattr(self, "_workbench_notebook_font"):
@@ -1593,11 +1583,34 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return False
         if self._find_performance_tab_record(tab_id) is None:
             return False
+
+        tab_left = int(bbox[0])
+        tab_top = int(bbox[1])
+        tab_width = int(bbox[2])
+        tab_height = int(bbox[3])
+        if not (tab_top <= int(event.y) <= tab_top + tab_height):
+            return False
+
+        title = str(notebook.tab(tab_id, "text") or "")
+        if "×" not in title:
+            return False
+
         font_obj = self._get_workbench_notebook_font()
-        close_hitbox_px = max(PERFORMANCE_TAB_CLOSE_HITBOX_PX, font_obj.measure("×") + 6)
-        left = int(bbox[0]) + int(bbox[2]) - close_hitbox_px
-        right = int(bbox[0]) + int(bbox[2])
-        return left <= int(event.x) <= right
+        title_width = font_obj.measure(title)
+        close_prefix = title.rsplit("×", 1)[0]
+        close_width = max(PERFORMANCE_TAB_CLOSE_HITBOX_PX, font_obj.measure("×") + 8)
+        text_left = tab_left + max((tab_width - title_width) // 2, 0)
+        close_left = text_left + font_obj.measure(close_prefix) - 4
+        close_right = close_left + close_width
+
+        tab_right = tab_left + tab_width
+        if close_left >= tab_right or close_right <= tab_left:
+            close_left = tab_right - close_width
+            close_right = tab_right
+
+        close_left = max(tab_left, close_left)
+        close_right = min(tab_right, close_right)
+        return close_left <= int(event.x) <= close_right
 
     def _on_performance_tab_click(self, event):
         notebook = getattr(self, "_notebook", None)
@@ -1637,9 +1650,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             _warn_gui_fallback("performance_tab.forget", exc)
         if not self._performance_tabs:
             try:
-                notebook.select(self._performance_placeholder_tab)
+                notebook.select(self._console_tab)
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.select(placeholder)", exc)
+                _warn_gui_fallback("performance_tab.select(console)", exc)
 
     def _resolve_performance_tab_insert_index(self):
         notebook = getattr(self, "_notebook", None)
@@ -1652,15 +1665,65 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             _warn_gui_fallback("performance_tab.index(console)", exc)
             return "end"
 
+    def _format_performance_param_value(self, value, *, pct=False):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return str(value) if value is not None else "-"
+        if pct:
+            return f"{numeric * 100:.1f}%"
+        if abs(numeric) >= 100:
+            return f"{numeric:.0f}"
+        return f"{numeric:.3g}"
+
+    def _build_performance_param_text(self, *, params, options):
+        end_year_label = "至今" if options.get("end_year") is None else str(options.get("end_year"))
+        rotation_label = "開" if options.get("enable_rotation") else "關"
+        param_source = str(options.get("param_source") or "-")
+        param_file = os.path.basename(str(options.get("params_path") or "")) or "-"
+        line1 = (
+            f"設定：{param_source}｜{param_file}｜區間 {options.get('start_year', '-')}~{end_year_label}"
+            f"｜持股 {options.get('max_positions', '-')}｜汰弱 {rotation_label}"
+            f"｜固定風險 {self._format_performance_param_value(options.get('fixed_risk'))}"
+            f"｜Benchmark {options.get('benchmark_ticker', PORTFOLIO_DEFAULT_BENCHMARK_TICKER)}"
+        )
+
+        line2_parts = [
+            f"high {getattr(params, 'high_len', '-')}",
+            f"ATR {getattr(params, 'atr_len', '-')}",
+            f"buy_tol {self._format_performance_param_value(getattr(params, 'atr_buy_tol', None))}",
+            f"init/trail {self._format_performance_param_value(getattr(params, 'atr_times_init', None))}/{self._format_performance_param_value(getattr(params, 'atr_times_trail', None))}",
+            f"TP {self._format_performance_param_value(getattr(params, 'tp_percent', None), pct=True)}",
+        ]
+        if getattr(params, "use_kc", False):
+            line2_parts.append(
+                f"KC {getattr(params, 'kc_len', '-')}/{self._format_performance_param_value(getattr(params, 'kc_mult', None))}"
+            )
+        else:
+            line2_parts.append("KC 關")
+        if getattr(params, "use_bb", False):
+            line2_parts.append(
+                f"BB {getattr(params, 'bb_len', '-')}/{self._format_performance_param_value(getattr(params, 'bb_mult', None))}"
+            )
+        else:
+            line2_parts.append("BB 關")
+        if getattr(params, "use_vol", False):
+            line2_parts.append(f"VOL {getattr(params, 'vol_short_len', '-')}/{getattr(params, 'vol_long_len', '-')}")
+        else:
+            line2_parts.append("VOL 關")
+        line2_parts.extend([
+            f"hist 次≥{getattr(params, 'min_history_trades', '-')}",
+            f"EV≥{self._format_performance_param_value(getattr(params, 'min_history_ev', None))}",
+            f"勝率≥{self._format_performance_param_value(getattr(params, 'min_history_win_rate', None), pct=True)}",
+        ])
+        return line1 + "\n策略：" + "｜".join(line2_parts)
+
     def _render_performance_chart(self, result_payload):
         df_eq = result_payload.get("df_eq")
         options = result_payload.get("options") or {}
         if df_eq is None or df_eq.empty:
-            self._performance_placeholder.configure(text="投組回測完成，但沒有績效曲線資料。")
-            try:
-                self._notebook.select(self._performance_placeholder_tab)
-            except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.select(placeholder)", exc)
+            self._status_var.set("完成：投組回測，但沒有績效曲線資料")
+            self._append_console_text("[portfolio] 投組回測完成，但沒有績效曲線資料。\n")
             return
         if FigureCanvasTkAgg is None:
             self._status_var.set("缺少 matplotlib TkAgg backend，無法內嵌績效圖。")
@@ -1678,17 +1741,27 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         benchmark_ticker = options.get("benchmark_ticker", PORTFOLIO_DEFAULT_BENCHMARK_TICKER)
         bm_col = f"Benchmark_{benchmark_ticker}_Pct"
         font_prop = FontProperties(family="Microsoft JhengHei", size=11)
+        param_font = FontProperties(family="Microsoft JhengHei", size=9)
         title_font = FontProperties(family="Microsoft JhengHei", weight="bold", size=16)
         figure = Figure(figsize=(18.2, 10.6), dpi=96, facecolor="#000000")
         axis = figure.add_subplot(1, 1, 1)
-        figure.subplots_adjust(left=0.055, right=0.985, top=0.94, bottom=0.08)
+        figure.subplots_adjust(left=0.055, right=0.985, top=0.865, bottom=0.08)
         axis.set_facecolor("#000000")
         axis.grid(True, color="#0a1824", alpha=0.22, linewidth=0.7)
         axis.plot(dates, df_eq["Strategy_Return_Pct"].astype(float), linewidth=3.0, color=PERFORMANCE_STRATEGY_COLOR, label="V16 尊爵系統報酬 (%)")
         if bm_col in df_eq.columns:
             axis.plot(dates, df_eq[bm_col].astype(float), linewidth=2.0, color=PERFORMANCE_BENCHMARK_COLOR, label=f"同期大盤 {benchmark_ticker} (%)", alpha=0.8)
         end_year_label = "至今" if options.get("end_year") is None else f"至 {options.get('end_year')}"
-        axis.set_title(f"V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤 ({options.get('start_year', '-')} {end_year_label})", color="#f7fbff", fontproperties=title_font)
+        axis.set_title(f"V16 投資組合實戰淨值 vs {benchmark_ticker} 大盤 ({options.get('start_year', '-')} {end_year_label})", color="#f7fbff", fontproperties=title_font, pad=42)
+        figure.text(
+            0.058,
+            0.925,
+            self._build_performance_param_text(params=result_payload.get("params"), options=options),
+            color="#d6dfeb",
+            fontproperties=param_font,
+            ha="left",
+            va="top",
+        )
         axis.set_xlabel("日期", color="#f7fbff", fontproperties=font_prop)
         axis.set_ylabel("累積報酬率 (%)", color="#f7fbff", fontproperties=font_prop)
         axis.tick_params(axis="x", colors="#f7fbff", labelsize=10)
@@ -1714,7 +1787,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         widget.pack(fill="both", expand=True)
         tab_title = self._resolve_performance_tab_title(options)
         self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
-        tab_id = str(tab_frame)
+        tab_id = self._notebook.tabs()[self._notebook.index(tab_frame)]
         self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure})
         self._notebook.select(tab_frame)
 
@@ -1745,8 +1818,3 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 except tk.TclError as exc:
                     _warn_gui_fallback("performance_tab.forget", exc)
         self._performance_tabs = []
-        if notebook is not None:
-            try:
-                notebook.select(self._performance_placeholder_tab)
-            except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.select(placeholder)", exc)
