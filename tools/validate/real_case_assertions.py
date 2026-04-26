@@ -145,13 +145,47 @@ def append_real_case_checks(
         add_check(results, "vip_scanner", ticker, "sort_value", expected_scanner_payload["sort_value"], scanner_result["sort_value"])
 
     extended_candidate = scanner_ref_stats.get("extended_candidate_today")
+    extended_tbd_candidate = scanner_ref_stats.get("extended_candidate_tbd_today")
+    latest_low = float(df["Low"].iloc[-1])
+    latest_close = float(df["Close"].iloc[-1])
+
     if extended_candidate is None:
-        add_skip_result(results, "vip_scanner", ticker, "extended_reference_price_in_range", "今日無延續候選，無需驗 A 版區間定義。")
-        add_skip_result(results, "vip_scanner", ticker, "extended_limit_price_in_range", "今日無延續候選，無需驗 A 版區間定義。")
+        add_skip_result(results, "vip_scanner", ticker, "extended_reference_price_in_range", "今日無一般延續候選，無需驗非 TBD 顯示區間。")
+        add_skip_result(results, "vip_scanner", ticker, "extended_limit_price_in_range", "今日無一般延續候選，無需驗非 TBD 掛單規格。")
     else:
-        reference_price = float(df["Close"].iloc[-1])
-        add_check(results, "vip_scanner", ticker, "extended_reference_price_in_range", True, bool(extended_candidate["init_sl"] < reference_price <= extended_candidate["orig_limit"]))
-        add_check(results, "vip_scanner", ticker, "extended_limit_price_in_range", True, bool(extended_candidate["init_sl"] < extended_candidate["limit_price"] <= extended_candidate["orig_limit"]))
+        original_limit = float(extended_candidate["orig_limit"])
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "extended_reference_price_in_range",
+            True,
+            bool(latest_low > original_limit and latest_close > original_limit),
+            note="新版延續候選：今日未到原始限價才列為一般 extended；Low <= orig_limit 必須改列 extended_tbd。",
+        )
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "extended_limit_price_in_range",
+            True,
+            bool(not pd.isna(extended_candidate.get("limit_price")) and extended_candidate.get("qty", 0) > 0),
+            note="新版延續候選的掛單價可能來自 shadow entry / trailing state，不再強制落在舊 A 版 init_sl~orig_limit 區間。",
+        )
+
+    if extended_tbd_candidate is None:
+        add_skip_result(results, "vip_scanner", ticker, "extended_tbd_reference_price_touched_original_limit", "今日無延續 TBD 候選，無需驗到價顯示條件。")
+    else:
+        original_limit = float(extended_tbd_candidate["orig_limit"])
+        add_check(
+            results,
+            "vip_scanner",
+            ticker,
+            "extended_tbd_reference_price_touched_original_limit",
+            True,
+            bool(latest_low <= original_limit),
+            note="Low <= orig_limit 代表今日是否可能已成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
+        )
 
     if downloader_error is not None:
         add_fail_result(results, "vip_downloader", ticker, "tool_runtime", "tool loads and runs", downloader_error, note="downloader 工具失敗時，validate 應保留其他模組結果，不可整體中斷。")

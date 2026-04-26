@@ -24,5 +24,6 @@
     "sell_fee": 0.000399,
     "tax_rate": 0.003,
     "min_fee": 20.0,
+    "min_entry_notional": 50126.0,
     "use_compounding": true
 }

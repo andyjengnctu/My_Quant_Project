@@ -246,7 +246,7 @@ def validate_model_io_schema_case(base_params):
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
 
-    shipped_best_params_paths = [Path("models/run_best_params.json"), Path("models/run_best_params.json")]
+    shipped_best_params_paths = [Path("models/candidate_best_params.json"), Path("models/run_best_params.json")]
     shipped_payload_keys = {}
     shipped_payload_type_mismatches = {}
     for shipped_path in shipped_best_params_paths:
@@ -254,6 +254,9 @@ def validate_model_io_schema_case(base_params):
         shipped_payload_keys[shipped_path.name] = sorted(shipped_payload.keys())
         mismatch_fields = []
         for field_name, default_value in default_payload.items():
+            if field_name not in shipped_payload:
+                mismatch_fields.append(f"{field_name}:MISSING")
+                continue
             actual_value = shipped_payload[field_name]
             if isinstance(default_value, bool):
                 field_ok = isinstance(actual_value, bool)
