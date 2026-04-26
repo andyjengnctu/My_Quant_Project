@@ -220,7 +220,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
     return dynamic_data, standalone_logs, pit_stats_index
 
 
-def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False, ticker=None):
+def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=False, ticker=None, return_pit_stats_index=False):
     t_total_start = time.perf_counter() if profile_stats is not None else None
 
     t0 = time.perf_counter() if profile_stats is not None else None
@@ -245,30 +245,46 @@ def prep_stock_data_and_trades(df, params, profile_stats=None, return_stats=Fals
 
     t0 = time.perf_counter() if profile_stats is not None else None
     if return_stats:
-        stats_dict, standalone_logs = run_v16_backtest(
+        backtest_result = run_v16_backtest(
             df,
             params,
             return_logs=True,
             precomputed_signals=precomputed_signals,
             ticker=resolved_ticker,
             collect_stats=True,
+            return_pit_stats_index=return_pit_stats_index,
         )
+        if return_pit_stats_index:
+            stats_dict, standalone_logs, pit_stats_index = backtest_result
+        else:
+            stats_dict, standalone_logs = backtest_result
+            pit_stats_index = None
     else:
-        _stats_unused, standalone_logs = run_v16_backtest(
+        backtest_result = run_v16_backtest(
             df,
             params,
             return_logs=True,
             precomputed_signals=precomputed_signals,
             ticker=resolved_ticker,
             collect_stats=False,
+            return_pit_stats_index=return_pit_stats_index,
         )
+        if return_pit_stats_index:
+            _stats_unused, standalone_logs, pit_stats_index = backtest_result
+        else:
+            _stats_unused, standalone_logs = backtest_result
+            pit_stats_index = None
         stats_dict = None
     if profile_stats is not None:
         profile_stats['run_backtest_sec'] = time.perf_counter() - t0
         profile_stats['total_sec'] = time.perf_counter() - t_total_start
 
     if return_stats:
+        if return_pit_stats_index:
+            return df, standalone_logs, stats_dict, pit_stats_index
         return df, standalone_logs, stats_dict
+    if return_pit_stats_index:
+        return df, standalone_logs, pit_stats_index
     return df, standalone_logs
 
 

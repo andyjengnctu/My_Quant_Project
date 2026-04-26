@@ -154,10 +154,10 @@ def main(argv=None, env=None):
         result = run_portfolio_simulation(
             selected_data_dir,
             params,
-            user_max_pos,
-            user_rotation,
-            user_start_year,
-            user_benchmark,
+            max_positions=user_max_pos,
+            enable_rotation=user_rotation,
+            start_year=user_start_year,
+            benchmark_ticker=user_benchmark,
         )
         end_time = time.time()
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

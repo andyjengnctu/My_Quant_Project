@@ -1277,6 +1277,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             end_year=options["end_year"],
             benchmark_ticker=options["benchmark_ticker"],
             verbose=True,
+            pit_stats_index=context.get("all_pit_stats_index"),
         )
         end_time = time.time()
 
