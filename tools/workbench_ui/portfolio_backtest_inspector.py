@@ -94,7 +94,7 @@ SIDEBAR_HISTORY_CHIP_ACTIVE_BG = "#ff8a1c"
 SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
-PERFORMANCE_TAB_CLOSE_HITBOX_PX = 28
+PERFORMANCE_TAB_CLOSE_HITBOX_PX = 34
 PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX = 18
 PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX = 4
 COMBOBOX_WIDTH_RULES = {
@@ -816,9 +816,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
         self._notebook = notebook
-        notebook.bind("<Configure>", self._refresh_performance_tab_close_buttons, add="+")
-        notebook.bind("<<NotebookTabChanged>>", self._refresh_performance_tab_close_buttons, add="+")
-        notebook.bind("<ButtonRelease-1>", self._on_performance_tab_click, add="+")
+        notebook.bind("<Button-1>", self._on_performance_tab_click)
+        notebook.bind("<ButtonRelease-1>", self._on_performance_tab_click)
 
         kline_tab = ttk.Frame(notebook, padding=0, style="Workbench.TFrame")
         kline_tab.rowconfigure(0, weight=1)
@@ -838,9 +837,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
-        sidebar_chip_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_header_font = ("Microsoft JhengHei", 15, "bold")
-        sidebar_body_font = ("Microsoft JhengHei", 14)
+        sidebar_chip_font = ("Microsoft JhengHei", 14, "bold")
+        sidebar_header_font = ("Microsoft JhengHei", 14, "bold")
+        sidebar_body_font = ("Microsoft JhengHei", 13)
         self._signal_chip = tk.Label(sidebar, textvariable=self._sidebar_signal_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._signal_chip.grid(row=0, column=0, sticky="ew", pady=(0, 4))
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
@@ -1614,39 +1613,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return button
 
     def _refresh_performance_tab_close_buttons(self, _event=None):
-        notebook = getattr(self, "_notebook", None)
-        if notebook is None:
-            return
-        live_tab_ids = set(str(tab_id) for tab_id in notebook.tabs())
-        performance_tab_ids = set(str(item.get("tab_id")) for item in getattr(self, "_performance_tabs", []))
         for tab_id, button in list(getattr(self, "_performance_tab_close_buttons", {}).items()):
-            if str(tab_id) not in live_tab_ids or str(tab_id) not in performance_tab_ids:
-                try:
-                    button.destroy()
-                except tk.TclError as exc:
-                    _warn_gui_fallback("performance_tab.close_button.destroy", exc)
-                self._performance_tab_close_buttons.pop(tab_id, None)
-
-        selected_tab_id = str(notebook.select() or "")
-        for item in list(getattr(self, "_performance_tabs", [])):
-            tab_id = str(item.get("tab_id"))
-            if not tab_id or tab_id not in live_tab_ids:
-                continue
             try:
-                tab_index = notebook.index(tab_id)
-                bbox = notebook.bbox(tab_index)
+                button.destroy()
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.bbox", exc)
-                continue
-            if not bbox or int(bbox[2]) <= 0 or int(bbox[3]) <= 0:
-                continue
-            button = self._get_or_create_performance_close_button(tab_id)
-            size = PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX
-            x_pos = int(bbox[0]) + int(bbox[2]) - size - PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX
-            y_pos = int(bbox[1]) + max(0, (int(bbox[3]) - size) // 2)
-            button.configure(bg=WORKBENCH_ACCENT if tab_id == selected_tab_id else WORKBENCH_SURFACE_ALT)
-            button.place(x=x_pos, y=y_pos, width=size, height=size)
-            button.lift()
+                _warn_gui_fallback("performance_tab.close_button.destroy", exc)
+            self._performance_tab_close_buttons.pop(tab_id, None)
 
     def _destroy_performance_close_button(self, tab_id):
         button = getattr(self, "_performance_tab_close_buttons", {}).pop(str(tab_id), None)
@@ -1656,6 +1628,23 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             button.destroy()
         except tk.TclError as exc:
             _warn_gui_fallback("performance_tab.close_button.destroy", exc)
+
+    def _get_notebook_tab_index_at_event(self, *, notebook, event):
+        try:
+            return int(notebook.index(f"@{event.x},{event.y}"))
+        except tk.TclError:
+            pass
+        for index, _tab_id in enumerate(notebook.tabs()):
+            try:
+                bbox = notebook.bbox(index)
+            except tk.TclError:
+                continue
+            if not bbox:
+                continue
+            left, top, width, height = [int(value) for value in bbox]
+            if left <= int(event.x) <= left + width and top <= int(event.y) <= top + height:
+                return index
+        return None
 
     def _is_performance_close_hit(self, *, notebook, tab_index, event, bbox):
         if not bbox:
@@ -1689,8 +1678,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         notebook = getattr(self, "_notebook", None)
         if notebook is None:
             return None
+        tab_index = self._get_notebook_tab_index_at_event(notebook=notebook, event=event)
+        if tab_index is None:
+            return None
         try:
-            tab_index = notebook.index(f"@{event.x},{event.y}")
             bbox = notebook.bbox(tab_index)
         except tk.TclError:
             return None
@@ -1817,14 +1808,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 text.set_color("#f7fbff")
 
         tab_frame = ttk.Frame(self._notebook, padding=0, style="Workbench.TFrame")
-        tab_frame.rowconfigure(0, weight=0)
-        tab_frame.rowconfigure(1, weight=1)
+        tab_frame.rowconfigure(0, weight=1)
         tab_frame.columnconfigure(0, weight=1)
-        tab_header = ttk.Frame(tab_frame, padding=(6, 2, 6, 0), style="Workbench.TFrame")
-        tab_header.grid(row=0, column=0, sticky="ew")
-        tab_header.columnconfigure(0, weight=1)
         host = tk.Frame(tab_frame, bg="#000000", highlightthickness=0, bd=0)
-        host.grid(row=1, column=0, sticky="nsew")
+        host.grid(row=0, column=0, sticky="nsew")
         canvas = FigureCanvasTkAgg(figure, master=host)
         canvas.draw()
         widget = canvas.get_tk_widget()
@@ -1833,17 +1820,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         tab_title = self._resolve_performance_tab_title(options)
         self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
         tab_id = self._notebook.tabs()[self._notebook.index(tab_frame)]
-        close_button = ttk.Button(
-            tab_header,
-            text="×",
-            width=3,
-            command=lambda target_tab_id=tab_id: self._close_performance_tab_by_id(target_tab_id),
-            style="Workbench.Sidebar.TButton",
-        )
-        close_button.grid(row=0, column=1, sticky="e")
-        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure, "close_button": close_button})
+        self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure})
         self._notebook.select(tab_frame)
-        self.after_idle(self._refresh_performance_tab_close_buttons)
 
     def _clear_kline_chart(self):
         if self._chart_canvas is not None:
