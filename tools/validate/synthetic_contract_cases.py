@@ -2743,7 +2743,7 @@ def validate_gui_chart_recent_view_signal_overlay_contract_case(base_params):
 
     add_check(results, "output_contract", case_id, "gui_chart_default_recent_view_ends_at_last_bar", len(chart_payload["x"]) - 1, int(default_view.get("end_idx", -1)))
     add_check(results, "output_contract", case_id, "gui_chart_default_recent_view_narrower_than_full_history", True, int(default_view.get("start_idx", 0)) > 0)
-    add_check(results, "output_contract", case_id, "gui_chart_contract_default_lookback_months", 18, contract.get("default_lookback_months"))
+    add_check(results, "output_contract", case_id, "gui_chart_contract_default_lookback_months", 6, contract.get("default_lookback_months"))
     add_check(results, "output_contract", case_id, "gui_chart_contract_hover_value_display_enabled", True, contract.get("hover_value_display_enabled"))
     add_check(results, "output_contract", case_id, "gui_chart_contract_twse_up_color", "#ff5b6e", contract.get("twse_up_color"))
     add_check(results, "output_contract", case_id, "gui_chart_contract_twse_down_color", "#18b26b", contract.get("twse_down_color"))
