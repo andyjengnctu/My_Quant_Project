@@ -104,28 +104,38 @@ def _execute_sell_leg(position, *, event, exec_price, sell_qty, params, deferred
     return freed_cash_milli, pnl_milli
 
 
-def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
-    if pd.isna(y_atr):
-        return
+def _sync_trailing_stop_display_fields(position):
+    position['highest_high_since_entry'] = milli_to_money(position['highest_high_since_entry_milli'])
+    position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
+    position['sl'] = milli_to_money(position['sl_milli'])
 
-    highest_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
+
+def _update_trailing_stop(position, *, y_high, y_atr, params, sync_display_fields=True):
+    previous_high_milli = int(position.get('highest_high_since_entry_milli', position['entry_fill_price_milli']))
+    highest_high_milli = previous_high_milli
+    made_new_high = False
+
     if not pd.isna(y_high):
-        highest_high_milli = max(highest_high_milli, price_to_milli(y_high))
+        y_high_milli = price_to_milli(y_high)
+        if y_high_milli > previous_high_milli:
+            highest_high_milli = y_high_milli
+            made_new_high = True
+
     position['highest_high_since_entry_milli'] = highest_high_milli
 
-    trail_reference = highest_high_milli / 1000.0
-    candidate_trail = adjust_long_stop_price(
-        trail_reference - (y_atr * params.atr_times_trail),
-        ticker=position.get('ticker'),
-        security_profile=position.get('security_profile'),
-    )
-    candidate_trail_milli = price_to_milli(candidate_trail)
-    position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
+    if made_new_high and not pd.isna(y_atr):
+        trail_reference = highest_high_milli / 1000.0
+        candidate_trail = adjust_long_stop_price(
+            trail_reference - (y_atr * params.atr_times_trail),
+            ticker=position.get('ticker'),
+            security_profile=position.get('security_profile'),
+        )
+        candidate_trail_milli = price_to_milli(candidate_trail)
+        position['trailing_stop_milli'] = max(position.get('trailing_stop_milli', 0), candidate_trail_milli)
+
     position['sl_milli'] = max(position['initial_stop_milli'], position['trailing_stop_milli'])
     if sync_display_fields:
-        position['highest_high_since_entry'] = milli_to_money(highest_high_milli)
-        position['trailing_stop'] = milli_to_money(position['trailing_stop_milli'])
-        position['sl'] = milli_to_money(position['sl_milli'])
+        _sync_trailing_stop_display_fields(position)
 
 
 def _try_execute_pending_exit_on_open(position, *, y_close, t_open, t_high, t_low, t_close, t_volume, params, current_date=None, record_exec_contexts=True, sync_display_fields=True):

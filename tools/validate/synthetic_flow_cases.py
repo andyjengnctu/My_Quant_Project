@@ -455,8 +455,8 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     stop_exec_context = next((ctx for ctx in updated_stop_position.get('_last_exec_contexts', []) if ctx.get('event') == 'STOP'), None)
 
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_executes_at_open_without_rehit", True, 'DEFERRED_TP_HALF_ON_OPEN' in tp_events and 'TP_HALF' in tp_events)
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_trailing_stop_updates_after_deferred_tp", 104.0, float(updated_tp_position['trailing_stop']))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_effective_stop_updates_after_deferred_tp", 104.0, float(updated_tp_position['sl']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_trailing_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['trailing_stop']))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_effective_stop_stays_unchanged_without_new_high", 93.0, float(updated_tp_position['sl']))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_deferred_tp_reduces_position_even_without_rehit", tp_position['initial_qty'] - calc_half_take_profit_sell_qty(tp_position['initial_qty'], params.tp_percent), int(updated_tp_position['qty']))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_executes_from_queued_entry_day_trigger", True, 'DEFERRED_STOP_ON_OPEN' in stop_events and 'STOP' in stop_events)
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "next_day_stop_records_current_bar_execution_context", 92.0, None if stop_exec_context is None else float(stop_exec_context['exec_price']))
