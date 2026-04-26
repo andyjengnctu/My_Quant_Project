@@ -269,6 +269,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                 params,
                 ticker=resolved_ticker,
                 security_profile=resolved_security_profile,
+                signal_date=Dates[j - 1],
             )
             if signal_state is not None:
                 active_extended_signal = signal_state
@@ -279,6 +280,7 @@ def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=Non
                         params,
                         ticker=resolved_ticker,
                         security_profile=resolved_security_profile,
+                        signal_date=Dates[j - 1],
                     )
 
             should_try_normal_entry = collect_stats or _optimizer_limit_reachable_for_entry_day(

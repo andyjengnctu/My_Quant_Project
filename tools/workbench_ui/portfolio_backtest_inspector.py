@@ -317,6 +317,17 @@ def _resolve_previous_trade_date(fast_data, trade_date):
     return pd.Timestamp(dates[pos - 1])
 
 
+def _resolve_buy_signal_date_from_row(row, fast_data, trade_date):
+    for field in ("買訊日", "Signal_Date", "signal_date"):
+        value = row.get(field)
+        if value is None or value == "":
+            continue
+        parsed = pd.to_datetime(value, errors="coerce")
+        if not pd.isna(parsed):
+            return pd.Timestamp(parsed)
+    return _resolve_previous_trade_date(fast_data, trade_date)
+
+
 def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
     enriched = dict(meta or {})
     trade_count = _coerce_int((actual_stats or {}).get("trade_count"), default=0)
@@ -474,7 +485,7 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
 def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, row, action, marker_meta):
     trade_date = pd.Timestamp(row.get("Date"))
     if action in {"買進", "買進(延續候選)"}:
-        signal_date = _resolve_previous_trade_date(fast_data, trade_date)
+        signal_date = _resolve_buy_signal_date_from_row(row, fast_data, trade_date)
         if signal_date not in price_df.index:
             return
         limit_price = marker_meta.get("limit_price")
@@ -487,6 +498,9 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
             detail_lines.append(f"限價: {float(limit_price):.2f}")
         if reserved_capital is not None and not pd.isna(reserved_capital):
             detail_lines.append(f"預留: {float(reserved_capital):,.0f}")
+        candidate_date = row.get("候選日")
+        if candidate_date:
+            detail_lines.append(f"候選日: {candidate_date}")
         record_signal_annotation(
             chart_context,
             current_date=signal_date,

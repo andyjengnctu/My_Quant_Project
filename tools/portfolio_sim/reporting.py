@@ -14,6 +14,19 @@ REPORT_XLSX_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Report.xlsx")
 DASHBOARD_HTML_PATH = os.path.join(OUTPUT_DIR, "V16_Portfolio_Dashboard.html")
 
 
+def _order_trade_history_columns(df_tr):
+    if df_tr is None or df_tr.empty:
+        return df_tr
+    preferred = [
+        "Date", "Ticker", "Type", "買訊日", "候選日", "候選類型", "進場類型",
+        "買入限價", "成交價", "成本均價", "股數", "投入總金額",
+        "單筆損益", "該筆總損益", "R_Multiple", "Risk", "備註",
+    ]
+    ordered = [col for col in preferred if col in df_tr.columns]
+    ordered.extend([col for col in df_tr.columns if col not in ordered])
+    return df_tr.loc[:, ordered]
+
+
 def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=None, benchmark_ticker="0050"):
     print(f"\n{C_CYAN}================================================================================{C_RESET}")
     print(f"📅 【各年度報酬率 vs {benchmark_ticker} 大盤】")
@@ -66,6 +79,7 @@ def print_yearly_return_report(yearly_return_rows, benchmark_yearly_return_rows=
 
 
 def export_portfolio_reports(df_eq, df_tr, df_yearly, benchmark_ticker, start_year, end_year=None):
+    df_tr = _order_trade_history_columns(df_tr)
     with pd.ExcelWriter(REPORT_XLSX_PATH) as writer:
         df_eq.to_excel(writer, sheet_name="Equity Curve", index=False)
         df_tr.to_excel(writer, sheet_name="Trade History", index=False)

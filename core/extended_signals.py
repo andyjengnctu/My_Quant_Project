@@ -62,7 +62,7 @@ def is_extended_tbd_display_day(signal_state, day_low):
 
 
 # # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立；共用同一份 shadow trade 狀態，不再拆 extended / TBD 雙核心)
-def create_signal_tracking_state(original_limit, atr, params, ticker=None, security_profile=None):
+def create_signal_tracking_state(original_limit, atr, params, ticker=None, security_profile=None, signal_date=None):
     if pd.isna(original_limit) or pd.isna(atr):
         return None
 
@@ -75,6 +75,7 @@ def create_signal_tracking_state(original_limit, atr, params, ticker=None, secur
         "shadow_position": None,
         "ticker": ticker,
         "security_profile": security_profile,
+        "signal_date": signal_date,
     }
 
 
@@ -293,6 +294,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "ticker": resolved_ticker,
         "security_profile": resolved_security_profile,
         "trade_date": trade_date,
+        "signal_date": signal_state.get("signal_date"),
     }
     if shadow_position is not None:
         base_plan["shadow_position_state"] = copy.deepcopy(shadow_position)
@@ -396,6 +398,6 @@ def build_extended_entry_plan_from_signal(signal_state, sizing_capital, params, 
 
 
 # # (AI註: 延續候選資格評估)
-def evaluate_extended_candidate_eligibility(original_limit, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
-    signal_state = create_signal_tracking_state(original_limit, atr, params, ticker=ticker, security_profile=security_profile)
+def evaluate_extended_candidate_eligibility(original_limit, atr, sizing_capital, params, ticker=None, security_profile=None, trade_date=None, signal_date=None):
+    signal_state = create_signal_tracking_state(original_limit, atr, params, ticker=ticker, security_profile=security_profile, signal_date=signal_date)
     return build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=ticker, security_profile=security_profile, trade_date=trade_date)

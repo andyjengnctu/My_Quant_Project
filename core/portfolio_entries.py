@@ -13,6 +13,18 @@ from core.trade_plans import (
 from core.portfolio_fast_data import get_fast_close, get_fast_pos, get_fast_value
 
 
+def _format_candidate_date(value):
+    if value is None or value != value:
+        return ""
+    if hasattr(value, "strftime"):
+        return value.strftime('%Y-%m-%d')
+    return str(value)
+
+
+def _candidate_kind_label(candidate_type):
+    return '延續候選' if candidate_type == 'extended' else '新訊號'
+
+
 def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
     sizing_capital = candidate_row.get('sizing_capital')
     if (sizing_capital is None or sizing_capital != sizing_capital) and sizing_equity is not None:
@@ -95,6 +107,9 @@ def execute_reserved_entries_for_day(
         cand = remaining_orderable_candidates.pop(0)
         if cand.get('is_orderable') is False:
             continue
+        candidate_kind_label = _candidate_kind_label(cand.get('type'))
+        signal_date_text = _format_candidate_date(cand.get('signal_date'))
+        candidate_date_text = _format_candidate_date(cand.get('candidate_date') or cand.get('trade_date') or today)
 
         chosen_entry_plan = _build_cash_capped_entry_plan_for_candidate(
             cand,
@@ -146,7 +161,10 @@ def execute_reserved_entries_for_day(
                     {
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': cand['ticker'],
-                        'Type': f"買進 (EV:{cand['ev']:.2f}R)",
+                        'Type': f"買進 ({candidate_kind_label}, EV:{cand['ev']:.2f}R)",
+                        '買訊日': signal_date_text,
+                        '候選日': candidate_date_text,
+                        '候選類型': candidate_kind_label,
                         '買入限價': chosen_entry_plan['limit_price'],
                         '成交價': entry_result.get('entry_fill_price', entry_result['buy_price']),
                         '成本均價': entry_result.get('cost_basis_price', entry_result['entry_price']),
@@ -168,6 +186,10 @@ def execute_reserved_entries_for_day(
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': cand['ticker'],
                         'Type': miss_buy_type,
+                        '買訊日': signal_date_text,
+                        '候選日': candidate_date_text,
+                        '候選類型': candidate_kind_label,
+                        '進場類型': cand['type'],
                         '單筆損益': 0.0,
                         '該筆總損益': 0.0,
                         'R_Multiple': 0.0,

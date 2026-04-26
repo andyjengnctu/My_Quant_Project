@@ -9,6 +9,7 @@ from core.trade_plans import (
 )
 from core.portfolio_fast_data import (
     get_fast_close,
+    get_fast_dates,
     get_fast_pos,
     get_fast_security_profile,
     get_fast_value,
@@ -42,6 +43,7 @@ def _make_candidate_row(
     entry_ref_price=None,
     security_profile=None,
     trade_date=None,
+    signal_date=None,
     sizing_capital=None,
 ):
     if est_qty > 0:
@@ -77,6 +79,8 @@ def _make_candidate_row(
         'entry_ref_price': entry_ref_price,
         'security_profile': security_profile,
         'trade_date': trade_date,
+        'candidate_date': trade_date,
+        'signal_date': signal_date,
         'sizing_capital': sizing_capital,
     }
     if signal_state is not None:
@@ -114,6 +118,7 @@ def _collect_normal_candidates(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
         is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
@@ -140,6 +145,7 @@ def _collect_normal_candidates(
             params,
             ticker=ticker,
             security_profile=security_profile,
+            signal_date=signal_date,
         )
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
@@ -168,6 +174,7 @@ def _collect_normal_candidates(
             params=params,
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
+            signal_date=signal_date,
             sizing_capital=candidate_plan.get('sizing_capital'),
         )
         if candidates_today is not None:
@@ -203,6 +210,7 @@ def track_normal_setup_signals_for_day(
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
         y_atr = get_fast_value(fast_df, 'ATR', pos=y_pos)
+        signal_date = get_fast_dates(fast_df)[y_pos]
         security_profile = get_fast_security_profile(fast_df)
 
         is_candidate, _ev, _win_rate, _trade_count, _asset_growth_pct = get_pit_stats_from_index(
@@ -217,6 +225,7 @@ def track_normal_setup_signals_for_day(
             params,
             ticker=ticker,
             security_profile=security_profile,
+            signal_date=signal_date,
         )
         if signal_state is not None:
             active_extended_signals[ticker] = signal_state
@@ -303,6 +312,7 @@ def _collect_extended_candidates(
             params=params,
             security_profile=candidate_plan.get('security_profile'),
             trade_date=today,
+            signal_date=candidate_plan.get('signal_date'),
             sizing_capital=candidate_plan.get('sizing_capital'),
             signal_state=active_extended_signals[ticker],
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
