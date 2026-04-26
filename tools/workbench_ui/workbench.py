@@ -126,7 +126,7 @@ def configure_workbench_theme(root):
     style.configure(WORKBENCH_LABEL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT)
     style.configure(WORKBENCH_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(10, 4), font=WORKBENCH_UI_FONT)
     style.map(WORKBENCH_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
-    style.configure(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(2, 3), font=("Microsoft JhengHei", 10))
+    style.configure(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=WORKBENCH_SURFACE_ALT, foreground=WORKBENCH_TEXT, bordercolor=WORKBENCH_BORDER, focusthickness=1, focuscolor=WORKBENCH_BORDER, padding=(2, 3), font=("Microsoft JhengHei", 11))
     style.map(WORKBENCH_SIDEBAR_BUTTON_STYLE, background=[("active", WORKBENCH_ACCENT), ("pressed", WORKBENCH_ACCENT)])
     style.configure(WORKBENCH_CHECK_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_UI_FONT, padding=(0, 2))
     style.map(WORKBENCH_CHECK_STYLE, foreground=[("active", WORKBENCH_TEXT)])
