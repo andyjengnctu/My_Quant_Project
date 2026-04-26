@@ -1593,21 +1593,28 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return None
 
     def _get_or_create_performance_close_button(self, tab_id):
-        button = self._performance_tab_close_buttons.get(str(tab_id))
+        tab_id = str(tab_id)
+        button = self._performance_tab_close_buttons.get(tab_id)
         if button is not None and button.winfo_exists():
             return button
 
-        target_tab_id = str(tab_id)
+        record = self._find_performance_tab_record(tab_id)
+        if record is None:
+            return None
+        tab_frame = record.get("frame")
+        if tab_frame is None:
+            return None
+
         button = tk.Button(
-            self,
+            tab_frame,
             text="×",
-            command=lambda target_tab_id=target_tab_id: self._close_performance_tab_by_id(target_tab_id),
-            bg=WORKBENCH_SURFACE_ALT,
-            activebackground=WORKBENCH_ACCENT,
+            command=lambda target_tab_id=tab_id: self._close_performance_tab_by_id(target_tab_id),
+            bg="#243040",
+            activebackground="#3a4a60",
             fg="#ffffff",
             activeforeground="#ffffff",
             cursor="hand2",
-            font=("Microsoft JhengHei", 11, "bold"),
+            font=("Microsoft JhengHei", 13, "bold"),
             bd=0,
             relief="flat",
             highlightthickness=0,
@@ -1615,7 +1622,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             pady=0,
             takefocus=0,
         )
-        self._performance_tab_close_buttons[target_tab_id] = button
+        self._performance_tab_close_buttons[tab_id] = button
+        record["close_button"] = button
         return button
 
     def _refresh_performance_tab_close_buttons(self, _event=None):
@@ -1639,29 +1647,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             if tab_id not in notebook_tabs:
                 self._destroy_performance_close_button(tab_id)
                 continue
-            try:
-                tab_index = notebook_tabs.index(tab_id)
-                bbox = notebook.bbox(tab_index)
-            except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.bbox", exc)
-                self._destroy_performance_close_button(tab_id)
+            button = item.get("close_button") or self._get_or_create_performance_close_button(tab_id)
+            if button is None:
                 continue
-            if not bbox:
-                self._destroy_performance_close_button(tab_id)
-                continue
-
-            left, top, width, height = [int(value) for value in bbox]
-            button = self._get_or_create_performance_close_button(tab_id)
-            button_size = int(PERFORMANCE_TAB_CLOSE_BUTTON_SIZE_PX)
-            notebook_x = int(notebook.winfo_rootx() - self.winfo_rootx())
-            notebook_y = int(notebook.winfo_rooty() - self.winfo_rooty())
-            button_x = notebook_x + left + width - int(PERFORMANCE_TAB_CLOSE_BUTTON_RIGHT_PAD_PX) - button_size
-            button_y = notebook_y + top + max(0, (height - button_size) // 2)
             try:
-                button.place(in_=self, x=button_x, y=button_y, width=button_size, height=button_size)
+                button.place(relx=1.0, x=-10, y=10, width=28, height=28, anchor="ne")
                 button.lift()
             except tk.TclError as exc:
-                _warn_gui_fallback("performance_tab.close_button.place", exc)
+                _warn_gui_fallback("performance_tab.close_button.place_in_tab", exc)
                 self._destroy_performance_close_button(tab_id)
         return None
 
@@ -1864,6 +1857,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._notebook.insert(self._resolve_performance_tab_insert_index(), tab_frame, text=tab_title)
         tab_id = self._notebook.tabs()[self._notebook.index(tab_frame)]
         self._performance_tabs.append({"tab_id": tab_id, "frame": tab_frame, "canvas": canvas, "figure": figure})
+        self._get_or_create_performance_close_button(tab_id)
         self._notebook.select(tab_frame)
         self.after_idle(self._refresh_performance_tab_close_buttons)
 
