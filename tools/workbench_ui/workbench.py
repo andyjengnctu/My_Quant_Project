@@ -33,6 +33,8 @@ WORKBENCH_SIDEBAR_SUMMARY_STYLE = "Workbench.SidebarSummary.TLabel"
 WORKBENCH_SIDEBAR_VALUE_STYLE = "Workbench.SidebarValue.TLabel"
 WORKBENCH_UI_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_NOTEBOOK_FONT = ("Microsoft JhengHei", 11)
+WORKBENCH_RIGHT_SIDEBAR_WIDTH = 125
+WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH = 112
 
 
 def _warn_gui_fallback(action, exc):

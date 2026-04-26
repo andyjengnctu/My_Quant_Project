@@ -452,9 +452,8 @@ def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=
         verbose=verbose,
         pit_stats_index=context.get("all_pit_stats_index"),
     )
-    try:
-        result[-1]["prep_wall_sec"] = float(context.get("prep_wall_sec", 0.0))
-        result[-1]["prep_mode"] = context.get("prep_mode")
-    except (AttributeError, IndexError, TypeError, ValueError):
-        pass
+    if not result or not isinstance(result[-1], dict):
+        raise RuntimeError("portfolio simulation result missing mutable profile payload")
+    result[-1]["prep_wall_sec"] = float(context.get("prep_wall_sec", 0.0))
+    result[-1]["prep_mode"] = context.get("prep_mode")
     return result

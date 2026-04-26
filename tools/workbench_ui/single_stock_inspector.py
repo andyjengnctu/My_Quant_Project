@@ -38,6 +38,7 @@ from tools.trade_analysis.charting import (
 )
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
+from tools.workbench_ui.workbench import WORKBENCH_RIGHT_SIDEBAR_WIDTH, WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -550,10 +551,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        sidebar_outer = ttk.Frame(chart_tab, padding=(4, 4, 2, 4), width=188, style="Workbench.TFrame")
+        sidebar_outer = ttk.Frame(chart_tab, padding=(4, 4, 2, 4), width=WORKBENCH_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
         sidebar_outer.grid(row=0, column=1, sticky="ns")
         sidebar_outer.grid_propagate(False)
-        chart_tab.grid_columnconfigure(1, minsize=188)
+        chart_tab.grid_columnconfigure(1, minsize=WORKBENCH_RIGHT_SIDEBAR_WIDTH)
 
         sidebar = ttk.Frame(sidebar_outer, padding=(2, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
@@ -566,7 +567,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=6, pady=4, anchor="center")
         self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=168).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
