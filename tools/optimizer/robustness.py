@@ -177,6 +177,7 @@ def _select_best_finalist_by_local_retention(finalists: list[dict]):
     eligible.sort(
         key=lambda item: (
             float(item.get("local_retention", float("-inf"))),
+            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
             float(item.get("base_score", INVALID_TRIAL_VALUE)),
             -int(item["trial"].number),
         ),
@@ -423,6 +424,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
     enriched_finalists.sort(
         key=lambda item: (
             float(item["local_retention"]),
+            float(item["local_min_score"]),
             float(item["base_score"]),
             -int(item["trial"].number),
         ),
