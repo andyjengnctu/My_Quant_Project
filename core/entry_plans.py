@@ -395,7 +395,9 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         "is_worse_than_initial_stop": False,
         "is_locked_limit_up": False,
         "buy_price": np.nan,
+        "entry_fill_price": np.nan,
         "entry_price": np.nan,
+        "cost_basis_price": np.nan,
         "tp_half": np.nan,
         "position": None,
         "entry_type": entry_type,
@@ -451,7 +453,9 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     result["filled"] = True
     result["count_as_missed_buy"] = False
     result["position"] = position
+    result["entry_fill_price"] = position["entry_fill_price"]
     result["entry_price"] = position["entry"]
+    result["cost_basis_price"] = position["entry"]
     result["tp_half"] = position["tp_half"]
     result["entry_day_stop_triggered"] = bool(position["entry_day_stop_triggered"])
     result["entry_day_tp_triggered"] = bool(position["entry_day_tp_triggered"])

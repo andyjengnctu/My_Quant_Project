@@ -168,7 +168,9 @@ def execute_reserved_entries_for_day(
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': cand['ticker'],
                         'Type': f"買進 (EV:{cand['ev']:.2f}R)",
-                        '成交價': entry_result['entry_price'],
+                        '買入限價': chosen_entry_plan['limit_price'],
+                        '成交價': entry_result.get('entry_fill_price', entry_result['buy_price']),
+                        '成本均價': entry_result.get('cost_basis_price', entry_result['entry_price']),
                         '股數': entry_result['position']['initial_qty'],
                         '投入總金額': milli_to_money(actual_total_cost_milli),
                         '進場類型': cand['type'],
@@ -191,6 +193,7 @@ def execute_reserved_entries_for_day(
                         '該筆總損益': 0.0,
                         'R_Multiple': 0.0,
                         'Risk': params.fixed_risk,
+                        '買入限價': chosen_entry_plan['limit_price'],
                         '備註': f"預掛限價 {chosen_entry_plan['limit_price']:.2f} 未成交",
                         '投入總金額': milli_to_money(reserved_cost_milli),
                     }
