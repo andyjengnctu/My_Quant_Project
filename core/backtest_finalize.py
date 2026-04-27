@@ -124,6 +124,13 @@ def finalize_open_position_at_end(
     }
 
 
+def _is_valid_preview_price(value):
+    try:
+        return value is not None and value == value and value > 0
+    except TypeError:
+        return False
+
+
 def build_backtest_stats(
     *,
     params,
@@ -142,9 +149,10 @@ def build_backtest_stats(
     buy_condition_last,
     atr_last,
     close_last,
-    low_last,
-    had_open_position_at_end,
-    active_extended_signal,
+    buy_limit_last=None,
+    low_last=None,
+    had_open_position_at_end=False,
+    active_extended_signal=None,
     active_extended_signal_tbd=None,
     end_position_qty=0,
     avg_bars_held=0,
@@ -175,9 +183,15 @@ def build_backtest_stats(
     resolved_security_profile = security_profile or (active_extended_signal or {}).get("security_profile")
     if resolved_security_profile is None:
         resolved_security_profile = (active_extended_signal_tbd or {}).get("security_profile")
-    buy_limit = adjust_long_buy_limit(close_last, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
-    stop_loss = calc_initial_stop_from_reference(close_last, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
-    tp_price = calc_frozen_target_price(close_last, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
+    buy_limit = 0.0
+    if buy_next_day:
+        if _is_valid_preview_price(buy_limit_last):
+            buy_limit = float(buy_limit_last)
+        else:
+            fallback_raw_limit = close_last + atr_last * params.atr_buy_tol
+            buy_limit = adjust_long_buy_limit(fallback_raw_limit, ticker=resolved_ticker, security_profile=resolved_security_profile)
+    stop_loss = calc_initial_stop_from_reference(buy_limit, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
+    tp_price = calc_frozen_target_price(buy_limit, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile) if buy_next_day else 0.0
     current_position = int(end_position_qty)
     score = (total_net_profit_pct / trade_count) if trade_count > 0 else 0.0
 
