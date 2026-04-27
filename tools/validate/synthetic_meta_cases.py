@@ -2002,8 +2002,8 @@ def validate_single_backtest_stats_legacy_schema_contract_case(_base_params):
     add_check(results, "meta_contract", case_id, "single_backtest_stats_extended_candidate_uses_threaded_final_date", True, "trade_date=final_date" in source_text)
     add_check(results, "meta_contract", case_id, "single_backtest_stats_extended_candidate_threads_security_profile", True, "security_profile=resolved_security_profile" in source_text)
     add_check(results, "meta_contract", case_id, "single_backtest_stats_preview_resolves_security_profile", True, 'resolved_security_profile = security_profile or (active_extended_signal or {}).get("security_profile")' in source_text)
-    add_check(results, "meta_contract", case_id, "single_backtest_stats_stop_preview_uses_shared_initial_stop_helper", True, "stop_loss = calc_initial_stop_from_reference(close_last, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile)" in source_text)
-    add_check(results, "meta_contract", case_id, "single_backtest_stats_tp_preview_uses_shared_target_helper", True, "tp_price = calc_frozen_target_price(close_last, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile)" in source_text)
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_stop_preview_uses_shared_initial_stop_helper", True, "stop_loss = calc_initial_stop_from_reference(buy_limit, atr_last, params, ticker=resolved_ticker, security_profile=resolved_security_profile)" in source_text)
+    add_check(results, "meta_contract", case_id, "single_backtest_stats_tp_preview_uses_shared_target_helper", True, "tp_price = calc_frozen_target_price(buy_limit, stop_loss, ticker=resolved_ticker, security_profile=resolved_security_profile)" in source_text)
     add_check(results, "meta_contract", case_id, "single_backtest_stats_has_no_manual_tp_preview_formula", False, "tp_price = close_last + (close_last - (close_last - atr_last * params.atr_times_init))" in source_text)
 
     summary["missing_keys"] = missing_keys
