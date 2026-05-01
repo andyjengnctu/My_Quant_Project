@@ -26,6 +26,7 @@ from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
+from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
@@ -700,8 +701,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._console_live_progress_start = None
         self._console_current_tag = "default"
         self._ticker_dropdown_stats = {}
+        self._history_summary_cache = {}
         self._current_chart_trade_indexes = []
         self._current_chart_trade_cursor_index = None
+        self._history_summary_var = tk.StringVar(value="-")
         self._sidebar_summary_var = tk.StringVar(value="-")
         self._selected_date_var = tk.StringVar(value="選取日: -")
         self._selected_open_var = tk.StringVar(value="開: -")
@@ -841,29 +844,31 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar.columnconfigure(0, weight=1)
         sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
         sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
-        ttk.Label(sidebar, text="投組實績摘要", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
-        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=3, column=0, sticky="w", pady=(2, 0))
-        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=4, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=7, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w", pady=(0, 4))
-        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=9, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(2, 0))
-        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=11, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=15, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._history_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, text="投組實績摘要", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=7, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
+        ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=16, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
         ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
-        sidebar.rowconfigure(17, weight=1)
+        sidebar.rowconfigure(19, weight=1)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         self._console_tab = console_tab
@@ -999,8 +1004,53 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
 
+    def _resolve_single_stock_history_params(self):
+        result_payload = self._result or {}
+        options = result_payload.get("options") or {}
+        params_path = str(options.get("params_path") or "").strip()
+        if params_path:
+            return load_strict_params(params_path)
+        return result_payload.get("params")
+
+    def _resolve_single_stock_history_summary_lines(self, ticker):
+        resolved_ticker = str(ticker or "").strip()
+        if not resolved_ticker:
+            return ["-"]
+        result_payload = self._result or {}
+        options = result_payload.get("options") or {}
+        cache_key = (resolved_ticker, str(options.get("params_path") or "").strip())
+        if cache_key in self._history_summary_cache:
+            return list(self._history_summary_cache[cache_key])
+
+        try:
+            analysis_result = run_ticker_analysis(
+                resolved_ticker,
+                dataset_profile_key=DEFAULT_DATASET_PROFILE,
+                data_dir=get_dataset_dir(WORKBENCH_PROJECT_ROOT, DEFAULT_DATASET_PROFILE),
+                params=self._resolve_single_stock_history_params(),
+                export_excel=False,
+                export_chart=False,
+                return_chart_payload=True,
+                verbose=False,
+            )
+            chart_payload = dict(analysis_result.get("chart_payload") or {})
+            lines = [str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()]
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
+            warnings.warn(
+                f"投組右側歷史績效表載入失敗: ticker={resolved_ticker} | {type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            lines = [f"歷史績效表無法載入: {type(exc).__name__}"]
+
+        if not lines:
+            lines = ["-"]
+        self._history_summary_cache[cache_key] = list(lines)
+        return lines
+
     def _update_sidebar_from_chart_payload(self, chart_payload):
         chart_payload = dict(chart_payload or {})
+        self._history_summary_var.set("\n".join(str(line) for line in (chart_payload.get("history_summary_box") or []) if str(line).strip()) or "-")
         self._sidebar_summary_var.set("\n".join(str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()) or "-")
         dates = chart_payload.get("date_labels") or []
         if dates:
@@ -1358,6 +1408,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return
         self._run_thread = None
         self._result = result_payload
+        self._history_summary_cache.clear()
         self._render_performance_chart(result_payload)
         self._refresh_trade_ticker_dropdown(result_payload)
         self._status_var.set("完成：投組回測")
@@ -1407,6 +1458,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._ticker_combo.configure(values=[])
             self._ticker_display_var.set("")
             self._autosize_combobox(self._ticker_combo, values=[], current_text="", rule_key="ticker")
+            self._history_summary_var.set("-")
+            self._sidebar_summary_var.set("-")
             return
 
         trade_rows = df_tr[df_tr.apply(_is_actual_trade_row, axis=1)].copy()
@@ -1438,6 +1491,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._ticker_display_var.set("")
             self._clear_kline_chart()
             self._update_selected_value_sidebar(None)
+            self._history_summary_var.set("-")
             self._sidebar_summary_var.set("-")
             self._kline_placeholder.configure(text="投組回測完成，但沒有可顯示的成交股票。")
 
@@ -1469,6 +1523,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             params=self._result.get("params"),
             ticker_dropdown_stats=self._ticker_dropdown_stats.get(display_key),
         )
+        chart_payload["history_summary_box"] = self._resolve_single_stock_history_summary_lines(ticker)
         self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload})
 
     def _render_kline_chart(self, result):
