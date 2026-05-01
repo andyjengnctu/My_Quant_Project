@@ -21,7 +21,6 @@ from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, prin
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
-from core.position_step import execute_bar_step
 from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
@@ -105,7 +104,7 @@ COMBOBOX_WIDTH_RULES = {
     "start_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
     "end_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
-    "ticker": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
+    "ticker": {"min_chars": 18, "max_chars": 60, "extra_px": 24},
 }
 
 
@@ -203,14 +202,7 @@ def _resolve_marker_price(price_df, row, action):
     price = _coerce_float(row.get("成交價"))
     if not pd.isna(price) and price > 0:
         return price
-    date = pd.Timestamp(row.get("Date"))
-    if date not in price_df.index:
-        return np.nan
-    if action in {"買進", "買進(延續候選)"}:
-        return float(price_df.loc[date, "Low"])
-    if action == "半倉停利":
-        return float(price_df.loc[date, "High"])
-    return float(price_df.loc[date, "Close"])
+    return np.nan
 
 
 
@@ -374,8 +366,12 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
 
 def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
     buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
+    reserved_capital = _coerce_float(row.get("預留總金額"), default=np.nan)
+    if pd.isna(reserved_capital):
+        reserved_capital = buy_capital
     meta = {
         "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
+        "reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital),
     }
     position = _build_position_from_portfolio_buy_row(row, fast_data=fast_data, params=params)
     if position is None:
@@ -471,7 +467,7 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         if signal_date not in price_df.index:
             return
         limit_price = marker_meta.get("limit_price")
-        reserved_capital = marker_meta.get("buy_capital")
+        reserved_capital = marker_meta.get("reserved_capital")
         detail_lines = []
         qty = _coerce_int(row.get("股數"), default=0)
         if qty > 0:
@@ -517,89 +513,33 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         )
 
 
-def _record_portfolio_active_level_segments(chart_context, *, fast_data, ticker_trades_df, params):
-    buy_rows = [row for row in ticker_trades_df.to_dict("records") if _is_buy_trade_row(row)]
-    if not buy_rows:
-        return
-    full_exit_rows = [row for row in ticker_trades_df.to_dict("records") if _is_full_exit_trade_row(row)]
-    fast_dates = pd.DatetimeIndex(pd.to_datetime(get_fast_dates(fast_data)))
-
-    for buy_idx, buy_row in enumerate(buy_rows):
-        buy_date = pd.Timestamp(buy_row.get("Date"))
-        buy_pos = _safe_fast_pos(fast_data, buy_date)
-        if buy_pos < 0:
+def _record_portfolio_active_level_rows(chart_context, *, active_level_rows):
+    for row in active_level_rows or []:
+        try:
+            current_date = pd.Timestamp(row.get("Date"))
+        except (TypeError, ValueError):
             continue
-        next_buy_date = pd.Timestamp(buy_rows[buy_idx + 1].get("Date")) if buy_idx + 1 < len(buy_rows) else None
-        exit_date = None
-        for exit_row in full_exit_rows:
-            candidate_exit_date = pd.Timestamp(exit_row.get("Date"))
-            if candidate_exit_date < buy_date:
-                continue
-            if next_buy_date is not None and candidate_exit_date >= next_buy_date:
-                continue
-            exit_date = candidate_exit_date
-            break
-
-        end_pos = len(fast_dates) - 1 if exit_date is None else _safe_fast_pos(fast_data, exit_date)
-        if end_pos < buy_pos:
-            continue
-
-        position = _build_position_from_portfolio_buy_row(buy_row, fast_data=fast_data, params=params)
-        if position is None:
-            continue
-
-        for pos in range(buy_pos, end_pos + 1):
-            current_date = fast_dates[pos]
-            if pos > buy_pos:
-                y_pos = pos - 1
-                try:
-                    position, _freed_cash, _pnl, _events = execute_bar_step(
-                        position,
-                        _safe_fast_value(fast_data, "ATR", pos=y_pos),
-                        bool(_safe_fast_value(fast_data, "ind_sell_signal", pos=y_pos)),
-                        _safe_fast_close(fast_data, pos=y_pos),
-                        _safe_fast_value(fast_data, "Open", pos=pos),
-                        _safe_fast_value(fast_data, "High", pos=pos),
-                        _safe_fast_value(fast_data, "Low", pos=pos),
-                        _safe_fast_close(fast_data, pos=pos),
-                        _safe_fast_value(fast_data, "Volume", pos=pos),
-                        params,
-                        current_date=current_date,
-                        y_high=_safe_fast_value(fast_data, "High", pos=y_pos),
-                        return_milli=False,
-                        record_exec_contexts=False,
-                        sync_display_fields=True,
-                    )
-                except (TypeError, ValueError, KeyError, IndexError, RuntimeError):
-                    break
-            if int(position.get("qty", 0) or 0) <= 0:
-                break
+        try:
             record_active_levels(
                 chart_context,
                 current_date=current_date,
-                stop_price=position.get("sl", np.nan),
-                tp_half_price=position.get("tp_half", np.nan),
-                limit_price=position.get("limit_price", np.nan),
-                entry_price=position.get("pure_buy_price", np.nan),
+                stop_price=_coerce_float(row.get("停損價")),
+                tp_half_price=_coerce_float(row.get("半倉停利價")),
+                limit_price=_coerce_float(row.get("買入限價")),
+                entry_price=_coerce_float(row.get("成交價")),
             )
-            if exit_date is not None and current_date >= exit_date:
-                break
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
 
 
-def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None):
+def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None, active_level_rows=None):
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
     dropdown_stats = dict(ticker_dropdown_stats or {})
     sort_text = str(dropdown_stats.get("sort_text") or "-")
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
 
-    if params is not None:
-        _record_portfolio_active_level_segments(
-            chart_context,
-            fast_data=fast_data,
-            ticker_trades_df=ticker_trades_df,
-            params=params,
-        )
+    _record_portfolio_active_level_rows(chart_context, active_level_rows=active_level_rows)
 
     active_entry = None
     sorted_records = sorted(
@@ -712,6 +652,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var = tk.StringVar(value="限價: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
+        self._selected_reserved_capital_var = tk.StringVar(value="預留: -")
         self._selected_actual_spend_var = tk.StringVar(value="實支: -")
         self._build_ui()
 
@@ -856,10 +797,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(sidebar, textvariable=self._selected_reserved_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.grid(row=19, column=0, sticky="ew", pady=(4, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
@@ -986,6 +928,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
+            self._selected_reserved_capital_var.set("預留: -")
             self._selected_actual_spend_var.set("實支: -")
             return
         self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
@@ -998,15 +941,24 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
         self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
+        self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
 
     def _resolve_single_stock_history_params(self):
         result_payload = self._result or {}
+        params = result_payload.get("params")
+        if params is not None:
+            return params
+
         options = result_payload.get("options") or {}
         params_path = str(options.get("params_path") or "").strip()
-        if params_path:
-            return load_strict_params(params_path)
-        return result_payload.get("params")
+        if not params_path:
+            return None
+
+        loaded_params = load_strict_params(params_path)
+        if "fixed_risk" in options:
+            loaded_params.fixed_risk = float(options["fixed_risk"])
+        return loaded_params
 
     def _resolve_single_stock_history_summary_lines(self, ticker):
         resolved_ticker = str(ticker or "").strip()
@@ -1014,7 +966,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return ["-"]
         result_payload = self._result or {}
         options = result_payload.get("options") or {}
-        cache_key = (resolved_ticker, str(options.get("params_path") or "").strip())
+        params = self._resolve_single_stock_history_params()
+        fixed_risk = getattr(params, "fixed_risk", options.get("fixed_risk", None))
+        cache_key = (resolved_ticker, str(options.get("params_path") or "").strip(), None if fixed_risk is None else float(fixed_risk))
         if cache_key in self._history_summary_cache:
             return list(self._history_summary_cache[cache_key])
 
@@ -1023,7 +977,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 resolved_ticker,
                 dataset_profile_key=DEFAULT_DATASET_PROFILE,
                 data_dir=get_dataset_dir(WORKBENCH_PROJECT_ROOT, DEFAULT_DATASET_PROFILE),
-                params=self._resolve_single_stock_history_params(),
+                params=params,
                 export_excel=False,
                 export_chart=False,
                 return_chart_payload=True,
@@ -1389,6 +1343,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "params": params,
             "options": dict(options),
             "context": context,
+            "profile_stats": dict(pf_profile),
             "metrics": {
                 "total_return": tot_ret,
                 "mdd": mdd,
@@ -1421,16 +1376,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         trade_count = int(actual_stats.get("trade_count", 0) or 0)
         win_rate_pct = actual_stats.get("win_rate_pct")
         total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
+        total_buy_capital = float(actual_stats.get("total_buy_capital", 0.0) or 0.0)
+        invested_return_pct = None if total_buy_capital <= 0 else total_pnl * 100.0 / total_buy_capital
         total_pnl_text = f"{total_pnl:+,.0f}"
+        invested_return_text = "-" if invested_return_pct is None else f"{invested_return_pct:+.1f}%"
         win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
         trade_count_text = "-" if trade_count <= 0 else str(trade_count)
         return {
             "sort_metric_label": "總損益",
             "sort_value": float(total_pnl),
             "sort_value_text": total_pnl_text,
-            "sort_text": f"總損益 {total_pnl_text}",
+            "sort_text": f"總損益 {total_pnl_text} / 投報 {invested_return_text}",
             "total_pnl": float(total_pnl),
             "total_pnl_text": total_pnl_text,
+            "invested_return_pct": invested_return_pct,
+            "invested_return_text": invested_return_text,
             "win_rate_text": win_rate_text,
             "trade_count_text": trade_count_text,
             "win_rate": win_rate_pct,
@@ -1512,12 +1472,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if fast_data is None or df_tr is None or df_tr.empty:
             return
         ticker_trades = df_tr[(df_tr["Ticker"].astype(str) == ticker) & df_tr.apply(_is_actual_trade_row, axis=1)].copy()
+        profile_stats = self._result.get("profile_stats") or {}
+        active_level_rows = [
+            row for row in (profile_stats.get("portfolio_active_level_rows") or [])
+            if str(row.get("Ticker", "")).strip() == str(ticker)
+        ]
         chart_payload = _build_portfolio_ticker_chart_payload(
             ticker=ticker,
             fast_data=fast_data,
             ticker_trades_df=ticker_trades,
             params=self._result.get("params"),
             ticker_dropdown_stats=self._ticker_dropdown_stats.get(display_key),
+            active_level_rows=active_level_rows,
         )
         chart_payload["history_summary_box"] = self._resolve_single_stock_history_summary_lines(ticker)
         self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload})

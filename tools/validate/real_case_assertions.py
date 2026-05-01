@@ -36,10 +36,10 @@ def append_real_case_checks(
 
     sim_years = calc_validation_sim_years(portfolio_stats["sorted_dates"], portfolio_stats["start_year"])
     expected_annual_trades = (portfolio_stats["trade_count"] / sim_years) if sim_years > 0 else 0.0
-    total_reserved_entries = portfolio_stats["normal_trade_count"] + portfolio_stats["extended_trade_count"]
+    filled_buy_count = int(portfolio_stats.get("filled_buy_count", portfolio_stats.get("portfolio_buy_rows", 0)) or 0)
     expected_reserved_buy_fill_rate = (
-        total_reserved_entries / (total_reserved_entries + portfolio_stats["total_missed"]) * 100.0
-        if (total_reserved_entries + portfolio_stats["total_missed"]) > 0 else 0.0
+        filled_buy_count / (filled_buy_count + portfolio_stats["total_missed"]) * 100.0
+        if (filled_buy_count + portfolio_stats["total_missed"]) > 0 else 0.0
     )
     expected_annual_return_pct = calc_validation_annual_return_pct(
         params.initial_capital, portfolio_stats["final_eq"], sim_years
@@ -127,7 +127,7 @@ def append_real_case_checks(
     add_check(results, "portfolio_sim", ticker, "bm_m_win_rate", portfolio_stats["bm_m_win_rate"], portfolio_sim_stats["bm_m_win_rate"], note="portfolio_sim benchmark 月勝率欄位必須穩定輸出。")
     add_check(results, "portfolio_sim", ticker, "normal_plus_extended_trade_count", portfolio_sim_stats["trade_count"], portfolio_sim_stats["normal_trade_count"] + portfolio_sim_stats["extended_trade_count"], note="portfolio_sim 正常/延續完整交易數總和應等於總交易次數。")
     add_check(results, "portfolio_sim", ticker, "annual_trades_formula", expected_annual_trades, portfolio_sim_stats["annual_trades"], note="portfolio_sim annual_trades 必須符合 trade_count / 年數公式。")
-    add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate_formula", expected_reserved_buy_fill_rate, portfolio_sim_stats["reserved_buy_fill_rate"], note="portfolio_sim 預留買進成交率必須符合 trade/missed counts 公式。")
+    add_check(results, "portfolio_sim", ticker, "reserved_buy_fill_rate_formula", expected_reserved_buy_fill_rate, portfolio_sim_stats["reserved_buy_fill_rate"], note="portfolio_sim 預留買進成交率必須符合 filled-buy/missed-buy counts 公式。")
     add_check(results, "portfolio_sim", ticker, "annual_return_pct_formula", expected_annual_return_pct, portfolio_sim_stats["annual_return_pct"], note="portfolio_sim 年化報酬率必須符合 final_eq 與模擬年數公式。")
     add_check(results, "portfolio_sim", ticker, "bm_annual_return_pct_formula", expected_bm_annual_return_pct, portfolio_sim_stats["bm_annual_return_pct"], note="portfolio_sim benchmark 年化報酬率必須符合 bm_ret 與模擬年數公式。")
     add_check(results, "portfolio_sim", ticker, "full_year_count_formula", portfolio_sim_full_year_metrics["full_year_count"], portfolio_sim_stats["full_year_count"], note="portfolio_sim 完整年度數必須與 yearly_return_rows 重算一致。")

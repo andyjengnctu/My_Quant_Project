@@ -152,6 +152,23 @@ def _get_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
         _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)
     return stats
 
+def _append_portfolio_active_level_rows(active_level_rows, portfolio, today):
+    if active_level_rows is None:
+        return
+    for ticker in sorted(portfolio.keys()):
+        pos = portfolio[ticker]
+        if int(pos.get('qty', 0) or 0) <= 0:
+            continue
+        active_level_rows.append({
+            'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
+            'Ticker': str(ticker),
+            '停損價': pos.get('sl'),
+            '半倉停利價': pos.get('tp_half'),
+            '買入限價': pos.get('limit_price'),
+            '成交價': pos.get('pure_buy_price'),
+        })
+
+
 def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
@@ -198,6 +215,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     active_extended_signals = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
     normal_trade_count, extended_trade_count = 0, 0
+    portfolio_entry_stats = {'filled_buy_count': 0}
+    active_level_rows = [] if (profile_stats is not None and not is_training) else None
     peak_equity, max_drawdown, current_equity = initial_capital_milli, 0.0, initial_capital_milli
     total_exposure, sim_days, total_missed_buys, total_missed_sells, max_exp = 0.0, 0, 0, 0, 0.0
     monthly_equities, bm_monthly_equities = [initial_capital], []
@@ -384,6 +403,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     trade_history=trade_history,
                     is_training=is_training,
                     total_missed_buys=total_missed_buys,
+                    entry_stats=portfolio_entry_stats,
                 )
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0
@@ -410,6 +430,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         cash_money = milli_to_money(cash)
         if profile_timing_enabled:
             equity_mark_sec += time.perf_counter() - t0
+
+        if active_level_rows is not None:
+            _append_portfolio_active_level_rows(active_level_rows, portfolio, today)
 
         current_equity = today_equity
         current_equity_money = today_equity_money
@@ -548,8 +571,8 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
     avg_exp = total_exposure / sim_days if sim_days > 0 else 0.0
     sim_years = calc_sim_years(sorted_dates, start_idx)
     annual_trades = (trade_count / sim_years) if sim_years > 0 else 0.0
-    total_reserved_entries = normal_trade_count + extended_trade_count
-    reserved_buy_fill_rate = (total_reserved_entries / (total_reserved_entries + total_missed_buys) * 100.0) if (total_reserved_entries + total_missed_buys) > 0 else 0.0
+    filled_buy_count = int(portfolio_entry_stats.get('filled_buy_count', 0) or 0)
+    reserved_buy_fill_rate = (filled_buy_count / (filled_buy_count + total_missed_buys) * 100.0) if (filled_buy_count + total_missed_buys) > 0 else 0.0
     annual_return_pct = calc_annual_return_pct(initial_capital, final_equity_money, sim_years)
 
     bm_start_value = float(benchmark_start_price) if benchmark_start_price is not None else 0.0
@@ -600,6 +623,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['annual_return_pct'] = annual_return_pct
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct
         profile_stats['reserved_buy_fill_rate'] = reserved_buy_fill_rate
+        profile_stats['filled_buy_count'] = filled_buy_count
+        if active_level_rows is not None:
+            profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
         profile_stats.update(yearly_stats)
         profile_stats.update(bm_yearly_stats)
 

@@ -89,6 +89,7 @@ def execute_reserved_entries_for_day(
     trade_history,
     is_training,
     total_missed_buys,
+    entry_stats=None,
 ):
     pre_market_occupied = len(portfolio) + len(sold_today)
     remaining_orderable_candidates = list(orderable_candidates_today)
@@ -153,6 +154,8 @@ def execute_reserved_entries_for_day(
             actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
             cash_milli -= actual_total_cost_milli
             portfolio[cand['ticker']] = entry_result['position']
+            if entry_stats is not None:
+                entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1
 
             if cand['ticker'] in active_extended_signals:
                 del active_extended_signals[cand['ticker']]
@@ -169,6 +172,7 @@ def execute_reserved_entries_for_day(
                         '成交價': entry_result.get('entry_fill_price', entry_result['buy_price']),
                         '成本均價': entry_result.get('cost_basis_price', entry_result['entry_price']),
                         '股數': entry_result['position']['initial_qty'],
+                        '預留總金額': milli_to_money(reserved_cost_milli),
                         '投入總金額': milli_to_money(actual_total_cost_milli),
                         '進場類型': cand['type'],
                         '單筆損益': 0.0,

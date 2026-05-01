@@ -145,7 +145,7 @@ def add_portfolio_stats_equality_checks(results, module_name, ticker, expected_s
         "final_eq", "avg_exp", "max_exp", "bm_ret", "bm_mdd", "total_missed",
         "total_missed_sells", "r_sq", "m_win_rate", "bm_r_sq", "bm_m_win_rate",
         "normal_trade_count", "extended_trade_count", "annual_trades",
-        "reserved_buy_fill_rate", "annual_return_pct", "bm_annual_return_pct",
+        "reserved_buy_fill_rate", "filled_buy_count", "annual_return_pct", "bm_annual_return_pct",
         "full_year_count", "min_full_year_return_pct", "yearly_return_rows",
         "bm_full_year_count", "bm_min_full_year_return_pct", "bm_yearly_return_rows",
         "portfolio_buy_rows", "portfolio_full_exit_rows", "portfolio_half_take_profit_rows",

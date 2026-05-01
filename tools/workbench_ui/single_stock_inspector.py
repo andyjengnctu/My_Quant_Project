@@ -458,6 +458,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var = tk.StringVar(value="限價: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
+        self._selected_reserved_capital_var = tk.StringVar(value="預留: -")
         self._selected_actual_spend_var = tk.StringVar(value="實支: -")
         self._ui_thread = threading.current_thread()
         self._console_stream_buffer = ""
@@ -587,10 +588,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=17, column=0, sticky="ew", pady=(4, 0))
+        ttk.Label(sidebar, textvariable=self._selected_reserved_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.grid(row=19, column=0, sticky="ew", pady=(4, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
@@ -1291,6 +1293,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
+            self._selected_reserved_capital_var.set("預留: -")
             self._selected_actual_spend_var.set("實支: -")
             return
         self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
@@ -1303,6 +1306,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
         self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
+        self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
 
     def _apply_sidebar_chip_styles(self, signal_active, history_active):

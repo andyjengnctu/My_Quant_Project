@@ -647,6 +647,9 @@ def build_chart_hover_snapshot(chart_payload, index):
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
     buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)"))
+    reserved_capital = buy_signal_meta.get("reserved_capital")
+    if reserved_capital is None:
+        reserved_capital = buy_trade_meta.get("reserved_capital")
     return {
         "index": idx,
         "date_label": chart_payload["date_labels"][idx],
@@ -657,7 +660,7 @@ def build_chart_hover_snapshot(chart_payload, index):
         "volume": float(chart_payload["volume"][idx]),
         "signal_capital": buy_signal_meta.get("current_capital"),
         "signal_qty": buy_signal_meta.get("qty"),
-        "reserved_capital": buy_signal_meta.get("reserved_capital"),
+        "reserved_capital": reserved_capital,
         "buy_capital": buy_trade_meta.get("buy_capital"),
         "buy_qty": None if buy_trade_marker is None else int(buy_trade_marker.get("qty", 0) or 0),
         **line_values,
@@ -744,6 +747,9 @@ def _build_trade_label_text(trace_name, marker):
             if value is None or pd.isna(value):
                 continue
             lines.append(f"{label}: {float(value):.2f}")
+        reserved_capital = meta.get("reserved_capital")
+        if reserved_capital is not None and not pd.isna(reserved_capital):
+            lines.append(f"預留: {float(reserved_capital):,.0f}")
         buy_capital = meta.get("buy_capital")
         if buy_capital is not None and not pd.isna(buy_capital):
             lines.append(f"實支: {float(buy_capital):,.0f}")
