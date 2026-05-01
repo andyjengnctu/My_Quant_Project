@@ -659,13 +659,9 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     win_rate_pct = actual_stats.get("win_rate_pct")
     win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
     chart_context["summary_box"] = [
-        "投組實際成交",
-        f"{ticker} 買進 {buy_count} 次",
-        f"完整出場 {exit_count} 次",
-        f"交易事件 {event_count} 筆",
-        f"投組勝率 {win_rate_text}",
-        f"投組總損益 {total_pnl:+,.0f}",
-        f"排序 {sort_text}",
+        f"交易次數 {exit_count} 次",
+        f"勝率 {win_rate_text}",
+        f"總損益 {total_pnl:+,.0f}",
     ]
     chart_context["status_box"] = {}
     return build_debug_chart_payload(price_df, chart_context)
@@ -855,7 +851,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
-        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
+        ttk.Label(sidebar, text="投組交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
