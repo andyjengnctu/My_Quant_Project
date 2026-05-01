@@ -16,7 +16,6 @@ import tkinter as tk
 import numpy as np
 import pandas as pd
 
-from core.buy_sort import calc_buy_sort_value, format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
@@ -118,13 +117,6 @@ PORTFOLIO_DROPDOWN_KIND_LABELS = {
     "extended": "延續",
     "extended_shadow": "延續",
 }
-PORTFOLIO_DROPDOWN_SORT_LABELS = {
-    "EV": "EV",
-    "預估投入": "投入",
-    "勝率×次數": "勝×次",
-    "資產成長": "成長",
-}
-PORTFOLIO_BUY_EV_PATTERN = re.compile(r"EV:([+-]?\d+(?:\.\d+)?)R")
 
 
 def _warn_gui_fallback(action, exc):
@@ -1413,31 +1405,19 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _resolve_ticker_dropdown_stats(self, *, ticker, first_buy_row, result_payload):
         df_tr = result_payload.get("df_tr")
         actual_stats = _build_portfolio_ticker_actual_stats(df_tr, ticker)
-        sort_method = get_buy_sort_method()
-        raw_sort_metric_label = get_buy_sort_metric_label(sort_method)
-        sort_metric_label = PORTFOLIO_DROPDOWN_SORT_LABELS.get(raw_sort_metric_label, raw_sort_metric_label)
-        ev = self._extract_ev_from_buy_type(first_buy_row.get("Type"))
-        projected_cost = _coerce_float(first_buy_row.get("投入總金額"), default=0.0)
         trade_count = int(actual_stats.get("trade_count", 0) or 0)
         win_rate_pct = actual_stats.get("win_rate_pct")
-        win_rate_fraction = 0.0 if win_rate_pct is None else float(win_rate_pct) / 100.0
-        asset_growth_pct = float(actual_stats.get("asset_growth_pct", 0.0) or 0.0)
-        sort_value = calc_buy_sort_value(
-            sort_method,
-            ev,
-            projected_cost,
-            win_rate_fraction,
-            trade_count,
-            asset_growth_pct,
-        )
-        sort_value_text = format_buy_sort_metric_value(sort_value, sort_method)
+        total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
+        total_pnl_text = f"{total_pnl:+,.0f}"
         win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
         trade_count_text = "-" if trade_count <= 0 else str(trade_count)
         return {
-            "sort_metric_label": sort_metric_label,
-            "sort_value": float(sort_value),
-            "sort_value_text": sort_value_text,
-            "sort_text": f"{sort_metric_label} {sort_value_text}",
+            "sort_metric_label": "總損益",
+            "sort_value": float(total_pnl),
+            "sort_value_text": total_pnl_text,
+            "sort_text": f"總損益 {total_pnl_text}",
+            "total_pnl": float(total_pnl),
+            "total_pnl_text": total_pnl_text,
             "win_rate_text": win_rate_text,
             "trade_count_text": trade_count_text,
             "win_rate": win_rate_pct,
@@ -1446,20 +1426,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         }
 
 
-    @staticmethod
-    def _extract_ev_from_buy_type(type_text):
-        match = PORTFOLIO_BUY_EV_PATTERN.search(str(type_text or ""))
-        if not match:
-            return 0.0
-        return _coerce_float(match.group(1), default=0.0)
-
     def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
         entry_type = str(first_buy_row.get("進場類型", "normal") or "normal")
         kind_label = PORTFOLIO_DROPDOWN_KIND_LABELS.get(entry_type, entry_type or "-")
         return (
             f"{ticker}|{kind_label}|{stats.get('sort_text', '-')}"
             f"|勝率 {stats.get('win_rate_text', '-')}"
-            f"|次 {stats.get('trade_count_text', '-')}"
+            f"|交易 {stats.get('trade_count_text', '-')}"
         )
 
     def _refresh_trade_ticker_dropdown(self, result_payload):
