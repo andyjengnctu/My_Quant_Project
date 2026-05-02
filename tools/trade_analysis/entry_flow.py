@@ -8,7 +8,7 @@ from core.extended_signals import (
     should_clear_extended_signal,
 )
 from core.exact_accounting import calc_entry_total_cost, milli_to_money, round_money_for_display
-from tools.trade_analysis.charting import record_active_levels, record_limit_order, record_trade_marker
+from tools.trade_analysis.charting import record_active_levels, record_shadow_active_levels, record_limit_order, record_trade_marker
 from tools.trade_analysis.log_rows import append_debug_trade_row, get_debug_tp_half_price
 
 
@@ -50,13 +50,40 @@ def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan
         return
 
     has_shadow_state = entry_plan.get('shadow_position_state') is not None
-    record_active_levels(
+    recorder = record_shadow_active_levels if has_shadow_state else record_active_levels
+    recorder(
         chart_context,
         current_date=current_date,
         stop_price=entry_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan,
         tp_half_price=entry_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan,
         limit_price=entry_plan['limit_price'],
         entry_price=entry_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan,
+    )
+
+
+def _record_active_extended_shadow_levels(chart_context, *, current_date, signal_state):
+    if chart_context is None or signal_state is None:
+        return
+
+    shadow_position = signal_state.get('shadow_position') or {}
+    if int(shadow_position.get('qty', 0) or 0) <= 0:
+        return
+
+    tp_half = shadow_position.get('tp_half', np.nan)
+    if bool(shadow_position.get('sold_half', False)) or shadow_position.get('pending_exit_action') == 'TP_HALF':
+        tp_half = np.nan
+
+    limit_price = signal_state.get('orig_limit', np.nan)
+    if limit_price is None or limit_price != limit_price:
+        limit_price = shadow_position.get('limit_price', np.nan)
+
+    record_shadow_active_levels(
+        chart_context,
+        current_date=current_date,
+        stop_price=shadow_position.get('sl', np.nan),
+        tp_half_price=tp_half,
+        limit_price=limit_price,
+        entry_price=shadow_position.get('entry_fill_price', np.nan),
     )
 
 
@@ -156,9 +183,6 @@ def process_debug_entry_for_day(
                     'tp_price': float(position['tp_half']),
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
-                    'current_capital': None if current_capital is None else float(current_capital),
-                    'entry_type': 'extended',
-                    'result': '成交',
                     'current_capital': None if current_capital is None else float(current_capital),
                     'entry_type': 'normal',
                     'result': '成交',
@@ -301,21 +325,29 @@ def process_debug_entry_for_day(
                 note="不計 miss buy",
             )
 
-    if not buy_triggered and position['qty'] == 0 and should_clear_extended_signal(
-        active_extended_signal,
-        t_low,
-        t_high,
-        t_open=t_open,
-        t_close=t_close,
-        t_volume=t_volume,
-        y_close=close_prev,
-        y_high=high_prev,
-        y_atr=atr_prev,
-        y_ind_sell=sell_condition_prev,
-        sizing_capital=sizing_cap,
-        current_date=current_date,
-        params=params,
-    ):
-        active_extended_signal = None
+    if not buy_triggered and position['qty'] == 0 and active_extended_signal is not None:
+        should_clear_signal = should_clear_extended_signal(
+            active_extended_signal,
+            t_low,
+            t_high,
+            t_open=t_open,
+            t_close=t_close,
+            t_volume=t_volume,
+            y_close=close_prev,
+            y_high=high_prev,
+            y_atr=atr_prev,
+            y_ind_sell=sell_condition_prev,
+            sizing_capital=sizing_cap,
+            current_date=current_date,
+            params=params,
+        )
+        if should_clear_signal:
+            active_extended_signal = None
+        else:
+            _record_active_extended_shadow_levels(
+                chart_context,
+                current_date=current_date,
+                signal_state=active_extended_signal,
+            )
 
     return position, active_extended_signal, spent_cash

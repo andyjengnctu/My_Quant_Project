@@ -230,7 +230,31 @@ def _apply_entry_day_pending_exit(position, *, t_high, t_low, params):
     return position
 
 
-def _apply_inherited_shadow_management(position, *, shadow_position):
+def _recompute_inherited_position_risk(position, *, params):
+    if position is None or params is None:
+        return position
+    stop_price = position.get('sl')
+    qty = int(position.get('initial_qty') or position.get('qty') or 0)
+    if qty <= 0 or stop_price is None or pd.isna(stop_price):
+        return sync_position_display_fields(position)
+
+    stop_sell_ledger = build_sell_ledger_from_price(
+        stop_price,
+        qty,
+        params,
+        ticker=position.get('ticker'),
+        security_profile=position.get('security_profile'),
+        trade_date=position.get('entry_trade_date'),
+    )
+    position['initial_risk_total_milli'] = calc_initial_risk_total_milli(
+        position.get('net_buy_total_milli', 0),
+        stop_sell_ledger['net_sell_total_milli'],
+        rate_to_ppm(params.fixed_risk),
+    )
+    return sync_position_display_fields(position)
+
+
+def _apply_inherited_shadow_management(position, *, shadow_position, params=None):
     if position is None or shadow_position is None:
         return position
 
@@ -257,7 +281,7 @@ def _apply_inherited_shadow_management(position, *, shadow_position):
     position['shadow_entry_fill_price_milli'] = shadow_position.get('entry_fill_price_milli', 0)
     position['shadow_entry_fill_price'] = shadow_position.get('entry_fill_price', float('nan'))
     position['shadow_sold_half'] = bool(shadow_position.get('sold_half', False))
-    return position
+    return _recompute_inherited_position_risk(position, params=params)
 
 
 def _apply_inherited_shadow_entry_day_state(position, *, t_high):
@@ -445,6 +469,8 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
     buy_price = adjust_long_buy_fill_price(min(t_open, limit_price), ticker=resolved_ticker, security_profile=resolved_security_profile)
     result["buy_price"] = buy_price
 
+    inherited_shadow_position = entry_plan.get("shadow_position_state")
+    entry_atr_for_position = None if inherited_shadow_position is not None else entry_plan.get("entry_atr")
     position = build_position_from_entry_fill(
         buy_price=buy_price,
         qty=qty,
@@ -454,14 +480,13 @@ def execute_pre_market_entry_plan(entry_plan, t_open, t_high, t_low, t_close, t_
         entry_type=entry_type,
         target_price=entry_plan.get("target_price"),
         limit_price=limit_price,
-        entry_atr=entry_plan.get("entry_atr"),
+        entry_atr=entry_atr_for_position,
         ticker=resolved_ticker,
         security_profile=resolved_security_profile,
         trade_date=trade_date,
     )
-    inherited_shadow_position = entry_plan.get("shadow_position_state")
     if inherited_shadow_position is not None:
-        position = _apply_inherited_shadow_management(position, shadow_position=inherited_shadow_position)
+        position = _apply_inherited_shadow_management(position, shadow_position=inherited_shadow_position, params=params)
         position = _apply_inherited_shadow_entry_day_state(position, t_high=t_high)
     else:
         position = _apply_entry_day_position_state(position, t_high=t_high)

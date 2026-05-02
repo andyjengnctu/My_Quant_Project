@@ -528,6 +528,15 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params, equity_snapshots
             meta["limit_price"] = float(limit_price)
         if entry_price is not None:
             meta["entry_price"] = float(entry_price)
+        explicit_stop_price = _resolve_valid_float(row.get("停損價"))
+        if explicit_stop_price is not None:
+            meta["stop_price"] = float(explicit_stop_price)
+        explicit_tp_price = _resolve_valid_float(row.get("半倉停利價"))
+        if explicit_tp_price is not None:
+            meta["tp_price"] = float(explicit_tp_price)
+        shadow_entry_price = _resolve_valid_float(row.get("Shadow買進價"))
+        if shadow_entry_price is not None:
+            meta["shadow_entry_price"] = float(shadow_entry_price)
         return _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
 
     for source_key, target_key in (
@@ -543,6 +552,15 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params, equity_snapshots
     entry_price = _resolve_valid_float(row.get("成交價"))
     if entry_price is not None:
         meta["entry_price"] = float(entry_price)
+    explicit_stop_price = _resolve_valid_float(row.get("停損價"))
+    if explicit_stop_price is not None:
+        meta["stop_price"] = float(explicit_stop_price)
+    explicit_tp_price = _resolve_valid_float(row.get("半倉停利價"))
+    if explicit_tp_price is not None:
+        meta["tp_price"] = float(explicit_tp_price)
+    shadow_entry_price = _resolve_valid_float(row.get("Shadow買進價"))
+    if shadow_entry_price is not None:
+        meta["shadow_entry_price"] = float(shadow_entry_price)
     return _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
 
 
@@ -613,6 +631,8 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
     if init_trail is None:
         init_trail = init_sl
     target_price = _resolve_valid_float(row.get("半倉停利價"))
+    explicit_management_levels = init_sl is not None or target_price is not None
+    entry_atr_for_rebuild = np.nan if explicit_management_levels else entry_atr
     try:
         return build_position_from_entry_fill(
             buy_price=buy_price,
@@ -623,7 +643,7 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
             entry_type=str(row.get("進場類型", "normal") or "normal"),
             target_price=target_price,
             limit_price=limit_price,
-            entry_atr=entry_atr,
+            entry_atr=entry_atr_for_rebuild,
             ticker=str(row.get("Ticker", "") or ""),
             security_profile=(fast_data or {}).get("security_profile"),
             trade_date=buy_date,
@@ -1275,7 +1295,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
         self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))
         self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
-        self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
+        entry_label = "Shadow買進" if bool(snapshot.get("shadow_line_active")) else "成交"
+        self._selected_entry_var.set(self._format_sidebar_line_value(entry_label, snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
         self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))

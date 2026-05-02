@@ -173,6 +173,10 @@ def execute_reserved_entries_for_day(
             if cand['ticker'] in active_extended_signals:
                 del active_extended_signals[cand['ticker']]
             if not is_training:
+                buy_position = entry_result['position']
+                tp_half_price = buy_position.get('tp_half')
+                if bool(buy_position.get('sold_half', False)):
+                    tp_half_price = None
                 trade_history.append(
                     {
                         'Date': today.strftime('%Y-%m-%d'),
@@ -184,7 +188,10 @@ def execute_reserved_entries_for_day(
                         '買入限價': chosen_entry_plan['limit_price'],
                         '成交價': entry_result.get('entry_fill_price', entry_result['buy_price']),
                         '成本均價': entry_result.get('cost_basis_price', entry_result['entry_price']),
-                        '股數': entry_result['position']['initial_qty'],
+                        '停損價': buy_position.get('sl'),
+                        '半倉停利價': tp_half_price,
+                        'Shadow買進價': buy_position.get('shadow_entry_fill_price'),
+                        '股數': buy_position['initial_qty'],
                         '預留總金額': milli_to_money(reserved_cost_milli),
                         '投入總金額': milli_to_money(actual_total_cost_milli),
                         '進場類型': cand['type'],

@@ -85,6 +85,11 @@ def _build_extended_like_row(*, ticker, expected_value, win_rate_pct, trade_coun
 
     invalidation_barrier = candidate_plan.get('continuation_invalidation_barrier') if candidate_plan is not None else None
     completion_barrier = candidate_plan.get('continuation_completion_barrier') if candidate_plan is not None else None
+    shadow_entry_price = None
+    if candidate_plan is not None:
+        shadow_entry_price = candidate_plan.get('shadow_entry_price', candidate_plan.get('entry_ref_price'))
+    if shadow_entry_price is not None and not pd.isna(shadow_entry_price):
+        barrier_parts.append(f"Shadow買進:{float(shadow_entry_price):>6.2f}")
     if invalidation_barrier is not None and not pd.isna(invalidation_barrier):
         barrier_parts.append(f"失效線:{float(invalidation_barrier):>6.2f}")
     if completion_barrier is not None and not pd.isna(completion_barrier):

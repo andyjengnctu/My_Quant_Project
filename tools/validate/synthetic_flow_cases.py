@@ -4,6 +4,7 @@ import tempfile
 
 import pandas as pd
 
+from core.exact_accounting import build_sell_ledger_from_price, calc_initial_risk_total_milli, rate_to_ppm
 from core.portfolio_candidates import build_daily_candidates
 from core.portfolio_entries import cleanup_extended_signals_for_day, execute_reserved_entries_for_day
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_prepared_stock_data
@@ -368,6 +369,47 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_shadow_entry_reference", 98.0, None if not inherited_position else float(inherited_position.get("shadow_entry_fill_price", float("nan"))))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_original_order_limit", 100.0, None if not inherited_position else float(inherited_position.get("limit_price", float("nan"))))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_uses_shadow_stop_not_late_fill_stop", 88.0, None if not inherited_position else float(inherited_position.get("initial_stop", float("nan"))))
+    if inherited_position:
+        stop_ledger = build_sell_ledger_from_price(
+            inherited_position.get("sl"),
+            inherited_position.get("initial_qty"),
+            params,
+            ticker=ticker,
+            security_profile=inherited_position.get("security_profile"),
+            trade_date=dates[2],
+        )
+        expected_risk_milli = calc_initial_risk_total_milli(
+            inherited_position.get("net_buy_total_milli", 0),
+            stop_ledger["net_sell_total_milli"],
+            rate_to_ppm(params.fixed_risk),
+        )
+    else:
+        expected_risk_milli = None
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_risk_uses_actual_fill_vs_inherited_stop", expected_risk_milli, None if not inherited_position else int(inherited_position.get("initial_risk_total_milli", 0)))
+
+    display_trade_history = []
+    display_portfolio = {}
+    display_active_extended_signals = {ticker: copy.deepcopy(active_extended_signals[ticker])}
+    execute_reserved_entries_for_day(
+        display_portfolio,
+        display_active_extended_signals,
+        list(day3_orderable),
+        set(),
+        all_dfs_fast,
+        dates[2],
+        params,
+        cash=1_000_000.0,
+        available_cash=1_000_000.0,
+        sizing_equity=1_000_000.0,
+        max_positions=1,
+        trade_history=display_trade_history,
+        is_training=False,
+        total_missed_buys=0,
+    )
+    display_buy_row = display_trade_history[0] if display_trade_history else {}
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_keeps_order_limit", 100.0, None if not display_buy_row else float(display_buy_row.get("買入限價", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_shows_inherited_stop", 88.0, None if not display_buy_row else float(display_buy_row.get("停損價", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_buy_history_shows_shadow_entry", 98.0, None if not display_buy_row else float(display_buy_row.get("Shadow買進價", float("nan"))))
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params, sizing_capital)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)

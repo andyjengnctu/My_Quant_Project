@@ -1361,10 +1361,15 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_low_var.set(self._format_sidebar_ohlcv_value("低", snapshot.get("low")))
         self._selected_close_var.set(self._format_sidebar_ohlcv_value("收", snapshot.get("close")))
         self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
-        self._selected_tp_var.set(self._format_sidebar_line_value("停利", snapshot.get("tp_price")))
-        self._selected_limit_var.set(self._format_sidebar_line_value("限價", snapshot.get("limit_price")))
-        self._selected_entry_var.set(self._format_sidebar_line_value("成交", snapshot.get("entry_price")))
-        self._selected_stop_var.set(self._format_sidebar_line_value("停損", snapshot.get("stop_price")))
+        line_sources = dict(snapshot.get("line_value_sources") or {})
+
+        def _line_label(base_label, key):
+            return f"Shadow{base_label}" if line_sources.get(key) == "shadow" else base_label
+
+        self._selected_tp_var.set(self._format_sidebar_line_value(_line_label("停利", "tp_price"), snapshot.get("tp_price")))
+        self._selected_limit_var.set(self._format_sidebar_line_value(_line_label("限價", "limit_price"), snapshot.get("limit_price")))
+        self._selected_entry_var.set(self._format_sidebar_line_value(_line_label("成交", "entry_price"), snapshot.get("entry_price")))
+        self._selected_stop_var.set(self._format_sidebar_line_value(_line_label("停損", "stop_price"), snapshot.get("stop_price")))
         self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
 
