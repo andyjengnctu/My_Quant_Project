@@ -39,6 +39,7 @@ from tools.trade_analysis.charting import (
     create_matplotlib_trade_chart_figure,
     extract_trade_marker_indexes,
     record_active_levels,
+    record_shadow_active_levels,
     record_limit_order,
     record_signal_annotation,
     record_trade_marker,
@@ -673,8 +674,9 @@ def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_leve
 
         tp_half_price = _coerce_float(row.get("半倉停利價"))
         visible_tp_half_price = np.nan if tp_line_stopped else tp_half_price
+        recorder = record_shadow_active_levels if str(row.get("level_scope", "") or "").strip() == "extended_shadow" else record_active_levels
         try:
-            record_active_levels(
+            recorder(
                 chart_context,
                 current_date=current_date,
                 stop_price=_coerce_float(row.get("停損價")),

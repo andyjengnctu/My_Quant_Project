@@ -127,6 +127,7 @@ CHART_LINE_LEGEND_SPECS = (
     ("限價線", MATPLOTLIB_LIMIT_COLOR, (0, (4, 2)), 1.5),
     ("成交線", MATPLOTLIB_ENTRY_COLOR, "solid", 1.8),
 )
+CHART_SHADOW_LINE_LEGEND_SPECS = ()
 
 CHART_SIGNAL_LEGEND_STYLE = {
     "買訊": {"mpl_marker": "v", "plotly_symbol": "triangle-down", "color": MATPLOTLIB_SIGNAL_BUY_COLOR},
@@ -168,6 +169,10 @@ def create_debug_chart_context(df):
         "tp_line": np.full(total, np.nan, dtype=np.float32),
         "limit_line": np.full(total, np.nan, dtype=np.float32),
         "entry_line": np.full(total, np.nan, dtype=np.float32),
+        "shadow_stop_line": np.full(total, np.nan, dtype=np.float32),
+        "shadow_tp_line": np.full(total, np.nan, dtype=np.float32),
+        "shadow_limit_line": np.full(total, np.nan, dtype=np.float32),
+        "shadow_entry_line": np.full(total, np.nan, dtype=np.float32),
         "order_markers": [],
         "trade_markers": [],
         "signal_annotations": [],
@@ -213,6 +218,20 @@ def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_h
         chart_context["limit_line"][pos] = float(limit_price)
     if not pd.isna(entry_price):
         chart_context["entry_line"][pos] = float(entry_price)
+
+
+def record_shadow_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
+    if chart_context is None:
+        return
+    pos = _resolve_chart_pos(chart_context, current_date)
+    if not pd.isna(stop_price):
+        chart_context["shadow_stop_line"][pos] = float(stop_price)
+    if not pd.isna(tp_half_price):
+        chart_context["shadow_tp_line"][pos] = float(tp_half_price)
+    if not pd.isna(limit_price):
+        chart_context["shadow_limit_line"][pos] = float(limit_price)
+    if not pd.isna(entry_price):
+        chart_context["shadow_entry_line"][pos] = float(entry_price)
 
 
 def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_type, status, note=""):
@@ -442,6 +461,10 @@ def build_debug_chart_payload(price_df, chart_context):
         "tp_line": _normalize_line_array((chart_context or {}).get("tp_line"), total_bars),
         "limit_line": _normalize_line_array((chart_context or {}).get("limit_line"), total_bars),
         "entry_line": _normalize_line_array((chart_context or {}).get("entry_line"), total_bars),
+        "shadow_stop_line": _normalize_line_array((chart_context or {}).get("shadow_stop_line"), total_bars),
+        "shadow_tp_line": _normalize_line_array((chart_context or {}).get("shadow_tp_line"), total_bars),
+        "shadow_limit_line": _normalize_line_array((chart_context or {}).get("shadow_limit_line"), total_bars),
+        "shadow_entry_line": _normalize_line_array((chart_context or {}).get("shadow_entry_line"), total_bars),
         "marker_groups": marker_groups,
         "signal_annotations": signal_annotations,
         "focus_positions": focus_positions,
@@ -485,7 +508,7 @@ def normalize_chart_payload_contract(chart_payload):
         up_mask = normalized["close"] >= normalized["open"]
     normalized["up_mask"] = np.asarray(up_mask, dtype=bool)
 
-    for key in ("stop_line", "tp_line", "limit_line", "entry_line"):
+    for key in ("stop_line", "tp_line", "limit_line", "entry_line", "shadow_stop_line", "shadow_tp_line", "shadow_limit_line", "shadow_entry_line"):
         normalized[key] = _normalize_line_array(normalized.get(key), total_bars)
 
     normalized["marker_groups"] = {str(name): list(markers) for name, markers in dict(normalized.get("marker_groups") or {}).items()}
@@ -525,6 +548,10 @@ def compute_visible_value_ranges(chart_payload, *, start_idx, end_idx, price_pad
         _slice_visible_window(chart_payload["tp_line"], start_idx, end_idx),
         _slice_visible_window(chart_payload["limit_line"], start_idx, end_idx),
         _slice_visible_window(chart_payload["entry_line"], start_idx, end_idx),
+        _slice_visible_window(chart_payload["shadow_stop_line"], start_idx, end_idx),
+        _slice_visible_window(chart_payload["shadow_tp_line"], start_idx, end_idx),
+        _slice_visible_window(chart_payload["shadow_limit_line"], start_idx, end_idx),
+        _slice_visible_window(chart_payload["shadow_entry_line"], start_idx, end_idx),
     ]
     marker_prices = []
     for markers in chart_payload["marker_groups"].values():
@@ -672,11 +699,24 @@ def _resolve_index_marker_meta(chart_payload, idx, *, trace_names):
 
 def build_chart_hover_snapshot(chart_payload, index):
     idx = int(np.clip(int(index), 0, len(chart_payload["x"]) - 1))
+    shadow_line_active = False
+
+    def _resolve_line_value(actual_key, shadow_key):
+        nonlocal shadow_line_active
+        actual_value = chart_payload[actual_key][idx]
+        if np.isfinite(actual_value):
+            return float(actual_value)
+        shadow_value = chart_payload[shadow_key][idx]
+        if np.isfinite(shadow_value):
+            shadow_line_active = True
+            return float(shadow_value)
+        return None
+
     line_values = {
-        "limit_price": float(chart_payload["limit_line"][idx]) if np.isfinite(chart_payload["limit_line"][idx]) else None,
-        "entry_price": float(chart_payload["entry_line"][idx]) if np.isfinite(chart_payload["entry_line"][idx]) else None,
-        "stop_price": float(chart_payload["stop_line"][idx]) if np.isfinite(chart_payload["stop_line"][idx]) else None,
-        "tp_price": float(chart_payload["tp_line"][idx]) if np.isfinite(chart_payload["tp_line"][idx]) else None,
+        "limit_price": _resolve_line_value("limit_line", "shadow_limit_line"),
+        "entry_price": _resolve_line_value("entry_line", "shadow_entry_line"),
+        "stop_price": _resolve_line_value("stop_line", "shadow_stop_line"),
+        "tp_price": _resolve_line_value("tp_line", "shadow_tp_line"),
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
     buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"))
@@ -691,6 +731,7 @@ def build_chart_hover_snapshot(chart_payload, index):
         "low": float(chart_payload["low"][idx]),
         "close": float(chart_payload["close"][idx]),
         "volume": float(chart_payload["volume"][idx]),
+        "shadow_line_active": bool(shadow_line_active),
         "signal_capital": buy_signal_meta.get("current_capital"),
         "signal_qty": buy_signal_meta.get("qty"),
         "reserved_capital": reserved_capital,
@@ -1172,6 +1213,8 @@ def _build_complete_matplotlib_legend_handles():
     handles = []
     for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS:
         handles.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label))
+    for label, color, linestyle, linewidth in CHART_SHADOW_LINE_LEGEND_SPECS:
+        handles.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label))
     for label in CHART_EVENT_LEGEND_ORDER:
         style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
         if not style:
@@ -1266,6 +1309,14 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         body_up_collection = axis_price.vlines(x_positions[up_mask], body_low[up_mask], body_high[up_mask], colors=MATPLOTLIB_UP_COLOR, linewidth=4.8, zorder=3)
     if np.any(~up_mask):
         body_down_collection = axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=4.8, zorder=3)
+    if np.isfinite(chart_payload["shadow_stop_line"]).any():
+        axis_price.step(x_positions, chart_payload["shadow_stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=3.8)
+    if np.isfinite(chart_payload["shadow_tp_line"]).any():
+        axis_price.step(x_positions, chart_payload["shadow_tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=3.8)
+    if np.isfinite(chart_payload["shadow_limit_line"]).any():
+        axis_price.step(x_positions, chart_payload["shadow_limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (4, 2)), zorder=3.8)
+    if np.isfinite(chart_payload["shadow_entry_line"]).any():
+        axis_price.step(x_positions, chart_payload["shadow_entry_line"], where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.8)
     axis_price.step(x_positions, chart_payload["stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4)
     if np.isfinite(chart_payload["tp_line"]).any():
         axis_price.step(x_positions, chart_payload["tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4)
@@ -1757,6 +1808,14 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
     font_family = _resolve_matplotlib_font_family() or "Microsoft JhengHei, Noto Sans CJK TC, sans-serif"
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.82, 0.18])
     fig.add_trace(go.Candlestick(x=dates, open=chart_payload["open"], high=chart_payload["high"], low=chart_payload["low"], close=chart_payload["close"], name="K線", increasing_line_color=MATPLOTLIB_UP_COLOR, increasing_fillcolor=MATPLOTLIB_UP_COLOR, decreasing_line_color=MATPLOTLIB_DOWN_COLOR, decreasing_fillcolor=MATPLOTLIB_DOWN_COLOR), row=1, col=1)
+    if np.isfinite(chart_payload["shadow_stop_line"]).any():
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+    if np.isfinite(chart_payload["shadow_tp_line"]).any():
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+    if np.isfinite(chart_payload["shadow_limit_line"]).any():
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+    if np.isfinite(chart_payload["shadow_entry_line"]).any():
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=chart_payload["stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["tp_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
@@ -1776,6 +1835,12 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
         fig.add_trace(go.Scatter(x=[item["date"] for item in markers], y=[item["price"] for item in markers], mode="markers", name=trace_name, marker={"symbol": style["plotly_symbol"], "size": 10, "color": style["color"], "line": {"width": 1, "color": style["color"]}}, hovertemplate="%{text}<extra></extra>", text=[item["hover_text"] for item in markers]), row=1, col=1)
         present_plotly_legends.add(trace_name)
     for label, color, dash, width in CHART_LINE_LEGEND_SPECS:
+        if label in present_plotly_legends:
+            continue
+        plotly_dash = "dash" if dash != "solid" else "solid"
+        fig.add_trace(go.Scatter(x=[dates[0]], y=[None], mode="lines", name=label, line={"color": color, "width": width, "dash": plotly_dash}, visible="legendonly", hoverinfo="skip"), row=1, col=1)
+        present_plotly_legends.add(label)
+    for label, color, dash, width in CHART_SHADOW_LINE_LEGEND_SPECS:
         if label in present_plotly_legends:
             continue
         plotly_dash = "dash" if dash != "solid" else "solid"
