@@ -551,6 +551,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         normal_trade_count=normal_trade_count,
         extended_trade_count=extended_trade_count,
         last_date=last_date,
+        active_level_rows=active_level_rows,
     )
 
     if profile_timing_enabled:

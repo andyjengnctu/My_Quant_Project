@@ -35,6 +35,10 @@ def _round_money_for_history(value):
     return round_money_for_display(value)
 
 
+def _resolve_position_active_tp_half(position):
+    if bool(position.get('sold_half', False)) or position.get('pending_exit_action') == 'TP_HALF':
+        return None
+    return position.get('tp_half')
 
 
 def append_portfolio_position_active_level_row(active_level_rows, *, ticker, position, today, require_open_qty=True):
@@ -46,7 +50,7 @@ def append_portfolio_position_active_level_row(active_level_rows, *, ticker, pos
         'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
         'Ticker': str(ticker),
         '停損價': position.get('sl'),
-        '半倉停利價': position.get('tp_half'),
+        '半倉停利價': _resolve_position_active_tp_half(position),
         '買入限價': position.get('limit_price'),
         '成交價': position.get('pure_buy_price'),
         'level_scope': 'actual_position',
@@ -393,11 +397,19 @@ def closeout_open_positions(
     normal_trade_count,
     extended_trade_count,
     last_date,
+    active_level_rows=None,
 ):
     final_cash = cash
 
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
+        append_portfolio_position_active_level_row(
+            active_level_rows,
+            ticker=ticker,
+            position=pos,
+            today=last_date,
+            require_open_qty=False,
+        )
         raw_exit_price = pos.get('last_px', pos.get('pure_buy_price', pos['entry']))
         exec_price = adjust_long_sell_fill_price(raw_exit_price, ticker=ticker)
         sell_ledger = build_sell_ledger_from_price(
