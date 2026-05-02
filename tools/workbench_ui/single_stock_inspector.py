@@ -56,6 +56,11 @@ else:
     FIGURE_CANVAS_TKAGG_IMPORT_ERROR = ""
 
 
+SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3
+SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH = int(round(WORKBENCH_RIGHT_SIDEBAR_WIDTH * SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH_SCALE))
+SINGLE_STOCK_RIGHT_SIDEBAR_WRAPLENGTH = SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH - (WORKBENCH_RIGHT_SIDEBAR_WIDTH - WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH)
+
+
 def _warn_gui_fallback(action, exc):
     warnings.warn(f"GUI fallback {action}: {type(exc).__name__}: {exc}", RuntimeWarning, stacklevel=2)
 
@@ -579,11 +584,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        sidebar_outer = ttk.Frame(chart_tab, padding=(0, 3, 0, 3), width=WORKBENCH_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
+        sidebar_outer = ttk.Frame(chart_tab, padding=(0, 3, 0, 3), width=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
         sidebar_outer.grid(row=0, column=1, sticky="ns")
         sidebar_outer.grid_propagate(False)
         sidebar_outer.pack_propagate(False)
-        chart_tab.grid_columnconfigure(1, minsize=WORKBENCH_RIGHT_SIDEBAR_WIDTH)
+        chart_tab.grid_columnconfigure(1, minsize=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH)
 
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
@@ -596,7 +601,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._history_chip = tk.Label(sidebar, textvariable=self._sidebar_history_var, bg="#04070c", fg="#ffffff", font=sidebar_chip_font, padx=2, pady=2, anchor="center")
         self._history_chip.grid(row=1, column=0, sticky="ew", pady=(0, 6))
         ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=SINGLE_STOCK_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
@@ -613,11 +618,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
         ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=19, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
-        ttk.Button(trade_nav, text="前交易", command=self._move_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
-        ttk.Button(trade_nav, text="後交易", command=self._move_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        ttk.Button(trade_nav, text="前交易", command=self._move_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0))
+        ttk.Button(trade_nav, text="後交易", command=self._move_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0))
         sidebar.rowconfigure(19, weight=1)
 
         table_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")

@@ -155,6 +155,16 @@ def _coerce_int(value, default=0):
         return default
 
 
+def _normalize_entry_type_value(value, default="normal"):
+    try:
+        if value is None or pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    text = str(value).strip()
+    return text if text else default
+
+
 def _format_pct(value):
     try:
         return f"{float(value):.2f}%"
@@ -346,6 +356,8 @@ def _empty_portfolio_ticker_actual_stats():
         "win_count": 0,
         "win_rate_pct": None,
         "trade_count": 0,
+        "normal_trade_count": 0,
+        "extended_trade_count": 0,
         "missed_buy_count": 0,
         "missed_sell_count": 0,
         "total_reserved_capital": 0.0,
@@ -373,11 +385,28 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
 
     win_count = sum(1 for row in exit_records if _coerce_float(row.get("該筆總損益"), default=0.0) > 0)
     exit_count = len(exit_records)
+    normal_trade_count = 0
+    extended_trade_count = 0
+    active_entry_type = None
+    for row in sorted(actual_records, key=lambda item: (str(item.get("Date", "") or ""), str(item.get("Type", "") or ""))):
+        action = _normalize_trade_action(row)
+        if action in {"買進", "買進(延續候選)"}:
+            active_entry_type = _normalize_entry_type_value(row.get("進場類型"), default="normal")
+            continue
+        if action in {"停損殺出", "指標賣出", "期末強制結算"}:
+            entry_type = _normalize_entry_type_value(row.get("進場類型"), default=active_entry_type or "normal")
+            if entry_type == "extended":
+                extended_trade_count += 1
+            else:
+                normal_trade_count += 1
+            active_entry_type = None
     win_rate_pct = None if exit_count <= 0 else float(win_count) * 100.0 / float(exit_count)
     total_buy_capital = sum(_coerce_float(row.get("投入總金額"), default=0.0) for row in buy_records)
     total_reserved_capital = sum(_coerce_float(row.get("預留總金額"), default=0.0) for row in buy_records + missed_buy_records)
     total_pnl = sum(_coerce_float(row.get("該筆總損益"), default=0.0) for row in exit_records)
     asset_growth_pct = None if total_buy_capital <= 0 else float(total_pnl) * 100.0 / float(total_buy_capital)
+    if normal_trade_count + extended_trade_count != exit_count:
+        normal_trade_count = max(int(exit_count) - int(extended_trade_count), 0)
     return {
         "buy_count": int(len(buy_records)),
         "exit_count": int(exit_count),
@@ -385,6 +414,8 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
         "win_count": int(win_count),
         "win_rate_pct": win_rate_pct,
         "trade_count": int(exit_count),
+        "normal_trade_count": int(normal_trade_count),
+        "extended_trade_count": int(extended_trade_count),
         "missed_buy_count": int(len(missed_buy_records)),
         "missed_sell_count": int(len(missed_sell_records)),
         "total_reserved_capital": float(total_reserved_capital),
@@ -650,6 +681,8 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         )
 
     exit_count = int(actual_stats.get("exit_count", 0) or 0)
+    normal_trade_count = int(actual_stats.get("normal_trade_count", 0) or 0)
+    extended_trade_count = int(actual_stats.get("extended_trade_count", 0) or 0)
     missed_buy_count = int(actual_stats.get("missed_buy_count", 0) or 0)
     missed_sell_count = int(actual_stats.get("missed_sell_count", 0) or 0)
     total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
@@ -658,11 +691,11 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
     invested_return_text = "-" if asset_growth_pct is None else f"{float(asset_growth_pct):+.1f}%"
     chart_context["summary_box"] = [
-        f"交易次數 {exit_count} 次",
-        f"勝率 {win_rate_text}",
-        f"錯失買進 {missed_buy_count} / 錯失賣出 {missed_sell_count}",
-        f"總損益 {total_pnl:+,.0f}",
-        f"投報 {invested_return_text}",
+        f"投報度: {invested_return_text}",
+        f"總損益: {total_pnl:+,.0f}",
+        f"交易次數: {exit_count} (正常: {normal_trade_count} \\ 延續: {extended_trade_count})",
+        f"錯失買進: {missed_buy_count} / 錯失賣出: {missed_sell_count}",
+        f"勝率: {win_rate_text}",
     ]
     chart_context["status_box"] = {}
     return build_debug_chart_payload(price_df, chart_context)
@@ -862,11 +895,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
         ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=19, column=0, sticky="ew", pady=(4, 0))
+        trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
-        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 2))
-        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0))
+        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0))
         sidebar.rowconfigure(19, weight=1)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
