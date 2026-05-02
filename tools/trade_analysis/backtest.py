@@ -63,13 +63,28 @@ def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
         return False
 
     has_shadow_state = preview_plan.get('shadow_position_state') is not None
+    stop_price = preview_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan
+    tp_half_price = preview_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan
+    limit_price = preview_plan['limit_price']
+    entry_price = preview_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan
     set_chart_future_preview(
         chart_context,
-        stop_price=preview_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan,
-        tp_half_price=preview_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan,
-        limit_price=preview_plan['limit_price'],
-        entry_price=preview_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan,
+        stop_price=stop_price,
+        tp_half_price=tp_half_price,
+        limit_price=limit_price,
+        entry_price=entry_price,
     )
+
+    dates = chart_context.get('dates')
+    if dates is not None and len(dates) > 0:
+        record_active_levels(
+            chart_context,
+            current_date=dates[-1],
+            stop_price=stop_price,
+            tp_half_price=tp_half_price,
+            limit_price=limit_price,
+            entry_price=entry_price,
+        )
     return True
 
 

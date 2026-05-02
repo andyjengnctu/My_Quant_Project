@@ -1313,7 +1313,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
-    supported_traces = {"買進", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
+    supported_traces = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
     occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))

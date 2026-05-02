@@ -72,14 +72,24 @@ def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan
         return
 
     has_shadow_state = entry_plan.get('shadow_position_state') is not None
-    recorder = record_shadow_active_levels if has_shadow_state else record_active_levels
-    recorder(
+    if has_shadow_state:
+        record_shadow_active_levels(
+            chart_context,
+            current_date=current_date,
+            stop_price=entry_plan.get('continuation_invalidation_barrier', np.nan),
+            tp_half_price=entry_plan.get('continuation_completion_barrier', np.nan),
+            limit_price=entry_plan['limit_price'],
+            entry_price=entry_plan.get('entry_ref_price', np.nan),
+        )
+        return
+
+    record_active_levels(
         chart_context,
         current_date=current_date,
-        stop_price=entry_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan,
-        tp_half_price=entry_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan,
+        stop_price=np.nan,
+        tp_half_price=np.nan,
         limit_price=entry_plan['limit_price'],
-        entry_price=entry_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan,
+        entry_price=np.nan,
     )
 
 
