@@ -254,7 +254,7 @@ def should_clear_extended_signal(
     return _did_extended_signal_touch_barrier(signal_state, day_low=t_low, day_high=t_high)
 
 
-# # (AI註: 單一真理來源 - 延續候選掛單資格一律從共同 shadow trade 派生；未啟動 shadow 前用原始 limit，啟動後沿用固定 shadow entry 與目前 shadow 管理狀態)
+# # (AI註: 單一真理來源 - 延續候選掛單資格一律從共同 shadow trade 派生；掛單限價沿用原始 L，管理線才沿用 shadow entry / stop / target 狀態)
 def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     if signal_state is None:
         return None
@@ -265,14 +265,17 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
     if pd.isna(entry_atr):
         return None
 
+    orig_limit = signal_state.get("orig_limit", np.nan)
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is not None:
-        limit_reference = shadow_position.get("entry_fill_price", np.nan)
+        limit_reference = shadow_position.get("limit_price", orig_limit)
+        if pd.isna(limit_reference):
+            limit_reference = orig_limit
         sizing_stop_ref = shadow_position.get("sl", np.nan)
         sizing_trail_ref = shadow_position.get("trailing_stop", np.nan)
         target_price = shadow_position.get("tp_half", np.nan)
     else:
-        limit_reference = signal_state.get("orig_limit", np.nan)
+        limit_reference = orig_limit
         sizing_stop_ref = calc_initial_stop_from_reference(limit_reference, entry_atr, params, ticker=resolved_ticker, security_profile=resolved_security_profile)
         sizing_trail_ref = calc_initial_trailing_stop_from_reference(limit_reference, entry_atr, params, ticker=resolved_ticker, security_profile=resolved_security_profile)
         target_price = calc_frozen_target_price(limit_reference, sizing_stop_ref, ticker=resolved_ticker, security_profile=resolved_security_profile)
@@ -284,7 +287,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
         "limit_price": limit_reference,
         "init_sl": sizing_stop_ref,
         "init_trail": sizing_trail_ref,
-        "orig_limit": signal_state.get("orig_limit", np.nan),
+        "orig_limit": orig_limit,
         "orig_atr": entry_atr,
         "target_price": target_price,
         "entry_atr": entry_atr,
