@@ -16,6 +16,7 @@ CHART_FOCUS_PADDING_BARS = 15
 CHART_FALLBACK_TAIL_BARS = 120
 CHART_MIN_WINDOW_BARS = 40
 CHART_PRICE_PADDING_RATIO = 0.035
+CHART_PRICE_DISPLAY_EQUAL_ATOL = 0.005
 CHART_VOLUME_PADDING_RATIO = 0.10
 MATPLOTLIB_DEBUG_CHART_FIGSIZE = (18.2, 10.6)
 MATPLOTLIB_SUBPLOT_LEFT = 0.046
@@ -536,6 +537,18 @@ def _clip_entry_line_after_stop_break(entry_values, stop_values):
         if cutoff_idx + 1 <= seg_end:
             clipped[cutoff_idx + 1 : seg_end + 1] = np.nan
     return clipped
+
+
+def _mask_entry_line_when_same_as_limit_for_render(entry_values, limit_values):
+    entry_for_render = np.asarray(entry_values, dtype=np.float32).copy()
+    limit_values = np.asarray(limit_values, dtype=np.float32)
+    same_price_mask = (
+        np.isfinite(entry_for_render)
+        & np.isfinite(limit_values)
+        & np.isclose(entry_for_render, limit_values, rtol=0.0, atol=CHART_PRICE_DISPLAY_EQUAL_ATOL)
+    )
+    entry_for_render[same_price_mask] = np.nan
+    return entry_for_render
 
 
 def _apply_chart_display_line_clipping(payload):
@@ -1484,19 +1497,27 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         body_up_collection = axis_price.vlines(x_positions[up_mask], body_low[up_mask], body_high[up_mask], colors=MATPLOTLIB_UP_COLOR, linewidth=4.8, zorder=3)
     if np.any(~up_mask):
         body_down_collection = axis_price.vlines(x_positions[~up_mask], body_low[~up_mask], body_high[~up_mask], colors=MATPLOTLIB_DOWN_COLOR, linewidth=4.8, zorder=3)
+    shadow_entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload["shadow_entry_line"],
+        chart_payload["shadow_limit_line"],
+    )
+    entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload["entry_line"],
+        chart_payload["limit_line"],
+    )
     if np.isfinite(chart_payload["shadow_stop_line"]).any():
         axis_price.step(x_positions, chart_payload["shadow_stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=3.8)
     if np.isfinite(chart_payload["shadow_tp_line"]).any():
         axis_price.step(x_positions, chart_payload["shadow_tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=3.8)
-    if np.isfinite(chart_payload["shadow_entry_line"]).any():
-        axis_price.step(x_positions, chart_payload["shadow_entry_line"], where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.75)
+    if np.isfinite(shadow_entry_line_for_render).any():
+        axis_price.step(x_positions, shadow_entry_line_for_render, where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.75)
     if np.isfinite(chart_payload["shadow_limit_line"]).any():
         axis_price.step(x_positions, chart_payload["shadow_limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=3.8)
     axis_price.step(x_positions, chart_payload["stop_line"], where="mid", color=MATPLOTLIB_STOP_COLOR, linewidth=2.0, zorder=4)
     if np.isfinite(chart_payload["tp_line"]).any():
         axis_price.step(x_positions, chart_payload["tp_line"], where="mid", color=MATPLOTLIB_TP_COLOR, linewidth=1.9, zorder=4)
-    if np.isfinite(chart_payload["entry_line"]).any():
-        axis_price.step(x_positions, chart_payload["entry_line"], where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95)
+    if np.isfinite(entry_line_for_render).any():
+        axis_price.step(x_positions, entry_line_for_render, where="mid", color=MATPLOTLIB_ENTRY_COLOR, linewidth=1.8, zorder=3.95)
     if np.isfinite(chart_payload["limit_line"]).any():
         axis_price.step(x_positions, chart_payload["limit_line"], where="mid", color=MATPLOTLIB_LIMIT_COLOR, linewidth=1.5, linestyle=(0, (1, 2)), zorder=4)
     for trace_name, markers in chart_payload["marker_groups"].items():
@@ -1983,19 +2004,27 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
     font_family = _resolve_matplotlib_font_family() or "Microsoft JhengHei, Noto Sans CJK TC, sans-serif"
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.82, 0.18])
     fig.add_trace(go.Candlestick(x=dates, open=chart_payload["open"], high=chart_payload["high"], low=chart_payload["low"], close=chart_payload["close"], name="K線", increasing_line_color=MATPLOTLIB_UP_COLOR, increasing_fillcolor=MATPLOTLIB_UP_COLOR, decreasing_line_color=MATPLOTLIB_DOWN_COLOR, decreasing_fillcolor=MATPLOTLIB_DOWN_COLOR), row=1, col=1)
+    shadow_entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload["shadow_entry_line"],
+        chart_payload["shadow_limit_line"],
+    )
+    entry_line_for_render = _mask_entry_line_when_same_as_limit_for_render(
+        chart_payload["entry_line"],
+        chart_payload["limit_line"],
+    )
     if np.isfinite(chart_payload["shadow_stop_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_tp_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_tp_line"], mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
-    if np.isfinite(chart_payload["shadow_entry_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+    if np.isfinite(shadow_entry_line_for_render).any():
+        fig.add_trace(go.Scatter(x=dates, y=shadow_entry_line_for_render, mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_limit_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dot"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=chart_payload["stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["tp_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
-    if np.isfinite(chart_payload["entry_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
+    if np.isfinite(entry_line_for_render).any():
+        fig.add_trace(go.Scatter(x=dates, y=entry_line_for_render, mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["limit_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dot"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     present_plotly_legends = {"K線", "停損線"}
