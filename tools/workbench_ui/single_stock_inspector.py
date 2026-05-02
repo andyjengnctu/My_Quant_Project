@@ -1368,7 +1368,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
 
         self._selected_tp_var.set(self._format_sidebar_line_value(_line_label("停利", "tp_price"), snapshot.get("tp_price")))
         self._selected_limit_var.set(self._format_sidebar_line_value(_line_label("限價", "limit_price"), snapshot.get("limit_price")))
-        self._selected_entry_var.set(self._format_sidebar_line_value(_line_label("成交", "entry_price"), snapshot.get("entry_price")))
+        self._selected_entry_var.set(self._format_sidebar_line_value(_line_label("買進", "entry_price") if line_sources.get("entry_price") == "shadow" else "成交", snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value(_line_label("停損", "stop_price"), snapshot.get("stop_price")))
         self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
         self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))

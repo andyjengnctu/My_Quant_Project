@@ -24,6 +24,28 @@ def _resolve_display_entry_total(entry_result, *, qty, params):
     return calc_entry_total_cost(buy_price, int(qty or 0), params)
 
 
+def _resolve_entry_display_stop_price(position):
+    if position is None:
+        return np.nan
+    active_stop = position.get('sl', np.nan)
+    if not _is_missing_price(active_stop):
+        return active_stop
+    return position.get('initial_stop', np.nan)
+
+
+def _resolve_entry_display_tp_half_price(position, *, qty, params):
+    if position is None or bool(position.get('sold_half', False)):
+        return np.nan
+    return get_debug_tp_half_price(position.get('tp_half', np.nan), qty, params)
+
+
+def _is_missing_price(value):
+    try:
+        return bool(np.isnan(value))
+    except (TypeError, ValueError):
+        return value is None
+
+
 def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_type, entry_result, note=""):
     if chart_context is None or entry_plan is None:
         return
@@ -168,8 +190,8 @@ def process_debug_entry_for_day(
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
                 gross_amount=spent_cash,
-                stop_price=position['initial_stop'],
-                tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
+                stop_price=_resolve_entry_display_stop_price(position),
+                tp_half_price=_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params),
                 atr_prev=atr_prev,
                 pnl=0.0,
             )
@@ -182,8 +204,8 @@ def process_debug_entry_for_day(
                 meta={
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
-                    'stop_price': float(position['initial_stop']),
-                    'tp_price': float(position['tp_half']),
+                    'stop_price': float(_resolve_entry_display_stop_price(position)),
+                    'tp_price': float(_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params)),
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
                     'current_capital': None if current_capital is None else float(current_capital),
@@ -278,8 +300,8 @@ def process_debug_entry_for_day(
                 net_price=entry_result['entry_price'],
                 qty=entry_plan['qty'],
                 gross_amount=spent_cash,
-                stop_price=position['initial_stop'],
-                tp_half_price=get_debug_tp_half_price(position['tp_half'], entry_plan['qty'], params),
+                stop_price=_resolve_entry_display_stop_price(position),
+                tp_half_price=_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params),
                 atr_prev=atr_prev,
                 pnl=0.0,
             )
@@ -292,8 +314,8 @@ def process_debug_entry_for_day(
                 meta={
                     'limit_price': float(entry_plan['limit_price']),
                     'entry_price': float(entry_result['buy_price']),
-                    'stop_price': float(position['initial_stop']),
-                    'tp_price': float(position['tp_half']),
+                    'stop_price': float(_resolve_entry_display_stop_price(position)),
+                    'tp_price': float(_resolve_entry_display_tp_half_price(position, qty=entry_plan['qty'], params=params)),
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
                     'current_capital': None if current_capital is None else float(current_capital),
