@@ -1033,7 +1033,6 @@
 | 2026-04-12 | B114 | 補上買入資訊框實支最後一行與 sidebar 同步 contract 後主表恢復 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
 | 2026-04-12 | B114 | 檢出 single_stock_inspector sidebar 交易資訊仍缺少實支欄位綁定，改回 PARTIAL | DONE -> PARTIAL | `tools/workbench_ui/single_stock_inspector.py` |
 | 2026-04-12 | B114 | 補上 sidebar 實支欄位與 hover snapshot 綁定 contract 後主表恢復 DONE | PARTIAL -> DONE | `tools/validate/synthetic_contract_cases.py` |
-| 2026-05-02 | B114 | 補上投組 missed-only ticker 下拉追查、錯失事件 K 線 marker、錯失列預留 / 實支分流、單檔 missed / 資金效率摘要與單股 fixed_risk UI contract 後主表維持 DONE | DONE -> DONE | `tools/validate/synthetic_contract_cases.py`, `tools/workbench_ui/portfolio_backtest_inspector.py`, `tools/workbench_ui/single_stock_inspector.py`, `core/portfolio_entries.py`, `core/portfolio_exits.py` |
 | 2026-04-12 | B124 | 檢出 `build_backtest_stats()` 的 normal preview 仍只靠 active signal 解析 `security_profile`，empty/final caller 也未明確傳入商品 profile，改回 PARTIAL | DONE -> PARTIAL | `core/backtest_finalize.py` |
 | 2026-04-12 | B124 | 補齊 `build_backtest_stats()` 的 `security_profile` 簽名、empty/final caller 傳遞與 normal / extended preview 商品 profile contract 後重新收斂為 DONE | PARTIAL -> DONE | `tools/validate/synthetic_meta_cases.py` |
 | 2026-04-12 | B126 | 檢出 debug backtest 的買訊預覽、latest raw preview 與 latest extended preview 尚未同步傳遞 `security_profile`，改回 PARTIAL | DONE -> PARTIAL | `tools/trade_analysis/backtest.py` |
@@ -1270,3 +1269,5 @@
 | 2026-04-18 | B52 | 補齊 walk-forward policy config loader / callbacks contract 後重新收斂為 DONE | PARTIAL -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
 | 2026-04-18 | T257 | 新增 optimizer walk-forward policy / callbacks contract 並驗證 | NEW -> DONE | `validate_optimizer_walk_forward_policy_contract_case` |
 | 2026-04-24 | T258 | 新增 optimizer milestone cache contract 並驗證 | NEW -> DONE | `validate_optimizer_session_milestone_cache_case` |
+| 2026-05-02 | B114 | 依 bundle 檢出 GUI / debug 資訊框與側欄契約回歸：停損賣出框未輸出最大回撤標籤、hover snapshot 缺少直接 price line 快照、投組側欄交易資訊與交易導覽位置未與單股同步，主表改回 PARTIAL | DONE -> PARTIAL | `tools/validate/synthetic_contract_cases.py` |
+| 2026-05-02 | B114 | 補齊 chart info formatter、hover snapshot line values、單股 / 投組側欄交易資訊與交易導覽 layout 後重新收斂為 DONE | PARTIAL -> DONE | `tools/trade_analysis/charting.py` |

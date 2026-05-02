@@ -162,7 +162,7 @@ def _normalize_entry_type_value(value, default="normal"):
         if value is None or pd.isna(value):
             return default
     except (TypeError, ValueError):
-        pass
+        return default
     text = str(value).strip()
     return text if text else default
 
@@ -1117,24 +1117,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
-        ttk.Label(sidebar, text="投組交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
+        ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_reserved_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
-        nav_block = ttk.Frame(sidebar, style="Workbench.TFrame")
-        nav_block.grid(row=18, column=0, sticky="ew", pady=(4, 0))
-        nav_block.columnconfigure(0, weight=1)
-        ttk.Button(nav_block, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 0))
-        trade_nav = ttk.Frame(nav_block, style="Workbench.TFrame")
-        trade_nav.grid(row=1, column=0, sticky="ew", pady=(0, 0))
+        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
+        trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
         ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
         ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 0))
-        sidebar.rowconfigure(19, weight=1)
+        sidebar.rowconfigure(20, weight=1)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
         self._console_tab = console_tab

@@ -712,6 +712,12 @@ def build_chart_hover_snapshot(chart_payload, index):
             return float(shadow_value)
         return None
 
+    actual_line_values = {
+        "tp_price": float(chart_payload["tp_line"][idx]),
+        "limit_price": float(chart_payload["limit_line"][idx]),
+        "entry_price": float(chart_payload["entry_line"][idx]),
+        "stop_price": float(chart_payload["stop_line"][idx]),
+    }
     line_values = {
         "limit_price": _resolve_line_value("limit_line", "shadow_limit_line"),
         "entry_price": _resolve_line_value("entry_line", "shadow_entry_line"),
@@ -898,7 +904,7 @@ CHART_INFO_FIELD_SPECS = {
     "pnl": {"label": "損益", "keys": ("total_pnl", "pnl_value"), "format": "signed_amount"},
     "pnl_pct": {"label": "報酬率", "keys": ("pnl_pct",), "format": "signed_pct"},
     "win_rate": {"label": "勝率", "keys": ("win_rate",), "format": "pct1"},
-    "max_drawdown": {"label": "最大回撤", "keys": ("max_drawdown",), "format": "pct2"},
+    "max_drawdown": {"label": "最大回撤:", "keys": ("max_drawdown",), "format": "pct2"},
     "trade_sequence": {"label": "交易次數", "keys": ("trade_sequence", "trade_count"), "format": "trade_sequence"},
 }
 
@@ -956,10 +962,16 @@ def _format_chart_info_field(field_key, meta, *, marker=None):
     elif fmt == "entry_type":
         rendered = _format_chart_entry_type(value)
     elif fmt == "trade_sequence":
-        rendered = _format_chart_trade_sequence(value)
+        if _is_missing_info_value(value):
+            rendered = "-"
+        else:
+            trade_sequence = value
+            return f"交易次數: 第 {int(trade_sequence)} 次"
     else:
         rendered = "-" if _is_missing_info_value(value) else str(value)
-    return f"{spec['label']}: {rendered}"
+    label = str(spec["label"])
+    separator = " " if label.endswith(":") else ": "
+    return f"{label}{separator}{rendered}"
 
 
 def _build_chart_info_box_text(title, meta, *, marker=None):
