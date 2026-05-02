@@ -31,6 +31,24 @@ def _has_live_shadow_position(signal_state):
     return _resolve_shadow_position(signal_state) is not None
 
 
+def resolve_extended_signal_effective_limit(signal_state):
+    if signal_state is None:
+        return np.nan
+
+    orig_limit = signal_state.get("orig_limit", np.nan)
+    shadow_position = _resolve_shadow_position(signal_state)
+    if shadow_position is not None:
+        shadow_entry_limit = shadow_position.get("entry_fill_price", np.nan)
+        if not pd.isna(shadow_entry_limit):
+            return shadow_entry_limit
+
+        shadow_order_limit = shadow_position.get("limit_price", np.nan)
+        if not pd.isna(shadow_order_limit):
+            return shadow_order_limit
+
+    return orig_limit
+
+
 def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
     if signal_state is None:
         return False
@@ -57,14 +75,14 @@ def _did_extended_signal_touch_barrier(signal_state, *, day_low, day_high):
     return stop_hit or target_hit
 
 
-# # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看『今日是否到價』，與 shadow engine 是否存在分離)
+# # (AI註: scanner/單股顯示層：是否列為 extended_tbd 只看『今日是否到有效延續掛單價』，與 shadow engine 是否存在分離)
 def is_extended_tbd_display_day(signal_state, day_low):
     if signal_state is None or pd.isna(day_low):
         return False
-    original_limit = signal_state.get('orig_limit', np.nan)
-    if pd.isna(original_limit):
+    effective_limit = resolve_extended_signal_effective_limit(signal_state)
+    if pd.isna(effective_limit):
         return False
-    return float(day_low) <= float(original_limit)
+    return float(day_low) <= float(effective_limit)
 
 
 # # (AI註: 單一真理來源 - 延續候選原始訊號狀態統一由此建立；共用同一份 shadow trade 狀態，不再拆 extended / TBD 雙核心)
@@ -260,7 +278,7 @@ def should_clear_extended_signal(
     return _did_extended_signal_touch_barrier(signal_state, day_low=t_low, day_high=t_high)
 
 
-# # (AI註: 單一真理來源 - 延續候選掛單資格一律從共同 shadow trade 派生；掛單限價沿用原始 L，管理線才沿用 shadow entry / stop / target 狀態)
+# # (AI註: 單一真理來源 - 延續候選掛單資格一律從共同 shadow trade 派生；shadow 建立後掛單限價與管理線都繼承固定 shadow entry / stop / target 狀態)
 def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, params, ticker=None, security_profile=None, trade_date=None):
     if signal_state is None:
         return None
@@ -274,9 +292,7 @@ def build_extended_candidate_plan_from_signal(signal_state, sizing_capital, para
     orig_limit = signal_state.get("orig_limit", np.nan)
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is not None:
-        limit_reference = shadow_position.get("limit_price", orig_limit)
-        if pd.isna(limit_reference):
-            limit_reference = orig_limit
+        limit_reference = resolve_extended_signal_effective_limit(signal_state)
         sizing_stop_ref = shadow_position.get("sl", np.nan)
         sizing_trail_ref = shadow_position.get("trailing_stop", np.nan)
         target_price = shadow_position.get("tp_half", np.nan)

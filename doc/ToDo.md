@@ -1,10 +1,5 @@
 ## Going
 
-- Debug
-    workben加頁投組檢示
-workbench 的單股與投組的顯示口徑是否有不一致且不合理處
-開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`
-
 
 - anti-overfitting
     

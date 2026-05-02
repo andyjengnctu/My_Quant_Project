@@ -339,7 +339,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
         params=params,
     )
     day3_plan = day3_candidates[0] if day3_candidates else None
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_reuses_original_order_limit_after_shadow_anchor", 100.0, None if day3_plan is None else float(day3_plan["limit_px"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_inherits_shadow_entry_after_shadow_anchor", 98.0, None if day3_plan is None else float(day3_plan["limit_px"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_carries_shadow_state_into_portfolio_entry_seed", True, day3_plan is not None and day3_plan.get("shadow_position_state") is not None)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
@@ -366,7 +366,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_inherits_shadow_management_state", True, bool(inherited_position.get("inherited_shadow_management", False)))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_actual_fill_separate_from_shadow_entry", 97.0, None if not inherited_position else float(inherited_position.get("entry_fill_price", float("nan"))))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_shadow_entry_reference", 98.0, None if not inherited_position else float(inherited_position.get("shadow_entry_fill_price", float("nan"))))
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_original_order_limit", 100.0, None if not inherited_position else float(inherited_position.get("limit_price", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_inherits_shadow_entry_order_limit", 98.0, None if not inherited_position else float(inherited_position.get("limit_price", float("nan"))))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_uses_shadow_stop_not_late_fill_stop", 88.0, None if not inherited_position else float(inherited_position.get("initial_stop", float("nan"))))
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params, sizing_capital)

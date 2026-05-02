@@ -21,6 +21,7 @@ from core.extended_signals import (
     is_extended_signal_orderable_for_day,
     is_extended_tbd_display_day,
     is_extended_tbd_orderable_for_day,
+    resolve_extended_signal_effective_limit,
     should_clear_extended_signal,
     update_extended_tbd_shadow_trade_for_bar,
 )
@@ -51,4 +52,5 @@ __all__ = [
     "is_extended_signal_orderable_for_day",
     "is_extended_tbd_display_day",
     "is_extended_tbd_orderable_for_day",
+    "resolve_extended_signal_effective_limit",
 ]

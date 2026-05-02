@@ -153,15 +153,15 @@ def append_real_case_checks(
         add_skip_result(results, "vip_scanner", ticker, "extended_reference_price_in_range", "今日無一般延續候選，無需驗非 TBD 顯示區間。")
         add_skip_result(results, "vip_scanner", ticker, "extended_limit_price_in_range", "今日無一般延續候選，無需驗非 TBD 掛單規格。")
     else:
-        original_limit = float(extended_candidate["orig_limit"])
+        effective_limit = float(extended_candidate["limit_price"])
         add_check(
             results,
             "vip_scanner",
             ticker,
             "extended_reference_price_in_range",
             True,
-            bool(latest_low > original_limit and latest_close > original_limit),
-            note="新版延續候選：今日未到原始限價才列為一般 extended；Low <= orig_limit 必須改列 extended_tbd。",
+            bool(latest_low > effective_limit and latest_close > effective_limit),
+            note="新版延續候選：今日未到有效延續掛單限價才列為一般 extended；Low <= effective_limit 必須改列 extended_tbd。",
         )
         add_check(
             results,
@@ -174,17 +174,17 @@ def append_real_case_checks(
         )
 
     if extended_tbd_candidate is None:
-        add_skip_result(results, "vip_scanner", ticker, "extended_tbd_reference_price_touched_original_limit", "今日無延續 TBD 候選，無需驗到價顯示條件。")
+        add_skip_result(results, "vip_scanner", ticker, "extended_tbd_reference_price_touched_effective_limit", "今日無延續 TBD 候選，無需驗到價顯示條件。")
     else:
-        original_limit = float(extended_tbd_candidate["orig_limit"])
+        effective_limit = float(extended_tbd_candidate["limit_price"])
         add_check(
             results,
             "vip_scanner",
             ticker,
-            "extended_tbd_reference_price_touched_original_limit",
+            "extended_tbd_reference_price_touched_effective_limit",
             True,
-            bool(latest_low <= original_limit),
-            note="Low <= orig_limit 代表今日是否可能已成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
+            bool(latest_low <= effective_limit),
+            note="Low <= effective_limit 代表今日是否可能依延續有效限價成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
         )
 
     if downloader_error is not None:
