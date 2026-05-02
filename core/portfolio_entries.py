@@ -199,8 +199,12 @@ def execute_reserved_entries_for_day(
                         'R_Multiple': 0.0,
                         'Risk': params.fixed_risk,
                         '買入限價': chosen_entry_plan['limit_price'],
+                        '成交價': None,
+                        '成本均價': None,
+                        '股數': chosen_entry_plan['qty'],
+                        '預留總金額': milli_to_money(reserved_cost_milli),
+                        '投入總金額': 0.0,
                         '備註': f"預掛限價 {chosen_entry_plan['limit_price']:.2f} 未成交",
-                        '投入總金額': milli_to_money(reserved_cost_milli),
                     }
                 )
 

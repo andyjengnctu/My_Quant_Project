@@ -2,7 +2,10 @@
 
 - Debug
     workben加頁投組檢示
-要跟單股K線一樣，停利/停損/限價/成交(shadow)，從買訊隔日就開始畫
+workbench 的單股與投組的顯示口徑是否有不一致且不合理處
+開始前必須先讀取並遵守 `/doc/PROJECT_SETTINGS.md`
+
+
 - anti-overfitting
     
     驗證架構: rolling move forward來的驗證策略架構本身，每次驗1年真正OOS資料，最後看加總績效，每輪設定訓練上限(次數/時間/變化/最小等)。

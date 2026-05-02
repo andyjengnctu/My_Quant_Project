@@ -19,8 +19,8 @@ def _order_trade_history_columns(df_tr):
         return df_tr
     preferred = [
         "Date", "Ticker", "Type", "買訊日", "候選日", "候選類型", "進場類型",
-        "買入限價", "成交價", "成本均價", "股數", "預留總金額", "投入總金額",
-        "單筆損益", "該筆總損益", "R_Multiple", "Risk", "備註",
+        "買入限價", "成交價", "成本均價", "停損價", "參考收盤價", "股數",
+        "預留總金額", "投入總金額", "單筆損益", "該筆總損益", "R_Multiple", "Risk", "備註",
     ]
     ordered = [col for col in preferred if col in df_tr.columns]
     ordered.extend([col for col in df_tr.columns if col not in ordered])

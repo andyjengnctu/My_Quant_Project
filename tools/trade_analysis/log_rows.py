@@ -34,7 +34,7 @@ def append_debug_trade_row(
         "日期": date_str,
         "動作": action,
         "成交價": price,
-        "含息成本價": net_price,
+        "成本均價": net_price,
         "股數": qty,
         "投入總金額": _round_money_for_log(gross_amount),
         "設定停損價": stop_price,

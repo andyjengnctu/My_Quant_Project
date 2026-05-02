@@ -646,7 +646,7 @@ def build_chart_hover_snapshot(chart_payload, index):
         "tp_price": float(chart_payload["tp_line"][idx]) if np.isfinite(chart_payload["tp_line"][idx]) else None,
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
-    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)"))
+    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"))
     reserved_capital = buy_signal_meta.get("reserved_capital")
     if reserved_capital is None:
         reserved_capital = buy_trade_meta.get("reserved_capital")
@@ -671,7 +671,7 @@ def build_chart_hover_snapshot(chart_payload, index):
 
 
 def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
-    default_trace_names = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
+    default_trace_names = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}
     allowed_trace_names = default_trace_names if trace_names is None else {str(name) for name in trace_names}
     marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
     indexes = []
@@ -726,6 +726,10 @@ def _resolve_trade_box_style(trace_name, marker):
     meta = marker.get("meta") or {}
     if trace_name in {"買進", "買進(延續候選)"}:
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
+    if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
+        return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
+    if trace_name == "錯失賣出":
+        return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_DOWN_COLOR, "above"
     if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is None:
@@ -753,6 +757,37 @@ def _build_trade_label_text(trace_name, marker):
         buy_capital = meta.get("buy_capital")
         if buy_capital is not None and not pd.isna(buy_capital):
             lines.append(f"實支: {float(buy_capital):,.0f}")
+        return "\n".join(lines)
+    if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
+        lines = ["錯失買進"]
+        for key, label in (("limit_price", "限價"),):
+            value = meta.get(key)
+            if value is not None and not pd.isna(value):
+                lines.append(f"{label}: {float(value):.2f}")
+        reserved_capital = meta.get("reserved_capital")
+        if reserved_capital is not None and not pd.isna(reserved_capital):
+            lines.append(f"預留: {float(reserved_capital):,.0f}")
+        buy_capital = meta.get("buy_capital")
+        if buy_capital is not None and not pd.isna(buy_capital):
+            lines.append(f"實支: {float(buy_capital):,.0f}")
+        note = str(marker.get("note", "") or "").strip()
+        if note:
+            lines.append(note)
+        return "\n".join(lines)
+    if trace_name == "錯失賣出":
+        lines = ["錯失賣出"]
+        stop_price = meta.get("stop_price")
+        if stop_price is not None and not pd.isna(stop_price):
+            lines.append(f"停損: {float(stop_price):.2f}")
+        reference_price = meta.get("reference_price")
+        if reference_price is not None and not pd.isna(reference_price):
+            lines.append(f"參考收: {float(reference_price):.2f}")
+        total_pnl = meta.get("total_pnl")
+        if total_pnl is not None:
+            lines.append(f"既實現: {float(total_pnl):+,.0f}")
+        note = str(marker.get("note", "") or "").strip()
+        if note:
+            lines.append(note)
         return "\n".join(lines)
     if trace_name == "半倉停利":
         lines = ["停利"]
@@ -930,7 +965,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
-    supported_traces = {"買進", "買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算"}
+    supported_traces = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}
     occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))

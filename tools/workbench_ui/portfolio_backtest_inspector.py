@@ -87,7 +87,7 @@ PORTFOLIO_CONSOLE_COLORS = {
 }
 
 
-BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)")
+BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "錯失賣出")
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
 PERFORMANCE_TAB_CLOSE_HITBOX_PX = 32
@@ -178,6 +178,8 @@ def _normalize_trade_action(row):
     entry_type = str(row.get("進場類型", "") or "").strip()
     if raw_type.startswith("買進"):
         return "買進(延續候選)" if entry_type == "extended" else "買進"
+    if raw_type.startswith("錯失買進"):
+        return "錯失買進(延續候選)" if entry_type == "extended" or "延續" in raw_type else "錯失買進(新訊號)"
     if raw_type == "半倉停利":
         return "半倉停利"
     if raw_type == "全倉結算(停損)":
@@ -198,10 +200,30 @@ def _is_actual_trade_row(row):
     return bool(action) and not str(row.get("Type", "") or "").startswith("錯失")
 
 
+def _is_missed_buy_trade_row(row):
+    return _normalize_trade_action(row).startswith("錯失買進")
+
+
+def _is_missed_sell_trade_row(row):
+    return _normalize_trade_action(row) == "錯失賣出"
+
+
+def _is_portfolio_kline_event_row(row):
+    return bool(_normalize_trade_action(row))
+
+
 def _resolve_marker_price(price_df, row, action):
     price = _coerce_float(row.get("成交價"))
     if not pd.isna(price) and price > 0:
         return price
+    if str(action).startswith("錯失買進"):
+        limit_price = _coerce_float(row.get("買入限價"))
+        return limit_price if not pd.isna(limit_price) and limit_price > 0 else np.nan
+    if str(action) == "錯失賣出":
+        for field in ("停損價", "參考收盤價"):
+            reference_price = _coerce_float(row.get(field))
+            if not pd.isna(reference_price) and reference_price > 0:
+                return reference_price
     return np.nan
 
 
@@ -313,60 +335,67 @@ def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
     return enriched
 
 
+def _empty_portfolio_ticker_actual_stats():
+    return {
+        "buy_count": 0,
+        "exit_count": 0,
+        "event_count": 0,
+        "win_count": 0,
+        "win_rate_pct": None,
+        "trade_count": 0,
+        "missed_buy_count": 0,
+        "missed_sell_count": 0,
+        "total_reserved_capital": 0.0,
+        "total_buy_capital": 0.0,
+        "total_pnl": 0.0,
+        "asset_growth_pct": None,
+    }
+
+
 def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     if df_tr is None or df_tr.empty or "Ticker" not in df_tr.columns:
-        return {
-            "buy_count": 0,
-            "exit_count": 0,
-            "event_count": 0,
-            "win_count": 0,
-            "win_rate_pct": None,
-            "trade_count": 0,
-            "total_buy_capital": 0.0,
-            "total_pnl": 0.0,
-            "asset_growth_pct": 0.0,
-        }
+        return _empty_portfolio_ticker_actual_stats()
 
     ticker_rows = df_tr[df_tr["Ticker"].astype(str) == str(ticker)].copy()
-    actual_rows = ticker_rows[ticker_rows.apply(_is_actual_trade_row, axis=1)].copy() if not ticker_rows.empty else pd.DataFrame()
-    if actual_rows.empty:
-        return {
-            "buy_count": 0,
-            "exit_count": 0,
-            "event_count": 0,
-            "win_count": 0,
-            "win_rate_pct": None,
-            "trade_count": 0,
-            "total_buy_capital": 0.0,
-            "total_pnl": 0.0,
-            "asset_growth_pct": 0.0,
-        }
+    if ticker_rows.empty:
+        return _empty_portfolio_ticker_actual_stats()
 
-    records = actual_rows.to_dict("records")
-    buy_records = [row for row in records if _is_buy_trade_row(row)]
-    exit_records = [row for row in records if _is_full_exit_trade_row(row)]
+    all_records = ticker_rows.to_dict("records")
+    actual_rows = ticker_rows[ticker_rows.apply(_is_actual_trade_row, axis=1)].copy()
+    actual_records = actual_rows.to_dict("records") if not actual_rows.empty else []
+    buy_records = [row for row in actual_records if _is_buy_trade_row(row)]
+    exit_records = [row for row in actual_records if _is_full_exit_trade_row(row)]
+    missed_buy_records = [row for row in all_records if _is_missed_buy_trade_row(row)]
+    missed_sell_records = [row for row in all_records if _is_missed_sell_trade_row(row)]
+
     win_count = sum(1 for row in exit_records if _coerce_float(row.get("該筆總損益"), default=0.0) > 0)
     exit_count = len(exit_records)
     win_rate_pct = None if exit_count <= 0 else float(win_count) * 100.0 / float(exit_count)
     total_buy_capital = sum(_coerce_float(row.get("投入總金額"), default=0.0) for row in buy_records)
+    total_reserved_capital = sum(_coerce_float(row.get("預留總金額"), default=0.0) for row in buy_records + missed_buy_records)
     total_pnl = sum(_coerce_float(row.get("該筆總損益"), default=0.0) for row in exit_records)
-    asset_growth_pct = 0.0 if total_buy_capital <= 0 else float(total_pnl) * 100.0 / float(total_buy_capital)
+    asset_growth_pct = None if total_buy_capital <= 0 else float(total_pnl) * 100.0 / float(total_buy_capital)
     return {
         "buy_count": int(len(buy_records)),
         "exit_count": int(exit_count),
-        "event_count": int(len(records)),
+        "event_count": int(len(actual_records) + len(missed_buy_records) + len(missed_sell_records)),
         "win_count": int(win_count),
         "win_rate_pct": win_rate_pct,
         "trade_count": int(exit_count),
+        "missed_buy_count": int(len(missed_buy_records)),
+        "missed_sell_count": int(len(missed_sell_records)),
+        "total_reserved_capital": float(total_reserved_capital),
         "total_buy_capital": float(total_buy_capital),
         "total_pnl": float(total_pnl),
-        "asset_growth_pct": float(asset_growth_pct),
+        "asset_growth_pct": asset_growth_pct,
     }
 
 
 def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
     buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
     reserved_capital = _coerce_float(row.get("預留總金額"), default=np.nan)
+    if _is_missed_buy_trade_row(row) and pd.isna(buy_capital):
+        buy_capital = 0.0
     if pd.isna(reserved_capital):
         reserved_capital = buy_capital
     meta = {
@@ -417,6 +446,20 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
     return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
 
 
+def _build_portfolio_missed_sell_marker_meta(row, actual_stats=None):
+    meta = {}
+    total_pnl = _resolve_valid_float(row.get("該筆總損益"))
+    stop_price = _resolve_valid_float(row.get("停損價"))
+    reference_price = _resolve_valid_float(row.get("參考收盤價"))
+    if total_pnl is not None:
+        meta["total_pnl"] = float(total_pnl)
+    if stop_price is not None:
+        meta["stop_price"] = float(stop_price)
+    if reference_price is not None:
+        meta["reference_price"] = float(reference_price)
+    return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
+
+
 def _extract_trade_marker_indexes(chart_payload):
     return extract_trade_marker_indexes(chart_payload, trace_names=BUY_TRADE_TRACE_NAMES)
 
@@ -462,7 +505,7 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
 
 def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, row, action, marker_meta):
     trade_date = pd.Timestamp(row.get("Date"))
-    if action in {"買進", "買進(延續候選)"}:
+    if action in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
         signal_date = _resolve_buy_signal_date_from_row(row, fast_data, trade_date)
         if signal_date not in price_df.index:
             return
@@ -479,12 +522,14 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         candidate_date = row.get("候選日")
         if candidate_date:
             detail_lines.append(f"候選日: {candidate_date}")
+        if str(action).startswith("錯失買進"):
+            detail_lines.append("結果: 未成交")
         record_signal_annotation(
             chart_context,
             current_date=signal_date,
             signal_type="buy",
             anchor_price=float(price_df.loc[signal_date, "Low"]),
-            title="買訊",
+            title="買訊(錯失)" if str(action).startswith("錯失買進") else "買訊",
             detail_lines=detail_lines,
             meta={
                 "qty": qty,
@@ -495,17 +540,23 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
             },
         )
         return
-    if action == "指標賣出":
+    if action in {"指標賣出", "錯失賣出"}:
         signal_date = _resolve_previous_trade_date(fast_data, trade_date)
         if signal_date not in price_df.index:
             return
+        detail_lines = []
+        if action == "錯失賣出":
+            detail_lines.append("結果: 賣出受阻")
+            note = str(row.get("備註", "") or "").strip()
+            if note:
+                detail_lines.append(note)
         record_signal_annotation(
             chart_context,
             current_date=signal_date,
             signal_type="sell",
             anchor_price=float(price_df.loc[signal_date, "Low"]),
-            title="賣訊",
-            detail_lines=[],
+            title="賣訊(錯失)" if action == "錯失賣出" else "賣訊",
+            detail_lines=detail_lines,
             meta={
                 "profit_pct": marker_meta.get("pnl_pct"),
                 "max_drawdown": marker_meta.get("max_drawdown", 0.0),
@@ -569,6 +620,10 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                 "qty": qty,
                 "date": trade_date,
             }
+        elif str(action).startswith("錯失買進"):
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+        elif action == "錯失賣出":
+            marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats)
         else:
             marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats)
             if action in {"停損殺出", "指標賣出", "期末強制結算"}:
@@ -594,14 +649,22 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
 
     buy_count = int(actual_stats.get("buy_count", 0) or 0)
     exit_count = int(actual_stats.get("exit_count", 0) or 0)
-    event_count = int(actual_stats.get("event_count", 0) or 0)
+    missed_buy_count = int(actual_stats.get("missed_buy_count", 0) or 0)
+    missed_sell_count = int(actual_stats.get("missed_sell_count", 0) or 0)
+    total_reserved_capital = float(actual_stats.get("total_reserved_capital", 0.0) or 0.0)
+    total_buy_capital = float(actual_stats.get("total_buy_capital", 0.0) or 0.0)
     total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
+    asset_growth_pct = actual_stats.get("asset_growth_pct")
     win_rate_pct = actual_stats.get("win_rate_pct")
     win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
+    invested_return_text = "-" if asset_growth_pct is None else f"{float(asset_growth_pct):+.1f}%"
     chart_context["summary_box"] = [
-        f"交易次數 {exit_count} 次",
-        f"勝率 {win_rate_text}",
-        f"總損益 {total_pnl:+,.0f}",
+        f"買進成交 {buy_count} 次",
+        f"完整交易 {exit_count} 次 / 勝率 {win_rate_text}",
+        f"錯失買進 {missed_buy_count} / 錯失賣出 {missed_sell_count}",
+        f"累計預留 {total_reserved_capital:,.0f}",
+        f"累計實支 {total_buy_capital:,.0f}",
+        f"總損益 {total_pnl:+,.0f} / 投報 {invested_return_text}",
     ]
     chart_context["status_box"] = {}
     return build_debug_chart_payload(price_df, chart_context)
@@ -781,7 +844,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar.columnconfigure(0, weight=1)
         sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
         sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
-        ttk.Label(sidebar, text="歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
+        ttk.Label(sidebar, text="單股獨立歷史績效（非投組）", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._history_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="投組實績摘要", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
@@ -984,7 +1047,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 verbose=False,
             )
             chart_payload = dict(analysis_result.get("chart_payload") or {})
-            lines = [str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()]
+            summary_lines = [str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()]
+            fixed_risk_text = "-" if fixed_risk is None else f"{float(fixed_risk):.4f}"
+            lines = [
+                "口徑: 單股獨立回測，非投組實際成交",
+                f"期間: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} 全資料區間",
+                f"固定風險: {fixed_risk_text}",
+                *summary_lines,
+            ]
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
             warnings.warn(
                 f"投組右側歷史績效表載入失敗: ticker={resolved_ticker} | {type(exc).__name__}: {exc}",
@@ -1374,6 +1444,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         df_tr = result_payload.get("df_tr")
         actual_stats = _build_portfolio_ticker_actual_stats(df_tr, ticker)
         trade_count = int(actual_stats.get("trade_count", 0) or 0)
+        buy_count = int(actual_stats.get("buy_count", 0) or 0)
+        missed_buy_count = int(actual_stats.get("missed_buy_count", 0) or 0)
+        missed_sell_count = int(actual_stats.get("missed_sell_count", 0) or 0)
         win_rate_pct = actual_stats.get("win_rate_pct")
         total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
         total_buy_capital = float(actual_stats.get("total_buy_capital", 0.0) or 0.0)
@@ -1382,9 +1455,12 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         invested_return_text = "-" if invested_return_pct is None else f"{invested_return_pct:+.1f}%"
         win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
         trade_count_text = "-" if trade_count <= 0 else str(trade_count)
+        has_actual_buy = buy_count > 0
+        missed_event_count = missed_buy_count + missed_sell_count
         return {
             "sort_metric_label": "總損益",
-            "sort_value": float(total_pnl),
+            "sort_group": 0 if has_actual_buy else 1,
+            "sort_value": float(total_pnl if has_actual_buy else missed_event_count),
             "sort_value_text": total_pnl_text,
             "sort_text": f"總損益 {total_pnl_text} / 投報 {invested_return_text}",
             "total_pnl": float(total_pnl),
@@ -1393,6 +1469,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "invested_return_text": invested_return_text,
             "win_rate_text": win_rate_text,
             "trade_count_text": trade_count_text,
+            "buy_count": buy_count,
+            "missed_buy_count": missed_buy_count,
+            "missed_sell_count": missed_sell_count,
             "win_rate": win_rate_pct,
             "trade_count": trade_count,
             "portfolio_actual_stats": actual_stats,
@@ -1401,7 +1480,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
         return (
-            f"{ticker}|{stats.get('sort_text', '-')}"
+            f"{ticker}|成交 {stats.get('buy_count', 0)} / 錯買 {stats.get('missed_buy_count', 0)} / 錯賣 {stats.get('missed_sell_count', 0)}"
+            f"|{stats.get('sort_text', '-')}"
             f"|勝率 {stats.get('win_rate_text', '-')}"
             f"|交易 {stats.get('trade_count_text', '-')}"
         )
@@ -1418,23 +1498,22 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._sidebar_summary_var.set("-")
             return
 
-        trade_rows = df_tr[df_tr.apply(_is_actual_trade_row, axis=1)].copy()
-        buy_rows = trade_rows[trade_rows.apply(_is_buy_trade_row, axis=1)].copy() if not trade_rows.empty else pd.DataFrame()
+        event_rows = df_tr[df_tr.apply(_is_portfolio_kline_event_row, axis=1)].copy()
         dropdown_entries = []
         seen = set()
-        for row in buy_rows.to_dict("records"):
+        for row in event_rows.to_dict("records"):
             ticker = str(row.get("Ticker", "") or "").strip()
             if not ticker or ticker in seen:
                 continue
             seen.add(ticker)
             stats = self._resolve_ticker_dropdown_stats(ticker=ticker, first_buy_row=row, result_payload=result_payload)
             label = self._format_ticker_dropdown_label(ticker=ticker, first_buy_row=row, stats=stats)
-            dropdown_entries.append((float(stats.get("sort_value", 0.0) or 0.0), ticker, label, stats))
+            dropdown_entries.append((int(stats.get("sort_group", 1)), float(stats.get("sort_value", 0.0) or 0.0), ticker, label, stats))
 
-        dropdown_entries.sort(key=lambda item: (-item[0], item[1]))
-        values = [label for _sort_value, _ticker, label, _stats in dropdown_entries]
-        label_to_ticker = {label: ticker for _sort_value, ticker, label, _stats in dropdown_entries}
-        label_stats = {label: stats for _sort_value, _ticker, label, stats in dropdown_entries}
+        dropdown_entries.sort(key=lambda item: (item[0], -item[1], item[2]))
+        values = [label for _sort_group, _sort_value, _ticker, label, _stats in dropdown_entries]
+        label_to_ticker = {label: ticker for _sort_group, _sort_value, ticker, label, _stats in dropdown_entries}
+        label_stats = {label: stats for _sort_group, _sort_value, _ticker, label, stats in dropdown_entries}
 
         self._ticker_map = label_to_ticker
         self._ticker_dropdown_stats = label_stats
@@ -1449,7 +1528,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             self._update_selected_value_sidebar(None)
             self._history_summary_var.set("-")
             self._sidebar_summary_var.set("-")
-            self._kline_placeholder.configure(text="投組回測完成，但沒有可顯示的成交股票。")
+            self._kline_placeholder.configure(text="投組回測完成，但沒有可顯示的成交或錯失事件股票。")
 
     def _on_ticker_selected(self, _event=None):
         self._render_selected_ticker_chart(self._ticker_display_var.get())
@@ -1471,7 +1550,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         fast_data = all_dfs_fast.get(ticker)
         if fast_data is None or df_tr is None or df_tr.empty:
             return
-        ticker_trades = df_tr[(df_tr["Ticker"].astype(str) == ticker) & df_tr.apply(_is_actual_trade_row, axis=1)].copy()
+        ticker_trades = df_tr[(df_tr["Ticker"].astype(str) == ticker) & df_tr.apply(_is_portfolio_kline_event_row, axis=1)].copy()
         profile_stats = self._result.get("profile_stats") or {}
         active_level_rows = [
             row for row in (profile_stats.get("portfolio_active_level_rows") or [])

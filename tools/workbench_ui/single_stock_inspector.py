@@ -25,6 +25,7 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.output_paths import ensure_output_dir
+from core.runtime_utils import parse_float_strict
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.scanner_display import build_scanner_sort_probe_text
 from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
@@ -88,11 +89,13 @@ PARAM_SOURCE_LABEL_TO_KEY = {
     "candidate_best | 候選參數": "candidate_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
+FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
     "candidate": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
     "history": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
+    "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
 }
 SCAN_DROPDOWN_KIND_LABELS = {
     "buy": "新訊號",
@@ -432,6 +435,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._ticker_var = tk.StringVar()
         self._reduced_stock_display_var = tk.StringVar()
         self._param_source_display_var = tk.StringVar(value=DEFAULT_PARAM_SOURCE_LABEL)
+        self._fixed_risk_display_var = tk.StringVar(value="0.01")
+        self._custom_fixed_risk_var = tk.StringVar(value="0.01")
         self._reduced_stock_map = {}
         self._reduced_stock_company_name_map = {}
         self._show_volume_var = tk.BooleanVar(value=False)
@@ -524,13 +529,29 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._autosize_combobox(self._param_source_combo, values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()), current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
+        ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=uniform_pady, sticky="w")
+        self._risk_combo = ttk.Combobox(
+            controls_bar,
+            state="readonly",
+            width=7,
+            textvariable=self._fixed_risk_display_var,
+            style="Workbench.TCombobox",
+            values=FIXED_RISK_LABELS,
+        )
+        self._autosize_combobox(self._risk_combo, values=FIXED_RISK_LABELS, current_text=self._fixed_risk_display_var.get(), rule_key="risk")
+        self._risk_combo.grid(row=0, column=11, padx=(0, 6), pady=uniform_pady, sticky="w")
+        self._risk_combo.bind("<<ComboboxSelected>>", self._on_fixed_risk_selected)
+        self._custom_fixed_risk_entry = ttk.Entry(controls_bar, textvariable=self._custom_fixed_risk_var, width=7, style="Workbench.TEntry")
+        self._custom_fixed_risk_entry.grid(row=0, column=12, padx=(0, 10), pady=uniform_pady, sticky="w")
+        self._custom_fixed_risk_entry.state(["disabled"])
+
         ttk.Checkbutton(
             controls_bar,
             text="顯示成交量",
             variable=self._show_volume_var,
             command=self._rerender_current_chart,
             style="Workbench.TCheckbutton",
-        ).grid(row=0, column=10, padx=(0, 0), pady=uniform_pady, sticky="w")
+        ).grid(row=0, column=13, padx=(0, 0), pady=uniform_pady, sticky="w")
 
         notebook = ttk.Notebook(self, style="Workbench.TNotebook")
         notebook.pack(fill="both", expand=True)
@@ -936,8 +957,25 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
         return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
 
+    def _on_fixed_risk_selected(self, _event=None):
+        if self._fixed_risk_display_var.get() == "自訂":
+            self._custom_fixed_risk_entry.state(["!disabled"])
+            self._custom_fixed_risk_entry.focus_set()
+        else:
+            self._custom_fixed_risk_entry.state(["disabled"])
+
+    def _resolve_fixed_risk(self):
+        selected = self._fixed_risk_display_var.get().strip()
+        raw_value = self._custom_fixed_risk_var.get().strip() if selected == "自訂" else selected
+        return parse_float_strict(raw_value, "固定風險比例", min_value=0.0, max_value=1.0, strict_gt=True)
+
+    def _load_params_with_fixed_risk(self, params_path, fixed_risk):
+        params = load_params(params_path, verbose=False)
+        params.fixed_risk = float(fixed_risk)
+        return params
+
     def _get_selected_params(self):
-        return load_params(self._get_selected_params_path(), verbose=False)
+        return self._load_params_with_fixed_risk(self._get_selected_params_path(), self._resolve_fixed_risk())
 
     def _get_selected_param_source_label(self):
         return self._param_source_display_var.get().strip() or DEFAULT_PARAM_SOURCE_LABEL
@@ -1094,10 +1132,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         value_var.set("")
         self._autosize_combobox(combo, values=[], current_text="", rule_key=rule_key)
 
-    def _run_scanner_worker(self, mode, params_path, request_token):
+    def _run_scanner_worker(self, mode, params_path, fixed_risk, request_token):
         try:
             data_dir = resolve_trade_analysis_data_dir(DEFAULT_DATASET_PROFILE)
-            params = load_params(params_path, verbose=False)
+            params = self._load_params_with_fixed_risk(params_path, fixed_risk)
             with redirect_stdout(self._console_writer), redirect_stderr(self._console_writer):
                 if mode == "candidate":
                     scan_result = run_daily_scanner(data_dir, params)
@@ -1117,6 +1155,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._scanner_active_token += 1
         request_token = self._scanner_active_token
         params_path = self._get_selected_params_path()
+        try:
+            fixed_risk = self._resolve_fixed_risk()
+        except ValueError as exc:
+            messagebox.showerror("股票工具工作台", str(exc))
+            return
         self._prepare_console_for_new_task()
         self._notebook.select(2)
         param_source = self._get_selected_param_source_label()
@@ -1129,7 +1172,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._append_console_text(f"[scanner] {status_text}\n")
         scanner_thread = threading.Thread(
             target=self._run_scanner_worker,
-            args=(mode, params_path, request_token),
+            args=(mode, params_path, fixed_risk, request_token),
             name=f"workbench-scanner-{mode}",
             daemon=True,
         )
@@ -1179,53 +1222,59 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
     def _run_history_scanner(self):
         self._start_scanner("history")
 
-    def _run_analysis_worker(self, ticker, params_path, request_token):
+    def _run_analysis_worker(self, ticker, params_path, fixed_risk, request_token):
         try:
             result = run_ticker_analysis(
                 ticker,
                 dataset_profile_key=DEFAULT_DATASET_PROFILE,
-                params=load_params(params_path, verbose=False),
+                params=self._load_params_with_fixed_risk(params_path, fixed_risk),
                 export_excel=True,
                 export_chart=False,
                 return_chart_payload=True,
                 verbose=False,
             )
         except Exception as exc:
-            self.after(0, self._finish_analysis_error, ticker, params_path, request_token, exc)
+            self.after(0, self._finish_analysis_error, ticker, params_path, fixed_risk, request_token, exc)
             return
-        self.after(0, self._finish_analysis_success, ticker, params_path, request_token, result)
+        self.after(0, self._finish_analysis_success, ticker, params_path, fixed_risk, request_token, result)
 
-    def _start_analysis(self, ticker, *, params_path=None):
+    def _start_analysis(self, ticker, *, params_path=None, fixed_risk=None):
         ticker = str(ticker or "").strip()
         if not ticker:
             return
         resolved_params_path = str(params_path or self._get_selected_params_path())
+        try:
+            resolved_fixed_risk = self._resolve_fixed_risk() if fixed_risk is None else float(fixed_risk)
+        except ValueError as exc:
+            messagebox.showerror("股票工具工作台", str(exc))
+            return
         self._analysis_active_token += 1
         request_token = self._analysis_active_token
-        self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
+        self._status_var.set(f"執行中：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} / 固定風險 {resolved_fixed_risk:.4f}")
         analysis_thread = threading.Thread(
             target=self._run_analysis_worker,
-            args=(ticker, resolved_params_path, request_token),
+            args=(ticker, resolved_params_path, resolved_fixed_risk, request_token),
             name=f"workbench-analysis-{ticker}",
             daemon=True,
         )
         self._analysis_thread = analysis_thread
         analysis_thread.start()
 
-    def _consume_pending_analysis_request(self, completed_ticker, completed_params_path):
+    def _consume_pending_analysis_request(self, completed_ticker, completed_params_path, completed_fixed_risk):
         pending_request = self._analysis_pending_request
         self._analysis_pending_request = None
         if not pending_request:
             return
-        pending_ticker, pending_params_path = pending_request
+        pending_ticker, pending_params_path, pending_fixed_risk = pending_request
         if (
             str(pending_ticker or "").strip() == str(completed_ticker or "").strip()
             and str(pending_params_path or "").strip() == str(completed_params_path or "").strip()
+            and float(pending_fixed_risk) == float(completed_fixed_risk)
         ):
             return
-        self.after_idle(lambda ticker=pending_ticker, path=pending_params_path: self._start_analysis(ticker, params_path=path))
+        self.after_idle(lambda ticker=pending_ticker, path=pending_params_path, risk=pending_fixed_risk: self._start_analysis(ticker, params_path=path, fixed_risk=risk))
 
-    def _finish_analysis_success(self, ticker, params_path, request_token, result):
+    def _finish_analysis_success(self, ticker, params_path, fixed_risk, request_token, result):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
@@ -1233,14 +1282,14 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         render_error_text = self._render_result(result)
         if not render_error_text:
             self._status_var.set(f"完成：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}")
-        self._consume_pending_analysis_request(ticker, params_path)
+        self._consume_pending_analysis_request(ticker, params_path, fixed_risk)
 
-    def _finish_analysis_error(self, ticker, params_path, request_token, exc):
+    def _finish_analysis_error(self, ticker, params_path, fixed_risk, request_token, exc):
         if request_token != self._analysis_active_token:
             return
         self._analysis_thread = None
         self._report_runtime_exception("run_analysis", exc, status_prefix="執行失敗")
-        self._consume_pending_analysis_request(ticker, params_path)
+        self._consume_pending_analysis_request(ticker, params_path, fixed_risk)
 
     def _run_analysis(self):
         ticker = self._ticker_var.get().strip()
@@ -1249,15 +1298,20 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             return
 
         params_path = self._get_selected_params_path()
+        try:
+            fixed_risk = self._resolve_fixed_risk()
+        except ValueError as exc:
+            messagebox.showerror("股票工具工作台", str(exc))
+            return
         if self._analysis_thread is not None and self._analysis_thread.is_alive():
-            self._analysis_pending_request = (ticker, params_path)
+            self._analysis_pending_request = (ticker, params_path, fixed_risk)
             self._status_var.set(
                 f"查股進行中，已排入最新請求：{ticker} / {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)}"
             )
             return
 
         self._analysis_pending_request = None
-        self._start_analysis(ticker, params_path=params_path)
+        self._start_analysis(ticker, params_path=params_path, fixed_risk=fixed_risk)
 
     def _render_result(self, result):
         trade_logs_df = result.get("trade_logs_df")

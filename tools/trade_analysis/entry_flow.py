@@ -125,6 +125,7 @@ def process_debug_entry_for_day(
             buy_triggered = True
             active_extended_signal = None
             spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -149,6 +150,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
+                    'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
                 },
             )
@@ -227,6 +229,7 @@ def process_debug_entry_for_day(
             buy_triggered = True
             active_extended_signal = None
             spent_cash = _resolve_display_entry_total(entry_result, qty=entry_plan['qty'], params=params)
+            reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)
             append_debug_trade_row(
                 trade_logs,
                 date_str=date_str,
@@ -251,6 +254,7 @@ def process_debug_entry_for_day(
                     'entry_price': float(entry_result['buy_price']),
                     'stop_price': float(position['initial_stop']),
                     'tp_price': float(position['tp_half']),
+                    'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
                 },
             )
