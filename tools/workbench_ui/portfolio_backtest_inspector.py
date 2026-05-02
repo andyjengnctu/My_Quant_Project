@@ -328,6 +328,13 @@ def _resolve_previous_trade_date(fast_data, trade_date):
     return pd.Timestamp(dates[pos - 1])
 
 
+def _normalize_portfolio_date_key(value):
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return ""
+    return pd.Timestamp(parsed).strftime("%Y-%m-%d")
+
+
 def _resolve_buy_signal_date_from_row(row, fast_data, trade_date):
     for field in ("買訊日", "Signal_Date", "signal_date"):
         value = row.get(field)
@@ -337,6 +344,28 @@ def _resolve_buy_signal_date_from_row(row, fast_data, trade_date):
         if not pd.isna(parsed):
             return pd.Timestamp(parsed)
     return _resolve_previous_trade_date(fast_data, trade_date)
+
+
+def _collect_visible_shadow_signal_date_keys(ticker_trades_df, *, fast_data, price_df):
+    if ticker_trades_df is None or ticker_trades_df.empty:
+        return set()
+
+    visible_signal_dates = set()
+    price_dates = set(pd.DatetimeIndex(pd.to_datetime(price_df.index))) if price_df is not None else set()
+    for row in ticker_trades_df.to_dict("records"):
+        action = _normalize_trade_action(row)
+        if action not in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+            continue
+        parsed_trade_date = pd.to_datetime(row.get("Date"), errors="coerce")
+        if pd.isna(parsed_trade_date):
+            continue
+        signal_date = _resolve_buy_signal_date_from_row(row, fast_data, pd.Timestamp(parsed_trade_date))
+        if price_dates and signal_date not in price_dates:
+            continue
+        signal_key = _normalize_portfolio_date_key(signal_date)
+        if signal_key:
+            visible_signal_dates.add(signal_key)
+    return visible_signal_dates
 
 
 def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
@@ -650,31 +679,47 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         )
 
 
-def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_level_rows):
+def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_level_rows, visible_shadow_signal_date_keys=None):
     def _sort_key(row):
         try:
             return pd.Timestamp(row.get("Date"))
         except (TypeError, ValueError):
             return pd.Timestamp.max
 
-    tp_line_stopped = False
-    previous_pos = None
+    visible_shadow_signal_date_keys = set(visible_shadow_signal_date_keys or [])
+    tp_line_stopped_by_scope = {}
+    previous_pos_by_scope = {}
     sorted_rows = sorted(active_level_rows or [], key=_sort_key)
     for row in sorted_rows:
         try:
             current_date = pd.Timestamp(row.get("Date"))
         except (TypeError, ValueError):
             continue
+
+        level_scope = str(row.get("level_scope", "") or "").strip()
+        is_shadow_level = level_scope == "extended_shadow"
+        shadow_signal_key = ""
+        if is_shadow_level:
+            shadow_signal_key = _normalize_portfolio_date_key(row.get("買訊日"))
+            if not shadow_signal_key or shadow_signal_key not in visible_shadow_signal_date_keys:
+                continue
+            signal_date = pd.to_datetime(shadow_signal_key, errors="coerce")
+            if pd.isna(signal_date) or current_date <= pd.Timestamp(signal_date):
+                continue
+
         current_pos = _safe_fast_pos(fast_data, current_date)
         if current_pos < 0:
             continue
+
+        line_scope_key = (level_scope or "actual_position", shadow_signal_key)
+        previous_pos = previous_pos_by_scope.get(line_scope_key)
         if previous_pos is None or current_pos != previous_pos + 1:
-            tp_line_stopped = False
-        previous_pos = current_pos
+            tp_line_stopped_by_scope[line_scope_key] = False
+        previous_pos_by_scope[line_scope_key] = current_pos
 
         tp_half_price = _coerce_float(row.get("半倉停利價"))
-        visible_tp_half_price = np.nan if tp_line_stopped else tp_half_price
-        recorder = record_shadow_active_levels if str(row.get("level_scope", "") or "").strip() == "extended_shadow" else record_active_levels
+        visible_tp_half_price = np.nan if tp_line_stopped_by_scope.get(line_scope_key, False) else tp_half_price
+        recorder = record_shadow_active_levels if is_shadow_level else record_active_levels
         try:
             recorder(
                 chart_context,
@@ -689,7 +734,7 @@ def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_leve
 
         day_high = _safe_fast_value(fast_data, "High", pos=current_pos)
         if (not pd.isna(visible_tp_half_price)) and (not pd.isna(day_high)) and float(day_high) >= float(visible_tp_half_price):
-            tp_line_stopped = True
+            tp_line_stopped_by_scope[line_scope_key] = True
 
 
 def _find_portfolio_signal_annotation_index(chart_context, *, current_date, signal_type, limit_price=None):
@@ -767,7 +812,17 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
     equity_snapshots = _build_portfolio_equity_snapshot_index(df_eq)
 
-    _record_portfolio_active_level_rows(chart_context, fast_data=fast_data, active_level_rows=active_level_rows)
+    visible_shadow_signal_date_keys = _collect_visible_shadow_signal_date_keys(
+        ticker_trades_df,
+        fast_data=fast_data,
+        price_df=price_df,
+    )
+    _record_portfolio_active_level_rows(
+        chart_context,
+        fast_data=fast_data,
+        active_level_rows=active_level_rows,
+        visible_shadow_signal_date_keys=visible_shadow_signal_date_keys,
+    )
 
     active_entry = None
     next_trade_sequence = 0
