@@ -550,6 +550,7 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None, equi
     pnl_value = _resolve_valid_float(row.get("單筆損益"))
     total_pnl = _resolve_valid_float(row.get("該筆總損益"))
     sell_capital = _estimate_sell_capital(row)
+    stop_price = _resolve_valid_float(row.get("停損價"))
     entry_capital = None if active_entry is None else active_entry.get("buy_capital")
     pnl_pct = _calc_pct_from_capital(total_pnl if total_pnl is not None else pnl_value, entry_capital)
     meta = {}
@@ -564,6 +565,8 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None, equi
         meta["pnl_pct"] = float(pnl_pct)
     if sell_capital is not None:
         meta["sell_capital"] = float(sell_capital)
+    if stop_price is not None:
+        meta["stop_price"] = float(stop_price)
     meta = _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
     return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
 
@@ -872,6 +875,14 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                 marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
             else:
                 marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
+            if action == "停損殺出":
+                stop_price = marker_meta.get("stop_price")
+                if stop_price is not None and not pd.isna(stop_price):
+                    record_active_levels(
+                        chart_context,
+                        current_date=trade_date,
+                        stop_price=float(stop_price),
+                    )
             if action in {"停損殺出", "指標賣出", "期末強制結算"}:
                 active_entry = None
 

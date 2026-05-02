@@ -291,12 +291,16 @@ def settle_portfolio_positions(
                 t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
                 exit_context = stop_context if 'STOP' in events else ind_sell_context
                 display_exit_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
+                exit_trigger_price = None
+                if 'STOP' in events and exit_context is not None:
+                    exit_trigger_price = exit_context.get('trigger_price')
                 trade_history.append(
                     {
                         'Date': today.strftime('%Y-%m-%d'),
                         'Ticker': ticker,
                         'Type': t_type,
                         '成交價': None if exit_context is None else exit_context['exec_price'],
+                        '停損價': exit_trigger_price,
                         '股數': None if exit_context is None else exit_context['qty'],
                         '單筆損益': _round_money_for_history(display_exit_pnl),
                         '該筆總損益': _round_money_for_history(total_pnl),
