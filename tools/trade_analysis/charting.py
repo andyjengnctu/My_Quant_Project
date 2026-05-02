@@ -92,6 +92,7 @@ MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
 
 
 CHART_TRACE_NAME_ALIASES = {
+    "買進(延續候選)": "買進",
     "錯失買進(新訊號)": "錯失買進",
     "錯失買進(延續候選)": "錯失買進",
     "半倉停利": "停利",
@@ -102,10 +103,9 @@ CHART_TRACE_NAME_ALIASES = {
 ACTION_STYLE_MAP = {
     "限價買進": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_LIMIT_COLOR},
     "買進": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
-    "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": "#68d8ff"},
     "錯失買進": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
     "停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
-    "停損賣出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
+    "停損賣出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
@@ -121,10 +121,9 @@ CHART_LEGEND_FIRST_ROW_ITEMS = (
 )
 CHART_LEGEND_SECOND_ROW_ITEMS = (
     "買訊",
-    "賣訊",
     "買進",
-    "買進(延續候選)",
     "錯失買進",
+    "賣訊",
     "指標賣出",
     "停損賣出",
     "錯失賣出",
@@ -142,8 +141,8 @@ CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
 CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
 
 CHART_SIGNAL_LEGEND_STYLE = {
-    "買訊": {"mpl_marker": "v", "plotly_symbol": "triangle-down", "color": MATPLOTLIB_SIGNAL_BUY_COLOR},
-    "賣訊": {"mpl_marker": "^", "plotly_symbol": "triangle-up", "color": MATPLOTLIB_SIGNAL_SELL_COLOR},
+    "買訊": {"mpl_marker": "^", "plotly_symbol": "triangle-up", "color": "#68d8ff"},
+    "賣訊": {"mpl_marker": "v", "plotly_symbol": "triangle-down", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
 }
 
 ORDER_STATUS_LABELS = {
@@ -1127,9 +1126,9 @@ def _normalize_entry_type_for_missed_buy_marker(marker):
 def _build_trade_label_text(trace_name, marker):
     trace_name = _normalize_chart_trace_name(trace_name)
     meta = dict(marker.get("meta") or {})
-    if trace_name in {"買進", "買進(延續候選)"}:
+    if trace_name == "買進":
         meta.setdefault("result", "成交")
-        meta.setdefault("entry_type", "extended" if trace_name == "買進(延續候選)" else "normal")
+        meta.setdefault("entry_type", meta.get("entry_type") or "normal")
         return _build_chart_info_box_text("買進", meta, marker=marker)
     if trace_name == "錯失買進":
         meta.setdefault("result", "未成交")
@@ -1280,7 +1279,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
-    supported_traces = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
+    supported_traces = {"買進", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
     occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))
