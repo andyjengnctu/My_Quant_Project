@@ -96,11 +96,41 @@ ACTION_STYLE_MAP = {
     "限價買進(延續候選)": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": "#7fb3ff"},
     "買進": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
     "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": "#68d8ff"},
+    "錯失買進(新訊號)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
+    "錯失買進(延續候選)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#7fb3ff"},
     "半倉停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
     "停損殺出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#fbbf24"},
+}
+
+CHART_EVENT_LEGEND_ORDER = (
+    "買訊",
+    "賣訊",
+    "限價買進",
+    "限價買進(延續候選)",
+    "買進",
+    "買進(延續候選)",
+    "錯失買進(新訊號)",
+    "錯失買進(延續候選)",
+    "半倉停利",
+    "停損殺出",
+    "指標賣出",
+    "期末強制結算",
+    "錯失賣出",
+)
+
+CHART_LINE_LEGEND_SPECS = (
+    ("停損線", MATPLOTLIB_STOP_COLOR, "solid", 2.0),
+    ("半倉停利線", MATPLOTLIB_TP_COLOR, "solid", 1.9),
+    ("限價線", MATPLOTLIB_LIMIT_COLOR, (0, (4, 2)), 1.5),
+    ("成交線", MATPLOTLIB_ENTRY_COLOR, "solid", 1.8),
+)
+
+CHART_SIGNAL_LEGEND_STYLE = {
+    "買訊": {"mpl_marker": "v", "plotly_symbol": "triangle-down", "color": MATPLOTLIB_SIGNAL_BUY_COLOR},
+    "賣訊": {"mpl_marker": "^", "plotly_symbol": "triangle-up", "color": MATPLOTLIB_SIGNAL_SELL_COLOR},
 }
 
 ORDER_STATUS_LABELS = {
@@ -742,46 +772,55 @@ def _resolve_trade_box_style(trace_name, marker):
     return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_TEXT_COLOR, "above"
 
 
+def _append_price_line(lines, meta, key, label):
+    value = meta.get(key)
+    if value is None or pd.isna(value):
+        return
+    lines.append(f"{label}: {float(value):.2f}")
+
+
+def _append_amount_line(lines, meta, key, label, *, signed=False):
+    value = meta.get(key)
+    if value is None or pd.isna(value):
+        return
+    sign_prefix = "+" if signed else ""
+    lines.append(f"{label}: {float(value):{sign_prefix},.0f}")
+
+
+def _append_trade_sequence_or_count(lines, meta):
+    trade_sequence = meta.get("trade_sequence")
+    if trade_sequence is not None and not pd.isna(trade_sequence):
+        lines.append(f"交易次數: 第 {int(trade_sequence)} 次")
+        return
+    trade_count = meta.get("trade_count")
+    if trade_count is not None and not pd.isna(trade_count):
+        lines.append(f"交易次數: {int(trade_count)}")
+
+
 def _build_trade_label_text(trace_name, marker):
     meta = marker.get("meta") or {}
     if trace_name in {"買進", "買進(延續候選)"}:
         lines = ["買進"]
+        _append_trade_sequence_or_count(lines, meta)
         for key, label in (("tp_price", "停利"), ("limit_price", "限價"), ("entry_price", "成交"), ("stop_price", "停損")):
-            value = meta.get(key)
-            if value is None or pd.isna(value):
-                continue
-            lines.append(f"{label}: {float(value):.2f}")
-        reserved_capital = meta.get("reserved_capital")
-        if reserved_capital is not None and not pd.isna(reserved_capital):
-            lines.append(f"預留: {float(reserved_capital):,.0f}")
-        buy_capital = meta.get("buy_capital")
-        if buy_capital is not None and not pd.isna(buy_capital):
-            lines.append(f"實支: {float(buy_capital):,.0f}")
+            _append_price_line(lines, meta, key, label)
+        _append_amount_line(lines, meta, "reserved_capital", "預留")
+        _append_amount_line(lines, meta, "buy_capital", "實支")
         return "\n".join(lines)
     if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
         lines = ["錯失買進"]
-        for key, label in (("limit_price", "限價"),):
-            value = meta.get(key)
-            if value is not None and not pd.isna(value):
-                lines.append(f"{label}: {float(value):.2f}")
-        reserved_capital = meta.get("reserved_capital")
-        if reserved_capital is not None and not pd.isna(reserved_capital):
-            lines.append(f"預留: {float(reserved_capital):,.0f}")
-        buy_capital = meta.get("buy_capital")
-        if buy_capital is not None and not pd.isna(buy_capital):
-            lines.append(f"實支: {float(buy_capital):,.0f}")
+        _append_price_line(lines, meta, "limit_price", "限價")
+        _append_amount_line(lines, meta, "reserved_capital", "預留")
+        _append_amount_line(lines, meta, "buy_capital", "實支")
         note = str(marker.get("note", "") or "").strip()
         if note:
             lines.append(note)
         return "\n".join(lines)
     if trace_name == "錯失賣出":
         lines = ["錯失賣出"]
-        stop_price = meta.get("stop_price")
-        if stop_price is not None and not pd.isna(stop_price):
-            lines.append(f"停損: {float(stop_price):.2f}")
-        reference_price = meta.get("reference_price")
-        if reference_price is not None and not pd.isna(reference_price):
-            lines.append(f"參考收: {float(reference_price):.2f}")
+        _append_trade_sequence_or_count(lines, meta)
+        _append_price_line(lines, meta, "stop_price", "停損")
+        _append_price_line(lines, meta, "reference_price", "參考收")
         total_pnl = meta.get("total_pnl")
         if total_pnl is not None:
             lines.append(f"既實現: {float(total_pnl):+,.0f}")
@@ -791,12 +830,11 @@ def _build_trade_label_text(trace_name, marker):
         return "\n".join(lines)
     if trace_name == "半倉停利":
         lines = ["停利"]
+        _append_trade_sequence_or_count(lines, meta)
         sell_qty = marker.get("qty", 0)
         if sell_qty:
             lines.append(f"股數: {int(sell_qty):,}")
-        sell_capital = meta.get("sell_capital")
-        if sell_capital is not None and not pd.isna(sell_capital):
-            lines.append(f"金額: {float(sell_capital):,.0f}")
+        _append_amount_line(lines, meta, "sell_capital", "金額")
         pnl_value = meta.get("pnl_value")
         if pnl_value is not None:
             lines.append(f"損益: {float(pnl_value):+,.0f}")
@@ -810,15 +848,12 @@ def _build_trade_label_text(trace_name, marker):
         sell_qty = marker.get("qty", 0)
         if sell_qty:
             lines.append(f"股數: {int(sell_qty):,}")
-        sell_capital = meta.get("sell_capital")
-        if sell_capital is not None and not pd.isna(sell_capital):
-            lines.append(f"金額: {float(sell_capital):,.0f}")
-        pnl_value = meta.get("pnl_value")
-        if pnl_value is not None:
-            lines.append(f"損益: {float(pnl_value):+,.0f}")
-        total_pnl = meta.get("total_pnl")
-        if total_pnl is not None:
-            lines.append(f"總損益: {float(total_pnl):+,.0f}")
+        _append_amount_line(lines, meta, "sell_capital", "金額")
+        trade_pnl = meta.get("total_pnl")
+        if trade_pnl is None:
+            trade_pnl = meta.get("pnl_value")
+        if trade_pnl is not None:
+            lines.append(f"損益: {float(trade_pnl):+,.0f}")
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is not None:
             lines.append(f"報酬率: {float(pnl_pct):+.2f}%")
@@ -834,9 +869,7 @@ def _build_trade_label_text(trace_name, marker):
         max_drawdown = meta.get("max_drawdown")
         if max_drawdown is not None:
             lines.append(f"最大回撤: {float(max_drawdown):.2f}%")
-        trade_count = meta.get("trade_count")
-        if trade_count is not None:
-            lines.append(f"交易次數: {int(trade_count)}")
+        _append_trade_sequence_or_count(lines, meta)
         return "\n".join(lines)
     return trace_name
 
@@ -1039,6 +1072,32 @@ def _render_future_preview_lines(axis_price, chart_payload):
     return rendered
 
 
+def _build_complete_matplotlib_legend_handles():
+    from matplotlib.lines import Line2D
+
+    handles = []
+    for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS:
+        handles.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label))
+    for label in CHART_EVENT_LEGEND_ORDER:
+        style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
+        if not style:
+            continue
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker=style["mpl_marker"],
+                linestyle="None",
+                markerfacecolor=style["color"],
+                markeredgecolor=style["color"],
+                color=style["color"],
+                markersize=8,
+                label=label,
+            )
+        )
+    return handles
+
+
 def create_matplotlib_trade_chart_figure(*, chart_payload, ticker, show_volume=False):
     return create_matplotlib_debug_chart_figure(chart_payload=chart_payload, ticker=ticker, show_volume=show_volume)
 
@@ -1148,9 +1207,8 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
         return date_labels[rounded] if 0 <= rounded < len(date_labels) else ""
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
-    line_handles, line_labels = axis_price.get_legend_handles_labels()
-    if line_handles:
-        axis_price.legend(line_handles, line_labels, loc="upper left", ncol=min(6, max(1, len(line_labels))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.2)
+    legend_handles = _build_complete_matplotlib_legend_handles()
+    axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=min(8, max(1, len(legend_handles))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
@@ -1612,9 +1670,31 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["entry_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
+    present_plotly_legends = {"K線", "停損線"}
+    if np.isfinite(chart_payload["tp_line"]).any():
+        present_plotly_legends.add("半倉停利線")
+    if np.isfinite(chart_payload["limit_line"]).any():
+        present_plotly_legends.add("限價線")
+    if np.isfinite(chart_payload["entry_line"]).any():
+        present_plotly_legends.add("成交線")
     for trace_name, markers in chart_payload["marker_groups"].items():
         style = ACTION_STYLE_MAP.get(trace_name, {"plotly_symbol": "circle", "color": MATPLOTLIB_TEXT_COLOR})
         fig.add_trace(go.Scatter(x=[item["date"] for item in markers], y=[item["price"] for item in markers], mode="markers", name=trace_name, marker={"symbol": style["plotly_symbol"], "size": 10, "color": style["color"], "line": {"width": 1, "color": style["color"]}}, hovertemplate="%{text}<extra></extra>", text=[item["hover_text"] for item in markers]), row=1, col=1)
+        present_plotly_legends.add(trace_name)
+    for label, color, dash, width in CHART_LINE_LEGEND_SPECS:
+        if label in present_plotly_legends:
+            continue
+        plotly_dash = "dash" if dash != "solid" else "solid"
+        fig.add_trace(go.Scatter(x=[dates[0]], y=[None], mode="lines", name=label, line={"color": color, "width": width, "dash": plotly_dash}, visible="legendonly", hoverinfo="skip"), row=1, col=1)
+        present_plotly_legends.add(label)
+    for label in CHART_EVENT_LEGEND_ORDER:
+        if label in present_plotly_legends:
+            continue
+        style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
+        if not style:
+            continue
+        fig.add_trace(go.Scatter(x=[dates[0]], y=[None], mode="markers", name=label, marker={"symbol": style["plotly_symbol"], "size": 10, "color": style["color"], "line": {"width": 1, "color": style["color"]}}, visible="legendonly", hoverinfo="skip"), row=1, col=1)
+        present_plotly_legends.add(label)
     fig.add_trace(go.Bar(x=dates, y=chart_payload["volume"], name="成交量", marker={"color": volume_colors}, opacity=0.7), row=2, col=1)
     fig.update_layout(title=f"<b>{ticker} 單股回測 K 線交易檢視</b>", template="plotly_dark", paper_bgcolor=MATPLOTLIB_DARK_BG, plot_bgcolor=MATPLOTLIB_DARK_BG, hovermode="x unified", dragmode="pan", xaxis_rangeslider_visible=False, legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0}, margin={"l": 40, "r": 40, "t": 70, "b": 40}, uirevision=ticker, font={"family": font_family, "color": MATPLOTLIB_TEXT_COLOR})
     fig.update_yaxes(title_text="價格", row=1, col=1, range=[default_ranges["price_min"], default_ranges["price_max"]])

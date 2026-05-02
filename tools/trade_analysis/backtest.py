@@ -173,12 +173,34 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
     )
 
 
-def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition):
+def _count_trade_type_split_from_trade_logs(trade_logs):
+    normal_trade_count = 0
+    extended_trade_count = 0
+    active_entry_type = None
+    for row in trade_logs or []:
+        action = str(row.get('動作', '') or '').strip()
+        if action in {'買進', '買進(延續候選)'}:
+            active_entry_type = 'extended' if '延續' in action else 'normal'
+            continue
+        if action in {'停損殺出', '指標賣出', '期末強制結算'}:
+            if active_entry_type == 'extended':
+                extended_trade_count += 1
+            else:
+                normal_trade_count += 1
+            active_entry_type = None
+    return int(normal_trade_count), int(extended_trade_count)
+
+
+def _apply_chart_sidebars(*, chart_context, stats_dict, sell_condition, trade_logs=None):
     if chart_context is None or stats_dict is None:
         return
+    trade_count = int(stats_dict.get('trade_count', 0) or 0)
+    normal_trade_count, extended_trade_count = _count_trade_type_split_from_trade_logs(trade_logs)
+    if normal_trade_count + extended_trade_count != trade_count:
+        normal_trade_count = max(trade_count - extended_trade_count, 0)
     summary_lines = [
         f"資產成長: {stats_dict.get('asset_growth', 0.0):.1f}%",
-        f"交易次數: {int(stats_dict.get('trade_count', 0) or 0)}",
+        f"交易次數: {trade_count} (正常: {normal_trade_count} | 延續: {extended_trade_count})",
         f"錯失買點: {int(stats_dict.get('missed_buys', 0) or 0)}次",
         f"單筆報酬: {stats_dict.get('score', 0.0):.2f}%",
         '',
@@ -377,7 +399,7 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
             stats_index=stats_index,
             overall_max_drawdown=stats_dict.get('max_drawdown', 0.0),
         )
-    _apply_chart_sidebars(chart_context=chart_context, stats_dict=stats_dict, sell_condition=sell_condition)
+    _apply_chart_sidebars(chart_context=chart_context, stats_dict=stats_dict, sell_condition=sell_condition, trade_logs=trade_logs)
     return finalize_debug_analysis(
         trade_logs=trade_logs,
         ticker=ticker,

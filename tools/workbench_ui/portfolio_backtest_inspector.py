@@ -39,6 +39,7 @@ from tools.trade_analysis.charting import (
     create_matplotlib_trade_chart_figure,
     extract_trade_marker_indexes,
     record_active_levels,
+    record_limit_order,
     record_signal_annotation,
     record_trade_marker,
     scroll_chart_to_adjacent_trade,
@@ -339,10 +340,7 @@ def _resolve_buy_signal_date_from_row(row, fast_data, trade_date):
 
 def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
     enriched = dict(meta or {})
-    trade_count = _coerce_int((actual_stats or {}).get("trade_count"), default=0)
     win_rate_pct = (actual_stats or {}).get("win_rate_pct")
-    if trade_count > 0:
-        enriched["trade_count"] = int(trade_count)
     if win_rate_pct is not None and not pd.isna(win_rate_pct):
         enriched["win_rate"] = float(win_rate_pct)
     return enriched
@@ -617,6 +615,14 @@ def _record_portfolio_active_level_rows(chart_context, *, active_level_rows):
             continue
 
 
+def _apply_trade_sequence_to_marker_meta(marker_meta, trade_sequence):
+    if trade_sequence is None:
+        return marker_meta
+    enriched = dict(marker_meta or {})
+    enriched["trade_sequence"] = int(trade_sequence)
+    return enriched
+
+
 def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None, active_level_rows=None):
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
@@ -626,6 +632,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     _record_portfolio_active_level_rows(chart_context, active_level_rows=active_level_rows)
 
     active_entry = None
+    next_trade_sequence = 0
     sorted_records = sorted(
         ticker_trades_df.to_dict("records"),
         key=lambda row: (pd.Timestamp(row.get("Date")), 0 if _is_buy_trade_row(row) else 1),
@@ -647,20 +654,47 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         qty = _coerce_int(row.get("股數"), default=0)
         note = str(row.get("Type", "") or "").strip()
         if action in {"買進", "買進(延續候選)"}:
+            next_trade_sequence += 1
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
             active_entry = {
                 "buy_capital": marker_meta.get("buy_capital"),
                 "qty": qty,
                 "date": trade_date,
+                "trade_sequence": next_trade_sequence,
             }
         elif str(action).startswith("錯失買進"):
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
         elif action == "錯失賣出":
             marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats)
+            marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
         else:
             marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats)
+            if active_entry is None and action in {"停損殺出", "指標賣出", "期末強制結算"}:
+                next_trade_sequence += 1
+                marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
+            else:
+                marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
             if action in {"停損殺出", "指標賣出", "期末強制結算"}:
                 active_entry = None
+
+        if action in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+            limit_price = marker_meta.get("limit_price")
+            if limit_price is not None and not pd.isna(limit_price):
+                record_active_levels(
+                    chart_context,
+                    current_date=trade_date,
+                    limit_price=float(limit_price),
+                )
+                record_limit_order(
+                    chart_context,
+                    current_date=trade_date,
+                    limit_price=float(limit_price),
+                    qty=qty,
+                    entry_type=_normalize_entry_type_value(row.get("進場類型"), default="normal"),
+                    status="missed" if str(action).startswith("錯失買進") else "filled",
+                    note=str(row.get("備註", "") or "").strip(),
+                )
 
         _record_portfolio_trade_annotations(
             chart_context,
@@ -693,8 +727,8 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     chart_context["summary_box"] = [
         f"投報度: {invested_return_text}",
         f"總損益: {total_pnl:+,.0f}",
-        f"交易次數: {exit_count} (正常: {normal_trade_count} \\ 延續: {extended_trade_count})",
-        f"錯失買進: {missed_buy_count} / 錯失賣出: {missed_sell_count}",
+        f"交易次數: {exit_count} (正常: {normal_trade_count} | 延續: {extended_trade_count})",
+        f"錯失買進: {missed_buy_count} | 錯失賣出: {missed_sell_count}",
         f"勝率: {win_rate_text}",
     ]
     chart_context["status_box"] = {}
@@ -875,7 +909,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         sidebar.columnconfigure(0, weight=1)
         sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
         sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
-        ttk.Label(sidebar, text="單股歷史績效", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
+        ttk.Label(sidebar, text="單股歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._history_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="投組實績摘要", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
