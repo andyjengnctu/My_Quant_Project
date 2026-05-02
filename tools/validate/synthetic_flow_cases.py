@@ -373,7 +373,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params, sizing_capital)
-    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_alone_does_not_clear_live_shadow_signal", True, ticker in active_extended_signals)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_hit_clears_live_shadow_signal", False, ticker in active_extended_signals)
 
     unreachable_frame = frame.copy()
     unreachable_frame.loc[dates[1], ["Open", "High", "Low", "Close"]] = [105.0, 109.0, 104.0, 106.0]
