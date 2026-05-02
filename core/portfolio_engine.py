@@ -192,16 +192,17 @@ def _append_portfolio_extended_shadow_level_rows(active_level_rows, active_exten
         if bool(shadow_position.get('sold_half', False)) or shadow_position.get('pending_exit_action') == 'TP_HALF':
             tp_half = None
 
-        shadow_limit_price = shadow_position.get('entry_fill_price')
-        if shadow_limit_price is None or shadow_limit_price != shadow_limit_price:
-            shadow_limit_price = shadow_position.get('limit_price', signal_state.get('orig_limit'))
+        orig_limit = signal_state.get('orig_limit')
+        if orig_limit is None or orig_limit != orig_limit:
+            orig_limit = shadow_position.get('limit_price')
 
         active_level_rows.append({
             'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
             'Ticker': str(ticker),
             '停損價': shadow_position.get('sl'),
             '半倉停利價': tp_half,
-            '買入限價': shadow_limit_price,
+            '買入限價': orig_limit,
+            'Shadow買進價': shadow_position.get('entry_fill_price'),
             '成交價': shadow_position.get('entry_fill_price'),
             'level_scope': 'extended_shadow',
             '進場類型': 'extended',

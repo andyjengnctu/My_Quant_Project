@@ -12,7 +12,7 @@ from core.trade_plans import (
     build_normal_entry_plan,
     create_signal_tracking_state,
     execute_pre_market_entry_plan,
-    resolve_extended_signal_effective_limit,
+    resolve_extended_signal_order_limit,
     should_clear_extended_signal,
 )
 
@@ -108,7 +108,7 @@ def _optimizer_extended_entry_limit(active_extended_signal):
     if shadow_position is not None and int(shadow_position.get("qty", 0) or 0) > 0:
         if shadow_position.get("pending_exit_action") is not None:
             return np.nan
-    return resolve_extended_signal_effective_limit(active_extended_signal)
+    return resolve_extended_signal_order_limit(active_extended_signal)
 
 
 def run_v16_backtest(df, params=None, return_logs=False, precomputed_signals=None, ticker=None, collect_stats=True, return_pit_stats_index=False):

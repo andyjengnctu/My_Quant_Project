@@ -153,15 +153,15 @@ def append_real_case_checks(
         add_skip_result(results, "vip_scanner", ticker, "extended_reference_price_in_range", "今日無一般延續候選，無需驗非 TBD 顯示區間。")
         add_skip_result(results, "vip_scanner", ticker, "extended_limit_price_in_range", "今日無一般延續候選，無需驗非 TBD 掛單規格。")
     else:
-        effective_limit = float(extended_candidate["limit_price"])
+        order_limit = float(extended_candidate["limit_price"])
         add_check(
             results,
             "vip_scanner",
             ticker,
             "extended_reference_price_in_range",
             True,
-            bool(latest_low > effective_limit and latest_close > effective_limit),
-            note="新版延續候選：今日未到有效延續掛單限價才列為一般 extended；Low <= effective_limit 必須改列 extended_tbd。",
+            bool(latest_low > order_limit and latest_close > order_limit),
+            note="新版延續候選：今日未到原始延續買入限價才列為一般 extended；Low <= order_limit 必須改列 extended_tbd。",
         )
         add_check(
             results,
@@ -170,21 +170,21 @@ def append_real_case_checks(
             "extended_limit_price_in_range",
             True,
             bool(not pd.isna(extended_candidate.get("limit_price"))),
-            note="新版延續候選的掛單價可能來自 shadow entry / trailing state；此處只驗一般 extended 已保留可顯示的掛單價，不再要求 qty > 0 或舊 A 版 init_sl~orig_limit 區間。",
+            note="新版延續候選的掛單價固定為原始買入限價；shadow entry 僅負責停利 / 停損 / 賣出線管理。",
         )
 
     if extended_tbd_candidate is None:
-        add_skip_result(results, "vip_scanner", ticker, "extended_tbd_reference_price_touched_effective_limit", "今日無延續 TBD 候選，無需驗到價顯示條件。")
+        add_skip_result(results, "vip_scanner", ticker, "extended_tbd_reference_price_touched_order_limit", "今日無延續 TBD 候選，無需驗到價顯示條件。")
     else:
-        effective_limit = float(extended_tbd_candidate["limit_price"])
+        order_limit = float(extended_tbd_candidate["limit_price"])
         add_check(
             results,
             "vip_scanner",
             ticker,
-            "extended_tbd_reference_price_touched_effective_limit",
+            "extended_tbd_reference_price_touched_order_limit",
             True,
-            bool(latest_low <= effective_limit),
-            note="Low <= effective_limit 代表今日是否可能依延續有效限價成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
+            bool(latest_low <= order_limit),
+            note="Low <= order_limit 代表今日是否可能依原始延續買入限價成交，應顯示為 extended_tbd，由使用者依實際持倉決定是否保留。",
         )
 
     if downloader_error is not None:
