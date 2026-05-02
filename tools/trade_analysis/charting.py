@@ -866,6 +866,7 @@ CHART_INFO_FIELD_SPECS = {
 CHART_INFO_BOX_SCHEMAS = {
     "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
     "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
+    "錯失買進": ("capital", "qty", "limit_price", "reserved_capital", "entry_type", "result"),
     "賣訊": ("capital", "qty", "reference_close"),
     "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
     "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
@@ -878,6 +879,8 @@ def _normalize_chart_info_title(title):
     normalized = str(title or "").strip()
     if normalized.startswith("買訊"):
         return "買訊"
+    if normalized.startswith("錯失買進"):
+        return "錯失買進"
     if normalized.startswith("賣訊"):
         return "賣訊"
     if normalized in {"停損殺出", "停損"}:
@@ -947,7 +950,7 @@ def _build_trade_label_text(trace_name, marker):
     if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
         meta.setdefault("result", "未成交")
         meta.setdefault("entry_type", "extended" if trace_name == "錯失買進(延續候選)" else "normal")
-        return _build_chart_info_box_text("買進", meta, marker=marker)
+        return _build_chart_info_box_text("錯失買進", meta, marker=marker)
     if trace_name == "錯失賣出":
         meta.setdefault("result", "賣出受阻")
         return _build_chart_info_box_text("指標賣出", meta, marker=marker)

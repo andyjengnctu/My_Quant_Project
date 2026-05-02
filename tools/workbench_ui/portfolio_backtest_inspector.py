@@ -608,7 +608,7 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         limit_price = marker_meta.get("limit_price")
         reserved_capital = marker_meta.get("reserved_capital")
         qty = _coerce_int(row.get("股數"), default=0)
-        record_signal_annotation(
+        _record_portfolio_signal_annotation_once(
             chart_context,
             current_date=signal_date,
             signal_type="buy",
@@ -666,6 +666,66 @@ def _record_portfolio_active_level_rows(chart_context, *, active_level_rows):
             )
         except (TypeError, ValueError, KeyError, IndexError):
             continue
+
+
+def _find_portfolio_signal_annotation_index(chart_context, *, current_date, signal_type, limit_price=None):
+    annotations = chart_context.get("signal_annotations") if isinstance(chart_context, dict) else None
+    if not annotations:
+        return None
+    target_date = pd.Timestamp(current_date)
+    target_signal_type = str(signal_type or "").strip().lower()
+    target_limit = _resolve_valid_float(limit_price)
+    for idx, item in enumerate(annotations):
+        try:
+            item_date = pd.Timestamp(item.get("date"))
+        except (TypeError, ValueError):
+            continue
+        if item_date != target_date:
+            continue
+        if str(item.get("signal_type", "")).strip().lower() != target_signal_type:
+            continue
+        if target_limit is not None:
+            item_limit = _resolve_valid_float((item.get("meta") or {}).get("limit_price"))
+            if item_limit is None or abs(float(item_limit) - float(target_limit)) > 1e-9:
+                continue
+        return idx
+    return None
+
+
+def _record_portfolio_signal_annotation_once(chart_context, *, current_date, signal_type, anchor_price, title, detail_lines, note="", meta=None):
+    idx = _find_portfolio_signal_annotation_index(
+        chart_context,
+        current_date=current_date,
+        signal_type=signal_type,
+        limit_price=(meta or {}).get("limit_price"),
+    )
+    annotations = chart_context.get("signal_annotations") if isinstance(chart_context, dict) else None
+    if idx is not None and annotations is not None:
+        existing_title = str(annotations[idx].get("title", "") or "")
+        new_title = str(title or "")
+        existing_is_missed_buy = existing_title.startswith("買訊(錯失)")
+        new_is_missed_buy = new_title.startswith("買訊(錯失)")
+        if existing_title == new_title:
+            return
+        if str(signal_type or "").strip().lower() == "buy":
+            if (not existing_is_missed_buy) and new_is_missed_buy:
+                return
+            if existing_is_missed_buy and (not new_is_missed_buy):
+                del annotations[idx]
+            else:
+                return
+        else:
+            return
+    record_signal_annotation(
+        chart_context,
+        current_date=current_date,
+        signal_type=signal_type,
+        anchor_price=anchor_price,
+        title=title,
+        detail_lines=detail_lines,
+        note=note,
+        meta=meta,
+    )
 
 
 def _apply_trade_sequence_to_marker_meta(marker_meta, trade_sequence):
