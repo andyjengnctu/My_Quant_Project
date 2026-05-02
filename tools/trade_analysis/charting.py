@@ -93,7 +93,6 @@ MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
 
 ACTION_STYLE_MAP = {
     "限價買進": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_LIMIT_COLOR},
-    "限價買進(延續候選)": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": "#7fb3ff"},
     "買進": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
     "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": "#68d8ff"},
     "錯失買進(新訊號)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
@@ -109,7 +108,6 @@ CHART_EVENT_LEGEND_ORDER = (
     "買訊",
     "賣訊",
     "限價買進",
-    "限價買進(延續候選)",
     "買進",
     "買進(延續候選)",
     "錯失買進(新訊號)",
@@ -124,7 +122,6 @@ CHART_EVENT_LEGEND_ORDER = (
 CHART_LINE_LEGEND_SPECS = (
     ("停損線", MATPLOTLIB_STOP_COLOR, "solid", 2.0),
     ("半倉停利線", MATPLOTLIB_TP_COLOR, "solid", 1.9),
-    ("限價線", MATPLOTLIB_LIMIT_COLOR, (0, (4, 2)), 1.5),
     ("成交線", MATPLOTLIB_ENTRY_COLOR, "solid", 1.8),
 )
 CHART_SHADOW_LINE_LEGEND_SPECS = ()
@@ -258,15 +255,24 @@ def record_shadow_active_levels(chart_context, *, current_date, stop_price=np.na
         chart_context["shadow_entry_line"][pos] = float(entry_price)
 
 
+def _format_order_entry_type_label(entry_type):
+    normalized = str(entry_type or "").strip().lower()
+    if normalized in {"extended", "extended_candidate", "延續", "延續候選"}:
+        return "延續"
+    return "正常"
+
+
 def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_type, status, note=""):
     if chart_context is None or pd.isna(limit_price):
         return
-    trace_name = "限價買進(延續候選)" if entry_type == "extended" else "限價買進"
+    trace_name = "限價買進"
+    entry_type_label = _format_order_entry_type_label(entry_type)
     status_label = ORDER_STATUS_LABELS.get(status, status)
     hover_text = (
         f"{trace_name}<br>日期: {pd.Timestamp(current_date).strftime('%Y-%m-%d')}"
         f"<br>預掛限價: {float(limit_price):.2f}"
         f"<br>股數: {int(qty)}"
+        f"<br>進場類型: {entry_type_label}"
         f"<br>結果: {status_label}"
     )
     if note:
@@ -1370,7 +1376,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
             color=style["color"],
             linewidths=1.8,
             zorder=5,
-            label=trace_name if trace_name not in {"限價買進", "限價買進(延續候選)"} else "_nolegend_",
+            label=trace_name if trace_name != "限價買進" else "_nolegend_",
         )
     future_preview_artists = _render_future_preview_lines(axis_price, chart_payload)
     axis_price.set_ylabel("價格", color=MATPLOTLIB_TEXT_COLOR, fontsize=12 if label_font is None else None, fontproperties=label_font)
@@ -1849,21 +1855,21 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
     if np.isfinite(chart_payload["shadow_tp_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_limit_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價買進", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_entry_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=chart_payload["stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["tp_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["limit_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價買進", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["entry_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
     present_plotly_legends = {"K線", "停損線"}
     if np.isfinite(chart_payload["tp_line"]).any():
         present_plotly_legends.add("半倉停利線")
     if np.isfinite(chart_payload["limit_line"]).any():
-        present_plotly_legends.add("限價線")
+        present_plotly_legends.add("限價買進")
     if np.isfinite(chart_payload["entry_line"]).any():
         present_plotly_legends.add("成交線")
     for trace_name, markers in chart_payload["marker_groups"].items():

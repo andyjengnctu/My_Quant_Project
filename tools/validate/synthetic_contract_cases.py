@@ -2473,6 +2473,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_trade_pnl_drawdown_trade_count_and_result", True, "損益: +3,333" in exit_label_text and "最大回撤: 5.43%" in exit_label_text and "交易次數: 第 11 次" in exit_label_text and exit_label_text.split("\n")[-1] == "結果: 停損")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_no_total_pnl_label", True, "資金: 2,012,345" in exit_label_text and "總損益:" not in exit_label_text and "風報比:" not in exit_label_text and "EV:" not in exit_label_text)
     add_check(results, "output_contract", case_id, "chart_legend_lists_complete_event_and_line_contract", True, "CHART_EVENT_LEGEND_ORDER" in charting_source and "CHART_LINE_LEGEND_SPECS" in charting_source and "_build_complete_matplotlib_legend_handles" in charting_source and 'visible="legendonly"' in charting_source)
+    add_check(results, "output_contract", case_id, "chart_limit_buy_legend_is_unified", True, 'trace_name = "限價買進"' in charting_source and '"限價買進(延續候選)"' not in charting_source and '("限價線", MATPLOTLIB_LIMIT_COLOR' not in charting_source and '進場類型: {entry_type_label}' in charting_source)
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text
