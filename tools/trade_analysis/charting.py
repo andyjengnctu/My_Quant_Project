@@ -267,7 +267,10 @@ def record_signal_annotation(chart_context, *, current_date, signal_type, anchor
     normalized_signal_type = str(signal_type).strip().lower()
     if normalized_signal_type not in {"buy", "sell"}:
         raise ValueError(f"不支援的 signal_type: {signal_type!r}")
-    detail_text = "\n".join(str(line) for line in detail_lines if str(line).strip())
+    normalized_meta = dict(meta or {})
+    detail_text = _build_signal_label_detail_text(str(title), normalized_meta)
+    if not detail_text:
+        detail_text = "\n".join(str(line) for line in detail_lines if str(line).strip())
     chart_context["signal_annotations"].append(
         {
             "date": pd.Timestamp(current_date),
@@ -276,7 +279,7 @@ def record_signal_annotation(chart_context, *, current_date, signal_type, anchor
             "title": str(title),
             "detail_text": detail_text,
             "note": str(note or ""),
-            "meta": dict(meta or {}),
+            "meta": normalized_meta,
         }
     )
 
@@ -772,107 +775,192 @@ def _resolve_trade_box_style(trace_name, marker):
     return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_TEXT_COLOR, "above"
 
 
-def _append_price_line(lines, meta, key, label):
-    value = meta.get(key)
-    if value is None or pd.isna(value):
-        return
-    lines.append(f"{label}: {float(value):.2f}")
+def _is_missing_info_value(value):
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
-def _append_amount_line(lines, meta, key, label, *, signed=False):
-    value = meta.get(key)
-    if value is None or pd.isna(value):
-        return
+def _first_present_info_value(meta, keys, *, marker=None):
+    for key in keys:
+        if key == "__marker_qty__" and marker is not None:
+            value = marker.get("qty")
+        elif key == "__marker_price__" and marker is not None:
+            value = marker.get("price")
+        else:
+            value = meta.get(key)
+        if not _is_missing_info_value(value):
+            return value
+    return None
+
+
+def _format_chart_amount(value, *, signed=False):
+    if _is_missing_info_value(value):
+        return "-"
     sign_prefix = "+" if signed else ""
-    lines.append(f"{label}: {float(value):{sign_prefix},.0f}")
+    return f"{float(value):{sign_prefix},.0f}"
 
 
-def _append_trade_sequence_or_count(lines, meta):
-    trade_sequence = meta.get("trade_sequence")
-    if trade_sequence is not None and not pd.isna(trade_sequence):
-        lines.append(f"交易次數: 第 {int(trade_sequence)} 次")
-        return
-    trade_count = meta.get("trade_count")
-    if trade_count is not None and not pd.isna(trade_count):
-        lines.append(f"交易次數: {int(trade_count)}")
+def _format_chart_price(value):
+    if _is_missing_info_value(value):
+        return "-"
+    return f"{float(value):.2f}"
+
+
+def _format_chart_qty(value):
+    if _is_missing_info_value(value):
+        return "-"
+    qty = int(value)
+    if qty <= 0:
+        return "-"
+    return f"{qty:,}"
+
+
+def _format_chart_pct(value, *, signed=False, digits=2):
+    if _is_missing_info_value(value):
+        return "-"
+    sign_prefix = "+" if signed else ""
+    return f"{float(value):{sign_prefix}.{int(digits)}f}%"
+
+
+def _format_chart_entry_type(value):
+    if _is_missing_info_value(value):
+        return "-"
+    normalized = str(value).strip().lower()
+    if normalized in {"extended", "延續", "extended_candidate"}:
+        return "延續"
+    if normalized in {"normal", "正常"}:
+        return "正常"
+    return str(value).strip() or "-"
+
+
+def _format_chart_trade_sequence(value):
+    if _is_missing_info_value(value):
+        return "-"
+    return f"第 {int(value)} 次"
+
+
+CHART_INFO_FIELD_SPECS = {
+    "capital": {"label": "資金", "keys": ("current_capital", "capital"), "format": "amount"},
+    "qty": {"label": "股數", "keys": ("qty", "__marker_qty__"), "format": "qty"},
+    "limit_price": {"label": "限價", "keys": ("limit_price",), "format": "price"},
+    "reserved_capital": {"label": "預留", "keys": ("reserved_capital",), "format": "amount"},
+    "tp_price": {"label": "停利", "keys": ("tp_price", "target_price"), "format": "price"},
+    "entry_price": {"label": "成交", "keys": ("entry_price", "sell_price", "exec_price", "__marker_price__"), "format": "price"},
+    "stop_price": {"label": "停損", "keys": ("stop_price",), "format": "price"},
+    "buy_capital": {"label": "實支", "keys": ("buy_capital",), "format": "amount"},
+    "entry_type": {"label": "進場類型", "keys": ("entry_type",), "format": "entry_type"},
+    "result": {"label": "結果", "keys": ("result",), "format": "text"},
+    "reference_close": {"label": "參考收", "keys": ("reference_price", "reference_close", "close_price"), "format": "price"},
+    "sell_capital": {"label": "金額", "keys": ("sell_capital",), "format": "amount"},
+    "pnl": {"label": "損益", "keys": ("total_pnl", "pnl_value"), "format": "signed_amount"},
+    "pnl_pct": {"label": "報酬率", "keys": ("pnl_pct",), "format": "signed_pct"},
+    "win_rate": {"label": "勝率", "keys": ("win_rate",), "format": "pct1"},
+    "max_drawdown": {"label": "最大回撤", "keys": ("max_drawdown",), "format": "pct2"},
+    "trade_sequence": {"label": "交易次數", "keys": ("trade_sequence", "trade_count"), "format": "trade_sequence"},
+}
+
+CHART_INFO_BOX_SCHEMAS = {
+    "買訊": ("capital", "qty", "limit_price", "reserved_capital"),
+    "買進": ("capital", "qty", "tp_price", "limit_price", "entry_price", "stop_price", "buy_capital", "entry_type", "result"),
+    "賣訊": ("capital", "qty", "reference_close"),
+    "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
+    "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
+    "指標賣出": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
+    "期末結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
+}
+
+
+def _normalize_chart_info_title(title):
+    normalized = str(title or "").strip()
+    if normalized.startswith("買訊"):
+        return "買訊"
+    if normalized.startswith("賣訊"):
+        return "賣訊"
+    if normalized in {"停損殺出", "停損"}:
+        return "停損"
+    if normalized in {"半倉停利", "停利"}:
+        return "停利"
+    if normalized in {"指標賣出", "賣出"}:
+        return "指標賣出"
+    if normalized in {"期末強制結算", "期未結算", "期末結算", "結算"}:
+        return "期末結算"
+    if normalized.startswith("買進"):
+        return "買進"
+    return normalized
+
+
+def _format_chart_info_field(field_key, meta, *, marker=None):
+    spec = CHART_INFO_FIELD_SPECS[field_key]
+    value = _first_present_info_value(meta, spec["keys"], marker=marker)
+    fmt = spec["format"]
+    if fmt == "amount":
+        rendered = _format_chart_amount(value)
+    elif fmt == "signed_amount":
+        rendered = _format_chart_amount(value, signed=True)
+    elif fmt == "price":
+        rendered = _format_chart_price(value)
+    elif fmt == "qty":
+        rendered = _format_chart_qty(value)
+    elif fmt == "signed_pct":
+        rendered = _format_chart_pct(value, signed=True, digits=2)
+    elif fmt == "pct1":
+        rendered = _format_chart_pct(value, digits=1)
+    elif fmt == "pct2":
+        rendered = _format_chart_pct(value, digits=2)
+    elif fmt == "entry_type":
+        rendered = _format_chart_entry_type(value)
+    elif fmt == "trade_sequence":
+        rendered = _format_chart_trade_sequence(value)
+    else:
+        rendered = "-" if _is_missing_info_value(value) else str(value)
+    return f"{spec['label']}: {rendered}"
+
+
+def _build_chart_info_box_text(title, meta, *, marker=None):
+    normalized_title = _normalize_chart_info_title(title)
+    schema = CHART_INFO_BOX_SCHEMAS.get(normalized_title)
+    if not schema:
+        return str(title or "")
+    lines = [normalized_title]
+    lines.extend(_format_chart_info_field(field_key, meta, marker=marker) for field_key in schema)
+    return "\n".join(lines)
+
+
+def _build_signal_label_detail_text(title, meta):
+    normalized_title = _normalize_chart_info_title(title)
+    schema = CHART_INFO_BOX_SCHEMAS.get(normalized_title)
+    if normalized_title not in {"買訊", "賣訊"} or not schema:
+        return ""
+    return "\n".join(_format_chart_info_field(field_key, meta) for field_key in schema)
 
 
 def _build_trade_label_text(trace_name, marker):
-    meta = marker.get("meta") or {}
+    meta = dict(marker.get("meta") or {})
     if trace_name in {"買進", "買進(延續候選)"}:
-        lines = ["買進"]
-        _append_trade_sequence_or_count(lines, meta)
-        for key, label in (("tp_price", "停利"), ("limit_price", "限價"), ("entry_price", "成交"), ("stop_price", "停損")):
-            _append_price_line(lines, meta, key, label)
-        _append_amount_line(lines, meta, "reserved_capital", "預留")
-        _append_amount_line(lines, meta, "buy_capital", "實支")
-        return "\n".join(lines)
+        meta.setdefault("result", "成交")
+        meta.setdefault("entry_type", "extended" if trace_name == "買進(延續候選)" else "normal")
+        return _build_chart_info_box_text("買進", meta, marker=marker)
     if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
-        lines = ["錯失買進"]
-        _append_price_line(lines, meta, "limit_price", "限價")
-        _append_amount_line(lines, meta, "reserved_capital", "預留")
-        _append_amount_line(lines, meta, "buy_capital", "實支")
-        note = str(marker.get("note", "") or "").strip()
-        if note:
-            lines.append(note)
-        return "\n".join(lines)
+        meta.setdefault("result", "未成交")
+        meta.setdefault("entry_type", "extended" if trace_name == "錯失買進(延續候選)" else "normal")
+        return _build_chart_info_box_text("買進", meta, marker=marker)
     if trace_name == "錯失賣出":
-        lines = ["錯失賣出"]
-        _append_trade_sequence_or_count(lines, meta)
-        _append_price_line(lines, meta, "stop_price", "停損")
-        _append_price_line(lines, meta, "reference_price", "參考收")
-        total_pnl = meta.get("total_pnl")
-        if total_pnl is not None:
-            lines.append(f"既實現: {float(total_pnl):+,.0f}")
-        note = str(marker.get("note", "") or "").strip()
-        if note:
-            lines.append(note)
-        return "\n".join(lines)
+        meta.setdefault("result", "賣出受阻")
+        return _build_chart_info_box_text("指標賣出", meta, marker=marker)
     if trace_name == "半倉停利":
-        lines = ["停利"]
-        _append_trade_sequence_or_count(lines, meta)
-        sell_qty = marker.get("qty", 0)
-        if sell_qty:
-            lines.append(f"股數: {int(sell_qty):,}")
-        _append_amount_line(lines, meta, "sell_capital", "金額")
-        pnl_value = meta.get("pnl_value")
-        if pnl_value is not None:
-            lines.append(f"損益: {float(pnl_value):+,.0f}")
-        return "\n".join(lines)
+        return _build_chart_info_box_text("停利", meta, marker=marker)
     if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
-        action_label = "停損" if trace_name == "停損殺出" else ("賣出" if trace_name == "指標賣出" else "結算")
-        lines = [action_label]
-        current_capital = meta.get("current_capital")
-        if current_capital is not None and not pd.isna(current_capital):
-            lines.append(f"資金: {float(current_capital):,.0f}")
-        sell_qty = marker.get("qty", 0)
-        if sell_qty:
-            lines.append(f"股數: {int(sell_qty):,}")
-        _append_amount_line(lines, meta, "sell_capital", "金額")
-        trade_pnl = meta.get("total_pnl")
-        if trade_pnl is None:
-            trade_pnl = meta.get("pnl_value")
-        if trade_pnl is not None:
-            lines.append(f"損益: {float(trade_pnl):+,.0f}")
-        pnl_pct = meta.get("pnl_pct")
-        if pnl_pct is not None:
-            lines.append(f"報酬率: {float(pnl_pct):+.2f}%")
-        payoff_ratio = meta.get("payoff_ratio")
-        if payoff_ratio is not None:
-            lines.append(f"風報比: {float(payoff_ratio):.2f}")
-        win_rate = meta.get("win_rate")
-        if win_rate is not None:
-            lines.append(f"勝率: {float(win_rate):.1f}%")
-        expected_value = meta.get("expected_value")
-        if expected_value is not None:
-            lines.append(f"EV: {float(expected_value):.2f} R")
-        max_drawdown = meta.get("max_drawdown")
-        if max_drawdown is not None:
-            lines.append(f"最大回撤: {float(max_drawdown):.2f}%")
-        _append_trade_sequence_or_count(lines, meta)
-        return "\n".join(lines)
+        title = "停損" if trace_name == "停損殺出" else ("指標賣出" if trace_name == "指標賣出" else "期末結算")
+        if trace_name == "停損殺出":
+            meta.setdefault("result", "停損")
+        elif trace_name == "指標賣出":
+            meta.setdefault("result", "指標賣出")
+        return _build_chart_info_box_text(title, meta, marker=marker)
     return trace_name
-
 
 def _build_status_chip_specs(status_box):
     status_lines = [str(line).strip() for line in (status_box.get("lines") or []) if str(line).strip()]

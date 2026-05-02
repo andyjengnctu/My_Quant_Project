@@ -162,6 +162,7 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
     if chart_context is None or position.get('qty', 0) <= 0:
         return
     signal_trade_pct = _resolve_sell_signal_profit_pct(position, signal_close, params, signal_date=signal_date)
+    snapshot = dict(history_snapshot or {})
     record_signal_annotation(
         chart_context,
         current_date=signal_date,
@@ -169,7 +170,13 @@ def _record_sell_signal_annotation(*, chart_context, signal_date, signal_low, si
         anchor_price=signal_low,
         title='賣訊',
         detail_lines=[],
-        meta={'profit_pct': float(signal_trade_pct), 'max_drawdown': float(history_snapshot.get('max_drawdown', 0.0))},
+        meta={
+            'current_capital': snapshot.get('current_capital'),
+            'qty': int(position.get('qty', 0) or 0),
+            'reference_price': float(signal_close),
+            'profit_pct': float(signal_trade_pct),
+            'max_drawdown': float(snapshot.get('max_drawdown', 0.0) or 0.0),
+        },
     )
 
 

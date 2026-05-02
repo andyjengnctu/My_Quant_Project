@@ -2245,8 +2245,8 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
     sell_fn_end = backtest_source.index('\n\ndef _apply_chart_sidebars', sell_fn_start)
     sell_fn_source = backtest_source[sell_fn_start:sell_fn_end]
 
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_title_only", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source)
-    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '股數:' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '報酬率:' not in sell_fn_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_shared_schema", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source and '"賣訊": ("capital", "qty", "reference_close")' in charting_source)
+    add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '報酬率:' not in sell_fn_source)
     add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
@@ -2355,7 +2355,7 @@ def validate_gui_trade_marker_and_tp_visual_contract_case(_base_params):
 
     add_check(results, "output_contract", case_id, "indicator_sell_marker_uses_green_horizontal_line", True, '"指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR}' in charting_source)
     add_check(results, "output_contract", case_id, "tp_visual_uses_yellow_color", True, 'MATPLOTLIB_TP_COLOR = "#facc15"' in charting_source)
-    add_check(results, "output_contract", case_id, "exit_trade_labels_include_trade_count", True, 'lines.append(f"交易次數: {int(trade_count)}")' in charting_source and "'trade_count': None if history_snapshot is None else int(history_snapshot.get('trade_count', 0) or 0)" in exit_flow_source)
+    add_check(results, "output_contract", case_id, "exit_trade_labels_include_trade_count", True, '"trade_sequence": {"label": "交易次數"' in charting_source and "'trade_count': _resolve_completed_trade_count(completed_trade_snapshot, include_current_round_trip=False)" in exit_flow_source)
     add_check(results, "output_contract", case_id, "buy_signal_annotation_exports_limit_and_reserved_for_autoscale", True, "'limit_price': float(entry_plan['limit_price'])" in backtest_source and "'reserved_capital': float(reserved_capital)" in backtest_source and "'tp_price': float(tp_line)" not in backtest_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
@@ -2461,17 +2461,17 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
 
-    add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "預留: 130,000" in buy_label_text and "實支: 123,456" in buy_label_text)
-    add_check(results, "output_contract", case_id, "buy_trade_label_includes_actual_spend_wording_last", "實支: 123,456", buy_label_text.split("\n")[-1] if buy_label_text else "")
+    add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "資金: -" in buy_label_text and "股數: 1,000" in buy_label_text and "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "實支: 123,456" in buy_label_text and "進場類型: 正常" in buy_label_text and "結果: 成交" in buy_label_text)
+    add_check(results, "output_contract", case_id, "buy_trade_label_includes_result_last", "結果: 成交", buy_label_text.split("\n")[-1] if buy_label_text else "")
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_and_missed_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)' in charting_source and 'base_y = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_offsets_when_signal_or_nearby_trade_boxes_cluster", True, '_count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)' in charting_source and 'collision_window = 5 if placement == "below" else 4' in charting_source and 'occupied_positions.append({"x": x_value, "placement": placement})' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_trade_info_includes_reserved_and_actual_spend_fields", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_reserved_capital_var' in inspector_source and '_selected_actual_spend_var' in inspector_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_sets_reserved_and_actual_spend_from_hover_snapshot", True, 'self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))' in inspector_source and 'self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))' in inspector_source and 'reserved_capital = buy_signal_meta.get("reserved_capital")' in charting_source and 'reserved_capital = buy_trade_meta.get("reserved_capital")' in charting_source and '"buy_capital": buy_trade_meta.get("buy_capital")' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_filled_buy_marker_writes_reserved_capital", True, "'reserved_capital': reserved_cost" in entry_flow_source and "reserved_cost = calc_entry_total_cost(entry_plan['limit_price'], entry_plan['qty'], params)" in entry_flow_source)
-    add_check(results, "output_contract", case_id, "tp_trade_label_includes_sell_amount_and_leg_pnl", True, "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
-    add_check(results, "output_contract", case_id, "exit_trade_label_includes_trade_pnl_and_trade_count_last", "交易次數: 11", exit_label_text.split("\n")[-1] if exit_label_text else "")
-    add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_trade_pnl", True, "資金: 2,012,345" in exit_label_text and "損益: +3,333" in exit_label_text and "總損益:" not in exit_label_text)
+    add_check(results, "output_contract", case_id, "tp_trade_label_includes_fill_amount_and_leg_pnl", True, "成交: -" in tp_label_text and "金額: 32,100" in tp_label_text and "損益: +4,567" in tp_label_text)
+    add_check(results, "output_contract", case_id, "exit_trade_label_includes_trade_pnl_drawdown_trade_count_and_result", True, "損益: +3,333" in exit_label_text and "最大回撤: 5.43%" in exit_label_text and "交易次數: 第 11 次" in exit_label_text and exit_label_text.split("\n")[-1] == "結果: 停損")
+    add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_no_total_pnl_label", True, "資金: 2,012,345" in exit_label_text and "總損益:" not in exit_label_text and "風報比:" not in exit_label_text and "EV:" not in exit_label_text)
     add_check(results, "output_contract", case_id, "chart_legend_lists_complete_event_and_line_contract", True, "CHART_EVENT_LEGEND_ORDER" in charting_source and "CHART_LINE_LEGEND_SPECS" in charting_source and "_build_complete_matplotlib_legend_handles" in charting_source and 'visible="legendonly"' in charting_source)
 
     summary["buy_label"] = buy_label_text
@@ -2572,8 +2572,8 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
         },
     )
     exit_lines = exit_label_text.split("\n")
-    add_check(results, "output_contract", case_id, "exit_trade_label_places_trade_count_last", "交易次數: 14", exit_lines[-1] if exit_lines else "")
-    add_check(results, "output_contract", case_id, "exit_trade_label_trade_count_matches_latest_completed_trade", True, "交易次數: 14" in exit_label_text)
+    add_check(results, "output_contract", case_id, "exit_trade_label_places_result_last_for_stop", "結果: 停損", exit_lines[-1] if exit_lines else "")
+    add_check(results, "output_contract", case_id, "exit_trade_label_trade_count_matches_latest_completed_trade", True, "交易次數: 第 14 次" in exit_label_text)
 
     summary["expected_trade_count"] = expected_trade_count
     summary["forced_close_trade_count"] = forced_close_meta.get("trade_count")

@@ -346,6 +346,14 @@ def _apply_portfolio_stats_to_marker_meta(meta, actual_stats):
     return enriched
 
 
+def _resolve_portfolio_event_capital(row):
+    for key in ("資金", "權益", "總資產", "當日資產", "可用資金"):
+        value = _resolve_valid_float(row.get(key))
+        if value is not None:
+            return float(value)
+    return None
+
+
 def _empty_portfolio_ticker_actual_stats():
     return {
         "buy_count": 0,
@@ -430,9 +438,11 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
         buy_capital = 0.0
     if pd.isna(reserved_capital):
         reserved_capital = buy_capital
+    current_capital = _resolve_portfolio_event_capital(row)
     meta = {
         "buy_capital": None if pd.isna(buy_capital) else float(buy_capital),
         "reserved_capital": None if pd.isna(reserved_capital) else float(reserved_capital),
+        "current_capital": current_capital,
     }
     position = _build_position_from_portfolio_buy_row(row, fast_data=fast_data, params=params)
     if position is None:
@@ -467,6 +477,9 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
     entry_capital = None if active_entry is None else active_entry.get("buy_capital")
     pnl_pct = _calc_pct_from_capital(total_pnl if total_pnl is not None else pnl_value, entry_capital)
     meta = {}
+    current_capital = _resolve_portfolio_event_capital(row)
+    if current_capital is not None:
+        meta["current_capital"] = float(current_capital)
     if pnl_value is not None:
         meta["pnl_value"] = float(pnl_value)
     if total_pnl is not None:
@@ -480,6 +493,9 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
 
 def _build_portfolio_missed_sell_marker_meta(row, actual_stats=None):
     meta = {}
+    current_capital = _resolve_portfolio_event_capital(row)
+    if current_capital is not None:
+        meta["current_capital"] = float(current_capital)
     total_pnl = _resolve_valid_float(row.get("該筆總損益"))
     stop_price = _resolve_valid_float(row.get("停損價"))
     reference_price = _resolve_valid_float(row.get("參考收盤價"))
@@ -543,30 +559,18 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
             return
         limit_price = marker_meta.get("limit_price")
         reserved_capital = marker_meta.get("reserved_capital")
-        detail_lines = []
         qty = _coerce_int(row.get("股數"), default=0)
-        if qty > 0:
-            detail_lines.append(f"股數: {qty:,}")
-        if limit_price is not None and not pd.isna(limit_price):
-            detail_lines.append(f"限價: {float(limit_price):.2f}")
-        if reserved_capital is not None and not pd.isna(reserved_capital):
-            detail_lines.append(f"預留: {float(reserved_capital):,.0f}")
-        candidate_date = row.get("候選日")
-        if candidate_date:
-            detail_lines.append(f"候選日: {candidate_date}")
-        if str(action).startswith("錯失買進"):
-            detail_lines.append("結果: 未成交")
         record_signal_annotation(
             chart_context,
             current_date=signal_date,
             signal_type="buy",
             anchor_price=float(price_df.loc[signal_date, "Low"]),
             title="買訊(錯失)" if str(action).startswith("錯失買進") else "買訊",
-            detail_lines=detail_lines,
+            detail_lines=[],
             meta={
                 "qty": qty,
                 "reserved_capital": reserved_capital,
-                "current_capital": None,
+                "current_capital": marker_meta.get("current_capital"),
                 "entry_price": marker_meta.get("entry_price"),
                 "limit_price": limit_price,
             },
@@ -576,20 +580,21 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         signal_date = _resolve_previous_trade_date(fast_data, trade_date)
         if signal_date not in price_df.index:
             return
-        detail_lines = []
-        if action == "錯失賣出":
-            detail_lines.append("結果: 賣出受阻")
-            note = str(row.get("備註", "") or "").strip()
-            if note:
-                detail_lines.append(note)
+        qty = _coerce_int(row.get("股數"), default=0)
+        reference_price = _resolve_valid_float(row.get("參考收盤價"))
+        if reference_price is None:
+            reference_price = _resolve_valid_float(price_df.loc[signal_date, "Close"])
         record_signal_annotation(
             chart_context,
             current_date=signal_date,
             signal_type="sell",
             anchor_price=float(price_df.loc[signal_date, "Low"]),
             title="賣訊(錯失)" if action == "錯失賣出" else "賣訊",
-            detail_lines=detail_lines,
+            detail_lines=[],
             meta={
+                "current_capital": marker_meta.get("current_capital"),
+                "qty": qty,
+                "reference_price": reference_price,
                 "profit_pct": marker_meta.get("pnl_pct"),
                 "max_drawdown": marker_meta.get("max_drawdown", 0.0),
             },
@@ -656,6 +661,8 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         if action in {"買進", "買進(延續候選)"}:
             next_trade_sequence += 1
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="normal")
+            marker_meta["result"] = "成交"
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
             active_entry = {
                 "buy_capital": marker_meta.get("buy_capital"),
@@ -665,6 +672,8 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             }
         elif str(action).startswith("錯失買進"):
             marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="extended" if "延續" in str(action) else "normal")
+            marker_meta["result"] = "未成交"
         elif action == "錯失賣出":
             marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats)
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))

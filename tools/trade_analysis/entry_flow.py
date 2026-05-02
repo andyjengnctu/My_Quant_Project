@@ -152,6 +152,12 @@ def process_debug_entry_for_day(
                     'tp_price': float(position['tp_half']),
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
+                    'current_capital': None if current_capital is None else float(current_capital),
+                    'entry_type': 'extended',
+                    'result': '成交',
+                    'current_capital': None if current_capital is None else float(current_capital),
+                    'entry_type': 'normal',
+                    'result': '成交',
                 },
             )
         elif entry_result['count_as_missed_buy']:
