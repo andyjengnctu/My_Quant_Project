@@ -119,11 +119,13 @@ def _collect_normal_candidates(
 
     for ticker, y_pos, t_pos in sorted(normal_setup_entries, key=lambda x: x[0]):
         normal_setup_tickers_today.add(ticker)
+
+        # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
+        # #        也不能讓舊 setup 的延續訊號跨日殘留。若 history filter 不合格，禁止沿用舊 setup 續掛)
+        active_extended_signals.pop(ticker, None)
+
         if ticker in portfolio or ticker in sold_today:
             continue
-
-        # # (AI註: 新的 normal setup 必須先覆蓋舊延續訊號；若當日 history filter 不合格，禁止沿用舊 setup 續掛)
-        active_extended_signals.pop(ticker, None)
 
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
@@ -211,11 +213,13 @@ def track_normal_setup_signals_for_day(
     normal_setup_tickers_today = set()
     for ticker, y_pos, _t_pos in sorted(normal_setup_entries, key=lambda x: x[0]):
         normal_setup_tickers_today.add(ticker)
+
+        # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；即使當日因已持有/剛賣出而不能下單，
+        # #        也不能讓舊 setup 的延續訊號跨日殘留。若 history filter 不合格則不續掛)
+        active_extended_signals.pop(ticker, None)
+
         if ticker in portfolio or ticker in sold_today:
             continue
-
-        # # (AI註: 與完整候選路徑一致：新的 normal setup 先覆蓋舊延續訊號；若 history filter 不合格則不續掛)
-        active_extended_signals.pop(ticker, None)
 
         fast_df = all_dfs_fast[ticker]
         y_buy_limit = get_fast_value(fast_df, 'buy_limit', pos=y_pos)
