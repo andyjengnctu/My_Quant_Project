@@ -37,6 +37,22 @@ def _round_money_for_history(value):
 
 
 
+def append_portfolio_position_active_level_row(active_level_rows, *, ticker, position, today, require_open_qty=True):
+    if active_level_rows is None:
+        return
+    if require_open_qty and int(position.get('qty', 0) or 0) <= 0:
+        return
+    active_level_rows.append({
+        'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
+        'Ticker': str(ticker),
+        '停損價': position.get('sl'),
+        '半倉停利價': position.get('tp_half'),
+        '買入限價': position.get('limit_price'),
+        '成交價': position.get('pure_buy_price'),
+        'level_scope': 'actual_position',
+    })
+
+
 def _resolve_full_entry_capital_milli(position, fallback_qty):
     exact_total_milli = int(position.get('net_buy_total_milli', 0) or 0)
     if exact_total_milli > 0:
@@ -98,6 +114,7 @@ def try_rotate_weakest_position(
     is_training,
     normal_trade_count,
     extended_trade_count,
+    active_level_rows=None,
 ):
     if len(portfolio) != max_positions or not enable_rotation or not orderable_candidates_today:
         return cash, normal_trade_count, extended_trade_count
@@ -204,6 +221,13 @@ def try_rotate_weakest_position(
             )
             register_display_realized_pnl(pos, display_tail_pnl)
 
+        append_portfolio_position_active_level_row(
+            active_level_rows,
+            ticker=weakest_ticker,
+            position=pos,
+            today=today,
+            require_open_qty=False,
+        )
         del portfolio[weakest_ticker]
         sold_today.add(weakest_ticker)
         break
@@ -224,6 +248,7 @@ def settle_portfolio_positions(
     total_missed_sells,
     normal_trade_count,
     extended_trade_count,
+    active_level_rows=None,
 ):
     tickers_to_remove = []
     for ticker in sorted(portfolio.keys()):
@@ -310,6 +335,13 @@ def settle_portfolio_positions(
                 )
                 register_display_realized_pnl(pos, display_exit_pnl)
 
+            append_portfolio_position_active_level_row(
+                active_level_rows,
+                ticker=ticker,
+                position=pos,
+                today=today,
+                require_open_qty=False,
+            )
             tickers_to_remove.append(ticker)
         elif 'MISSED_SELL' in events:
             total_missed_sells += 1

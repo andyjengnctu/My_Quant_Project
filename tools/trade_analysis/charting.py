@@ -206,6 +206,30 @@ def _append_marker(marker_list, *, trace_name, current_date, price, qty, hover_t
     )
 
 
+def resolve_position_tp_half_line(position, *, fallback_qty=None, fallback_tp_half=np.nan):
+    if position is None:
+        return np.nan
+    try:
+        qty = int(position.get('qty', 0) or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0 and fallback_qty is not None:
+        try:
+            qty = int(fallback_qty or 0)
+        except (TypeError, ValueError):
+            qty = 0
+    if qty <= 0:
+        return np.nan
+    if bool(position.get('sold_half', False)):
+        return np.nan
+    if bool(position.get('_debug_tp_preview_done', False)):
+        return np.nan
+    value = position.get('tp_half', fallback_tp_half)
+    if pd.isna(value):
+        value = fallback_tp_half
+    return value
+
+
 def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
     if chart_context is None:
         return

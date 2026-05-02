@@ -11,7 +11,7 @@ from core.exact_accounting import (
 )
 from core.position_step import execute_bar_step, sum_last_exec_contexts_milli
 from core.price_utils import adjust_long_sell_fill_price, calc_net_sell_price
-from tools.trade_analysis.charting import record_trade_marker
+from tools.trade_analysis.charting import record_active_levels, record_trade_marker, resolve_position_tp_half_line
 from tools.trade_analysis.history_snapshot import build_pit_history_snapshot
 from tools.trade_analysis.log_rows import append_debug_trade_row
 
@@ -109,6 +109,39 @@ def _build_completed_trade_snapshot(stats_index, current_date, params, current_c
         current_capital_after_event,
         overall_max_drawdown,
         include_current_date_exits=True,
+    )
+
+
+def _resolve_exit_day_stop_line(position, stop_context, active_stop_after_update):
+    if stop_context is not None:
+        trigger_price = stop_context.get('trigger_price')
+        if trigger_price is not None and not np.isnan(float(trigger_price)):
+            return float(trigger_price)
+    return active_stop_after_update
+
+
+def _record_exit_day_active_levels(
+    chart_context,
+    *,
+    current_date,
+    position,
+    stop_price=np.nan,
+    fallback_qty=None,
+    fallback_tp_half=np.nan,
+):
+    if chart_context is None:
+        return
+    record_active_levels(
+        chart_context,
+        current_date=current_date,
+        stop_price=stop_price,
+        tp_half_price=resolve_position_tp_half_line(
+            position,
+            fallback_qty=fallback_qty,
+            fallback_tp_half=fallback_tp_half,
+        ),
+        limit_price=position.get('limit_price', np.nan),
+        entry_price=position.get('pure_buy_price', np.nan),
     )
 
 
@@ -249,6 +282,14 @@ def process_debug_position_step(
         final_leg_pnl = calc_reconciled_exit_display_pnl(position, total_pnl)
         full_entry_capital_milli = _resolve_full_entry_capital_milli(position, prev_qty, params)
         total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0
+        _record_exit_day_active_levels(
+            chart_context,
+            current_date=current_date,
+            position=position,
+            stop_price=_resolve_exit_day_stop_line(position, stop_context, active_stop_after_update),
+            fallback_qty=prev_qty,
+            fallback_tp_half=prev_tp_half,
+        )
         append_debug_trade_row(
             trade_logs,
             date_str=date_str,
@@ -358,6 +399,14 @@ def append_debug_forced_closeout(
     )
     full_entry_capital_milli = _resolve_full_entry_capital_milli(position, position['qty'], params)
     total_return_pct = float(total_pnl_milli * 100.0 / full_entry_capital_milli) if full_entry_capital_milli > 0 else 0.0
+    _record_exit_day_active_levels(
+        chart_context,
+        current_date=current_date,
+        position=position,
+        stop_price=position.get('sl', np.nan),
+        fallback_qty=position.get('qty'),
+        fallback_tp_half=position.get('tp_half', np.nan),
+    )
     append_debug_trade_row(
         trade_logs,
         date_str=current_date.strftime('%Y-%m-%d'),

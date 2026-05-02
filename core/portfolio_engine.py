@@ -30,6 +30,7 @@ from core.portfolio_ops import (
     settle_portfolio_positions,
     try_rotate_weakest_position,
 )
+from core.portfolio_exits import append_portfolio_position_active_level_row
 
 
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
@@ -156,18 +157,12 @@ def _append_portfolio_active_level_rows(active_level_rows, portfolio, today):
     if active_level_rows is None:
         return
     for ticker in sorted(portfolio.keys()):
-        pos = portfolio[ticker]
-        if int(pos.get('qty', 0) or 0) <= 0:
-            continue
-        active_level_rows.append({
-            'Date': today.strftime('%Y-%m-%d') if hasattr(today, 'strftime') else str(today),
-            'Ticker': str(ticker),
-            '停損價': pos.get('sl'),
-            '半倉停利價': pos.get('tp_half'),
-            '買入限價': pos.get('limit_price'),
-            '成交價': pos.get('pure_buy_price'),
-            'level_scope': 'actual_position',
-        })
+        append_portfolio_position_active_level_row(
+            active_level_rows,
+            ticker=ticker,
+            position=portfolio[ticker],
+            today=today,
+        )
 
 
 def _is_portfolio_shadow_level_visible_day(today, signal_date):
@@ -398,6 +393,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         is_training=is_training,
                         normal_trade_count=normal_trade_count,
                         extended_trade_count=extended_trade_count,
+                        active_level_rows=active_level_rows,
                     )
                     if profile_timing_enabled:
                         rotation_sec += time.perf_counter() - t0
@@ -418,6 +414,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                 total_missed_sells=total_missed_sells,
                 normal_trade_count=normal_trade_count,
                 extended_trade_count=extended_trade_count,
+                active_level_rows=active_level_rows,
             )
             if profile_timing_enabled:
                 settle_sec += time.perf_counter() - t0

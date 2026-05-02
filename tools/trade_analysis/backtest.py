@@ -19,6 +19,7 @@ from tools.trade_analysis.charting import (
     create_debug_chart_context,
     record_active_levels,
     record_signal_annotation,
+    resolve_position_tp_half_line,
     set_chart_status_box,
     set_chart_summary_box,
     set_chart_future_preview,
@@ -54,11 +55,7 @@ def _resolve_active_tp_half(position):
 
 
 def _resolve_chart_tp_line(position):
-    if position.get('qty', 0) <= 0:
-        return np.nan
-    if position.get('_debug_tp_preview_done', False):
-        return np.nan
-    return position.get('tp_half', np.nan)
+    return resolve_position_tp_half_line(position)
 
 
 def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
