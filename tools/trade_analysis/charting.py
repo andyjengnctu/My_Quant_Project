@@ -757,10 +757,8 @@ def _resolve_signal_annotation_face(item):
 
 def _resolve_trade_box_style(trace_name, marker):
     meta = marker.get("meta") or {}
-    if trace_name in {"買進", "買進(延續候選)"}:
+    if trace_name in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
-    if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
-        return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
     if trace_name == "錯失賣出":
         return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_DOWN_COLOR, "above"
     if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
@@ -1020,13 +1018,6 @@ def _compute_dynamic_linewidths(axis_price, figure):
     return body_px * pt_scale, wick_px * pt_scale
 
 
-def _resolve_annotation_slot_x_offset(slot_index, *, step=62):
-    if slot_index <= 0:
-        return 0
-    magnitude = ((slot_index + 1) // 2) * step
-    return magnitude if slot_index % 2 == 1 else -magnitude
-
-
 def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, collision_window):
     return sum(
         1
@@ -1036,33 +1027,45 @@ def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, co
 
 
 def _resolve_trade_label_offsets(slot_index, *, placement, trace_name):
-    if trace_name in {"買進", "買進(延續候選)"}:
+    if trace_name in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
         base_y = -64
-        step_x = 94
-        step_y = 28
+        step_y = 32
     elif placement == "below":
         base_y = -82
-        step_x = 82
-        step_y = 24
+        step_y = 30
     else:
         base_y = 18
-        step_x = 74
-        step_y = 22
-    x_offset = _resolve_annotation_slot_x_offset(slot_index, step=step_x)
-    tier = 0 if slot_index <= 0 else ((slot_index + 1) // 2)
+        step_y = 28
+    x_offset = 0
+    tier = max(0, int(slot_index))
     y_offset = base_y - (tier * step_y) if placement == "below" else base_y + (tier * step_y)
     return x_offset, y_offset
 
 
+def _resolve_signal_label_offsets(slot_index, *, placement):
+    if placement == "below":
+        return 0, -64 - (max(0, int(slot_index)) * 32), "top"
+    return 0, 18 + (max(0, int(slot_index)) * 28), "bottom"
+
+
 def _render_signal_annotations(axis_price, signal_annotations, label_font, *, start_idx=None, end_idx=None):
     rendered = []
+    occupied_positions = []
+    visible_items = []
     for item in signal_annotations:
-        if start_idx is not None and int(item["x"]) < int(start_idx):
+        x_value = int(item["x"])
+        if start_idx is not None and x_value < int(start_idx):
             continue
-        if end_idx is not None and int(item["x"]) > int(end_idx):
+        if end_idx is not None and x_value > int(end_idx):
             continue
-        is_buy = item["signal_type"] == "buy"
-        y_offset = -64 if is_buy else -76
+        placement = "below" if item["signal_type"] == "buy" else "above"
+        visible_items.append((x_value, 0 if placement == "below" else 1, item, placement))
+    visible_items.sort(key=lambda current: (current[0], current[1], str(current[2].get("title", ""))))
+
+    for x_value, _, item, placement in visible_items:
+        slot_index = _count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=5)
+        x_offset, y_offset, va = _resolve_signal_label_offsets(slot_index, placement=placement)
+        occupied_positions.append({"x": x_value, "placement": placement})
         face_color, arrow_color = _resolve_signal_annotation_face(item)
         annotation_text = item["title"]
         if item.get("detail_text"):
@@ -1071,10 +1074,10 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
             axis_price.annotate(
                 annotation_text,
                 xy=(item["x"], item["anchor_price"]),
-                xytext=(0, y_offset),
+                xytext=(x_offset, y_offset),
                 textcoords="offset points",
                 ha="center",
-                va="top",
+                va=va,
                 color=MATPLOTLIB_TEXT_COLOR,
                 fontsize=MATPLOTLIB_SIGNAL_FONT_SIZE if label_font is None else None,
                 fontproperties=label_font,
