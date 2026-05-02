@@ -1,3 +1,5 @@
+import copy
+
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.exact_accounting import (
     coerce_money_like_to_milli,
@@ -29,7 +31,8 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
     sizing_capital = candidate_row.get('sizing_capital')
     if (sizing_capital is None or sizing_capital != sizing_capital) and sizing_equity is not None:
         sizing_capital = sizing_equity
-    return {
+
+    plan = {
         'limit_price': candidate_row['limit_px'],
         'init_sl': candidate_row['init_sl'],
         'init_trail': candidate_row['init_trail'],
@@ -39,7 +42,17 @@ def _build_candidate_plan_seed(candidate_row, sizing_equity=None):
         'security_profile': candidate_row.get('security_profile'),
         'trade_date': candidate_row.get('trade_date'),
         'sizing_capital': sizing_capital,
+        'orig_limit': candidate_row.get('orig_limit'),
+        'orig_atr': candidate_row.get('orig_atr'),
     }
+
+    shadow_position_state = candidate_row.get('shadow_position_state')
+    if shadow_position_state is None:
+        signal_state = candidate_row.get('signal_state') or {}
+        shadow_position_state = signal_state.get('shadow_position')
+    if shadow_position_state is not None:
+        plan['shadow_position_state'] = copy.deepcopy(shadow_position_state)
+    return plan
 
 
 def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash_milli, params, sizing_equity=None):

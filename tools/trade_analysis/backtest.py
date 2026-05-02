@@ -64,12 +64,14 @@ def _resolve_chart_tp_line(position):
 def _apply_chart_future_preview_from_plan(chart_context, preview_plan):
     if chart_context is None or preview_plan is None:
         return False
+
+    has_shadow_state = preview_plan.get('shadow_position_state') is not None
     set_chart_future_preview(
         chart_context,
-        stop_price=np.nan,
-        tp_half_price=np.nan,
+        stop_price=preview_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan,
+        tp_half_price=preview_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan,
         limit_price=preview_plan['limit_price'],
-        entry_price=np.nan,
+        entry_price=preview_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan,
     )
     return True
 

@@ -1,3 +1,5 @@
+import copy
+
 from core.buy_sort import calc_buy_sort_value
 from core.config import get_buy_sort_method
 from core.exact_accounting import build_buy_ledger_from_price, milli_to_money
@@ -45,6 +47,7 @@ def _make_candidate_row(
     trade_date=None,
     signal_date=None,
     sizing_capital=None,
+    shadow_position_state=None,
 ):
     if est_qty > 0:
         est_ledger = build_buy_ledger_from_price(est_limit_px, est_qty, params)
@@ -82,9 +85,16 @@ def _make_candidate_row(
         'candidate_date': trade_date,
         'signal_date': signal_date,
         'sizing_capital': sizing_capital,
+        'orig_limit': (signal_state or {}).get('orig_limit') if signal_state is not None else est_limit_px,
+        'orig_atr': (signal_state or {}).get('orig_atr') if signal_state is not None else entry_atr,
     }
     if signal_state is not None:
         row['signal_state'] = signal_state
+    resolved_shadow_position = shadow_position_state
+    if resolved_shadow_position is None and signal_state is not None:
+        resolved_shadow_position = (signal_state or {}).get('shadow_position')
+    if resolved_shadow_position is not None:
+        row['shadow_position_state'] = copy.deepcopy(resolved_shadow_position)
     return row
 
 
@@ -318,6 +328,7 @@ def _collect_extended_candidates(
             continuation_invalidation_barrier=candidate_plan.get('continuation_invalidation_barrier'),
             continuation_completion_barrier=candidate_plan.get('continuation_completion_barrier'),
             entry_ref_price=candidate_plan.get('entry_ref_price'),
+            shadow_position_state=candidate_plan.get('shadow_position_state'),
         )
         if candidates_today is not None:
             candidates_today.append(candidate_row)

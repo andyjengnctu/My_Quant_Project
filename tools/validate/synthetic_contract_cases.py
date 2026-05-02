@@ -2646,11 +2646,11 @@ def validate_gui_chart_margin_and_latest_extended_preview_contract_case(base_par
     tp_line = np.asarray(payload.get("tp_line", []), dtype=np.float64)
 
     add_check(results, "output_contract", case_id, "extended_preview_limit_line_reaches_latest_actual_bar", True, bool(limit_line.size > 6 and np.isfinite(limit_line[6])))
-    add_check(results, "output_contract", case_id, "extended_preview_stop_line_stays_absent_at_latest_actual_bar", True, bool(stop_line.size > 6 and np.isnan(stop_line[6])))
-    add_check(results, "output_contract", case_id, "extended_preview_tp_line_stays_absent_at_latest_actual_bar", True, bool(tp_line.size > 6 and np.isnan(tp_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_stop_line_uses_shadow_state_at_latest_actual_bar", True, bool(stop_line.size > 6 and np.isfinite(stop_line[6])))
+    add_check(results, "output_contract", case_id, "extended_preview_tp_line_uses_shadow_state_at_latest_actual_bar", True, bool(tp_line.size > 6 and np.isfinite(tp_line[6])))
     add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_limit_exists", True, bool(np.isfinite(float(future_preview.get("limit_price", np.nan)))))
-    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_stop_absent_before_fill", True, bool(np.isnan(float(future_preview.get("stop_price", np.nan)))))
-    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_tp_absent_before_fill", True, bool(np.isnan(float(future_preview.get("tp_half_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_stop_uses_shadow_state", True, bool(np.isfinite(float(future_preview.get("stop_price", np.nan)))))
+    add_check(results, "output_contract", case_id, "latest_extended_candidate_future_preview_tp_uses_shadow_state", True, bool(np.isfinite(float(future_preview.get("tp_half_price", np.nan)))))
 
     summary["latest_future_preview"] = {
         key: float(value) for key, value in future_preview.items() if value is not None and np.isfinite(value)

@@ -1,3 +1,4 @@
+import copy
 import os
 import tempfile
 
@@ -280,7 +281,7 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     ticker = "9818"
     frame = pd.DataFrame(
         {
-            "Open": [120.0, 98.0, 99.0, 97.0],
+            "Open": [120.0, 98.0, 97.0, 97.0],
             "High": [121.0, 99.0, 99.5, 108.2],
             "Low": [119.0, 97.5, 96.0, 89.0],
             "Close": [120.0, 98.5, 98.8, 95.0],
@@ -340,12 +341,48 @@ def validate_synthetic_extended_signal_a2_frozen_plan_case(base_params):
     day3_plan = day3_candidates[0] if day3_candidates else None
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_limit_reuses_fixed_counterfactual_entry_ref", 98.0, None if day3_plan is None else float(day3_plan["limit_px"]))
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_sizing_stop_tracks_fixed_counterfactual_entry_ref", 88.0, None if day3_plan is None else float(day3_plan["init_sl"]))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_candidate_carries_shadow_state_into_portfolio_entry_seed", True, day3_plan is not None and day3_plan.get("shadow_position_state") is not None)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_reachable_extended_signal_can_reenter_orderable_list", 1, len(day3_orderable))
+
+    buy_portfolio = {}
+    buy_active_extended_signals = {ticker: copy.deepcopy(active_extended_signals[ticker])}
+    execute_reserved_entries_for_day(
+        buy_portfolio,
+        buy_active_extended_signals,
+        list(day3_orderable),
+        set(),
+        all_dfs_fast,
+        dates[2],
+        params,
+        cash=1_000_000.0,
+        available_cash=1_000_000.0,
+        sizing_equity=1_000_000.0,
+        max_positions=1,
+        trade_history=[],
+        is_training=True,
+        total_missed_buys=0,
+    )
+    inherited_position = buy_portfolio.get(ticker) or {}
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_inherits_shadow_management_state", True, bool(inherited_position.get("inherited_shadow_management", False)))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_actual_fill_separate_from_shadow_entry", 97.0, None if not inherited_position else float(inherited_position.get("entry_fill_price", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_keeps_shadow_entry_reference", 98.0, None if not inherited_position else float(inherited_position.get("shadow_entry_fill_price", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_portfolio_extended_fill_uses_shadow_stop_not_late_fill_stop", 88.0, None if not inherited_position else float(inherited_position.get("initial_stop", float("nan"))))
+
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[2], params, sizing_capital)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day3_no_barrier_hit_signal_remains_active", True, ticker in active_extended_signals)
 
     cleanup_extended_signals_for_day(active_extended_signals, {}, all_dfs_fast, dates[3], params, sizing_capital)
     add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day4_completion_barrier_alone_does_not_clear_live_shadow_signal", True, ticker in active_extended_signals)
+
+    unreachable_frame = frame.copy()
+    unreachable_frame.loc[dates[1], ["Open", "High", "Low", "Close"]] = [105.0, 109.0, 104.0, 106.0]
+    unreachable_dfs_fast = {ticker: pack_prepared_stock_data(unreachable_frame)}
+    unreachable_active_extended_signals = {ticker: create_signal_tracking_state(100.0, 10.0, params)}
+    cleanup_extended_signals_for_day(unreachable_active_extended_signals, {}, unreachable_dfs_fast, dates[1], params, sizing_capital)
+    unreachable_state = unreachable_active_extended_signals.get(ticker)
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_freezes_shadow_entry_at_orig_limit", 100.0, None if unreachable_state is None else float(unreachable_state.get("entry_ref_price", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_initializes_shadow_stop_from_next_day_anchor", 90.0, None if unreachable_state is None else float(unreachable_state.get("continuation_invalidation_barrier", float("nan"))))
+    add_check(results, "synthetic_extended_signal_counterfactual_barrier", case_id, "day2_unreachable_bar_still_initializes_shadow_target_from_next_day_anchor", 110.0, None if unreachable_state is None else float(unreachable_state.get("continuation_completion_barrier", float("nan"))))
 
     stop_frame = frame.copy()
     stop_frame.loc[dates[3], ["Open", "High", "Low", "Close"]] = [96.0, 97.0, 87.5, 90.0]
@@ -418,9 +455,9 @@ def validate_synthetic_init_sl_single_source_runtime_case(base_params):
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_tp_hit_queues_next_day_open_action", 'TP_HALF', None if tp_position is None else tp_position.get('pending_exit_action'))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_stop_hit_queues_next_day_open_action", 'STOP', None if stop_position is None else stop_position.get('pending_exit_action'))
     add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "entry_day_high_watermark_tracks_entry_bar_high", 109.0, None if tp_position is None else float(tp_position.get('highest_high_since_entry', float('nan'))))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_counterfactual_entry_ref_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_invalidation_barrier_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
-    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_completion_barrier_before_first_reachable_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_completion_barrier')))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_counterfactual_entry_ref_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('entry_ref_price')))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_invalidation_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_invalidation_barrier')))
+    add_check(results, "synthetic_init_sl_single_source_runtime", case_id, "extended_signal_has_no_completion_barrier_before_first_pending_order_day", True, signal_state is not None and pd.isna(signal_state.get('continuation_completion_barrier')))
 
     if tp_position is None or stop_position is None:
         raise ValueError("validate_synthetic_init_sl_single_source_runtime_case 需要有效成交部位")

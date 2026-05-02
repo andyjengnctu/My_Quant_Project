@@ -48,13 +48,15 @@ def _record_entry_plan_marker(chart_context, *, current_date, entry_plan, entry_
 def _record_entry_plan_preview_levels(chart_context, *, current_date, entry_plan):
     if chart_context is None or entry_plan is None:
         return
+
+    has_shadow_state = entry_plan.get('shadow_position_state') is not None
     record_active_levels(
         chart_context,
         current_date=current_date,
-        stop_price=np.nan,
-        tp_half_price=np.nan,
+        stop_price=entry_plan.get('continuation_invalidation_barrier', np.nan) if has_shadow_state else np.nan,
+        tp_half_price=entry_plan.get('continuation_completion_barrier', np.nan) if has_shadow_state else np.nan,
         limit_price=entry_plan['limit_price'],
-        entry_price=np.nan,
+        entry_price=entry_plan.get('entry_ref_price', np.nan) if has_shadow_state else np.nan,
     )
 
 
