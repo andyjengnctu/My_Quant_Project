@@ -215,6 +215,26 @@ def _resolve_chart_pos(chart_context, current_date):
     return pos
 
 
+def _resolve_optional_chart_pos(chart_context, current_date):
+    if chart_context is None:
+        return None
+    if "date_to_pos" not in chart_context:
+        dates = chart_context.get("dates")
+        if dates is None:
+            return None
+        chart_context["date_to_pos"] = {pd.Timestamp(dt): idx for idx, dt in enumerate(pd.to_datetime(dates))}
+    return _resolve_chart_pos(chart_context, current_date)
+
+
+def _set_optional_chart_line_value(chart_context, key, pos, value):
+    if pd.isna(value):
+        return
+    line_values = chart_context.get(key)
+    if line_values is None:
+        return
+    line_values[pos] = float(value)
+
+
 def _append_marker(marker_list, *, trace_name, current_date, price, qty, hover_text, note="", meta=None):
     if pd.isna(price):
         return
@@ -258,29 +278,25 @@ def resolve_position_tp_half_line(position, *, fallback_qty=None, fallback_tp_ha
 def record_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
     if chart_context is None:
         return
-    pos = _resolve_chart_pos(chart_context, current_date)
-    if not pd.isna(stop_price):
-        chart_context["stop_line"][pos] = float(stop_price)
-    if not pd.isna(tp_half_price):
-        chart_context["tp_line"][pos] = float(tp_half_price)
-    if not pd.isna(limit_price):
-        chart_context["limit_line"][pos] = float(limit_price)
-    if not pd.isna(entry_price):
-        chart_context["entry_line"][pos] = float(entry_price)
+    pos = _resolve_optional_chart_pos(chart_context, current_date)
+    if pos is None:
+        return
+    _set_optional_chart_line_value(chart_context, "stop_line", pos, stop_price)
+    _set_optional_chart_line_value(chart_context, "tp_line", pos, tp_half_price)
+    _set_optional_chart_line_value(chart_context, "limit_line", pos, limit_price)
+    _set_optional_chart_line_value(chart_context, "entry_line", pos, entry_price)
 
 
 def record_shadow_active_levels(chart_context, *, current_date, stop_price=np.nan, tp_half_price=np.nan, limit_price=np.nan, entry_price=np.nan):
     if chart_context is None:
         return
-    pos = _resolve_chart_pos(chart_context, current_date)
-    if not pd.isna(stop_price):
-        chart_context["shadow_stop_line"][pos] = float(stop_price)
-    if not pd.isna(tp_half_price):
-        chart_context["shadow_tp_line"][pos] = float(tp_half_price)
-    if not pd.isna(limit_price):
-        chart_context["shadow_limit_line"][pos] = float(limit_price)
-    if not pd.isna(entry_price):
-        chart_context["shadow_entry_line"][pos] = float(entry_price)
+    pos = _resolve_optional_chart_pos(chart_context, current_date)
+    if pos is None:
+        return
+    _set_optional_chart_line_value(chart_context, "shadow_stop_line", pos, stop_price)
+    _set_optional_chart_line_value(chart_context, "shadow_tp_line", pos, tp_half_price)
+    _set_optional_chart_line_value(chart_context, "shadow_limit_line", pos, limit_price)
+    _set_optional_chart_line_value(chart_context, "shadow_entry_line", pos, entry_price)
 
 
 def _format_order_entry_type_label(entry_type):
