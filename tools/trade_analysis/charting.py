@@ -34,7 +34,7 @@ MATPLOTLIB_DOWN_COLOR = "#18b26b"
 MATPLOTLIB_STOP_COLOR = "#ff4d4f"
 MATPLOTLIB_TP_COLOR = "#facc15"
 MATPLOTLIB_INDICATOR_SELL_COLOR = "#22c55e"
-MATPLOTLIB_LIMIT_COLOR = "#4f86ff"
+MATPLOTLIB_LIMIT_COLOR = "#f4a7b9"
 MATPLOTLIB_ENTRY_COLOR = "#2f6df6"
 MATPLOTLIB_INFO_BOX_FACE = (0.02, 0.04, 0.06, 0.80)
 MATPLOTLIB_SIGNAL_BUY_COLOR = "#1f9cf0"
@@ -91,40 +91,55 @@ MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE = (0.92, 0.22, 0.30, CHART_SIGNAL_BOX_ALPHA)
 MATPLOTLIB_SIGNAL_SELL_LOSS_FACE = (0.10, 0.60, 0.24, CHART_SIGNAL_BOX_ALPHA)
 
 
+CHART_TRACE_NAME_ALIASES = {
+    "錯失買進(新訊號)": "錯失買進",
+    "錯失買進(延續候選)": "錯失買進",
+    "半倉停利": "停利",
+    "停損殺出": "停損賣出",
+    "期末強制結算": "強制結算",
+}
+
 ACTION_STYLE_MAP = {
     "限價買進": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_LIMIT_COLOR},
     "買進": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": MATPLOTLIB_ENTRY_COLOR},
     "買進(延續候選)": {"plotly_symbol": "triangle-up", "mpl_marker": "^", "color": "#68d8ff"},
-    "錯失買進(新訊號)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
-    "錯失買進(延續候選)": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#7fb3ff"},
-    "半倉停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
-    "停損殺出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
+    "錯失買進": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_LIMIT_COLOR},
+    "停利": {"plotly_symbol": "diamond", "mpl_marker": "D", "color": MATPLOTLIB_TP_COLOR},
+    "停損賣出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
-    "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
+    "強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
     "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
 }
 
-CHART_EVENT_LEGEND_ORDER = (
+CHART_LEGEND_FIRST_ROW_ITEMS = (
+    "停損線",
+    "成交線",
+    "限價線",
+    "停利線",
+    "停利",
+    "強制結算",
+)
+CHART_LEGEND_SECOND_ROW_ITEMS = (
     "買訊",
     "賣訊",
-    "限價買進",
     "買進",
     "買進(延續候選)",
-    "錯失買進(新訊號)",
-    "錯失買進(延續候選)",
-    "半倉停利",
-    "停損殺出",
+    "錯失買進",
     "指標賣出",
-    "期末強制結算",
+    "停損賣出",
     "錯失賣出",
 )
+CHART_EVENT_LEGEND_ORDER = CHART_LEGEND_FIRST_ROW_ITEMS[4:] + CHART_LEGEND_SECOND_ROW_ITEMS
 
 CHART_LINE_LEGEND_SPECS = (
     ("停損線", MATPLOTLIB_STOP_COLOR, "solid", 2.0),
-    ("半倉停利線", MATPLOTLIB_TP_COLOR, "solid", 1.9),
     ("成交線", MATPLOTLIB_ENTRY_COLOR, "solid", 1.8),
+    ("限價線", MATPLOTLIB_LIMIT_COLOR, "dashed", 1.6),
+    ("停利線", MATPLOTLIB_TP_COLOR, "solid", 1.9),
 )
 CHART_SHADOW_LINE_LEGEND_SPECS = ()
+CHART_MATPLOTLIB_LEGEND_COLUMNS = 8
+CHART_MATPLOTLIB_LEGEND_SPACER_COUNT = 2
 
 CHART_SIGNAL_LEGEND_STYLE = {
     "買訊": {"mpl_marker": "v", "plotly_symbol": "triangle-down", "color": MATPLOTLIB_SIGNAL_BUY_COLOR},
@@ -136,6 +151,19 @@ ORDER_STATUS_LABELS = {
     "missed": "未成交",
     "abandoned": "放棄進場",
 }
+
+
+def _normalize_chart_trace_name(trace_name):
+    normalized = str(trace_name or "").strip()
+    return CHART_TRACE_NAME_ALIASES.get(normalized, normalized)
+
+
+def _rewrite_marker_hover_label(hover_text, original_trace_name, normalized_trace_name):
+    original = str(original_trace_name or "").strip()
+    normalized = str(normalized_trace_name or "").strip()
+    if not hover_text or not original or original == normalized:
+        return hover_text
+    return str(hover_text).replace(original, normalized, 1)
 
 
 def _warn_chart_runtime_fallback_once(key, exc, *, context):
@@ -291,8 +319,9 @@ def record_limit_order(chart_context, *, current_date, limit_price, qty, entry_t
 def record_trade_marker(chart_context, *, current_date, action, price, qty, note="", meta=None):
     if chart_context is None or pd.isna(price):
         return
+    display_action = _normalize_chart_trace_name(action)
     hover_text = (
-        f"{action}<br>日期: {pd.Timestamp(current_date).strftime('%Y-%m-%d')}"
+        f"{display_action}<br>日期: {pd.Timestamp(current_date).strftime('%Y-%m-%d')}"
         f"<br>價格: {float(price):.2f}"
         f"<br>股數: {int(qty)}"
     )
@@ -300,7 +329,7 @@ def record_trade_marker(chart_context, *, current_date, action, price, qty, note
         hover_text += f"<br>備註: {note}"
     _append_marker(
         chart_context["trade_markers"],
-        trace_name=action,
+        trace_name=display_action,
         current_date=current_date,
         price=price,
         qty=qty,
@@ -379,17 +408,18 @@ def _build_marker_groups(*, marker_lists, date_to_pos):
         pos = date_to_pos.get(marker_date)
         if pos is None:
             continue
+        normalized_trace_name = _normalize_chart_trace_name(marker.get("trace_name"))
         normalized_marker = {
-            "trace_name": marker["trace_name"],
+            "trace_name": normalized_trace_name,
             "date": marker_date,
             "x": int(pos),
             "price": float(marker["price"]),
             "qty": int(marker.get("qty", 0) or 0),
             "note": str(marker.get("note", "") or ""),
-            "hover_text": marker["hover_text"],
+            "hover_text": _rewrite_marker_hover_label(marker["hover_text"], marker.get("trace_name"), normalized_trace_name),
             "meta": dict(marker.get("meta") or {}),
         }
-        groups.setdefault(marker["trace_name"], []).append(normalized_marker)
+        groups.setdefault(normalized_trace_name, []).append(normalized_marker)
         focus_positions.append(int(pos))
     return groups, focus_positions
 
@@ -459,6 +489,65 @@ def compute_default_view_window(dates, total_bars, focus_positions, *, default_l
     return {"start_idx": int(start_idx), "end_idx": int(end_idx)}
 
 
+def _iter_finite_line_segments(values):
+    finite_mask = np.isfinite(values)
+    start = None
+    for idx, is_finite in enumerate(finite_mask):
+        if is_finite and start is None:
+            start = idx
+        elif (not is_finite) and start is not None:
+            yield start, idx - 1
+            start = None
+    if start is not None:
+        yield start, len(values) - 1
+
+
+def _clip_limit_line_after_buy(values, marker_groups, *, buy_trace_names):
+    clipped = np.asarray(values, dtype=np.float32).copy()
+    buy_indexes = sorted(
+        int(marker.get("x"))
+        for trace_name in buy_trace_names
+        for marker in (marker_groups.get(trace_name) or [])
+        if marker.get("x") is not None
+    )
+    if not buy_indexes:
+        return clipped
+    for seg_start, seg_end in _iter_finite_line_segments(clipped):
+        buy_idx = next((idx for idx in buy_indexes if seg_start <= idx <= seg_end), None)
+        if buy_idx is None:
+            continue
+        if buy_idx + 1 <= seg_end:
+            clipped[buy_idx + 1 : seg_end + 1] = np.nan
+    return clipped
+
+
+def _clip_entry_line_after_stop_break(entry_values, stop_values):
+    clipped = np.asarray(entry_values, dtype=np.float32).copy()
+    stop_values = np.asarray(stop_values, dtype=np.float32)
+    for seg_start, seg_end in _iter_finite_line_segments(clipped):
+        cutoff_idx = None
+        for idx in range(seg_start, seg_end + 1):
+            entry_value = clipped[idx]
+            stop_value = stop_values[idx]
+            if np.isfinite(entry_value) and np.isfinite(stop_value) and float(stop_value) > float(entry_value):
+                cutoff_idx = idx
+                break
+        if cutoff_idx is None:
+            continue
+        if cutoff_idx + 1 <= seg_end:
+            clipped[cutoff_idx + 1 : seg_end + 1] = np.nan
+    return clipped
+
+
+def _apply_chart_display_line_clipping(payload):
+    marker_groups = dict(payload.get("marker_groups") or {})
+    payload["limit_line"] = _clip_limit_line_after_buy(payload["limit_line"], marker_groups, buy_trace_names=("買進", "買進(延續候選)"))
+    payload["shadow_limit_line"] = _clip_limit_line_after_buy(payload["shadow_limit_line"], marker_groups, buy_trace_names=("買進", "買進(延續候選)"))
+    payload["entry_line"] = _clip_entry_line_after_stop_break(payload["entry_line"], payload["stop_line"])
+    payload["shadow_entry_line"] = _clip_entry_line_after_stop_break(payload["shadow_entry_line"], payload["shadow_stop_line"])
+    return payload
+
+
 def compute_gui_render_window(chart_payload):
     total_bars = int(len(chart_payload["x"]))
     if total_bars <= 0:
@@ -502,6 +591,7 @@ def build_debug_chart_payload(price_df, chart_context):
         "status_box": dict((chart_context or {}).get("status_box") or {}),
         "future_preview": dict((chart_context or {}).get("future_preview") or {}),
     }
+    payload = _apply_chart_display_line_clipping(payload)
     payload["default_view"] = compute_default_view_window(dates, total_bars, focus_positions)
     payload["gui_render_window"] = compute_gui_render_window(payload)
     return payload
@@ -548,6 +638,7 @@ def normalize_chart_payload_contract(chart_payload):
     normalized["summary_box"] = list(normalized.get("summary_box") or [])
     normalized["status_box"] = dict(normalized.get("status_box") or {})
     normalized["future_preview"] = dict(normalized.get("future_preview") or {})
+    normalized = _apply_chart_display_line_clipping(normalized)
 
     default_view = dict(normalized.get("default_view") or {})
     if not default_view:
@@ -755,7 +846,7 @@ def build_chart_hover_snapshot(chart_payload, index):
         "tp_price": _resolve_line_value("tp_line", "shadow_tp_line"),
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
-    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"))
+    buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進"))
     reserved_capital = buy_signal_meta.get("reserved_capital")
     if reserved_capital is None:
         reserved_capital = buy_trade_meta.get("reserved_capital")
@@ -781,7 +872,7 @@ def build_chart_hover_snapshot(chart_payload, index):
 
 
 def extract_trade_marker_indexes(chart_payload, *, trace_names=None):
-    default_trace_names = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}
+    default_trace_names = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
     allowed_trace_names = default_trace_names if trace_names is None else {str(name) for name in trace_names}
     marker_groups = dict((chart_payload or {}).get("marker_groups") or {})
     indexes = []
@@ -834,18 +925,18 @@ def _resolve_signal_annotation_face(item):
 
 def _resolve_trade_box_style(trace_name, marker):
     meta = marker.get("meta") or {}
-    if trace_name in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+    if trace_name in {"買進", "買進(延續候選)", "錯失買進"}:
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
     if trace_name == "錯失賣出":
         return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_INDICATOR_SELL_COLOR, "above"
-    if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
+    if trace_name in {"停損賣出", "指標賣出", "強制結算"}:
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is None:
             pnl_pct = _extract_signed_percent(marker.get("note", ""))
         face = MATPLOTLIB_SELL_PROFIT_FACE if pnl_pct is not None and float(pnl_pct) >= 0.0 else MATPLOTLIB_SELL_LOSS_FACE
         color = MATPLOTLIB_UP_COLOR if pnl_pct is not None and float(pnl_pct) >= 0.0 else MATPLOTLIB_DOWN_COLOR
         return face, color, "below"
-    if trace_name == "半倉停利":
+    if trace_name == "停利":
         return MATPLOTLIB_SIGNAL_SELL_PROFIT_FACE, MATPLOTLIB_TP_COLOR, "above"
     return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_TEXT_COLOR, "above"
 
@@ -946,7 +1037,7 @@ CHART_INFO_BOX_SCHEMAS = {
     "停利": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct"),
     "停損": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
     "指標賣出": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
-    "期末結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence"),
+    "強制結算": ("capital", "qty", "entry_price", "sell_capital", "pnl", "pnl_pct", "win_rate", "max_drawdown", "trade_sequence", "result"),
 }
 
 
@@ -958,14 +1049,14 @@ def _normalize_chart_info_title(title):
         return "錯失買進"
     if normalized.startswith("賣訊"):
         return "賣訊"
-    if normalized in {"停損殺出", "停損"}:
+    if normalized in {"停損殺出", "停損賣出", "停損"}:
         return "停損"
     if normalized in {"半倉停利", "停利"}:
         return "停利"
     if normalized in {"指標賣出", "賣出"}:
         return "指標賣出"
-    if normalized in {"期末強制結算", "期未結算", "期末結算", "結算"}:
-        return "期末結算"
+    if normalized in {"期末強制結算", "強制結算", "期未結算", "期末結算", "結算"}:
+        return "強制結算"
     if normalized.startswith("買進"):
         return "買進"
     return normalized
@@ -1022,27 +1113,41 @@ def _build_signal_label_detail_text(title, meta):
     return "\n".join(_format_chart_info_field(field_key, meta) for field_key in schema)
 
 
+def _normalize_entry_type_for_missed_buy_marker(marker):
+    meta = dict((marker or {}).get("meta") or {})
+    entry_type = str(meta.get("entry_type", "") or "").strip().lower()
+    if entry_type in {"extended", "extended_candidate", "延續", "延續候選"}:
+        return "extended"
+    note = str((marker or {}).get("note", "") or "")
+    if "延續" in note:
+        return "extended"
+    return "normal"
+
+
 def _build_trade_label_text(trace_name, marker):
+    trace_name = _normalize_chart_trace_name(trace_name)
     meta = dict(marker.get("meta") or {})
     if trace_name in {"買進", "買進(延續候選)"}:
         meta.setdefault("result", "成交")
         meta.setdefault("entry_type", "extended" if trace_name == "買進(延續候選)" else "normal")
         return _build_chart_info_box_text("買進", meta, marker=marker)
-    if trace_name in {"錯失買進(新訊號)", "錯失買進(延續候選)"}:
+    if trace_name == "錯失買進":
         meta.setdefault("result", "未成交")
-        meta.setdefault("entry_type", "extended" if trace_name == "錯失買進(延續候選)" else "normal")
+        meta.setdefault("entry_type", _normalize_entry_type_for_missed_buy_marker(marker))
         return _build_chart_info_box_text("錯失買進", meta, marker=marker)
     if trace_name == "錯失賣出":
         meta.setdefault("result", "賣出受阻")
         return _build_chart_info_box_text("指標賣出", meta, marker=marker)
-    if trace_name == "半倉停利":
+    if trace_name == "停利":
         return _build_chart_info_box_text("停利", meta, marker=marker)
-    if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
-        title = "停損" if trace_name == "停損殺出" else ("指標賣出" if trace_name == "指標賣出" else "期末結算")
-        if trace_name == "停損殺出":
+    if trace_name in {"停損賣出", "指標賣出", "強制結算"}:
+        title = "停損" if trace_name == "停損賣出" else ("指標賣出" if trace_name == "指標賣出" else "強制結算")
+        if trace_name == "停損賣出":
             meta.setdefault("result", "停損")
         elif trace_name == "指標賣出":
             meta.setdefault("result", "指標賣出")
+        else:
+            meta.setdefault("result", "強制結算")
         return _build_chart_info_box_text(title, meta, marker=marker)
     return trace_name
 
@@ -1110,7 +1215,7 @@ def _count_nearby_annotation_slots(x_value, placement, occupied_positions, *, co
 
 
 def _resolve_trade_label_offsets(slot_index, *, placement, trace_name):
-    if trace_name in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+    if trace_name in {"買進", "買進(延續候選)", "錯失買進"}:
         base_y = -64
         step_y = 32
     elif placement == "below":
@@ -1175,7 +1280,7 @@ def _render_signal_annotations(axis_price, signal_annotations, label_font, *, st
 
 def _render_trade_labels(axis_price, marker_groups, label_font, *, signal_annotations=None, start_idx=None, end_idx=None):
     rendered = []
-    supported_traces = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}
+    supported_traces = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}
     occupied_positions = []
     for item in signal_annotations or []:
         x_value = int(item.get("x", -10**9))
@@ -1252,28 +1357,43 @@ def _render_future_preview_lines(axis_price, chart_payload):
 def _build_complete_matplotlib_legend_handles():
     from matplotlib.lines import Line2D
 
-    handles = []
-    for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS:
-        handles.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label))
+    def _build_line_handle(label, color, linestyle, linewidth):
+        return Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label)
+
+    def _build_marker_handle(label, style):
+        return Line2D(
+            [0],
+            [0],
+            marker=style["mpl_marker"],
+            linestyle="None",
+            markerfacecolor=style["color"],
+            markeredgecolor=style["color"],
+            color=style["color"],
+            markersize=8,
+            label=label,
+        )
+
+    line_handle_lookup = {label: _build_line_handle(label, color, linestyle, linewidth) for label, color, linestyle, linewidth in CHART_LINE_LEGEND_SPECS}
     for label, color, linestyle, linewidth in CHART_SHADOW_LINE_LEGEND_SPECS:
-        handles.append(Line2D([0], [0], color=color, linestyle=linestyle, linewidth=linewidth, label=label))
+        line_handle_lookup.setdefault(label, _build_line_handle(label, color, linestyle, linewidth))
+
+    event_handle_lookup = {}
     for label in CHART_EVENT_LEGEND_ORDER:
         style = CHART_SIGNAL_LEGEND_STYLE.get(label) or ACTION_STYLE_MAP.get(label)
-        if not style:
-            continue
-        handles.append(
-            Line2D(
-                [0],
-                [0],
-                marker=style["mpl_marker"],
-                linestyle="None",
-                markerfacecolor=style["color"],
-                markeredgecolor=style["color"],
-                color=style["color"],
-                markersize=8,
-                label=label,
-            )
-        )
+        if style:
+            event_handle_lookup[label] = _build_marker_handle(label, style)
+
+    handles = []
+    for label in CHART_LEGEND_FIRST_ROW_ITEMS:
+        handle = line_handle_lookup.get(label) or event_handle_lookup.get(label)
+        if handle is not None:
+            handles.append(handle)
+    for _ in range(CHART_MATPLOTLIB_LEGEND_SPACER_COUNT):
+        handles.append(Line2D([0], [0], linestyle="None", linewidth=0.0, alpha=0.0, marker=None, label=" "))
+    for label in CHART_LEGEND_SECOND_ROW_ITEMS:
+        handle = line_handle_lookup.get(label) or event_handle_lookup.get(label)
+        if handle is not None:
+            handles.append(handle)
     return handles
 
 
@@ -1395,7 +1515,7 @@ def create_matplotlib_debug_chart_figure(*, chart_payload, ticker, show_volume=F
     axis_price.xaxis.set_major_locator(mticker.MaxNLocator(nbins=8, integer=True))
     axis_price.xaxis.set_major_formatter(mticker.FuncFormatter(_format_date_label))
     legend_handles = _build_complete_matplotlib_legend_handles()
-    axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=min(8, max(1, len(legend_handles))), frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
+    axis_price.legend(legend_handles, [handle.get_label() for handle in legend_handles], loc="upper left", ncol=CHART_MATPLOTLIB_LEGEND_COLUMNS, frameon=False, prop=legend_font, labelcolor=MATPLOTLIB_TEXT_COLOR, bbox_to_anchor=(0.012, 1.012), borderaxespad=0.0, handlelength=2.0, columnspacing=0.85)
     hover_text_artist = axis_price.text(0.01, 0.998, "", transform=axis_price.transAxes, ha="left", va="top", color=MATPLOTLIB_TEXT_COLOR, fontsize=10 if legend_font is None else None, fontproperties=legend_font, zorder=8)
     hover_text_artist.set_visible(False)
     crosshair_vline = axis_price.axvline(x=chart_payload["default_view"]["end_idx"], color=MATPLOTLIB_CROSSHAIR_COLOR, linewidth=0.8, linestyle=(0, (4, 4)), alpha=0.58, zorder=1)
@@ -1853,23 +1973,23 @@ def export_debug_chart_html(price_df, *, ticker, output_dir, chart_context, char
     if np.isfinite(chart_payload["shadow_stop_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_tp_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_tp_line"], mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_limit_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價買進", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["shadow_entry_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["shadow_entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     fig.add_trace(go.Scatter(x=dates, y=chart_payload["stop_line"], mode="lines", name="停損線", line={"color": MATPLOTLIB_STOP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["tp_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="半倉停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["tp_line"], mode="lines", name="停利線", line={"color": MATPLOTLIB_TP_COLOR, "width": 2}, line_shape="hv", connectgaps=False), row=1, col=1)
     if np.isfinite(chart_payload["limit_line"]).any():
-        fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價買進", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=dates, y=chart_payload["limit_line"], mode="lines", name="限價線", line={"color": MATPLOTLIB_LIMIT_COLOR, "width": 1.6, "dash": "dash"}, line_shape="hv", connectgaps=False, showlegend=False), row=1, col=1)
     if np.isfinite(chart_payload["entry_line"]).any():
         fig.add_trace(go.Scatter(x=dates, y=chart_payload["entry_line"], mode="lines", name="成交線", line={"color": MATPLOTLIB_ENTRY_COLOR, "width": 1.8}, line_shape="hv", connectgaps=False), row=1, col=1)
     present_plotly_legends = {"K線", "停損線"}
     if np.isfinite(chart_payload["tp_line"]).any():
-        present_plotly_legends.add("半倉停利線")
+        present_plotly_legends.add("停利線")
     if np.isfinite(chart_payload["limit_line"]).any():
-        present_plotly_legends.add("限價買進")
+        present_plotly_legends.add("限價線")
     if np.isfinite(chart_payload["entry_line"]).any():
         present_plotly_legends.add("成交線")
     for trace_name, markers in chart_payload["marker_groups"].items():

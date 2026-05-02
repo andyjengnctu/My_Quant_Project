@@ -2247,7 +2247,7 @@ def validate_gui_signal_annotation_and_forced_close_visual_contract_case(_base_p
 
     add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_uses_shared_schema", True, "title='賣訊'" in sell_fn_source and 'detail_lines=[]' in sell_fn_source and '"賣訊": ("capital", "qty", "reference_close")' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sell_signal_annotation_omits_executed_sell_fields", True, '訊號日收盤:' not in sell_fn_source and '僅代表賣訊，不代表已成交' not in sell_fn_source and '金額:' not in sell_fn_source and '損益:' not in sell_fn_source and '報酬率:' not in sell_fn_source)
-    add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
+    add_check(results, "output_contract", case_id, "forced_close_marker_uses_yellow_visual", True, '"強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"}' in charting_source)
 
     dates = pd.date_range("2024-01-01", periods=4, freq="D")
     chart_payload = normalize_chart_payload_contract(
@@ -2433,7 +2433,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
     tp_label_text = build_trade_label_text(
-        "半倉停利",
+        "停利",
         {
             "qty": 520,
             "meta": {
@@ -2443,7 +2443,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
         },
     )
     exit_label_text = build_trade_label_text(
-        "停損殺出",
+        "停損賣出",
         {
             "qty": 480,
             "meta": {
@@ -2463,7 +2463,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
 
     add_check(results, "output_contract", case_id, "buy_trade_label_uses_trade_info_wording", True, "資金: -" in buy_label_text and "股數: 1,000" in buy_label_text and "停利: 62.40" in buy_label_text and "限價: 56.00" in buy_label_text and "成交: 55.20" in buy_label_text and "停損: 47.65" in buy_label_text and "實支: 123,456" in buy_label_text and "進場類型: 正常" in buy_label_text and "結果: 成交" in buy_label_text)
     add_check(results, "output_contract", case_id, "buy_trade_label_includes_result_last", "結果: 成交", buy_label_text.split("\n")[-1] if buy_label_text else "")
-    add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_and_missed_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "半倉停利", "停損殺出", "指標賣出", "期末強制結算", "錯失賣出"}' in charting_source)
+    add_check(results, "output_contract", case_id, "buy_trade_label_overlay_includes_buy_and_missed_traces", True, 'supported_traces = {"買進", "買進(延續候選)", "錯失買進", "停利", "停損賣出", "指標賣出", "強制結算", "錯失賣出"}' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_places_buy_box_below_kbar", True, '_resolve_trade_label_offsets(slot_index, placement=placement, trace_name=trace_name)' in charting_source and 'base_y = -64' in charting_source and 'va = "top" if placement == "below" else "bottom"' in charting_source)
     add_check(results, "output_contract", case_id, "buy_trade_label_overlay_offsets_when_signal_or_nearby_trade_boxes_cluster", True, '_count_nearby_annotation_slots(x_value, placement, occupied_positions, collision_window=collision_window)' in charting_source and 'collision_window = 5 if placement == "below" else 4' in charting_source and 'occupied_positions.append({"x": x_value, "placement": placement})' in charting_source)
     add_check(results, "output_contract", case_id, "single_stock_sidebar_trade_info_includes_reserved_and_actual_spend_fields", True, 'text="交易資訊"' in inspector_source and '_selected_tp_var' in inspector_source and '_selected_limit_var' in inspector_source and '_selected_entry_var' in inspector_source and '_selected_stop_var' in inspector_source and '_selected_reserved_capital_var' in inspector_source and '_selected_actual_spend_var' in inspector_source)
@@ -2473,7 +2473,7 @@ def validate_gui_trade_box_capital_and_round_trip_contract_case(_base_params):
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_trade_pnl_drawdown_trade_count_and_result", True, "損益: +3,333" in exit_label_text and "最大回撤: 5.43%" in exit_label_text and "交易次數: 第 11 次" in exit_label_text and exit_label_text.split("\n")[-1] == "結果: 停損")
     add_check(results, "output_contract", case_id, "exit_trade_label_includes_current_capital_and_no_total_pnl_label", True, "資金: 2,012,345" in exit_label_text and "總損益:" not in exit_label_text and "風報比:" not in exit_label_text and "EV:" not in exit_label_text)
     add_check(results, "output_contract", case_id, "chart_legend_lists_complete_event_and_line_contract", True, "CHART_EVENT_LEGEND_ORDER" in charting_source and "CHART_LINE_LEGEND_SPECS" in charting_source and "_build_complete_matplotlib_legend_handles" in charting_source and 'visible="legendonly"' in charting_source)
-    add_check(results, "output_contract", case_id, "chart_limit_buy_legend_is_unified", True, 'trace_name = "限價買進"' in charting_source and '"限價買進(延續候選)"' not in charting_source and '("限價線", MATPLOTLIB_LIMIT_COLOR' not in charting_source and '進場類型: {entry_type_label}' in charting_source)
+    add_check(results, "output_contract", case_id, "chart_limit_buy_legend_is_unified", True, 'trace_name = "限價買進"' in charting_source and '"限價買進(延續候選)"' not in charting_source and '("限價線", MATPLOTLIB_LIMIT_COLOR' in charting_source and '進場類型: {entry_type_label}' in charting_source)
 
     summary["buy_label"] = buy_label_text
     summary["tp_label"] = tp_label_text
@@ -2555,12 +2555,12 @@ def validate_gui_trade_count_and_sidebar_sync_contract_case(base_params):
     forced_close_meta = forced_close_marker.get("meta") or {}
     expected_trade_count = int(stats_index["cum_trade_count"][-1]) if len(stats_index.get("cum_trade_count", [])) > 0 else 0
     add_check(results, "output_contract", case_id, "final_exit_trade_count_uses_completed_round_trip_index", expected_trade_count, forced_close_meta.get("trade_count"))
-    add_check(results, "output_contract", case_id, "final_exit_marker_action_is_forced_close", "期末強制結算", forced_close_marker.get("trace_name"))
+    add_check(results, "output_contract", case_id, "final_exit_marker_action_is_forced_close", "強制結算", forced_close_marker.get("trace_name"))
 
     charting_module = importlib.import_module("tools.trade_analysis.charting")
     build_trade_label_text = getattr(charting_module, "_build_trade_label_text")
     exit_label_text = build_trade_label_text(
-        "停損殺出",
+        "停損賣出",
         {
             "qty": 100,
             "meta": {

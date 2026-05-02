@@ -89,7 +89,7 @@ PORTFOLIO_CONSOLE_COLORS = {
 }
 
 
-BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)", "錯失賣出")
+BUY_TRADE_TRACE_NAMES = ("買進", "買進(延續候選)", "錯失買進", "錯失賣出")
 PERFORMANCE_STRATEGY_COLOR = "#ff3333"
 PERFORMANCE_BENCHMARK_COLOR = "#4dabf5"
 PERFORMANCE_TAB_CLOSE_HITBOX_PX = 32
@@ -194,17 +194,17 @@ def _normalize_trade_action(row):
     if raw_type.startswith("買進"):
         return "買進(延續候選)" if entry_type == "extended" else "買進"
     if raw_type.startswith("錯失買進"):
-        return "錯失買進(延續候選)" if entry_type == "extended" or "延續" in raw_type else "錯失買進(新訊號)"
+        return "錯失買進"
     if raw_type == "半倉停利":
-        return "半倉停利"
+        return "停利"
     if raw_type == "全倉結算(停損)":
-        return "停損殺出"
+        return "停損賣出"
     if raw_type == "全倉結算(指標)":
         return "指標賣出"
     if raw_type.startswith("汰弱賣出"):
         return "指標賣出"
     if raw_type == "期末強制結算":
-        return "期末強制結算"
+        return "強制結算"
     if raw_type == "錯失賣出":
         return "錯失賣出"
     return ""
@@ -249,7 +249,7 @@ def _is_buy_trade_row(row):
 
 
 def _is_full_exit_trade_row(row):
-    return _normalize_trade_action(row) in {"停損殺出", "指標賣出", "期末強制結算"}
+    return _normalize_trade_action(row) in {"停損賣出", "指標賣出", "強制結算"}
 
 
 def _resolve_valid_float(value):
@@ -354,7 +354,7 @@ def _collect_visible_shadow_signal_date_keys(ticker_trades_df, *, fast_data, pri
     price_dates = set(pd.DatetimeIndex(pd.to_datetime(price_df.index))) if price_df is not None else set()
     for row in ticker_trades_df.to_dict("records"):
         action = _normalize_trade_action(row)
-        if action not in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+        if action not in {"買進", "買進(延續候選)", "錯失買進"}:
             continue
         parsed_trade_date = pd.to_datetime(row.get("Date"), errors="coerce")
         if pd.isna(parsed_trade_date):
@@ -475,7 +475,7 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
         if action in {"買進", "買進(延續候選)"}:
             active_entry_type = _normalize_entry_type_value(row.get("進場類型"), default="normal")
             continue
-        if action in {"停損殺出", "指標賣出", "期末強制結算"}:
+        if action in {"停損賣出", "指標賣出", "強制結算"}:
             entry_type = _normalize_entry_type_value(row.get("進場類型"), default=active_entry_type or "normal")
             if entry_type == "extended":
                 extended_trade_count += 1
@@ -634,7 +634,7 @@ def _build_position_from_portfolio_buy_row(row, *, fast_data, params):
 
 def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, row, action, marker_meta):
     trade_date = pd.Timestamp(row.get("Date"))
-    if action in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+    if action in {"買進", "買進(延續候選)", "錯失買進"}:
         signal_date = _resolve_buy_signal_date_from_row(row, fast_data, trade_date)
         if signal_date not in price_df.index:
             return
@@ -870,12 +870,12 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
         else:
             marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats, equity_snapshots=equity_snapshots)
-            if active_entry is None and action in {"停損殺出", "指標賣出", "期末強制結算"}:
+            if active_entry is None and action in {"停損賣出", "指標賣出", "強制結算"}:
                 next_trade_sequence += 1
                 marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
             else:
                 marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
-            if action == "停損殺出":
+            if action == "停損賣出":
                 stop_price = marker_meta.get("stop_price")
                 if stop_price is not None and not pd.isna(stop_price):
                     record_active_levels(
@@ -883,10 +883,10 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                         current_date=trade_date,
                         stop_price=float(stop_price),
                     )
-            if action in {"停損殺出", "指標賣出", "期末強制結算"}:
+            if action in {"停損賣出", "指標賣出", "強制結算"}:
                 active_entry = None
 
-        if action in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
+        if action in {"買進", "買進(延續候選)", "錯失買進"}:
             limit_price = marker_meta.get("limit_price")
             if limit_price is not None and not pd.isna(limit_price):
                 record_active_levels(
