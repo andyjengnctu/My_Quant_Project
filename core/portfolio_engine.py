@@ -203,7 +203,7 @@ def _append_portfolio_extended_shadow_level_rows(active_level_rows, active_exten
             '半倉停利價': tp_half,
             '買入限價': orig_limit,
             'Shadow買進價': shadow_position.get('entry_fill_price'),
-            '成交價': shadow_position.get('entry_fill_price'),
+            '成交價': None,
             'level_scope': 'extended_shadow',
             '進場類型': 'extended',
             '買訊日': signal_state.get('signal_date'),

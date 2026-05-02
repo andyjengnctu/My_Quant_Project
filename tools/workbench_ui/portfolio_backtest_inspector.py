@@ -743,6 +743,7 @@ def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_leve
         tp_half_price = _coerce_float(row.get("半倉停利價"))
         visible_tp_half_price = np.nan if tp_line_stopped_by_scope.get(line_scope_key, False) else tp_half_price
         recorder = record_shadow_active_levels if is_shadow_level else record_active_levels
+        entry_price = _coerce_float(row.get("Shadow買進價")) if is_shadow_level else _coerce_float(row.get("成交價"))
         try:
             recorder(
                 chart_context,
@@ -750,7 +751,7 @@ def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_leve
                 stop_price=_coerce_float(row.get("停損價")),
                 tp_half_price=visible_tp_half_price,
                 limit_price=_coerce_float(row.get("買入限價")),
-                entry_price=_coerce_float(row.get("成交價")),
+                entry_price=entry_price,
             )
         except (TypeError, ValueError, KeyError, IndexError):
             continue

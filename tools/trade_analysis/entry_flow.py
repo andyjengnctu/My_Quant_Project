@@ -136,6 +136,9 @@ def process_debug_entry_for_day(
             y_close=close_prev,
             params=params,
             entry_type='normal',
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=effective_trade_date,
         )
         marker_note = ""
         if entry_result['count_as_missed_buy']:
@@ -243,6 +246,9 @@ def process_debug_entry_for_day(
             y_close=close_prev,
             params=params,
             entry_type='extended',
+            ticker=ticker,
+            security_profile=security_profile,
+            trade_date=effective_trade_date,
         )
         marker_note = ""
         if entry_result['count_as_missed_buy']:
@@ -290,6 +296,9 @@ def process_debug_entry_for_day(
                     'tp_price': float(position['tp_half']),
                     'reserved_capital': reserved_cost,
                     'buy_capital': spent_cash,
+                    'current_capital': None if current_capital is None else float(current_capital),
+                    'entry_type': 'extended',
+                    'result': '成交',
                 },
             )
         elif entry_result['count_as_missed_buy']:
