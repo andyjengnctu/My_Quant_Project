@@ -102,7 +102,7 @@ ACTION_STYLE_MAP = {
     "停損殺出": {"plotly_symbol": "x", "mpl_marker": "x", "color": MATPLOTLIB_STOP_COLOR},
     "指標賣出": {"plotly_symbol": "line-ew-open", "mpl_marker": "_", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
     "期末強制結算": {"plotly_symbol": "square", "mpl_marker": "s", "color": "#facc15"},
-    "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": "#fbbf24"},
+    "錯失賣出": {"plotly_symbol": "circle-open", "mpl_marker": "o", "color": MATPLOTLIB_INDICATOR_SELL_COLOR},
 }
 
 CHART_EVENT_LEGEND_ORDER = (
@@ -760,7 +760,7 @@ def _resolve_trade_box_style(trace_name, marker):
     if trace_name in {"買進", "買進(延續候選)", "錯失買進(新訊號)", "錯失買進(延續候選)"}:
         return MATPLOTLIB_BUY_FILL_FACE, MATPLOTLIB_LIMIT_COLOR, "below"
     if trace_name == "錯失賣出":
-        return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_DOWN_COLOR, "above"
+        return MATPLOTLIB_INFO_BOX_FACE, MATPLOTLIB_INDICATOR_SELL_COLOR, "above"
     if trace_name in {"停損殺出", "指標賣出", "期末強制結算"}:
         pnl_pct = meta.get("pnl_pct")
         if pnl_pct is None:

@@ -649,23 +649,45 @@ def _record_portfolio_trade_annotations(chart_context, *, price_df, fast_data, r
         )
 
 
-def _record_portfolio_active_level_rows(chart_context, *, active_level_rows):
-    for row in active_level_rows or []:
+def _record_portfolio_active_level_rows(chart_context, *, fast_data, active_level_rows):
+    def _sort_key(row):
+        try:
+            return pd.Timestamp(row.get("Date"))
+        except (TypeError, ValueError):
+            return pd.Timestamp.max
+
+    tp_line_stopped = False
+    previous_pos = None
+    sorted_rows = sorted(active_level_rows or [], key=_sort_key)
+    for row in sorted_rows:
         try:
             current_date = pd.Timestamp(row.get("Date"))
         except (TypeError, ValueError):
             continue
+        current_pos = _safe_fast_pos(fast_data, current_date)
+        if current_pos < 0:
+            continue
+        if previous_pos is None or current_pos != previous_pos + 1:
+            tp_line_stopped = False
+        previous_pos = current_pos
+
+        tp_half_price = _coerce_float(row.get("半倉停利價"))
+        visible_tp_half_price = np.nan if tp_line_stopped else tp_half_price
         try:
             record_active_levels(
                 chart_context,
                 current_date=current_date,
                 stop_price=_coerce_float(row.get("停損價")),
-                tp_half_price=_coerce_float(row.get("半倉停利價")),
+                tp_half_price=visible_tp_half_price,
                 limit_price=_coerce_float(row.get("買入限價")),
                 entry_price=_coerce_float(row.get("成交價")),
             )
         except (TypeError, ValueError, KeyError, IndexError):
             continue
+
+        day_high = _safe_fast_value(fast_data, "High", pos=current_pos)
+        if (not pd.isna(visible_tp_half_price)) and (not pd.isna(day_high)) and float(day_high) >= float(visible_tp_half_price):
+            tp_line_stopped = True
 
 
 def _find_portfolio_signal_annotation_index(chart_context, *, current_date, signal_type, limit_price=None):
@@ -743,7 +765,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
     equity_snapshots = _build_portfolio_equity_snapshot_index(df_eq)
 
-    _record_portfolio_active_level_rows(chart_context, active_level_rows=active_level_rows)
+    _record_portfolio_active_level_rows(chart_context, fast_data=fast_data, active_level_rows=active_level_rows)
 
     active_entry = None
     next_trade_sequence = 0
@@ -1045,13 +1067,16 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_reserved_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
-        ttk.Button(sidebar, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
-        trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
-        trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
+        nav_block = ttk.Frame(sidebar, style="Workbench.TFrame")
+        nav_block.grid(row=18, column=0, sticky="ew", pady=(4, 0))
+        nav_block.columnconfigure(0, weight=1)
+        ttk.Button(nav_block, text="回到最新K線", command=self._move_kline_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", pady=(0, 0))
+        trade_nav = ttk.Frame(nav_block, style="Workbench.TFrame")
+        trade_nav.grid(row=1, column=0, sticky="ew", pady=(0, 0))
         trade_nav.columnconfigure(0, weight=1)
         trade_nav.columnconfigure(1, weight=1)
-        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0))
-        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0))
+        ttk.Button(trade_nav, text="前交易", command=self._move_kline_chart_to_previous_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 0), pady=(0, 0))
+        ttk.Button(trade_nav, text="後交易", command=self._move_kline_chart_to_next_trade, style="Workbench.Sidebar.TButton").grid(row=0, column=1, sticky="ew", padx=(0, 0), pady=(0, 0))
         sidebar.rowconfigure(19, weight=1)
 
         console_tab = ttk.Frame(notebook, padding=10, style="Workbench.TFrame")
