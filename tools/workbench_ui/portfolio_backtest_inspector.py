@@ -98,6 +98,9 @@ PERFORMANCE_CHART_TITLE_PAD_PX = 6
 PERFORMANCE_CHART_SUBPLOT_TOP = 0.945
 PERFORMANCE_CHART_CLOSE_BUTTON_SIZE_PX = 22
 PERFORMANCE_CHART_CLOSE_BUTTON_MARGIN_PX = 5
+PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3
+PORTFOLIO_RIGHT_SIDEBAR_WIDTH = int(round(WORKBENCH_RIGHT_SIDEBAR_WIDTH * PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE))
+PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH = PORTFOLIO_RIGHT_SIDEBAR_WIDTH - (WORKBENCH_RIGHT_SIDEBAR_WIDTH - WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH)
 COMBOBOX_WIDTH_RULES = {
     "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
@@ -587,7 +590,6 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
     dropdown_stats = dict(ticker_dropdown_stats or {})
-    sort_text = str(dropdown_stats.get("sort_text") or "-")
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
 
     _record_portfolio_active_level_rows(chart_context, active_level_rows=active_level_rows)
@@ -647,24 +649,20 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
             meta=marker_meta,
         )
 
-    buy_count = int(actual_stats.get("buy_count", 0) or 0)
     exit_count = int(actual_stats.get("exit_count", 0) or 0)
     missed_buy_count = int(actual_stats.get("missed_buy_count", 0) or 0)
     missed_sell_count = int(actual_stats.get("missed_sell_count", 0) or 0)
-    total_reserved_capital = float(actual_stats.get("total_reserved_capital", 0.0) or 0.0)
-    total_buy_capital = float(actual_stats.get("total_buy_capital", 0.0) or 0.0)
     total_pnl = float(actual_stats.get("total_pnl", 0.0) or 0.0)
     asset_growth_pct = actual_stats.get("asset_growth_pct")
     win_rate_pct = actual_stats.get("win_rate_pct")
     win_rate_text = "-" if win_rate_pct is None else f"{float(win_rate_pct):.1f}%"
     invested_return_text = "-" if asset_growth_pct is None else f"{float(asset_growth_pct):+.1f}%"
     chart_context["summary_box"] = [
-        f"買進成交 {buy_count} 次",
-        f"完整交易 {exit_count} 次 / 勝率 {win_rate_text}",
+        f"交易次數 {exit_count} 次",
+        f"勝率 {win_rate_text}",
         f"錯失買進 {missed_buy_count} / 錯失賣出 {missed_sell_count}",
-        f"累計預留 {total_reserved_capital:,.0f}",
-        f"累計實支 {total_buy_capital:,.0f}",
-        f"總損益 {total_pnl:+,.0f} / 投報 {invested_return_text}",
+        f"總損益 {total_pnl:+,.0f}",
+        f"投報 {invested_return_text}",
     ]
     chart_context["status_box"] = {}
     return build_debug_chart_payload(price_df, chart_context)
@@ -833,21 +831,21 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._kline_host.grid(row=0, column=0, sticky="nsew")
         self._kline_placeholder = self._make_placeholder(self._kline_host, "請先執行投組回測；選擇有成交過的股票後會顯示 K 線結果。")
 
-        sidebar_outer = ttk.Frame(kline_tab, padding=(0, 3, 0, 3), width=WORKBENCH_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
+        sidebar_outer = ttk.Frame(kline_tab, padding=(0, 3, 0, 3), width=PORTFOLIO_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
         sidebar_outer.grid(row=0, column=1, sticky="ns")
         sidebar_outer.grid_propagate(False)
         sidebar_outer.pack_propagate(False)
-        kline_tab.grid_columnconfigure(1, minsize=WORKBENCH_RIGHT_SIDEBAR_WIDTH)
+        kline_tab.grid_columnconfigure(1, minsize=PORTFOLIO_RIGHT_SIDEBAR_WIDTH)
 
         sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
         sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
         sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
         sidebar_body_font = WORKBENCH_RIGHT_SIDEBAR_BODY_FONT
-        ttk.Label(sidebar, text="單股獨立歷史績效（非投組）", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._history_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, text="單股歷史績效", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=0, column=0, sticky="w")
+        ttk.Label(sidebar, textvariable=self._history_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=1, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="投組實績摘要", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
+        ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
@@ -1048,13 +1046,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             )
             chart_payload = dict(analysis_result.get("chart_payload") or {})
             summary_lines = [str(line) for line in (chart_payload.get("summary_box") or []) if str(line).strip()]
-            fixed_risk_text = "-" if fixed_risk is None else f"{float(fixed_risk):.4f}"
-            lines = [
-                "口徑: 單股獨立回測，非投組實際成交",
-                f"期間: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} 全資料區間",
-                f"固定風險: {fixed_risk_text}",
-                *summary_lines,
-            ]
+            lines = list(summary_lines)
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
             warnings.warn(
                 f"投組右側歷史績效表載入失敗: ticker={resolved_ticker} | {type(exc).__name__}: {exc}",
@@ -1462,7 +1454,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "sort_group": 0 if has_actual_buy else 1,
             "sort_value": float(total_pnl if has_actual_buy else missed_event_count),
             "sort_value_text": total_pnl_text,
-            "sort_text": f"總損益 {total_pnl_text} / 投報 {invested_return_text}",
             "total_pnl": float(total_pnl),
             "total_pnl_text": total_pnl_text,
             "invested_return_pct": invested_return_pct,
@@ -1480,10 +1471,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _format_ticker_dropdown_label(self, *, ticker, first_buy_row, stats):
         return (
-            f"{ticker}|成交 {stats.get('buy_count', 0)} / 錯買 {stats.get('missed_buy_count', 0)} / 錯賣 {stats.get('missed_sell_count', 0)}"
-            f"|{stats.get('sort_text', '-')}"
-            f"|勝率 {stats.get('win_rate_text', '-')}"
-            f"|交易 {stats.get('trade_count_text', '-')}"
+            f"{ticker}"
+            f" | 總損益 {stats.get('total_pnl_text', '-')}"
+            f" | 勝率 {stats.get('win_rate_text', '-')}"
+            f" | 交易次數 {stats.get('trade_count_text', '-')}"
         )
 
     def _refresh_trade_ticker_dropdown(self, result_payload):
