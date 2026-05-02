@@ -514,9 +514,9 @@ def validate_synthetic_unexecutable_half_tp_case(base_params):
         debug_df, _debug_module_path = run_debug_trade_log_check(primary_ticker, debug_input_df, case["params"])
         half_rows = int((debug_df["動作"].fillna("") == "半倉停利").sum()) if debug_df is not None and len(debug_df) > 0 else 0
         buy_rows = debug_df[debug_df["動作"].fillna("").str.startswith("買進")].copy() if debug_df is not None and len(debug_df) > 0 else pd.DataFrame()
-        half_tp_price_is_nan = bool(buy_rows["半倉停利價"].isna().all()) if len(buy_rows) > 0 else False
+        half_tp_price_is_visible = bool(buy_rows["半倉停利價"].notna().all()) if len(buy_rows) > 0 else False
         add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_half_take_profit_rows", 0, half_rows)
-        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_buy_row_half_tp_price_is_nan", True, half_tp_price_is_nan)
+        add_check(results, "synthetic_unexecutable_half_tp", case["case_id"], "debug_buy_row_half_tp_price_is_visible", True, half_tp_price_is_visible)
 
     scanner_case = build_synthetic_half_tp_full_year_case(base_params)
     scanner_case["params"].initial_capital = 130.0

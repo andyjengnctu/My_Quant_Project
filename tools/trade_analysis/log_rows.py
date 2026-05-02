@@ -2,11 +2,15 @@ import math
 import numpy as np
 
 from core.exact_accounting import round_money_for_display
-from core.price_utils import can_execute_half_take_profit
 
 
-def get_debug_tp_half_price(tp_half, qty, params):
-    return tp_half if can_execute_half_take_profit(qty, params.tp_percent) else np.nan
+def get_debug_tp_half_price(tp_half, qty=None, params=None):
+    if tp_half is None:
+        return np.nan
+    try:
+        return np.nan if np.isnan(tp_half) else tp_half
+    except (TypeError, ValueError):
+        return tp_half
 
 
 def _round_money_for_log(value):
