@@ -354,6 +354,52 @@ def _resolve_portfolio_event_capital(row):
     return None
 
 
+def _build_portfolio_equity_snapshot_index(df_eq):
+    if df_eq is None or df_eq.empty or "Date" not in df_eq.columns or "Equity" not in df_eq.columns:
+        return {}
+
+    working = df_eq.copy()
+    working["_workbench_date"] = pd.to_datetime(working["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    working["_workbench_equity"] = pd.to_numeric(working["Equity"], errors="coerce")
+    working = working.dropna(subset=["_workbench_date", "_workbench_equity"])
+    if working.empty:
+        return {}
+
+    running_peak = working["_workbench_equity"].cummax()
+    drawdown = np.where(running_peak > 0, (running_peak - working["_workbench_equity"]) * 100.0 / running_peak, 0.0)
+    working["_workbench_max_drawdown"] = pd.Series(drawdown, index=working.index).cummax()
+
+    snapshots = {}
+    for row in working.to_dict("records"):
+        date_key = str(row.get("_workbench_date") or "").strip()
+        if not date_key:
+            continue
+        snapshots[date_key] = {
+            "current_capital": float(row.get("_workbench_equity")),
+            "max_drawdown": float(row.get("_workbench_max_drawdown") or 0.0),
+        }
+    return snapshots
+
+
+def _resolve_portfolio_equity_snapshot(equity_snapshots, date_value):
+    if not equity_snapshots:
+        return {}
+    parsed = pd.to_datetime(date_value, errors="coerce")
+    if pd.isna(parsed):
+        return {}
+    return dict(equity_snapshots.get(pd.Timestamp(parsed).strftime("%Y-%m-%d")) or {})
+
+
+def _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots=None):
+    enriched = dict(meta or {})
+    snapshot = _resolve_portfolio_equity_snapshot(equity_snapshots, row.get("Date"))
+    if enriched.get("current_capital") is None and snapshot.get("current_capital") is not None:
+        enriched["current_capital"] = float(snapshot["current_capital"])
+    if enriched.get("max_drawdown") is None and snapshot.get("max_drawdown") is not None:
+        enriched["max_drawdown"] = float(snapshot["max_drawdown"])
+    return enriched
+
+
 def _empty_portfolio_ticker_actual_stats():
     return {
         "buy_count": 0,
@@ -431,7 +477,7 @@ def _build_portfolio_ticker_actual_stats(df_tr, ticker):
     }
 
 
-def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
+def _build_portfolio_buy_marker_meta(row, *, fast_data, params, equity_snapshots=None):
     buy_capital = _coerce_float(row.get("投入總金額"), default=np.nan)
     reserved_capital = _coerce_float(row.get("預留總金額"), default=np.nan)
     if _is_missed_buy_trade_row(row) and pd.isna(buy_capital):
@@ -452,7 +498,7 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
             meta["limit_price"] = float(limit_price)
         if entry_price is not None:
             meta["entry_price"] = float(entry_price)
-        return meta
+        return _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
 
     for source_key, target_key in (
         ("limit_price", "limit_price"),
@@ -467,10 +513,10 @@ def _build_portfolio_buy_marker_meta(row, *, fast_data, params):
     entry_price = _resolve_valid_float(row.get("成交價"))
     if entry_price is not None:
         meta["entry_price"] = float(entry_price)
-    return meta
+    return _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
 
 
-def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
+def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None, equity_snapshots=None):
     pnl_value = _resolve_valid_float(row.get("單筆損益"))
     total_pnl = _resolve_valid_float(row.get("該筆總損益"))
     sell_capital = _estimate_sell_capital(row)
@@ -488,10 +534,11 @@ def _build_portfolio_sell_marker_meta(row, active_entry, actual_stats=None):
         meta["pnl_pct"] = float(pnl_pct)
     if sell_capital is not None:
         meta["sell_capital"] = float(sell_capital)
+    meta = _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
     return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
 
 
-def _build_portfolio_missed_sell_marker_meta(row, actual_stats=None):
+def _build_portfolio_missed_sell_marker_meta(row, actual_stats=None, equity_snapshots=None):
     meta = {}
     current_capital = _resolve_portfolio_event_capital(row)
     if current_capital is not None:
@@ -505,6 +552,7 @@ def _build_portfolio_missed_sell_marker_meta(row, actual_stats=None):
         meta["stop_price"] = float(stop_price)
     if reference_price is not None:
         meta["reference_price"] = float(reference_price)
+    meta = _apply_portfolio_equity_snapshot_to_marker_meta(meta, row, equity_snapshots)
     return _apply_portfolio_stats_to_marker_meta(meta, actual_stats or {})
 
 
@@ -628,11 +676,12 @@ def _apply_trade_sequence_to_marker_meta(marker_meta, trade_sequence):
     return enriched
 
 
-def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None, active_level_rows=None):
+def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None, active_level_rows=None, df_eq=None):
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
     dropdown_stats = dict(ticker_dropdown_stats or {})
     actual_stats = dict(dropdown_stats.get("portfolio_actual_stats") or _build_portfolio_ticker_actual_stats(ticker_trades_df, ticker))
+    equity_snapshots = _build_portfolio_equity_snapshot_index(df_eq)
 
     _record_portfolio_active_level_rows(chart_context, active_level_rows=active_level_rows)
 
@@ -660,7 +709,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
         note = str(row.get("Type", "") or "").strip()
         if action in {"買進", "買進(延續候選)"}:
             next_trade_sequence += 1
-            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params, equity_snapshots=equity_snapshots)
             marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="normal")
             marker_meta["result"] = "成交"
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
@@ -671,14 +720,14 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                 "trade_sequence": next_trade_sequence,
             }
         elif str(action).startswith("錯失買進"):
-            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params)
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params, equity_snapshots=equity_snapshots)
             marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="extended" if "延續" in str(action) else "normal")
             marker_meta["result"] = "未成交"
         elif action == "錯失賣出":
-            marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats)
+            marker_meta = _build_portfolio_missed_sell_marker_meta(row, actual_stats, equity_snapshots=equity_snapshots)
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, None if active_entry is None else active_entry.get("trade_sequence"))
         else:
-            marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats)
+            marker_meta = _build_portfolio_sell_marker_meta(row, active_entry, actual_stats, equity_snapshots=equity_snapshots)
             if active_entry is None and action in {"停損殺出", "指標賣出", "期末強制結算"}:
                 next_trade_sequence += 1
                 marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
@@ -1630,6 +1679,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             params=self._result.get("params"),
             ticker_dropdown_stats=self._ticker_dropdown_stats.get(display_key),
             active_level_rows=active_level_rows,
+            df_eq=self._result.get("df_eq"),
         )
         chart_payload["history_summary_box"] = self._resolve_single_stock_history_summary_lines(ticker)
         self._render_kline_chart({"ticker": ticker, "chart_payload": chart_payload})
