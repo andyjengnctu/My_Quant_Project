@@ -16,7 +16,7 @@ BUY_SORT_METHOD = 'PROJ_COST'
 # 系統評分 (Score) 算法切換
 # 'RoMD' = 傳統報酬回撤比風格的基底分數
 # 'LOG_R2' = 結合對數 R 平方與月度勝率的不對稱模型
-SCORE_CALC_METHOD = 'LOG_R2'  
+SCORE_CALC_METHOD = 'RoMD'  
 
 # 系統評分分子切換
 # 'TOTAL_RETURN' = 分子使用總報酬率
