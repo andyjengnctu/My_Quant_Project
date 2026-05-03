@@ -4,6 +4,7 @@ from typing import Mapping, Optional
 MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
 RUN_BEST_PARAMS_PATH_ENV_VAR = "V16_RUN_BEST_PARAMS_PATH"
 CANDIDATE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_BEST_PARAMS_PATH"
+CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_RETENTION_BEST_PARAMS_PATH"
 
 
 def _resolve_override_path(project_root: str, raw_value: str) -> str:
@@ -39,6 +40,14 @@ def resolve_candidate_best_params_path(project_root: str, environ: Optional[Mapp
     if override != "":
         return _resolve_override_path(project_root, override)
     return os.path.join(resolve_models_dir(project_root, environ=env), "candidate_best_params.json")
+
+
+def resolve_candidate_retention_best_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
+    env = os.environ if environ is None else environ
+    override = str(env.get(CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR, "")).strip()
+    if override != "":
+        return _resolve_override_path(project_root, override)
+    return os.path.join(resolve_models_dir(project_root, environ=env), "candidate_retention_best_params.json")
 
 
 def resolve_active_params_path(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:

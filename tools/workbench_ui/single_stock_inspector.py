@@ -28,7 +28,11 @@ from core.output_paths import ensure_output_dir
 from core.runtime_utils import parse_float_strict
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.scanner_display import build_scanner_sort_probe_text
-from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
+from core.model_paths import (
+    resolve_candidate_best_params_path,
+    resolve_candidate_retention_best_params_path,
+    resolve_run_best_params_path,
+)
 from tools.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_chart_hover_snapshot,
@@ -97,6 +101,7 @@ WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
 PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 目前參數": "run_best",
     "candidate_best | 候選參數": "candidate_best",
+    "candidate_retention_best | retention 最大候選": "candidate_retention_best",
 }
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
@@ -104,7 +109,7 @@ COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
     "candidate": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
     "history": {"min_chars": 18, "max_chars": 44, "extra_px": 24},
-    "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
+    "param_source": {"min_chars": 18, "max_chars": 36, "extra_px": 32},
     "risk": {"min_chars": 6, "max_chars": 7, "extra_px": 22},
 }
 SCAN_DROPDOWN_KIND_LABELS = {
@@ -971,6 +976,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         param_source = self._get_selected_param_source()
         if param_source == "candidate_best":
             return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
+        if param_source == "candidate_retention_best":
+            return resolve_candidate_retention_best_params_path(WORKBENCH_PROJECT_ROOT)
         return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
 
     def _on_fixed_risk_selected(self, _event=None):

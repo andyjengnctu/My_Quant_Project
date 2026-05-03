@@ -18,7 +18,11 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
+from core.model_paths import (
+    resolve_candidate_best_params_path,
+    resolve_candidate_retention_best_params_path,
+    resolve_run_best_params_path,
+)
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.runtime_utils import parse_float_strict, parse_int_strict
@@ -73,6 +77,7 @@ WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__),
 PARAM_SOURCE_LABEL_TO_KEY = {
     "run_best | 目前參數": "run_best",
     "candidate_best | 候選參數": "candidate_best",
+    "candidate_retention_best | retention 最大候選": "candidate_retention_best",
 }
 PARAM_SOURCE_KEY_TO_LABEL = {value: key for key, value in PARAM_SOURCE_LABEL_TO_KEY.items()}
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
@@ -109,7 +114,7 @@ PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE = 4 / 3
 PORTFOLIO_RIGHT_SIDEBAR_WIDTH = int(round(WORKBENCH_RIGHT_SIDEBAR_WIDTH * PORTFOLIO_RIGHT_SIDEBAR_WIDTH_SCALE))
 PORTFOLIO_RIGHT_SIDEBAR_WRAPLENGTH = PORTFOLIO_RIGHT_SIDEBAR_WIDTH - (WORKBENCH_RIGHT_SIDEBAR_WIDTH - WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH)
 COMBOBOX_WIDTH_RULES = {
-    "param_source": {"min_chars": 18, "max_chars": 24, "extra_px": 32},
+    "param_source": {"min_chars": 18, "max_chars": 36, "extra_px": 32},
     "rotation": {"min_chars": 12, "max_chars": 18, "extra_px": 30},
     "start_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
     "end_year": {"min_chars": 7, "max_chars": 8, "extra_px": 24},
@@ -1445,8 +1450,11 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         return PARAM_SOURCE_LABEL_TO_KEY.get(self._param_source_display_var.get().strip(), "run_best")
 
     def _get_selected_params_path(self):
-        if self._get_selected_param_source() == "candidate_best":
+        param_source = self._get_selected_param_source()
+        if param_source == "candidate_best":
             return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
+        if param_source == "candidate_retention_best":
+            return resolve_candidate_retention_best_params_path(WORKBENCH_PROJECT_ROOT)
         return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
 
     def _resolve_fixed_risk(self):
