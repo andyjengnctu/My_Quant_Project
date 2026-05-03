@@ -845,6 +845,27 @@ def _resolve_index_marker_meta(chart_payload, idx, *, trace_names):
     return {}, None
 
 
+def _resolve_latest_marker_meta_at_or_before_index(chart_payload, idx, *, trace_names):
+    marker_groups = dict(chart_payload.get("marker_groups") or {})
+    latest_marker = None
+    latest_x = None
+    for trace_name in trace_names:
+        markers = marker_groups.get(trace_name) or []
+        for marker in markers:
+            try:
+                marker_x = int(marker.get("x", -1))
+            except (TypeError, ValueError):
+                continue
+            if marker_x > int(idx):
+                continue
+            if latest_x is None or marker_x > latest_x:
+                latest_x = marker_x
+                latest_marker = marker
+    if latest_marker is None:
+        return {}, None
+    return dict(latest_marker.get("meta") or {}), latest_marker
+
+
 
 def build_chart_hover_snapshot(chart_payload, index):
     idx = int(np.clip(int(index), 0, len(chart_payload["x"]) - 1))
@@ -879,9 +900,25 @@ def build_chart_hover_snapshot(chart_payload, index):
     }
     buy_signal_meta = _resolve_index_signal_annotation_meta(chart_payload, idx, signal_type="buy")
     buy_trade_meta, buy_trade_marker = _resolve_index_marker_meta(chart_payload, idx, trace_names=("買進", "買進(延續候選)", "錯失買進"))
+    active_buy_trade_meta = {}
+    active_buy_trade_marker = None
+    if line_value_sources.get("entry_price") == "actual":
+        active_buy_trade_meta, active_buy_trade_marker = _resolve_latest_marker_meta_at_or_before_index(
+            chart_payload,
+            idx,
+            trace_names=("買進", "買進(延續候選)"),
+        )
     reserved_capital = buy_signal_meta.get("reserved_capital")
     if reserved_capital is None:
         reserved_capital = buy_trade_meta.get("reserved_capital")
+    if reserved_capital is None:
+        reserved_capital = active_buy_trade_meta.get("reserved_capital")
+    buy_capital = buy_trade_meta.get("buy_capital")
+    if buy_capital is None:
+        buy_capital = active_buy_trade_meta.get("buy_capital")
+    buy_qty = None if buy_trade_marker is None else int(buy_trade_marker.get("qty", 0) or 0)
+    if buy_qty is None and active_buy_trade_marker is not None:
+        buy_qty = int(active_buy_trade_marker.get("qty", 0) or 0)
     return {
         "index": idx,
         "date_label": chart_payload["date_labels"][idx],
@@ -895,8 +932,8 @@ def build_chart_hover_snapshot(chart_payload, index):
         "signal_capital": buy_signal_meta.get("current_capital"),
         "signal_qty": buy_signal_meta.get("qty"),
         "reserved_capital": reserved_capital,
-        "buy_capital": buy_trade_meta.get("buy_capital"),
-        "buy_qty": None if buy_trade_marker is None else int(buy_trade_marker.get("qty", 0) or 0),
+        "buy_capital": buy_capital,
+        "buy_qty": buy_qty,
         **line_values,
     }
 

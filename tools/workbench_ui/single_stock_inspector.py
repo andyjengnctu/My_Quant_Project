@@ -42,8 +42,8 @@ from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_s
 from tools.workbench_ui.workbench import (
     build_workbench_scrollable_sidebar,
     grid_workbench_selected_ohlcv_labels,
+    resolve_workbench_capital_display_mode_for_snapshot,
     set_workbench_capital_display_text,
-    toggle_workbench_capital_display,
     WORKBENCH_CAPITAL_MODE_RESERVED,
     WORKBENCH_RIGHT_SIDEBAR_BODY_FONT,
     WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT,
@@ -477,7 +477,6 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_reserved_capital_text = "預留: -"
         self._selected_actual_spend_text = "實支: -"
         self._selected_capital_var = tk.StringVar(value="預留: -")
-        self._selected_capital_toggle_var = tk.StringVar(value="實支")
         self._ui_thread = threading.current_thread()
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
@@ -627,8 +626,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         capital_frame = ttk.Frame(sidebar, style="Workbench.TFrame")
         capital_frame.grid(row=16, column=0, sticky="ew", pady=(0, 4))
         capital_frame.columnconfigure(0, weight=1)
-        ttk.Label(capital_frame, textvariable=self._selected_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=0, column=0, sticky="w")
-        ttk.Button(capital_frame, textvariable=self._selected_capital_toggle_var, command=self._toggle_selected_capital_display, style="Workbench.Sidebar.TButton", width=4).grid(row=0, column=1, sticky="e", padx=(4, 0))
+        ttk.Label(capital_frame, textvariable=self._selected_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=0, column=0, sticky="ew")
         ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
         trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
@@ -1337,9 +1335,6 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._render_trade_table(trade_logs_df)
         return self._render_embedded_chart(result)
 
-    def _toggle_selected_capital_display(self):
-        toggle_workbench_capital_display(self)
-
     def _format_sidebar_line_value(self, label, value):
         return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
 
@@ -1369,7 +1364,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
-            set_workbench_capital_display_text(self, reserved_text="預留: -", actual_text="實支: -")
+            set_workbench_capital_display_text(self, reserved_text="預留: -", actual_text="實支: -", display_mode=WORKBENCH_CAPITAL_MODE_RESERVED)
             return
         self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
         self._selected_open_var.set(self._format_sidebar_ohlcv_value("開", snapshot.get("open")))
@@ -1396,6 +1391,7 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self,
             reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")),
             actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")),
+            display_mode=resolve_workbench_capital_display_mode_for_snapshot(snapshot),
         )
 
     def _apply_sidebar_chip_styles(self, signal_active, history_active):

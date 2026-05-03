@@ -21,7 +21,7 @@ WORKBENCH_BORDER = "#18324a"
 WORKBENCH_TEXT = "#f7fbff"
 WORKBENCH_MUTED = "#d6dfeb"
 WORKBENCH_ACCENT = "#2d7ff9"
-WORKBENCH_SIDEBAR_TITLE_BLUE = "#9fd7ff"
+WORKBENCH_SIDEBAR_TITLE_BLUE = "#2d7ff9"
 WORKBENCH_FRAME_STYLE = "Workbench.TFrame"
 WORKBENCH_LABELLF_STYLE = "Workbench.TLabelframe"
 WORKBENCH_LABEL_STYLE = "Workbench.TLabel"
@@ -43,7 +43,7 @@ WORKBENCH_UI_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_NOTEBOOK_FONT = ("Microsoft JhengHei", 11)
 WORKBENCH_RIGHT_SIDEBAR_WIDTH = 195
 WORKBENCH_RIGHT_SIDEBAR_WRAPLENGTH = 182
-WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.90
+WORKBENCH_RIGHT_SIDEBAR_FONT_SCALE = 0.81
 
 
 def _scale_right_sidebar_font_size(base_size):
@@ -308,23 +308,24 @@ def refresh_workbench_capital_display(target):
         target._selected_capital_display_mode = mode
     reserved_text = getattr(target, "_selected_reserved_capital_text", "預留: -")
     actual_text = getattr(target, "_selected_actual_spend_text", "實支: -")
-    if mode == WORKBENCH_CAPITAL_MODE_ACTUAL:
-        target._selected_capital_var.set(actual_text)
-        target._selected_capital_toggle_var.set("預留")
-    else:
-        target._selected_capital_var.set(reserved_text)
-        target._selected_capital_toggle_var.set("實支")
+    target._selected_capital_var.set(actual_text if mode == WORKBENCH_CAPITAL_MODE_ACTUAL else reserved_text)
 
 
-def set_workbench_capital_display_text(target, *, reserved_text, actual_text):
+def resolve_workbench_capital_display_mode_for_snapshot(snapshot):
+    if not snapshot:
+        return WORKBENCH_CAPITAL_MODE_RESERVED
+    line_sources = dict(snapshot.get("line_value_sources") or {})
+    buy_capital = _coerce_optional_float_for_sidebar(snapshot.get("buy_capital"))
+    if line_sources.get("entry_price") == "actual" and buy_capital is not None:
+        return WORKBENCH_CAPITAL_MODE_ACTUAL
+    return WORKBENCH_CAPITAL_MODE_RESERVED
+
+
+def set_workbench_capital_display_text(target, *, reserved_text, actual_text, display_mode=None):
     target._selected_reserved_capital_text = str(reserved_text)
     target._selected_actual_spend_text = str(actual_text)
-    refresh_workbench_capital_display(target)
-
-
-def toggle_workbench_capital_display(target):
-    mode = getattr(target, "_selected_capital_display_mode", WORKBENCH_CAPITAL_MODE_RESERVED)
-    target._selected_capital_display_mode = WORKBENCH_CAPITAL_MODE_RESERVED if mode == WORKBENCH_CAPITAL_MODE_ACTUAL else WORKBENCH_CAPITAL_MODE_ACTUAL
+    if display_mode in {WORKBENCH_CAPITAL_MODE_RESERVED, WORKBENCH_CAPITAL_MODE_ACTUAL}:
+        target._selected_capital_display_mode = display_mode
     refresh_workbench_capital_display(target)
 
 
