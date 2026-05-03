@@ -40,6 +40,11 @@ from tools.trade_analysis.charting import (
 from tools.trade_analysis.trade_log import load_params, resolve_trade_analysis_data_dir, run_ticker_analysis
 from tools.scanner.scan_runner import run_daily_scanner, run_history_qualified_scanner
 from tools.workbench_ui.workbench import (
+    build_workbench_scrollable_sidebar,
+    grid_workbench_selected_ohlcv_labels,
+    set_workbench_capital_display_text,
+    toggle_workbench_capital_display,
+    WORKBENCH_CAPITAL_MODE_RESERVED,
     WORKBENCH_RIGHT_SIDEBAR_BODY_FONT,
     WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT,
     WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT,
@@ -468,8 +473,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var = tk.StringVar(value="限價: -")
         self._selected_entry_var = tk.StringVar(value="成交: -")
         self._selected_stop_var = tk.StringVar(value="停損: -")
-        self._selected_reserved_capital_var = tk.StringVar(value="預留: -")
-        self._selected_actual_spend_var = tk.StringVar(value="實支: -")
+        self._selected_capital_display_mode = WORKBENCH_CAPITAL_MODE_RESERVED
+        self._selected_reserved_capital_text = "預留: -"
+        self._selected_actual_spend_text = "實支: -"
+        self._selected_capital_var = tk.StringVar(value="預留: -")
+        self._selected_capital_toggle_var = tk.StringVar(value="實支")
         self._ui_thread = threading.current_thread()
         self._console_stream_buffer = ""
         self._console_stream_mode = "line"
@@ -584,14 +592,13 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         )
         self._chart_placeholder.pack(fill="both", expand=True)
 
-        sidebar_outer = ttk.Frame(chart_tab, padding=(0, 3, 0, 3), width=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH, style="Workbench.TFrame")
-        sidebar_outer.grid(row=0, column=1, sticky="ns")
-        sidebar_outer.grid_propagate(False)
-        sidebar_outer.pack_propagate(False)
+        sidebar_outer, sidebar = build_workbench_scrollable_sidebar(
+            chart_tab,
+            width=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH,
+            row=0,
+            column=1,
+        )
         chart_tab.grid_columnconfigure(1, minsize=SINGLE_STOCK_RIGHT_SIDEBAR_WIDTH)
-
-        sidebar = ttk.Frame(sidebar_outer, padding=(0, 2), style="Workbench.TFrame")
-        sidebar.pack(fill="both", expand=True)
         sidebar.columnconfigure(0, weight=1)
         sidebar_chip_font = WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT
         sidebar_header_font = WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT
@@ -603,19 +610,25 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         ttk.Label(sidebar, text="單股歷史績效表", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=2, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._sidebar_summary_var, style="Workbench.SidebarSummary.TLabel", font=sidebar_body_font, justify="left", anchor="nw", wraplength=SINGLE_STOCK_RIGHT_SIDEBAR_WRAPLENGTH).grid(row=3, column=0, sticky="ew", pady=(2, 8))
         ttk.Label(sidebar, text="選取日線值", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=4, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=5, column=0, sticky="w", pady=(2, 0))
-        ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=6, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=7, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=8, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=9, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=10, column=0, sticky="w", pady=(0, 4))
+        self._selected_ohlcv_labels = {
+            "date": ttk.Label(sidebar, textvariable=self._selected_date_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+            "high": ttk.Label(sidebar, textvariable=self._selected_high_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+            "close": ttk.Label(sidebar, textvariable=self._selected_close_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+            "open": ttk.Label(sidebar, textvariable=self._selected_open_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+            "low": ttk.Label(sidebar, textvariable=self._selected_low_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+            "volume": ttk.Label(sidebar, textvariable=self._selected_volume_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left"),
+        }
+        grid_workbench_selected_ohlcv_labels(self._selected_ohlcv_labels, start_row=5)
         ttk.Label(sidebar, text="交易資訊", style="Workbench.SidebarHeader.TLabel", font=sidebar_header_font).grid(row=11, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_tp_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=12, column=0, sticky="w", pady=(2, 0))
         ttk.Label(sidebar, textvariable=self._selected_limit_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=13, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_entry_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=14, column=0, sticky="w")
         ttk.Label(sidebar, textvariable=self._selected_stop_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=15, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_reserved_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=16, column=0, sticky="w")
-        ttk.Label(sidebar, textvariable=self._selected_actual_spend_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=17, column=0, sticky="w", pady=(0, 4))
+        capital_frame = ttk.Frame(sidebar, style="Workbench.TFrame")
+        capital_frame.grid(row=16, column=0, sticky="ew", pady=(0, 4))
+        capital_frame.columnconfigure(0, weight=1)
+        ttk.Label(capital_frame, textvariable=self._selected_capital_var, style="Workbench.SidebarValue.TLabel", font=sidebar_body_font, justify="left").grid(row=0, column=0, sticky="w")
+        ttk.Button(capital_frame, textvariable=self._selected_capital_toggle_var, command=self._toggle_selected_capital_display, style="Workbench.Sidebar.TButton", width=4).grid(row=0, column=1, sticky="e", padx=(4, 0))
         ttk.Button(sidebar, text="回到最新K線", command=self._move_chart_to_latest, style="Workbench.Sidebar.TButton").grid(row=18, column=0, sticky="ew", pady=(4, 0))
         trade_nav = ttk.Frame(sidebar, style="Workbench.TFrame")
         trade_nav.grid(row=19, column=0, sticky="ew", pady=(0, 0))
@@ -1324,6 +1337,9 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._render_trade_table(trade_logs_df)
         return self._render_embedded_chart(result)
 
+    def _toggle_selected_capital_display(self):
+        toggle_workbench_capital_display(self)
+
     def _format_sidebar_line_value(self, label, value):
         return f"{label}: -" if value is None or pd.isna(value) else f"{label}: {float(value):.2f}"
 
@@ -1348,12 +1364,12 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             self._selected_low_var.set("低: -")
             self._selected_close_var.set("收: -")
             self._selected_volume_var.set("量: -")
+            grid_workbench_selected_ohlcv_labels(self._selected_ohlcv_labels, start_row=5)
             self._selected_tp_var.set("停利: -")
             self._selected_limit_var.set("限價: -")
             self._selected_entry_var.set("成交: -")
             self._selected_stop_var.set("停損: -")
-            self._selected_reserved_capital_var.set("預留: -")
-            self._selected_actual_spend_var.set("實支: -")
+            set_workbench_capital_display_text(self, reserved_text="預留: -", actual_text="實支: -")
             return
         self._selected_date_var.set(f"選取日: {snapshot.get('date_label', '-')}")
         self._selected_open_var.set(self._format_sidebar_ohlcv_value("開", snapshot.get("open")))
@@ -1361,6 +1377,12 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_low_var.set(self._format_sidebar_ohlcv_value("低", snapshot.get("low")))
         self._selected_close_var.set(self._format_sidebar_ohlcv_value("收", snapshot.get("close")))
         self._selected_volume_var.set(self._format_sidebar_ohlcv_value("量", snapshot.get("volume"), volume=True))
+        grid_workbench_selected_ohlcv_labels(
+            self._selected_ohlcv_labels,
+            open_value=snapshot.get("open"),
+            close_value=snapshot.get("close"),
+            start_row=5,
+        )
         line_sources = dict(snapshot.get("line_value_sources") or {})
 
         def _line_label(base_label, key):
@@ -1370,8 +1392,11 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._selected_limit_var.set(self._format_sidebar_line_value(_line_label("限價", "limit_price"), snapshot.get("limit_price")))
         self._selected_entry_var.set(self._format_sidebar_line_value(_line_label("買進", "entry_price") if line_sources.get("entry_price") == "shadow" else "成交", snapshot.get("entry_price")))
         self._selected_stop_var.set(self._format_sidebar_line_value(_line_label("停損", "stop_price"), snapshot.get("stop_price")))
-        self._selected_reserved_capital_var.set(self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")))
-        self._selected_actual_spend_var.set(self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")))
+        set_workbench_capital_display_text(
+            self,
+            reserved_text=self._format_sidebar_amount_value("預留", snapshot.get("reserved_capital")),
+            actual_text=self._format_sidebar_amount_value("實支", snapshot.get("buy_capital")),
+        )
 
     def _apply_sidebar_chip_styles(self, signal_active, history_active):
         self._signal_chip.configure(bg=SIDEBAR_CHIP_ACTIVE_BG if bool(signal_active) else SIDEBAR_CHIP_INACTIVE_BG)

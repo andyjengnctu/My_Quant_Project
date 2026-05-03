@@ -8,6 +8,12 @@ from tkinter import ttk
 
 WORKBENCH_TITLE = "股票工具工作台"
 WORKBENCH_GEOMETRY = "1920x1180"
+WORKBENCH_DEFAULT_MIN_WIDTH = 1520
+WORKBENCH_DEFAULT_MIN_HEIGHT = 920
+WORKBENCH_SAFE_MIN_WIDTH = 900
+WORKBENCH_SAFE_MIN_HEIGHT = 650
+WORKBENCH_SCREEN_MARGIN_X = 40
+WORKBENCH_SCREEN_MARGIN_Y = 80
 WORKBENCH_BG = "#05090e"
 WORKBENCH_SURFACE = "#0a1220"
 WORKBENCH_SURFACE_ALT = "#0d1626"
@@ -15,6 +21,7 @@ WORKBENCH_BORDER = "#18324a"
 WORKBENCH_TEXT = "#f7fbff"
 WORKBENCH_MUTED = "#d6dfeb"
 WORKBENCH_ACCENT = "#2d7ff9"
+WORKBENCH_SIDEBAR_TITLE_BLUE = "#9fd7ff"
 WORKBENCH_FRAME_STYLE = "Workbench.TFrame"
 WORKBENCH_LABELLF_STYLE = "Workbench.TLabelframe"
 WORKBENCH_LABEL_STYLE = "Workbench.TLabel"
@@ -161,9 +168,36 @@ def configure_workbench_theme(root):
     style.configure(WORKBENCH_HSCROLL_STYLE, background=WORKBENCH_SURFACE_ALT, troughcolor=WORKBENCH_BG, arrowcolor=WORKBENCH_TEXT)
     style.configure(WORKBENCH_SIDEBAR_SIGNAL_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT)
     style.configure(WORKBENCH_SIDEBAR_GATE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, anchor="center", padding=(10, 8), font=WORKBENCH_RIGHT_SIDEBAR_CHIP_FONT)
-    style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT)
+    style.configure(WORKBENCH_SIDEBAR_HEADER_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_SIDEBAR_TITLE_BLUE, font=WORKBENCH_RIGHT_SIDEBAR_HEADER_FONT)
     style.configure(WORKBENCH_SIDEBAR_SUMMARY_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_RIGHT_SIDEBAR_BODY_FONT, anchor="nw")
     style.configure(WORKBENCH_SIDEBAR_VALUE_STYLE, background=WORKBENCH_BG, foreground=WORKBENCH_TEXT, font=WORKBENCH_RIGHT_SIDEBAR_BODY_FONT)
+
+def _resolve_screen_limited_size(root, *, desired_width, desired_height):
+    screen_width = max(1, int(root.winfo_screenwidth()))
+    screen_height = max(1, int(root.winfo_screenheight()))
+    available_width = max(1, screen_width - WORKBENCH_SCREEN_MARGIN_X)
+    available_height = max(1, screen_height - WORKBENCH_SCREEN_MARGIN_Y)
+    return min(int(desired_width), available_width), min(int(desired_height), available_height)
+
+
+def _resolve_screen_limited_min_size(root):
+    min_width, min_height = _resolve_screen_limited_size(
+        root,
+        desired_width=WORKBENCH_DEFAULT_MIN_WIDTH,
+        desired_height=WORKBENCH_DEFAULT_MIN_HEIGHT,
+    )
+    if min_width >= WORKBENCH_SAFE_MIN_WIDTH:
+        min_width = max(WORKBENCH_SAFE_MIN_WIDTH, min_width)
+    if min_height >= WORKBENCH_SAFE_MIN_HEIGHT:
+        min_height = max(WORKBENCH_SAFE_MIN_HEIGHT, min_height)
+    return min_width, min_height
+
+
+def _apply_responsive_window_size(root):
+    initial_width, initial_height = _resolve_screen_limited_size(root, desired_width=1920, desired_height=1180)
+    root.geometry(f"{initial_width}x{initial_height}+0+0")
+    root.minsize(*_resolve_screen_limited_min_size(root))
+
 
 def _maximize_root_window(root):
     try:
@@ -184,13 +218,122 @@ def _maximize_root_window(root):
     return "geometry-screen"
 
 
+def build_workbench_scrollable_sidebar(master, *, width, row=0, column=1, outer_padding=(0, 3, 0, 3), inner_padding=(0, 2)):
+    outer = ttk.Frame(master, padding=outer_padding, width=width, style=WORKBENCH_FRAME_STYLE)
+    outer.grid(row=row, column=column, sticky="ns")
+    outer.grid_propagate(False)
+    outer.pack_propagate(False)
+    outer.rowconfigure(0, weight=1)
+    outer.columnconfigure(0, weight=1)
+
+    canvas = tk.Canvas(outer, bg=WORKBENCH_BG, highlightthickness=0, bd=0)
+    y_scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview, style=WORKBENCH_VSCROLL_STYLE)
+    canvas.configure(yscrollcommand=y_scroll.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    y_scroll.grid(row=0, column=1, sticky="ns")
+
+    inner = ttk.Frame(canvas, padding=inner_padding, style=WORKBENCH_FRAME_STYLE)
+    inner_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def _refresh_scrollregion(_event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def _sync_inner_width(event=None):
+        canvas_width = 1 if event is None else max(1, int(event.width))
+        canvas.itemconfigure(inner_window, width=canvas_width)
+
+    def _on_mousewheel(event):
+        if event.num == 4:
+            delta = -1
+        elif event.num == 5:
+            delta = 1
+        else:
+            delta = -1 * int(event.delta / 120) if event.delta else 0
+        if delta:
+            canvas.yview_scroll(delta, "units")
+
+    inner.bind("<Configure>", _refresh_scrollregion)
+    canvas.bind("<Configure>", _sync_inner_width)
+    for widget in (canvas, inner):
+        widget.bind("<MouseWheel>", _on_mousewheel, add="+")
+        widget.bind("<Button-4>", _on_mousewheel, add="+")
+        widget.bind("<Button-5>", _on_mousewheel, add="+")
+
+    outer._workbench_sidebar_canvas = canvas
+    outer._workbench_sidebar_inner = inner
+    return outer, inner
+
+
+WORKBENCH_SELECTED_OHLCV_UP_OR_FLAT_ORDER = ("date", "high", "close", "open", "low", "volume")
+WORKBENCH_SELECTED_OHLCV_DOWN_ORDER = ("date", "high", "open", "close", "low", "volume")
+WORKBENCH_CAPITAL_MODE_RESERVED = "reserved"
+WORKBENCH_CAPITAL_MODE_ACTUAL = "actual"
+
+
+def _coerce_optional_float_for_sidebar(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
+def resolve_workbench_selected_ohlcv_order(*, open_value, close_value):
+    open_number = _coerce_optional_float_for_sidebar(open_value)
+    close_number = _coerce_optional_float_for_sidebar(close_value)
+    if open_number is not None and close_number is not None and close_number < open_number:
+        return WORKBENCH_SELECTED_OHLCV_DOWN_ORDER
+    return WORKBENCH_SELECTED_OHLCV_UP_OR_FLAT_ORDER
+
+
+def grid_workbench_selected_ohlcv_labels(label_widgets, *, open_value=None, close_value=None, start_row=5):
+    order = resolve_workbench_selected_ohlcv_order(open_value=open_value, close_value=close_value)
+    for widget in label_widgets.values():
+        widget.grid_forget()
+    for offset, key in enumerate(order):
+        widget = label_widgets.get(key)
+        if widget is None:
+            continue
+        pady = (2, 0) if offset == 0 else ((0, 4) if offset == len(order) - 1 else (0, 0))
+        widget.grid(row=start_row + offset, column=0, sticky="w", pady=pady)
+    return order
+
+
+def refresh_workbench_capital_display(target):
+    mode = getattr(target, "_selected_capital_display_mode", WORKBENCH_CAPITAL_MODE_RESERVED)
+    if mode not in {WORKBENCH_CAPITAL_MODE_RESERVED, WORKBENCH_CAPITAL_MODE_ACTUAL}:
+        mode = WORKBENCH_CAPITAL_MODE_RESERVED
+        target._selected_capital_display_mode = mode
+    reserved_text = getattr(target, "_selected_reserved_capital_text", "預留: -")
+    actual_text = getattr(target, "_selected_actual_spend_text", "實支: -")
+    if mode == WORKBENCH_CAPITAL_MODE_ACTUAL:
+        target._selected_capital_var.set(actual_text)
+        target._selected_capital_toggle_var.set("預留")
+    else:
+        target._selected_capital_var.set(reserved_text)
+        target._selected_capital_toggle_var.set("實支")
+
+
+def set_workbench_capital_display_text(target, *, reserved_text, actual_text):
+    target._selected_reserved_capital_text = str(reserved_text)
+    target._selected_actual_spend_text = str(actual_text)
+    refresh_workbench_capital_display(target)
+
+
+def toggle_workbench_capital_display(target):
+    mode = getattr(target, "_selected_capital_display_mode", WORKBENCH_CAPITAL_MODE_RESERVED)
+    target._selected_capital_display_mode = WORKBENCH_CAPITAL_MODE_RESERVED if mode == WORKBENCH_CAPITAL_MODE_ACTUAL else WORKBENCH_CAPITAL_MODE_ACTUAL
+    refresh_workbench_capital_display(target)
+
+
 class StockToolsWorkbench:
     def __init__(self):
         self.root = tk.Tk()
         configure_workbench_theme(self.root)
         self.root.title(WORKBENCH_TITLE)
-        self.root.geometry(WORKBENCH_GEOMETRY)
-        self.root.minsize(1520, 920)
+        _apply_responsive_window_size(self.root)
         self.root.update_idletasks()
         self._maximize_mode = _maximize_root_window(self.root)
         self._build_ui()
