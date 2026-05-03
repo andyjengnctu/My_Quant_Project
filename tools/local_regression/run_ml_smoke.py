@@ -139,6 +139,10 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         label_dir = ensure_dir(parent_run_dir / label)
         models_dir = ensure_dir(label_dir / "models")
         params_path = models_dir / "run_best_params.json"
+        candidate_params_path = models_dir / "candidate_best_params.json"
+        candidate_summary_path = models_dir / "candidate_best_summary.json"
+        candidate_retention_params_path = models_dir / "candidate_retention_best_params.json"
+        candidate_retention_summary_path = models_dir / "candidate_retention_best_summary.json"
         db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
         failures = []
 
@@ -199,26 +203,54 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             elif db_metrics["trial_count"] < 1:
                 failures.append("no_trials_recorded")
 
+        candidate_params_info = _load_params_payload(candidate_params_path)
+        candidate_summary_exists = candidate_summary_path.exists()
+        candidate_retention_params_exists = candidate_retention_params_path.exists()
+        candidate_retention_summary_exists = candidate_retention_summary_path.exists()
+        candidate_best_available = candidate_params_path.exists() or candidate_summary_exists
         params_info = _load_params_payload(params_path)
-        run_best_params_required = db_metrics["qualified_trial_count"] > 0
+        run_best_params_required = bool(candidate_best_available)
+        if candidate_params_path.exists():
+            if candidate_params_info["params_read_error"]:
+                failures.append("candidate_best_params_invalid_json")
+            elif candidate_params_info["missing_keys"]:
+                failures.append(f"candidate_best_params_missing_keys:{','.join(candidate_params_info['missing_keys'])}")
+        if candidate_params_path.exists() and not candidate_summary_exists:
+            failures.append("missing_candidate_best_summary")
+        if candidate_summary_exists and not candidate_params_path.exists():
+            failures.append("missing_candidate_best_params")
+
         if not params_path.exists():
             if run_best_params_required:
-                failures.append("missing_run_best_params_for_qualified_trial")
+                failures.append("missing_run_best_params_for_exported_candidate")
         elif params_info["params_read_error"]:
             failures.append("run_best_params_invalid_json")
         elif params_info["missing_keys"]:
             failures.append(f"run_best_params_missing_keys:{','.join(params_info['missing_keys'])}")
 
         payload_digest = _canonical_payload_digest(params_info["payload"]) if params_info["payload"] else ""
+        candidate_payload_digest = _canonical_payload_digest(candidate_params_info["payload"]) if candidate_params_info["payload"] else ""
         result = {
             "label": label,
             "status": "PASS" if not failures else "FAIL",
             "db_path": str(db_path),
             "run_best_params_path": str(params_path),
+            "candidate_best_params_path": str(candidate_params_path),
+            "candidate_best_summary_path": str(candidate_summary_path),
+            "candidate_retention_best_params_path": str(candidate_retention_params_path),
+            "candidate_retention_best_summary_path": str(candidate_retention_summary_path),
             "db_trial_count": db_metrics["trial_count"],
             "qualified_trial_count": db_metrics["qualified_trial_count"],
             "best_trial_value": db_metrics["best_trial_value"],
             "run_best_params_required": run_best_params_required,
+            "candidate_best_available": bool(candidate_best_available),
+            "candidate_best_params_exists": candidate_params_path.exists(),
+            "candidate_best_summary_exists": candidate_summary_exists,
+            "candidate_best_params_keys": sorted(candidate_params_info["payload"].keys()) if candidate_params_info["payload"] else [],
+            "candidate_best_params_digest": candidate_payload_digest,
+            "candidate_best_params_read_error": candidate_params_info["params_read_error"],
+            "candidate_retention_best_params_exists": candidate_retention_params_exists,
+            "candidate_retention_best_summary_exists": candidate_retention_summary_exists,
             "run_best_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
             "run_best_params_payload": params_info["payload"],
             "run_best_params_digest": payload_digest,
@@ -252,6 +284,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
         "trial_count_match": first_run["db_trial_count"] == second_run["db_trial_count"],
         "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
         "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
+        "candidate_best_available_match": first_run.get("candidate_best_available", False) == second_run.get("candidate_best_available", False),
+        "candidate_best_params_digest_match": first_run.get("candidate_best_params_digest", "") == second_run.get("candidate_best_params_digest", ""),
         "run_best_params_digest_match": first_digest == second_digest,
         "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
@@ -270,6 +304,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "qualified_trial_count": first_run["qualified_trial_count"],
                 "best_trial_value": first_run["best_trial_value"],
                 "run_best_params_digest": first_digest,
+                "candidate_best_available": first_run.get("candidate_best_available", False),
+                "candidate_best_params_digest": first_run.get("candidate_best_params_digest", ""),
                 "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": first_run["failures"],
@@ -282,6 +318,8 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "qualified_trial_count": second_run["qualified_trial_count"],
                 "best_trial_value": second_run["best_trial_value"],
                 "run_best_params_digest": second_digest,
+                "candidate_best_available": second_run.get("candidate_best_available", False),
+                "candidate_best_params_digest": second_run.get("candidate_best_params_digest", ""),
                 "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
                 "failures": second_run["failures"],
@@ -322,6 +360,16 @@ def main(argv=None) -> int:
             "db_read_error": first_run["db_read_error"],
             "run_best_params_path": first_run["run_best_params_path"],
             "run_best_params_required": first_run["run_best_params_required"],
+            "candidate_best_available": first_run.get("candidate_best_available", False),
+            "candidate_best_params_path": first_run.get("candidate_best_params_path", ""),
+            "candidate_best_summary_path": first_run.get("candidate_best_summary_path", ""),
+            "candidate_best_params_keys": first_run.get("candidate_best_params_keys", []),
+            "candidate_best_params_digest": first_run.get("candidate_best_params_digest", ""),
+            "candidate_best_params_read_error": first_run.get("candidate_best_params_read_error", ""),
+            "candidate_retention_best_params_path": first_run.get("candidate_retention_best_params_path", ""),
+            "candidate_retention_best_summary_path": first_run.get("candidate_retention_best_summary_path", ""),
+            "candidate_retention_best_params_exists": first_run.get("candidate_retention_best_params_exists", False),
+            "candidate_retention_best_summary_exists": first_run.get("candidate_retention_best_summary_exists", False),
             "qualified_trial_count": first_run["qualified_trial_count"],
             "best_trial_value": first_run["best_trial_value"],
             "run_best_params_keys": first_run["run_best_params_keys"],
