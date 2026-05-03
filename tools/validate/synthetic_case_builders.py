@@ -131,10 +131,13 @@ def build_synthetic_rotation_t_plus_one_case(base_params, make_params):
     set_synthetic_bar(df_weak, 22, open_price=102.5, high_price=103.0, low_price=100.5, close_price=101.5)
     set_synthetic_bar(df_weak, 23, open_price=101.4, high_price=101.9, low_price=101.1, close_price=101.6)
 
-    set_synthetic_bar(df_weak, 70, open_price=103.0, high_price=104.5, low_price=102.8, close_price=104.0)
-    set_synthetic_bar(df_weak, 71, open_price=103.8, high_price=105.0, low_price=103.4, close_price=104.2)
+    for idx in range(36, len(df_weak)):
+        set_synthetic_bar(df_weak, idx, open_price=49.8, high_price=50.3, low_price=49.5, close_price=50.0)
+
+    set_synthetic_bar(df_weak, 70, open_price=50.0, high_price=55.0, low_price=48.0, close_price=50.8)
+    set_synthetic_bar(df_weak, 71, open_price=50.6, high_price=51.2, low_price=50.4, close_price=50.8)
     for idx in range(72, len(df_weak)):
-        set_synthetic_bar(df_weak, idx, open_price=104.2, high_price=104.5, low_price=103.9, close_price=104.2)
+        set_synthetic_bar(df_weak, idx, open_price=50.8, high_price=51.0, low_price=50.6, close_price=50.8)
 
     df_strong = build_synthetic_baseline_frame("2024-01-01", 140)
     winning_bars = {
