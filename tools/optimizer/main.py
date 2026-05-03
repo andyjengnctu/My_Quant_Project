@@ -64,6 +64,8 @@ MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 RUN_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "run_best_params.json")
 CANDIDATE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_best_params.json")
 CANDIDATE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_best_summary.json")
+CANDIDATE_RETENTION_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_params.json")
+CANDIDATE_RETENTION_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_summary.json")
 RUN_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "run_best_summary.json")
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
@@ -139,7 +141,7 @@ def _find_finalist_entry(finalists, winner_trial):
     return None
 
 
-def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode: str, walk_forward_policy: dict, action_label: str):
+def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode: str, walk_forward_policy: dict, action_label: str, selection_rule: str, compare_only: bool = False):
     if winner_trial is None or finalist_entry is None:
         raise ValueError("缺少 winner_trial 或 finalist_entry，無法建立 summary")
     return {
@@ -153,6 +155,8 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "search_train_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
         "oos_start_year": walk_forward_policy.get("oos_start_year"),
         "action": str(action_label),
+        "selection_rule": str(selection_rule),
+        "compare_only": bool(compare_only),
         "created_at": get_taipei_now().isoformat(),
     }
 
@@ -219,14 +223,18 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
         return True, "run_best summary 缺失，視同首次 promote"
     if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
         return True, "run_best summary effective policy 與 candidate 不一致，視同舊基準重新 promote"
+    run_best_local_min = float(run_best_summary.get("local_min_score", float("-inf")))
     run_best_retention = float(run_best_summary.get("retention", float("-inf")))
-    if candidate_retention > run_best_retention:
-        return True, "candidate.retention > run_best.retention"
-    if candidate_retention == run_best_retention:
-        run_best_local_min = float(run_best_summary.get("local_min_score", float("-inf")))
-        if candidate_local_min > run_best_local_min:
-            return True, "candidate.retention == run_best.retention，且 candidate.local_min_score > run_best.local_min_score"
-    return False, "candidate 未通過 promote 比較規則"
+    local_min_not_worse = candidate_local_min >= run_best_local_min
+    retention_not_worse = candidate_retention >= run_best_retention
+    strictly_better = candidate_local_min > run_best_local_min or candidate_retention > run_best_retention
+    if local_min_not_worse and retention_not_worse and strictly_better:
+        return True, "candidate local_min_score 與 retention 對 run_best 形成 Pareto 不劣，且至少一項勝出"
+    if candidate_local_min > run_best_local_min and candidate_retention < run_best_retention:
+        return False, "trade-off：candidate.local_min_score 較高，但 retention 較低，不自動 promote"
+    if candidate_local_min < run_best_local_min and candidate_retention > run_best_retention:
+        return False, "trade-off：candidate.retention 較高，但 local_min_score 較低，不自動 promote"
+    return False, "candidate 未通過 Pareto promote 比較規則"
 
 
 def _promote_candidate_to_run_best():
@@ -371,6 +379,55 @@ def finalize_best_trial_outputs(*, session, study, best_trial_resolver, dataset_
     return 0
 
 
+def _export_selected_candidate_artifacts(
+    *,
+    study,
+    finalists,
+    selected_trial,
+    params_path: str,
+    summary_path: str,
+    fixed_tp_percent: float,
+    colors: dict,
+    objective_mode: str,
+    walk_forward_policy: dict,
+    action_label: str,
+    selection_rule: str,
+    compare_only: bool,
+    artifact_label: str,
+    export_best_params_if_requested,
+    is_qualified_trial_value,
+):
+    if selected_trial is None or not is_qualified_trial_value(selected_trial.value):
+        print(f"{C_YELLOW}ℹ️ {artifact_label} 無可匯出 trial。{C_RESET}")
+        return False
+    export_status = export_best_params_if_requested(
+        study,
+        best_params_path=params_path,
+        fixed_tp_percent=fixed_tp_percent,
+        colors=colors,
+        best_trial_resolver=(lambda _study, _selected_trial=selected_trial: _selected_trial),
+        suppress_success_message=True,
+    )
+    if export_status != 0:
+        return False
+    finalist_entry = _find_finalist_entry(finalists, selected_trial)
+    if finalist_entry is None:
+        raise ValueError(f"找不到 {artifact_label} 的 finalist entry，無法建立 summary")
+    candidate_summary = _build_best_summary_payload(
+        winner_trial=selected_trial,
+        finalist_entry=finalist_entry,
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        action_label=action_label,
+        selection_rule=selection_rule,
+        compare_only=compare_only,
+    )
+    _write_json_file(summary_path, candidate_summary)
+    compare_note = "（比較用，不參與 promote）" if compare_only else ""
+    print(f"{C_GREEN}💾 {artifact_label}{compare_note} 已寫入：{params_path}{C_RESET}")
+    return True
+
+
 def _extract_cli_value(argv, option_name: str):
     args = [] if argv is None else list(argv)
     for idx in range(1, len(args)):
@@ -457,7 +514,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 並自動挑戰進版 run_best；若使用者中斷則不做。")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 作比較；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 與 candidate_retention_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -478,6 +535,7 @@ def main(argv=None, environ=None):
         build_local_min_score_best_trial_resolver,
         print_local_min_score_finalist_review,
         print_local_min_score_winner_summary,
+        select_best_finalist_by_local_retention,
     )
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.study_utils import (
@@ -576,32 +634,53 @@ def main(argv=None, environ=None):
                 colors=COLORS,
                 winner_trial=None,
             )
-            if best_trial is not None and is_qualified_trial_value(best_trial.value):
-                print_local_min_score_winner_summary(
-                    winner_trial=best_trial,
-                    session=session,
-                    colors=COLORS,
-                )
-            export_status = export_best_params_if_requested(
-                study,
-                best_params_path=CANDIDATE_BEST_PARAMS_PATH,
+            if best_trial is None or not is_qualified_trial_value(best_trial.value):
+                print(f"{C_YELLOW}ℹ️ 匯出模式完成，但目前尚無通過 local_min_score gate 的 winner。{C_RESET}")
+                return 0
+
+            print_local_min_score_winner_summary(
+                winner_trial=best_trial,
+                session=session,
+                colors=COLORS,
+            )
+            exported = _export_selected_candidate_artifacts(
+                study=study,
+                finalists=finalists,
+                selected_trial=best_trial,
+                params_path=CANDIDATE_BEST_PARAMS_PATH,
+                summary_path=CANDIDATE_BEST_SUMMARY_PATH,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
-                best_trial_resolver=(lambda _study, _best_trial=best_trial: _best_trial),
-                suppress_success_message=True,
-            )
-            if export_status != 0:
-                return export_status
-            finalist_entry = _find_finalist_entry(finalists, best_trial)
-            candidate_summary = _build_best_summary_payload(
-                winner_trial=best_trial,
-                finalist_entry=finalist_entry,
                 objective_mode=objective_mode,
                 walk_forward_policy=walk_forward_policy,
                 action_label="export_candidate",
+                selection_rule="max_local_min_score",
+                compare_only=False,
+                artifact_label="candidate_best",
+                export_best_params_if_requested=export_best_params_if_requested,
+                is_qualified_trial_value=is_qualified_trial_value,
             )
-            _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
-            print(f"{C_GREEN}💾 candidate_best 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+            if not exported:
+                return 1
+            retention_best_finalist = select_best_finalist_by_local_retention(finalists)
+            retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
+            _export_selected_candidate_artifacts(
+                study=study,
+                finalists=finalists,
+                selected_trial=retention_best_trial,
+                params_path=CANDIDATE_RETENTION_BEST_PARAMS_PATH,
+                summary_path=CANDIDATE_RETENTION_BEST_SUMMARY_PATH,
+                fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                colors=COLORS,
+                objective_mode=objective_mode,
+                walk_forward_policy=walk_forward_policy,
+                action_label="export_candidate",
+                selection_rule="max_retention_compare",
+                compare_only=True,
+                artifact_label="candidate_retention_best",
+                export_best_params_if_requested=export_best_params_if_requested,
+                is_qualified_trial_value=is_qualified_trial_value,
+            )
             if selected_model_mode == 'split':
                 return finalize_best_trial_outputs(
                     session=session,
@@ -767,9 +846,30 @@ def main(argv=None, environ=None):
                     objective_mode=objective_mode,
                     walk_forward_policy=walk_forward_policy,
                     action_label="train",
+                    selection_rule="max_local_min_score",
+                    compare_only=False,
                 )
                 _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)
                 print(f"{C_GREEN}💾 candidate_best 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+                retention_best_finalist = select_best_finalist_by_local_retention(finalists)
+                retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
+                _export_selected_candidate_artifacts(
+                    study=study,
+                    finalists=finalists,
+                    selected_trial=retention_best_trial,
+                    params_path=CANDIDATE_RETENTION_BEST_PARAMS_PATH,
+                    summary_path=CANDIDATE_RETENTION_BEST_SUMMARY_PATH,
+                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                    colors=COLORS,
+                    objective_mode=objective_mode,
+                    walk_forward_policy=walk_forward_policy,
+                    action_label="train",
+                    selection_rule="max_retention_compare",
+                    compare_only=True,
+                    artifact_label="candidate_retention_best",
+                    export_best_params_if_requested=export_best_params_if_requested,
+                    is_qualified_trial_value=is_qualified_trial_value,
+                )
                 _promote_candidate_to_run_best()
                 if selected_model_mode == 'split':
                     finalize_best_trial_outputs(

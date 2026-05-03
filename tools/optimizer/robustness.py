@@ -170,7 +170,23 @@ def _compute_local_retention(base_score: float, local_min_score: float) -> float
     return float(local_min_score) / base
 
 
-def _select_best_finalist_by_local_retention(finalists: list[dict]):
+def _select_best_finalist_by_local_min_score(finalists: list[dict]):
+    eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
+    if not eligible:
+        return None
+    eligible.sort(
+        key=lambda item: (
+            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+            float(item.get("local_retention", float("-inf"))),
+            float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            -int(item["trial"].number),
+        ),
+        reverse=True,
+    )
+    return eligible[0]
+
+
+def select_best_finalist_by_local_retention(finalists: list[dict]):
     eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
     if not eligible:
         return None
@@ -423,8 +439,8 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
         })
     enriched_finalists.sort(
         key=lambda item: (
-            float(item["local_retention"]),
             float(item["local_min_score"]),
+            float(item["local_retention"]),
             float(item["base_score"]),
             -int(item["trial"].number),
         ),
@@ -444,8 +460,10 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     )
     if not finalists:
         return [], winner_trial
+    retention_best_finalist = select_best_finalist_by_local_retention(finalists)
+    retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
     if winner_trial is None:
-        best_finalist = _select_best_finalist_by_local_retention(finalists)
+        best_finalist = _select_best_finalist_by_local_min_score(finalists)
         winner_trial = None if best_finalist is None else best_finalist["trial"]
 
     gray = colors.get("gray", "")
@@ -462,8 +480,14 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         gate_pass = bool(item["gate_pass"])
         status_text = 'PASS' if gate_pass else 'FAIL'
         status_color = green if gate_pass else red
-        result_text = 'winner' if winner_trial is not None and int(winner_trial.number) == int(trial.number) else ('保留' if gate_pass else '淘汰')
-        result_color = yellow if result_text == 'winner' else status_color
+        is_winner = winner_trial is not None and int(winner_trial.number) == int(trial.number)
+        is_retention_ref = (
+            retention_best_trial is not None
+            and int(retention_best_trial.number) == int(trial.number)
+            and not is_winner
+        )
+        result_text = 'winner' if is_winner else ('ret_ref' if is_retention_ref else ('保留' if gate_pass else '淘汰'))
+        result_color = yellow if result_text in {'winner', 'ret_ref'} else status_color
         print(
             f"#{int(trial.number) + 1:<13}"
             f"#{int(item.get('base_rank', idx)):>7}"
@@ -497,7 +521,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
         include_trial=None,
         show_progress=show_progress,
     )
-    best_finalist = _select_best_finalist_by_local_retention(finalists)
+    best_finalist = _select_best_finalist_by_local_min_score(finalists)
     if best_finalist is None:
         if show_progress:
             _print_progress_line(session, "ℹ️ 沒有任何 finalist 通過 local_min_score gate")
@@ -507,7 +531,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     if show_progress:
         _print_progress_line(
             session,
-            f"🏁 winner: trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
+            f"🏁 winner(local_min): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
         )
     resolver_cache[cache_key] = trial
     return trial
