@@ -165,6 +165,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
             "full_year_count": full_year_count,
             "min_full_year_return_pct": min_full_year_return_pct,
             "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+            "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
             "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
             "r_squared": r_sq,
             "m_win_rate": m_win_rate,
@@ -201,6 +202,7 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
         "full_year_count": full_year_count,
         "min_full_year_return_pct": min_full_year_return_pct,
         "yearly_return_rows": pf_profile.get("yearly_return_rows", []),
+        "dominant_year_dependency_diagnostics": pf_profile.get("dominant_year_dependency_diagnostics", {}),
         "bm_min_full_year_return_pct": bm_min_full_year_return_pct,
         "r_squared": r_sq,
         "m_win_rate": m_win_rate,
@@ -340,6 +342,7 @@ def run_optimizer_objective(session, trial):
     trial.set_user_attr("full_year_count", evaluation["full_year_count"])
     trial.set_user_attr("min_full_year_return_pct", evaluation["min_full_year_return_pct"])
     trial.set_user_attr("yearly_return_rows", evaluation["yearly_return_rows"])
+    trial.set_user_attr("dominant_year_dependency_diagnostics", evaluation.get("dominant_year_dependency_diagnostics", {}))
     trial.set_user_attr("base_score", evaluation["base_score"])
     trial.set_user_attr("bm_min_full_year_return_pct", evaluation["bm_min_full_year_return_pct"])
     trial.set_user_attr("r_squared", evaluation["r_squared"])

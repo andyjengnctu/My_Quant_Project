@@ -26,7 +26,11 @@ from core.walk_forward_policy import (
     build_optimizer_runtime_policy,
     load_walk_forward_policy,
 )
-from config.training_policy import DEFAULT_OPTIMIZER_MODEL_MODE, OPTIMIZER_FIXED_TP_PERCENT
+from config.training_policy import (
+    DEFAULT_OPTIMIZER_MODEL_MODE,
+    OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_FIXED_TP_PERCENT,
+)
 
 warnings.simplefilter("default")
 warnings.filterwarnings("once", category=FutureWarning, module=r"optuna(\..*)?$")
@@ -144,7 +148,7 @@ def _find_finalist_entry(finalists, winner_trial):
 def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode: str, walk_forward_policy: dict, action_label: str, selection_rule: str, compare_only: bool = False):
     if winner_trial is None or finalist_entry is None:
         raise ValueError("缺少 winner_trial 或 finalist_entry，無法建立 summary")
-    return {
+    payload = {
         "trial_number": int(winner_trial.number) + 1,
         "base_score": float(finalist_entry["base_score"]),
         "local_min_score": float(finalist_entry["local_min_score"]),
@@ -157,8 +161,20 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "action": str(action_label),
         "selection_rule": str(selection_rule),
         "compare_only": bool(compare_only),
+        "dominant_year_dependency_anti_overfit_enabled": bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
         "created_at": get_taipei_now().isoformat(),
     }
+    diagnostics = finalist_entry.get("dominant_year_dependency_diagnostics")
+    if isinstance(diagnostics, dict):
+        payload["dominant_year_dependency_diagnostics"] = diagnostics
+        payload["dependency_warning"] = bool(diagnostics.get("dependency_warning", False))
+    return payload
+
+
+def _resolve_candidate_best_selection_rule():
+    if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
+        return "max_local_min_score_with_dominant_year_dependency_veto"
+    return "max_local_min_score"
 
 
 def _summary_policy_signature(summary: dict | None):
@@ -654,7 +670,7 @@ def main(argv=None, environ=None):
                 objective_mode=objective_mode,
                 walk_forward_policy=walk_forward_policy,
                 action_label="export_candidate",
-                selection_rule="max_local_min_score",
+                selection_rule=_resolve_candidate_best_selection_rule(),
                 compare_only=False,
                 artifact_label="candidate_best",
                 export_best_params_if_requested=export_best_params_if_requested,
@@ -846,7 +862,7 @@ def main(argv=None, environ=None):
                     objective_mode=objective_mode,
                     walk_forward_policy=walk_forward_policy,
                     action_label="train",
-                    selection_rule="max_local_min_score",
+                    selection_rule=_resolve_candidate_best_selection_rule(),
                     compare_only=False,
                 )
                 _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, candidate_summary)

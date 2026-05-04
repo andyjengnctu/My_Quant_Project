@@ -5,7 +5,10 @@ import sys
 from typing import Callable
 
 
-from config.training_policy import resolve_optimizer_local_min_score_finalist_top_k
+from config.training_policy import (
+    OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
+    resolve_optimizer_local_min_score_finalist_top_k,
+)
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
@@ -38,6 +41,12 @@ def _get_local_min_payload_score_cache(session):
     if not hasattr(session, "local_min_payload_score_cache"):
         session.local_min_payload_score_cache = {}
     return session.local_min_payload_score_cache
+
+
+def _get_dominant_year_dependency_cache(session):
+    if not hasattr(session, "dominant_year_dependency_cache"):
+        session.dominant_year_dependency_cache = {}
+    return session.dominant_year_dependency_cache
 
 
 def _build_payload_score_cache_key(payload: dict):
@@ -170,11 +179,20 @@ def _compute_local_retention(base_score: float, local_min_score: float) -> float
     return float(local_min_score) / base
 
 
-def _select_best_finalist_by_local_min_score(finalists: list[dict]):
-    eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
-    if not eligible:
-        return None
-    eligible.sort(
+def is_dominant_year_dependency_anti_overfit_enabled() -> bool:
+    return bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED)
+
+
+def _has_dependency_warning(item: dict) -> bool:
+    diagnostics = item.get("dominant_year_dependency_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    return bool(diagnostics.get("dependency_warning", False))
+
+
+def _sort_finalists_by_local_min(finalists: list[dict]) -> list[dict]:
+    return sorted(
+        finalists,
         key=lambda item: (
             float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
             float(item.get("local_retention", float("-inf"))),
@@ -183,7 +201,17 @@ def _select_best_finalist_by_local_min_score(finalists: list[dict]):
         ),
         reverse=True,
     )
-    return eligible[0]
+
+
+def _select_best_finalist_by_local_min_score(finalists: list[dict]):
+    eligible = [item for item in finalists if bool(item.get("gate_pass", False))]
+    if not eligible:
+        return None
+    if is_dominant_year_dependency_anti_overfit_enabled():
+        safe_eligible = [item for item in eligible if not _has_dependency_warning(item)]
+        if safe_eligible:
+            return _sort_finalists_by_local_min(safe_eligible)[0]
+    return _sort_finalists_by_local_min(eligible)[0]
 
 
 def select_best_finalist_by_local_retention(finalists: list[dict]):
@@ -357,6 +385,48 @@ def compute_local_min_score(
 
 
 
+def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
+    existing = trial.user_attrs.get("dominant_year_dependency_diagnostics")
+    if isinstance(existing, dict) and existing:
+        return existing
+
+    payload = build_best_params_payload_from_trial(
+        trial,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
+    )
+    cache = _get_dominant_year_dependency_cache(session)
+    cache_key = _build_payload_score_cache_key(payload)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    ai_params = build_params_from_mapping(payload)
+    prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+    prep_result = prepare_trial_inputs(
+        raw_data_cache=session.raw_data_cache,
+        params=ai_params,
+        default_max_workers=session.default_max_workers,
+        executor_bundle=prep_executor_bundle,
+        static_fast_cache=session.static_fast_cache,
+        static_master_dates=session.master_dates,
+        include_trade_logs=False,
+        include_pit_stats_index=True,
+    )
+    search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=objective_mode)
+    evaluation = evaluate_prepared_train_score(
+        session,
+        ai_params=ai_params,
+        prep_result=prep_result,
+        search_scope=search_scope,
+        profile_stats={},
+    )
+    diagnostics = evaluation.get("dominant_year_dependency_diagnostics", {})
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    cache[cache_key] = diagnostics
+    return diagnostics
+
+
 def _list_qualified_trials_for_objective(study, objective_mode: str):
     qualified_trials = [
         trial
@@ -429,14 +499,21 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
         else:
             local_min_score = compute_local_min_score(session, trial)
         base_score = float(item["base_score"])
-        enriched_finalists.append({
+        enriched_item = {
             "trial": trial,
             "base_rank": int(item.get("base_rank", 0)),
             "base_score": base_score,
             "local_min_score": float(local_min_score),
             "local_retention": _compute_local_retention(base_score, float(local_min_score)),
             "gate_pass": bool(local_min_score > 0.0),
-        })
+        }
+        if is_dominant_year_dependency_anti_overfit_enabled():
+            enriched_item["dominant_year_dependency_diagnostics"] = _resolve_trial_dependency_diagnostics(
+                session,
+                trial,
+                objective_mode,
+            )
+        enriched_finalists.append(enriched_item)
     enriched_finalists.sort(
         key=lambda item: (
             float(item["local_min_score"]),
@@ -473,8 +550,16 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     yellow = colors.get("yellow", "")
     reset = colors.get("reset", "")
 
-    print(f"{gray}{'-' * 96}{reset}")
-    print(f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
+    dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled()
+    separator_width = 152 if dependency_enabled else 96
+    print(f"{gray}{'-' * separator_width}{reset}")
+    if dependency_enabled:
+        print(
+            f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}"
+            f"{'local_gate':>14}{'dep':>8}{'dom_year':>10}{'eff_yrs':>10}{'eff_trades':>12}{'eff_symbols':>13}{'top_trade%':>12}{'結果':>12}"
+        )
+    else:
+        print(f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
     for idx, item in enumerate(finalists, start=1):
         trial = item["trial"]
         gate_pass = bool(item["gate_pass"])
@@ -486,18 +571,49 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             and int(retention_best_trial.number) == int(trial.number)
             and not is_winner
         )
-        result_text = 'winner' if is_winner else ('ret_ref' if is_retention_ref else ('保留' if gate_pass else '淘汰'))
-        result_color = yellow if result_text in {'winner', 'ret_ref'} else status_color
-        print(
-            f"#{int(trial.number) + 1:<13}"
-            f"#{int(item.get('base_rank', idx)):>7}"
-            f"{float(item['base_score']):>14.3f}"
-            f"{float(item['local_min_score']):>14.3f}"
-            f"{float(item['local_retention']):>12.3f}"
-            f"{status_color}{status_text:>14}{reset}"
-            f"{result_color}{result_text:>12}{reset}"
-        )
-    print(f"{gray}{'=' * 96}{reset}")
+        has_dependency_warning = dependency_enabled and _has_dependency_warning(item)
+        if is_winner:
+            result_text = 'winner'
+        elif is_retention_ref:
+            result_text = 'ret_ref'
+        elif has_dependency_warning and gate_pass:
+            result_text = 'dep_skip'
+        else:
+            result_text = '保留' if gate_pass else '淘汰'
+        result_color = yellow if result_text in {'winner', 'ret_ref'} else (red if result_text == 'dep_skip' else status_color)
+        if dependency_enabled:
+            diagnostics = item.get("dominant_year_dependency_diagnostics") if isinstance(item.get("dominant_year_dependency_diagnostics"), dict) else {}
+            dep_text = 'WARN' if bool(diagnostics.get('dependency_warning', False)) else str(diagnostics.get('dependency_status') or 'OK')
+            dep_color = red if dep_text == 'WARN' else green
+            dominant_year = diagnostics.get('dominant_entry_year')
+            dominant_year_text = 'N/A' if dominant_year is None else str(dominant_year)
+            top_trade_pct = float(diagnostics.get('top_trade_pnl_share_in_dominant_year', 0.0)) * 100.0
+            print(
+                f"#{int(trial.number) + 1:<13}"
+                f"#{int(item.get('base_rank', idx)):>7}"
+                f"{float(item['base_score']):>14.3f}"
+                f"{float(item['local_min_score']):>14.3f}"
+                f"{float(item['local_retention']):>12.3f}"
+                f"{status_color}{status_text:>14}{reset}"
+                f"{dep_color}{dep_text:>8}{reset}"
+                f"{dominant_year_text:>10}"
+                f"{float(diagnostics.get('effective_positive_year_count', 0.0)):>10.2f}"
+                f"{float(diagnostics.get('effective_trade_count_in_dominant_year', 0.0)):>12.2f}"
+                f"{float(diagnostics.get('effective_symbol_count_in_dominant_year', 0.0)):>13.2f}"
+                f"{top_trade_pct:>12.1f}"
+                f"{result_color}{result_text:>12}{reset}"
+            )
+        else:
+            print(
+                f"#{int(trial.number) + 1:<13}"
+                f"#{int(item.get('base_rank', idx)):>7}"
+                f"{float(item['base_score']):>14.3f}"
+                f"{float(item['local_min_score']):>14.3f}"
+                f"{float(item['local_retention']):>12.3f}"
+                f"{status_color}{status_text:>14}{reset}"
+                f"{result_color}{result_text:>12}{reset}"
+            )
+    print(f"{gray}{'=' * separator_width}{reset}")
     return finalists, winner_trial
 
 
@@ -531,7 +647,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     if show_progress:
         _print_progress_line(
             session,
-            f"🏁 winner(local_min): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
+            f"🏁 winner(local_min{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
         )
     resolver_cache[cache_key] = trial
     return trial

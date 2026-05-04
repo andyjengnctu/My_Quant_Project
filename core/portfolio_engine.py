@@ -22,6 +22,7 @@ from core.portfolio_stats import (
     find_sim_start_idx,
 )
 from core.portfolio_stats import calc_portfolio_score
+from core.portfolio_attribution import build_dominant_year_dependency_diagnostics
 from core.portfolio_candidates import build_daily_candidates, track_normal_setup_signals_for_day
 from core.portfolio_ops import (
     cleanup_extended_signals_for_day,
@@ -664,6 +665,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
         profile_stats['portfolio_closeout_sec'] = closeout_sec
         profile_stats['curve_stats_sec'] = curve_stats_sec
+        profile_stats['dominant_year_dependency_diagnostics'] = build_dominant_year_dependency_diagnostics(closed_trades_stats)
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct
         profile_stats['bm_annual_return_pct'] = bm_annual_return_pct

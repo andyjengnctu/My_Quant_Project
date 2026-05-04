@@ -35,6 +35,48 @@ def _round_money_for_history(value):
     return round_money_for_display(value)
 
 
+def _format_date_or_none(raw_date):
+    if raw_date is None:
+        return None
+    if hasattr(raw_date, 'strftime'):
+        return raw_date.strftime('%Y-%m-%d')
+    raw_text = str(raw_date).strip()
+    return raw_text or None
+
+
+def _resolve_year_or_none(raw_date):
+    if raw_date is None:
+        return None
+    raw_year = getattr(raw_date, 'year', None)
+    if raw_year is not None:
+        try:
+            year = int(raw_year)
+            return year if year > 0 else None
+        except (TypeError, ValueError):
+            return None
+    raw_text = str(raw_date).strip()
+    if len(raw_text) < 4:
+        return None
+    try:
+        year = int(raw_text[:4])
+    except ValueError:
+        return None
+    return year if year > 0 else None
+
+
+def _build_closed_trade_stat(position, *, ticker, pnl, r_mult, exit_date):
+    entry_trade_date = position.get('entry_trade_date')
+    return {
+        'pnl': pnl,
+        'r_mult': r_mult,
+        'entry_type': position.get('entry_type', 'normal'),
+        'ticker': str(ticker or position.get('ticker') or ''),
+        'entry_trade_date': _format_date_or_none(entry_trade_date),
+        'entry_year': _resolve_year_or_none(entry_trade_date),
+        'exit_date': _format_date_or_none(exit_date),
+    }
+
+
 def _resolve_position_active_tp_half(position):
     if bool(position.get('sold_half', False)) or position.get('pending_exit_action') == 'TP_HALF':
         return None
@@ -202,7 +244,7 @@ def try_rotate_weakest_position(
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
-            {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
+            _build_closed_trade_stat(pos, ticker=weakest_ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
         )
         if is_extended_entry_type(pos.get('entry_type', 'normal')):
             extended_trade_count += 1
@@ -309,7 +351,7 @@ def settle_portfolio_positions(
             total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
             total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
             closed_trades_stats.append(
-                {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
+                _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=today)
             )
             if is_extended_entry_type(pos.get('entry_type', 'normal')):
                 extended_trade_count += 1
@@ -428,7 +470,7 @@ def closeout_open_positions(
         display_tail_pnl = calc_reconciled_exit_display_pnl(pos, total_pnl)
         total_r = calc_ratio_from_milli(total_pnl_milli, pos.get('initial_risk_total_milli', 0))
         closed_trades_stats.append(
-            {'pnl': total_pnl, 'r_mult': total_r, 'entry_type': pos.get('entry_type', 'normal')}
+            _build_closed_trade_stat(pos, ticker=ticker, pnl=total_pnl, r_mult=total_r, exit_date=last_date)
         )
         if is_extended_entry_type(pos.get('entry_type', 'normal')):
             extended_trade_count += 1

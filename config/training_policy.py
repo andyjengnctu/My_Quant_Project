@@ -34,6 +34,17 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
+# dominant-year dependency anti-overfitting 開關。
+# True  = candidate_best 會跳過「年度集中 + 來源狹窄」的脆弱型 finalist。
+# False = candidate_best 回到原本只看 local_min_score 的選法。
+OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = True
+
+# 以下門檻只在上述開關啟用時使用；語意採 effective count，避免單純懲罰真的抓到大行情的參數。
+DOMINANT_YEAR_MIN_EFFECTIVE_POSITIVE_YEAR_COUNT = 2.0  # 正獲利來源等效少於 2 年才視為年度集中
+DOMINANT_YEAR_MIN_EFFECTIVE_TRADE_COUNT = 3.0  # dominant year 正獲利等效少於 3 筆交易才視為交易來源狹窄
+DOMINANT_YEAR_MIN_EFFECTIVE_SYMBOL_COUNT = 3.0  # dominant year 正獲利等效少於 3 檔股票才視為標的來源狹窄
+DOMINANT_YEAR_MAX_TOP_TRADE_PNL_SHARE = 0.50  # dominant year 單筆交易貢獻 >= 50% 才視為單筆 outlier
+
 
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     requested_trials = max(0, int(n_trials))
