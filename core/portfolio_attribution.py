@@ -10,7 +10,6 @@ from config.training_policy import (
     DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE,
 )
 
-DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION = "dominant_year_dependency_v2_intuitive"
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -53,7 +52,6 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
 
 def _empty_diagnostics(*, status: str, positive_total_pnl: float = 0.0) -> dict:
     return {
-        "diagnostics_version": DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION,
         "dependency_warning": False,
         "dependency_status": str(status),
         "dependency_reason": [],
@@ -62,11 +60,8 @@ def _empty_diagnostics(*, status: str, positive_total_pnl: float = 0.0) -> dict:
         "dominant_entry_year": None,
         "dominant_year_positive_pnl": 0.0,
         "dominant_year_positive_pnl_share": 0.0,
-        "dominant_year_pnl_share": 0.0,
         "dominant_year_positive_trade_count": 0,
-        "dominant_year_trade_count": 0,
         "dominant_year_positive_symbol_count": 0,
-        "dominant_year_symbol_count": 0,
         "top_trade_pnl_share_in_dominant_year": 0.0,
         "thresholds": _threshold_snapshot(),
     }
@@ -155,7 +150,6 @@ def build_dominant_year_dependency_diagnostics(closed_trades_stats) -> dict:
             dependency_reason.append("top_trade_pnl_share_in_dominant_year_gte_outlier")
 
     return {
-        "diagnostics_version": DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION,
         "dependency_warning": dependency_warning,
         "dependency_status": "WARN" if dependency_warning else "OK",
         "dependency_reason": dependency_reason,
@@ -164,11 +158,8 @@ def build_dominant_year_dependency_diagnostics(closed_trades_stats) -> dict:
         "dominant_entry_year": dominant_entry_year,
         "dominant_year_positive_pnl": float(dominant_year_positive_pnl),
         "dominant_year_positive_pnl_share": float(dominant_share),
-        "dominant_year_pnl_share": float(dominant_share),
         "dominant_year_positive_trade_count": positive_trade_count,
-        "dominant_year_trade_count": positive_trade_count,
         "dominant_year_positive_symbol_count": positive_symbol_count,
-        "dominant_year_symbol_count": positive_symbol_count,
         "top_trade_pnl_share_in_dominant_year": float(top_trade_pnl_share),
         "thresholds": _threshold_snapshot(),
     }

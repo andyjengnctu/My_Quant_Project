@@ -10,7 +10,6 @@ from config.training_policy import (
     resolve_optimizer_local_min_score_finalist_top_k,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.portfolio_attribution import DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import evaluate_prepared_train_score, resolve_search_train_scope
@@ -400,13 +399,44 @@ def compute_local_min_score(
 
 
 
+_CURRENT_DEPENDENCY_DIAGNOSTIC_REQUIRED_KEYS = frozenset({
+    "dependency_warning",
+    "dependency_status",
+    "dependency_reason",
+    "positive_total_pnl",
+    "dominant_entry_year",
+    "dominant_year_positive_pnl",
+    "dominant_year_positive_pnl_share",
+    "dominant_year_positive_trade_count",
+    "dominant_year_positive_symbol_count",
+    "top_trade_pnl_share_in_dominant_year",
+})
+
+_CURRENT_DEPENDENCY_DIAGNOSTIC_OUTPUT_KEYS = (
+    "dependency_warning",
+    "dependency_status",
+    "dependency_reason",
+    "positive_total_pnl",
+    "unassigned_positive_pnl",
+    "dominant_entry_year",
+    "dominant_year_positive_pnl",
+    "dominant_year_positive_pnl_share",
+    "dominant_year_positive_trade_count",
+    "dominant_year_positive_symbol_count",
+    "top_trade_pnl_share_in_dominant_year",
+    "thresholds",
+)
+
+
+def _normalize_current_dependency_diagnostics(value):
+    if not isinstance(value, dict) or not _CURRENT_DEPENDENCY_DIAGNOSTIC_REQUIRED_KEYS.issubset(value.keys()):
+        return None
+    return {key: value.get(key) for key in _CURRENT_DEPENDENCY_DIAGNOSTIC_OUTPUT_KEYS if key in value}
+
+
 def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
-    existing = trial.user_attrs.get("dominant_year_dependency_diagnostics")
-    if (
-        isinstance(existing, dict)
-        and existing
-        and existing.get("diagnostics_version") == DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION
-    ):
+    existing = _normalize_current_dependency_diagnostics(trial.user_attrs.get("dominant_year_dependency_diagnostics"))
+    if existing is not None:
         return existing
 
     payload = build_best_params_payload_from_trial(
@@ -415,7 +445,7 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
     )
     cache = _get_dominant_year_dependency_cache(session)
     cache_key = _build_payload_score_cache_key(payload)
-    cached = cache.get(cache_key)
+    cached = _normalize_current_dependency_diagnostics(cache.get(cache_key))
     if cached is not None:
         return cached
 
@@ -439,8 +469,8 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
         search_scope=search_scope,
         profile_stats={},
     )
-    diagnostics = evaluation.get("dominant_year_dependency_diagnostics", {})
-    if not isinstance(diagnostics, dict):
+    diagnostics = _normalize_current_dependency_diagnostics(evaluation.get("dominant_year_dependency_diagnostics", {}))
+    if diagnostics is None:
         diagnostics = {}
     cache[cache_key] = diagnostics
     return diagnostics
@@ -606,10 +636,10 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             dep_color = red if dep_text == 'WARN' else green
             dominant_year = diagnostics.get('dominant_entry_year')
             dominant_year_text = 'N/A' if dominant_year is None else str(dominant_year)
-            dominant_pnl_pct = float(diagnostics.get('dominant_year_positive_pnl_share', diagnostics.get('dominant_year_pnl_share', 0.0))) * 100.0
+            dominant_pnl_pct = float(diagnostics.get('dominant_year_positive_pnl_share', 0.0)) * 100.0
             top_trade_pct = float(diagnostics.get('top_trade_pnl_share_in_dominant_year', 0.0)) * 100.0
-            positive_trade_count = int(diagnostics.get('dominant_year_positive_trade_count', diagnostics.get('dominant_year_trade_count', 0)) or 0)
-            positive_symbol_count = int(diagnostics.get('dominant_year_positive_symbol_count', diagnostics.get('dominant_year_symbol_count', 0)) or 0)
+            positive_trade_count = int(diagnostics.get('dominant_year_positive_trade_count', 0) or 0)
+            positive_symbol_count = int(diagnostics.get('dominant_year_positive_symbol_count', 0) or 0)
             dep_reason_text = _format_dependency_reason(diagnostics)
             print(
                 f"#{int(trial.number) + 1:<13}"
