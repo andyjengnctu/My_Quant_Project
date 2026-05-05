@@ -30,6 +30,8 @@ from config.training_policy import (
     DEFAULT_OPTIMIZER_MODEL_MODE,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
+    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
 )
 
 warnings.simplefilter("default")
@@ -148,6 +150,9 @@ def _find_finalist_entry(finalists, winner_trial):
 def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode: str, walk_forward_policy: dict, action_label: str, selection_rule: str, compare_only: bool = False):
     if winner_trial is None or finalist_entry is None:
         raise ValueError("缺少 winner_trial 或 finalist_entry，無法建立 summary")
+    effective_search_train_end_year = int(
+        winner_trial.user_attrs.get("search_train_end_year", walk_forward_policy.get("search_train_end_year", 0))
+    )
     payload = {
         "trial_number": int(winner_trial.number) + 1,
         "base_score": float(finalist_entry["base_score"]),
@@ -156,14 +161,26 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "local_gate": bool(finalist_entry["gate_pass"]),
         "objective_mode": str(objective_mode),
         "train_start_year": int(walk_forward_policy.get("train_start_year", 0)),
-        "search_train_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
+        "search_train_end_year": int(effective_search_train_end_year),
+        "selection_end_year": int(walk_forward_policy.get("search_train_end_year", effective_search_train_end_year)),
         "oos_start_year": walk_forward_policy.get("oos_start_year"),
         "action": str(action_label),
         "selection_rule": str(selection_rule),
         "compare_only": bool(compare_only),
+        "inner_validate_anti_overfit_enabled": bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
+        "inner_validate_min_score": float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE),
         "dominant_year_dependency_anti_overfit_enabled": bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
         "created_at": get_taipei_now().isoformat(),
     }
+    inner_validate_diagnostics = finalist_entry.get("inner_validate_diagnostics")
+    if isinstance(inner_validate_diagnostics, dict):
+        payload["inner_validate_diagnostics"] = inner_validate_diagnostics
+        payload["inner_validate_score"] = float(inner_validate_diagnostics.get("inner_validate_score", 0.0))
+        payload["inner_validate_gate"] = bool(payload["inner_validate_score"] > float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE))
+        if inner_validate_diagnostics.get("validate_year") is not None:
+            payload["inner_validate_year"] = int(inner_validate_diagnostics["validate_year"])
+        if inner_validate_diagnostics.get("inner_train_end_year") is not None:
+            payload["inner_train_end_year"] = int(inner_validate_diagnostics["inner_train_end_year"])
     diagnostics = finalist_entry.get("dominant_year_dependency_diagnostics")
     if isinstance(diagnostics, dict):
         payload["dominant_year_dependency_diagnostics"] = diagnostics
@@ -172,9 +189,12 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
 
 
 def _resolve_candidate_best_selection_rule():
+    parts = ["max_local_min_score"]
+    if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
+        parts.append("inner_validate_score_gt_0")
     if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
-        return "max_local_min_score_with_dominant_year_dependency_veto"
-    return "max_local_min_score"
+        parts.append("intuitive_dominant_year_dependency_veto")
+    return "_with_".join(parts)
 
 
 def _summary_policy_signature(summary: dict | None):
@@ -235,6 +255,10 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
         return False, "candidate.local_min_score <= 0"
     if candidate_base_score <= 0.0:
         return False, "candidate.base_score <= 0"
+    if bool(candidate_summary.get("inner_validate_anti_overfit_enabled", False)):
+        candidate_inner_validate_score = float(candidate_summary.get("inner_validate_score", float("-inf")))
+        if candidate_inner_validate_score <= float(candidate_summary.get("inner_validate_min_score", 0.0)):
+            return False, "candidate.inner_validate_score <= 0"
     if run_best_summary is None:
         return True, "run_best summary 缺失，視同首次 promote"
     if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
@@ -740,8 +764,13 @@ def main(argv=None, environ=None):
     search_train_end_year = int(walk_forward_policy['search_train_end_year'])
     oos_start_year = walk_forward_policy.get('oos_start_year')
     if selected_model_mode == 'split':
+        inner_scope_text = ""
+        if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
+            inner_validate_year = int(search_train_end_year)
+            inner_train_end_year = int(inner_validate_year) - 1
+            inner_scope_text = f" | inner_train={selection_start_year}~{inner_train_end_year} | inner_val={inner_validate_year}"
         scope_text = (
-            f"selection={selection_start_year}~{search_train_end_year} | "
+            f"selection={selection_start_year}~{search_train_end_year}{inner_scope_text} | "
             f"oos={oos_start_year if oos_start_year is not None else search_train_end_year + 1}~latest"
         )
     else:

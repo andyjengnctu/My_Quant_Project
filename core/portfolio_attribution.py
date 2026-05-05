@@ -4,11 +4,12 @@ from collections import defaultdict
 from typing import Any
 
 from config.training_policy import (
-    DOMINANT_YEAR_MAX_TOP_TRADE_PNL_SHARE,
-    DOMINANT_YEAR_MIN_EFFECTIVE_POSITIVE_YEAR_COUNT,
-    DOMINANT_YEAR_MIN_EFFECTIVE_SYMBOL_COUNT,
-    DOMINANT_YEAR_MIN_EFFECTIVE_TRADE_COUNT,
+    DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE,
+    DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT,
+    DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT,
+    DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE,
 )
+
 
 
 def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -45,136 +46,120 @@ def _resolve_trade_entry_year(trade: dict) -> int | None:
     return _resolve_year(trade.get("entry_trade_date"))
 
 
-def _effective_count_from_positive_values(values) -> float:
-    positives = [float(value) for value in values if float(value) > 0.0]
-    total = sum(positives)
-    if total <= 0.0:
-        return 0.0
-    share_square_sum = sum((value / total) ** 2 for value in positives)
-    if share_square_sum <= 0.0:
-        return 0.0
-    return 1.0 / share_square_sum
-
-
 def _safe_ratio(numerator: float, denominator: float) -> float:
     return float(numerator) / float(denominator) if float(denominator) > 0.0 else 0.0
 
 
-def build_dominant_year_dependency_diagnostics(closed_trades_stats) -> dict:
-    """Diagnose whether positive train PnL is structurally concentrated.
+def _empty_diagnostics(*, status: str, positive_total_pnl: float = 0.0) -> dict:
+    return {
+        "dependency_warning": False,
+        "dependency_status": str(status),
+        "dependency_reason": [],
+        "positive_total_pnl": float(positive_total_pnl),
+        "unassigned_positive_pnl": 0.0,
+        "dominant_entry_year": None,
+        "dominant_year_positive_pnl": 0.0,
+        "dominant_year_positive_pnl_share": 0.0,
+        "dominant_year_positive_trade_count": 0,
+        "dominant_year_positive_symbol_count": 0,
+        "top_trade_pnl_share_in_dominant_year": 0.0,
+        "thresholds": _threshold_snapshot(),
+    }
 
-    The warning intentionally requires both temporal concentration and narrow internal sources,
-    so it does not penalize a parameter set only because it captured a genuine broad bull year.
+
+def _threshold_snapshot() -> dict:
+    return {
+        "high_positive_pnl_share": float(DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE),
+        "narrow_positive_trade_count": int(DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT),
+        "narrow_positive_symbol_count": int(DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT),
+        "top_trade_outlier_pnl_share": float(DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE),
+    }
+
+
+def build_dominant_year_dependency_diagnostics(closed_trades_stats) -> dict:
+    """Diagnose whether positive train PnL is concentrated in an intuitive way.
+
+    WARN only when both conditions hold:
+    1. one entry year contributes a high share of total positive train PnL;
+    2. that dominant year is narrow by trade count, symbol count, or one top-trade outlier.
+
+    This avoids penalizing a parameter set solely because it broadly captured a genuine bull year.
     """
 
     trades = [dict(trade) for trade in list(closed_trades_stats or []) if isinstance(trade, dict)]
     positive_total_pnl = sum(max(_coerce_float(trade.get("pnl")), 0.0) for trade in trades)
     if positive_total_pnl <= 0.0:
-        return {
-            "dependency_warning": False,
-            "dependency_status": "NO_POSITIVE_PNL",
-            "dependency_reason": [],
-            "positive_total_pnl": 0.0,
-            "dominant_entry_year": None,
-            "dominant_year_positive_pnl": 0.0,
-            "dominant_year_pnl_share": 0.0,
-            "effective_positive_year_count": 0.0,
-            "dominant_year_trade_count": 0,
-            "dominant_year_symbol_count": 0,
-            "effective_trade_count_in_dominant_year": 0.0,
-            "effective_symbol_count_in_dominant_year": 0.0,
-            "top_trade_pnl_share_in_dominant_year": 0.0,
-        }
+        return _empty_diagnostics(status="NO_POSITIVE_PNL", positive_total_pnl=0.0)
 
     year_positive_pnl = defaultdict(float)
+    year_positive_trade_count = defaultdict(int)
+    year_symbol_positive_pnl: dict[int, defaultdict[str, float]] = defaultdict(lambda: defaultdict(float))
+    year_positive_trade_pnls: dict[int, list[float]] = defaultdict(list)
+    unassigned_positive_pnl = 0.0
+
     for trade in trades:
         pnl = max(_coerce_float(trade.get("pnl")), 0.0)
         if pnl <= 0.0:
             continue
         entry_year = _resolve_trade_entry_year(trade)
         if entry_year is None:
+            unassigned_positive_pnl += pnl
             continue
-        year_positive_pnl[int(entry_year)] += pnl
+        entry_year = int(entry_year)
+        year_positive_pnl[entry_year] += pnl
+        year_positive_trade_count[entry_year] += 1
+        year_positive_trade_pnls[entry_year].append(pnl)
+        ticker = str(trade.get("ticker") or "").strip()
+        if ticker:
+            year_symbol_positive_pnl[entry_year][ticker] += pnl
 
     if not year_positive_pnl:
-        return {
-            "dependency_warning": False,
-            "dependency_status": "MISSING_ENTRY_YEAR",
-            "dependency_reason": [],
-            "positive_total_pnl": float(positive_total_pnl),
-            "dominant_entry_year": None,
-            "dominant_year_positive_pnl": 0.0,
-            "dominant_year_pnl_share": 0.0,
-            "effective_positive_year_count": 0.0,
-            "dominant_year_trade_count": 0,
-            "dominant_year_symbol_count": 0,
-            "effective_trade_count_in_dominant_year": 0.0,
-            "effective_symbol_count_in_dominant_year": 0.0,
-            "top_trade_pnl_share_in_dominant_year": 0.0,
-        }
+        diagnostics = _empty_diagnostics(status="MISSING_ENTRY_YEAR", positive_total_pnl=positive_total_pnl)
+        diagnostics["unassigned_positive_pnl"] = float(unassigned_positive_pnl)
+        return diagnostics
 
     dominant_entry_year, dominant_year_positive_pnl = max(
         year_positive_pnl.items(),
         key=lambda item: (float(item[1]), -int(item[0])),
     )
-    effective_positive_year_count = _effective_count_from_positive_values(year_positive_pnl.values())
-    dominant_year_trades = [
-        trade for trade in trades if _resolve_trade_entry_year(trade) == int(dominant_entry_year)
-    ]
-    dominant_positive_trade_pnls = [
-        max(_coerce_float(trade.get("pnl")), 0.0)
-        for trade in dominant_year_trades
-        if max(_coerce_float(trade.get("pnl")), 0.0) > 0.0
-    ]
-    effective_trade_count = _effective_count_from_positive_values(dominant_positive_trade_pnls)
+    dominant_entry_year = int(dominant_entry_year)
+    dominant_share = _safe_ratio(dominant_year_positive_pnl, positive_total_pnl)
+    positive_trade_count = int(year_positive_trade_count.get(dominant_entry_year, 0))
+    positive_symbol_count = int(len(year_symbol_positive_pnl.get(dominant_entry_year, {})))
+    top_trade_pnl_share = _safe_ratio(
+        max(year_positive_trade_pnls.get(dominant_entry_year, []), default=0.0),
+        dominant_year_positive_pnl,
+    )
 
-    symbol_positive_pnl = defaultdict(float)
-    for trade in dominant_year_trades:
-        pnl = max(_coerce_float(trade.get("pnl")), 0.0)
-        if pnl <= 0.0:
-            continue
-        ticker = str(trade.get("ticker") or "").strip()
-        if ticker:
-            symbol_positive_pnl[ticker] += pnl
-    effective_symbol_count = _effective_count_from_positive_values(symbol_positive_pnl.values())
-    top_trade_pnl_share = _safe_ratio(max(dominant_positive_trade_pnls, default=0.0), dominant_year_positive_pnl)
-
-    temporal_concentration = effective_positive_year_count < float(DOMINANT_YEAR_MIN_EFFECTIVE_POSITIVE_YEAR_COUNT)
-    trade_concentration = effective_trade_count < float(DOMINANT_YEAR_MIN_EFFECTIVE_TRADE_COUNT)
-    symbol_concentration = effective_symbol_count < float(DOMINANT_YEAR_MIN_EFFECTIVE_SYMBOL_COUNT)
-    top_trade_outlier = top_trade_pnl_share >= float(DOMINANT_YEAR_MAX_TOP_TRADE_PNL_SHARE)
+    temporal_concentration = dominant_share >= float(DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE)
+    narrow_trade_source = positive_trade_count <= int(DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT)
+    narrow_symbol_source = positive_symbol_count <= int(DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT)
+    top_trade_outlier = top_trade_pnl_share >= float(DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE)
     dependency_warning = bool(
-        temporal_concentration and (trade_concentration or symbol_concentration or top_trade_outlier)
+        temporal_concentration and (narrow_trade_source or narrow_symbol_source or top_trade_outlier)
     )
 
     dependency_reason = []
-    if temporal_concentration:
-        dependency_reason.append("effective_positive_year_count_lt_min")
-    if trade_concentration:
-        dependency_reason.append("effective_trade_count_in_dominant_year_lt_min")
-    if symbol_concentration:
-        dependency_reason.append("effective_symbol_count_in_dominant_year_lt_min")
-    if top_trade_outlier:
-        dependency_reason.append("top_trade_pnl_share_in_dominant_year_gte_max")
+    if dependency_warning:
+        dependency_reason.append("dominant_year_positive_pnl_share_gte_high")
+        if narrow_trade_source:
+            dependency_reason.append("dominant_year_positive_trade_count_lte_narrow")
+        if narrow_symbol_source:
+            dependency_reason.append("dominant_year_positive_symbol_count_lte_narrow")
+        if top_trade_outlier:
+            dependency_reason.append("top_trade_pnl_share_in_dominant_year_gte_outlier")
 
     return {
         "dependency_warning": dependency_warning,
         "dependency_status": "WARN" if dependency_warning else "OK",
-        "dependency_reason": dependency_reason if dependency_warning else [],
+        "dependency_reason": dependency_reason,
         "positive_total_pnl": float(positive_total_pnl),
-        "dominant_entry_year": int(dominant_entry_year),
+        "unassigned_positive_pnl": float(unassigned_positive_pnl),
+        "dominant_entry_year": dominant_entry_year,
         "dominant_year_positive_pnl": float(dominant_year_positive_pnl),
-        "dominant_year_pnl_share": float(_safe_ratio(dominant_year_positive_pnl, positive_total_pnl)),
-        "effective_positive_year_count": float(effective_positive_year_count),
-        "dominant_year_trade_count": int(len(dominant_year_trades)),
-        "dominant_year_symbol_count": int(len(symbol_positive_pnl)),
-        "effective_trade_count_in_dominant_year": float(effective_trade_count),
-        "effective_symbol_count_in_dominant_year": float(effective_symbol_count),
+        "dominant_year_positive_pnl_share": float(dominant_share),
+        "dominant_year_positive_trade_count": positive_trade_count,
+        "dominant_year_positive_symbol_count": positive_symbol_count,
         "top_trade_pnl_share_in_dominant_year": float(top_trade_pnl_share),
-        "thresholds": {
-            "min_effective_positive_year_count": float(DOMINANT_YEAR_MIN_EFFECTIVE_POSITIVE_YEAR_COUNT),
-            "min_effective_trade_count": float(DOMINANT_YEAR_MIN_EFFECTIVE_TRADE_COUNT),
-            "min_effective_symbol_count": float(DOMINANT_YEAR_MIN_EFFECTIVE_SYMBOL_COUNT),
-            "max_top_trade_pnl_share": float(DOMINANT_YEAR_MAX_TOP_TRADE_PNL_SHARE),
-        },
+        "thresholds": _threshold_snapshot(),
     }
