@@ -48,7 +48,7 @@ OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS = 1
 # dominant-year dependency anti-overfitting 開關。
 # True  = candidate_best 會跳過「年度集中 + 來源狹窄」的脆弱型 finalist。
 # False = candidate_best 回到原本只看 local_min_score 的選法。
-OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = True
+OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = False
 
 # 以下門檻只在上述開關啟用時使用；採直覺版「最大獲利年度佔比 + 該年度來源狹窄」判斷。
 # 物理意義：若單一進場年度貢獻全 train 正獲利 70% 以上，視為年度獲利高度集中。
