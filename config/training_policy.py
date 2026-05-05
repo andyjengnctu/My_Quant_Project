@@ -34,6 +34,17 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
+# inner validation anti-overfitting 開關。
+# True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。
+# False = 不切 inner validation，維持原本 selection 區間全段訓練。
+OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED = True
+
+# 目前第一版 gate 只使用 inner_validate_score > 0。
+OPTIMIZER_INNER_VALIDATE_MIN_SCORE = 0.0
+
+# 第一版固定切最後 1 年做 validation。
+OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS = 1
+
 # dominant-year dependency anti-overfitting 開關。
 # True  = candidate_best 會跳過「年度集中 + 來源狹窄」的脆弱型 finalist。
 # False = candidate_best 回到原本只看 local_min_score 的選法。
@@ -120,6 +131,9 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
+        "OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED": OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+        "OPTIMIZER_INNER_VALIDATE_MIN_SCORE": OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
+        "OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS": OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
     }
 
 def build_selection_policy_snapshot():

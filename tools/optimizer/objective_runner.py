@@ -3,6 +3,10 @@ from typing import Any
 
 import pandas as pd
 
+from config.training_policy import (
+    OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS,
+)
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_stats import calc_portfolio_score
 from core.strategy_params import build_runtime_param_raw_value
@@ -29,6 +33,74 @@ def _append_invalid_profile_row(*, session, trial, profile_row, fail_reason: str
     return INVALID_TRIAL_VALUE
 
 
+def is_inner_validate_anti_overfit_enabled_for_mode(objective_mode: str | None) -> bool:
+    mode = normalize_objective_mode(objective_mode or "")
+    return bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED) and mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
+
+
+def resolve_inner_validate_policy(session, *, objective_mode: str | None = None) -> dict[str, Any]:
+    mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
+    if not is_inner_validate_anti_overfit_enabled_for_mode(mode):
+        return {"enabled": False, "mode": str(mode)}
+
+    full_selection_end_year = int(
+        getattr(session, "walk_forward_policy", {})
+        .get("search_train_end_year", getattr(session, "search_train_end_year", 0))
+    )
+    holdout_years = max(1, int(OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS))
+    validate_start_year = int(full_selection_end_year) - int(holdout_years) + 1
+    validate_end_year = int(full_selection_end_year)
+    inner_train_end_year = int(validate_start_year) - 1
+    train_start_year = int(getattr(session, "train_start_year", 0))
+    return {
+        "enabled": True,
+        "mode": str(mode),
+        "train_start_year": int(train_start_year),
+        "inner_train_end_year": int(inner_train_end_year),
+        "validate_start_year": int(validate_start_year),
+        "validate_end_year": int(validate_end_year),
+        "validate_year": int(validate_end_year),
+        "holdout_years": int(holdout_years),
+        "full_selection_end_year": int(full_selection_end_year),
+    }
+
+
+def _filter_year_window_dates(sorted_dates, *, start_year: int, end_year: int):
+    filtered = []
+    start_year = int(start_year)
+    end_year = int(end_year)
+    for raw_date in list(sorted_dates or []):
+        year = int(getattr(raw_date, "year", 0) or 0)
+        if year == 0:
+            raw_text = str(raw_date or "").strip()
+            try:
+                year = int(raw_text[:4])
+            except (TypeError, ValueError):
+                continue
+        if start_year <= year <= end_year:
+            filtered.append(raw_date)
+    return filtered
+
+
+def resolve_inner_validate_scope(session, master_dates, *, objective_mode: str | None = None):
+    policy = resolve_inner_validate_policy(session, objective_mode=objective_mode)
+    if not bool(policy.get("enabled", False)):
+        return {"enabled": False, "policy": policy, "validate_dates": [], "fail_reason": None}
+    sorted_dates = sorted(master_dates or [])
+    validate_dates = _filter_year_window_dates(
+        sorted_dates,
+        start_year=int(policy["validate_start_year"]),
+        end_year=int(policy["validate_end_year"]),
+    )
+    fail_reason = None if validate_dates else "inner validation 區間無有效資料"
+    return {
+        "enabled": True,
+        "policy": policy,
+        "validate_dates": validate_dates,
+        "fail_reason": fail_reason,
+    }
+
+
 def resolve_search_train_scope(session, master_dates, *, objective_mode: str | None = None):
     mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
     if not master_dates:
@@ -37,7 +109,9 @@ def resolve_search_train_scope(session, master_dates, *, objective_mode: str | N
             "sorted_dates": [],
             "search_train_dates": [],
             "effective_search_train_end_year": int(session.search_train_end_year),
+            "sort_dates_sec": 0.0,
             "fail_reason": "無有效資料",
+            "inner_validate_policy": resolve_inner_validate_policy(session, objective_mode=mode),
         }
 
     sort_start = time.perf_counter()
@@ -47,15 +121,30 @@ def resolve_search_train_scope(session, master_dates, *, objective_mode: str | N
     if use_full_history_search:
         search_train_dates = list(sorted_dates)
         effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
+        fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
     else:
-        search_train_dates = filter_search_train_dates(
-            sorted_dates=sorted_dates,
-            train_start_year=int(session.train_start_year),
-            search_train_end_year=int(session.search_train_end_year),
-        )
-        effective_search_train_end_year = int(session.search_train_end_year)
+        inner_policy = resolve_inner_validate_policy(session, objective_mode=mode)
+        if bool(inner_policy.get("enabled", False)):
+            effective_search_train_end_year = int(inner_policy["inner_train_end_year"])
+            if effective_search_train_end_year < int(session.train_start_year):
+                search_train_dates = []
+                fail_reason = "inner validation 切分後 training years 不足"
+            else:
+                search_train_dates = filter_search_train_dates(
+                    sorted_dates=sorted_dates,
+                    train_start_year=int(session.train_start_year),
+                    search_train_end_year=int(effective_search_train_end_year),
+                )
+                fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        else:
+            effective_search_train_end_year = int(session.search_train_end_year)
+            search_train_dates = filter_search_train_dates(
+                sorted_dates=sorted_dates,
+                train_start_year=int(session.train_start_year),
+                search_train_end_year=int(effective_search_train_end_year),
+            )
+            fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
 
-    fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
     return {
         "mode": str(mode),
         "sorted_dates": sorted_dates,
@@ -63,6 +152,7 @@ def resolve_search_train_scope(session, master_dates, *, objective_mode: str | N
         "effective_search_train_end_year": int(effective_search_train_end_year),
         "sort_dates_sec": float(sort_dates_sec),
         "fail_reason": fail_reason,
+        "inner_validate_policy": resolve_inner_validate_policy(session, objective_mode=mode),
     }
 
 
@@ -212,6 +302,98 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     }
 
 
+def evaluate_prepared_inner_validate_score(session, *, ai_params, prep_result, validate_scope: dict[str, Any], profile_stats=None):
+    if not bool(validate_scope.get("enabled", False)):
+        return {"enabled": False, "inner_validate_score": None, "inner_validate_gate": None}
+
+    fail_reason = str(validate_scope.get("fail_reason") or "").strip()
+    policy = dict(validate_scope.get("policy") or {})
+    if fail_reason:
+        return {
+            "enabled": True,
+            "inner_validate_score": float(INVALID_TRIAL_VALUE),
+            "inner_validate_gate": False,
+            "fail_reason": fail_reason,
+            "validate_year": policy.get("validate_year"),
+            "validate_start_year": policy.get("validate_start_year"),
+            "validate_end_year": policy.get("validate_end_year"),
+            "inner_train_end_year": policy.get("inner_train_end_year"),
+        }
+
+    all_dfs_fast = prep_result["all_dfs_fast"]
+    all_trade_logs = prep_result["all_trade_logs"]
+    all_pit_stats_index = prep_result.get("all_pit_stats_index")
+    benchmark_data = all_dfs_fast.get("0050", None)
+    pf_profile = {} if profile_stats is None else profile_stats
+    validate_dates = list(validate_scope.get("validate_dates") or [])
+    validate_start_year = int(policy.get("validate_start_year", policy.get("validate_year", 0)))
+
+    (
+        ret_pct,
+        mdd,
+        trade_count,
+        final_eq,
+        avg_exp,
+        max_exp,
+        bm_ret,
+        bm_mdd,
+        win_rate,
+        pf_ev,
+        pf_payoff,
+        total_missed,
+        total_missed_sells,
+        r_sq,
+        m_win_rate,
+        bm_r_sq,
+        bm_m_win_rate,
+        normal_trade_count,
+        extended_trade_count,
+        annual_trades,
+        reserved_buy_fill_rate,
+        annual_return_pct,
+        bm_annual_return_pct,
+    ) = run_portfolio_timeline(
+        all_dfs_fast,
+        all_trade_logs,
+        validate_dates,
+        validate_start_year,
+        ai_params,
+        session.train_max_positions,
+        session.train_enable_rotation,
+        benchmark_ticker="0050",
+        benchmark_data=benchmark_data,
+        is_training=True,
+        profile_stats=pf_profile,
+        verbose=False,
+        pit_stats_index=all_pit_stats_index,
+    )
+    inner_validate_score = calc_portfolio_score(
+        ret_pct,
+        mdd,
+        m_win_rate,
+        r_sq,
+        annual_return_pct=annual_return_pct,
+    )
+    return {
+        "enabled": True,
+        "inner_validate_score": float(inner_validate_score),
+        "inner_validate_gate": bool(float(inner_validate_score) > 0.0),
+        "validate_year": policy.get("validate_year"),
+        "validate_start_year": policy.get("validate_start_year"),
+        "validate_end_year": policy.get("validate_end_year"),
+        "inner_train_end_year": policy.get("inner_train_end_year"),
+        "ret_pct": float(ret_pct),
+        "mdd": float(mdd),
+        "trade_count": int(trade_count),
+        "annual_return_pct": float(annual_return_pct),
+        "monthly_win_rate": float(m_win_rate),
+        "r_squared": float(r_sq),
+        "normal_trades": int(normal_trade_count),
+        "extended_trades": int(extended_trade_count),
+        "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
+    }
+
+
 def run_optimizer_objective(session, trial):
     objective_start = time.perf_counter()
     ai_params = build_trial_params(session, trial)
@@ -250,9 +432,18 @@ def run_optimizer_objective(session, trial):
     profile_row["search_train_end_year"] = int(search_scope["effective_search_train_end_year"])
     profile_row["sort_dates_sec"] = float(search_scope.get("sort_dates_sec", 0.0))
     profile_row["search_train_date_count"] = int(len(search_scope["search_train_dates"]))
+    inner_policy = dict(search_scope.get("inner_validate_policy") or {})
+    profile_row["inner_validate_enabled"] = bool(inner_policy.get("enabled", False))
+    if bool(inner_policy.get("enabled", False)):
+        profile_row["inner_validate_year"] = int(inner_policy["validate_year"])
+        profile_row["inner_train_end_year"] = int(inner_policy["inner_train_end_year"])
     trial.set_user_attr("objective_mode", mode)
     trial.set_user_attr("search_train_end_year", int(search_scope["effective_search_train_end_year"]))
     trial.set_user_attr("search_train_date_count", int(len(search_scope["search_train_dates"])))
+    trial.set_user_attr("inner_validate_enabled", bool(inner_policy.get("enabled", False)))
+    if bool(inner_policy.get("enabled", False)):
+        trial.set_user_attr("inner_validate_year", int(inner_policy["validate_year"]))
+        trial.set_user_attr("inner_train_end_year", int(inner_policy["inner_train_end_year"]))
     if search_scope.get("fail_reason") is not None:
         return _append_invalid_profile_row(
             session=session,
