@@ -39,11 +39,19 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist rev
 # False = candidate_best 回到原本只看 local_min_score 的選法。
 OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = True
 
-# 以下門檻只在上述開關啟用時使用；語意採 effective count，避免單純懲罰真的抓到大行情的參數。
-DOMINANT_YEAR_MIN_EFFECTIVE_POSITIVE_YEAR_COUNT = 2.0  # 正獲利來源等效少於 2 年才視為年度集中
-DOMINANT_YEAR_MIN_EFFECTIVE_TRADE_COUNT = 3.0  # dominant year 正獲利等效少於 3 筆交易才視為交易來源狹窄
-DOMINANT_YEAR_MIN_EFFECTIVE_SYMBOL_COUNT = 3.0  # dominant year 正獲利等效少於 3 檔股票才視為標的來源狹窄
-DOMINANT_YEAR_MAX_TOP_TRADE_PNL_SHARE = 0.50  # dominant year 單筆交易貢獻 >= 50% 才視為單筆 outlier
+# 以下門檻只在上述開關啟用時使用；採直覺版「最大獲利年度佔比 + 該年度來源狹窄」判斷。
+# 物理意義：若單一進場年度貢獻全 train 正獲利 70% 以上，視為年度獲利高度集中。
+# 此條件本身不構成 warning，必須同時伴隨少數交易、少數股票或單筆 outlier。
+DOMINANT_YEAR_HIGH_POSITIVE_PNL_SHARE = 0.70
+
+# 物理意義：最大獲利年度若只有 3 筆以內賺錢交易，視為該年度交易來源狹窄。
+DOMINANT_YEAR_NARROW_POSITIVE_TRADE_COUNT = 3
+
+# 物理意義：最大獲利年度若只有 3 檔以內賺錢股票，視為該年度標的來源狹窄。
+DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT = 3
+
+# 物理意義：最大獲利年度若單筆交易貢獻該年正獲利 50% 以上，視為單筆 outlier。
+DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE = 0.50
 
 
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):

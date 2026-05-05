@@ -10,6 +10,7 @@ from config.training_policy import (
     resolve_optimizer_local_min_score_finalist_top_k,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.portfolio_attribution import DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import evaluate_prepared_train_score, resolve_search_train_scope
@@ -188,6 +189,20 @@ def _has_dependency_warning(item: dict) -> bool:
     if not isinstance(diagnostics, dict):
         return False
     return bool(diagnostics.get("dependency_warning", False))
+
+
+def _format_dependency_reason(diagnostics: dict) -> str:
+    reasons = diagnostics.get("dependency_reason") if isinstance(diagnostics, dict) else []
+    if not isinstance(reasons, list) or not reasons:
+        return "-"
+    label_map = {
+        "dominant_year_positive_pnl_share_gte_high": "year",
+        "dominant_year_positive_trade_count_lte_narrow": "trades",
+        "dominant_year_positive_symbol_count_lte_narrow": "symbols",
+        "top_trade_pnl_share_in_dominant_year_gte_outlier": "top_trade",
+    }
+    labels = [label_map.get(str(reason), str(reason)) for reason in reasons]
+    return "+".join(labels)
 
 
 def _sort_finalists_by_local_min(finalists: list[dict]) -> list[dict]:
@@ -387,7 +402,11 @@ def compute_local_min_score(
 
 def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
     existing = trial.user_attrs.get("dominant_year_dependency_diagnostics")
-    if isinstance(existing, dict) and existing:
+    if (
+        isinstance(existing, dict)
+        and existing
+        and existing.get("diagnostics_version") == DOMINANT_YEAR_DEPENDENCY_DIAGNOSTICS_VERSION
+    ):
         return existing
 
     payload = build_best_params_payload_from_trial(
@@ -551,12 +570,12 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     reset = colors.get("reset", "")
 
     dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled()
-    separator_width = 152 if dependency_enabled else 96
+    separator_width = 168 if dependency_enabled else 96
     print(f"{gray}{'-' * separator_width}{reset}")
     if dependency_enabled:
         print(
             f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}"
-            f"{'local_gate':>14}{'dep':>8}{'dom_year':>10}{'eff_yrs':>10}{'eff_trades':>12}{'eff_symbols':>13}{'top_trade%':>12}{'結果':>12}"
+            f"{'local_gate':>14}{'dep':>8}{'dom_year':>10}{'dom_pnl%':>10}{'pos_trades':>12}{'pos_symbols':>13}{'top_trade%':>12}{'dep_reason':>14}{'結果':>12}"
         )
     else:
         print(f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}{'local_gate':>14}{'結果':>12}")
@@ -587,7 +606,11 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             dep_color = red if dep_text == 'WARN' else green
             dominant_year = diagnostics.get('dominant_entry_year')
             dominant_year_text = 'N/A' if dominant_year is None else str(dominant_year)
+            dominant_pnl_pct = float(diagnostics.get('dominant_year_positive_pnl_share', diagnostics.get('dominant_year_pnl_share', 0.0))) * 100.0
             top_trade_pct = float(diagnostics.get('top_trade_pnl_share_in_dominant_year', 0.0)) * 100.0
+            positive_trade_count = int(diagnostics.get('dominant_year_positive_trade_count', diagnostics.get('dominant_year_trade_count', 0)) or 0)
+            positive_symbol_count = int(diagnostics.get('dominant_year_positive_symbol_count', diagnostics.get('dominant_year_symbol_count', 0)) or 0)
+            dep_reason_text = _format_dependency_reason(diagnostics)
             print(
                 f"#{int(trial.number) + 1:<13}"
                 f"#{int(item.get('base_rank', idx)):>7}"
@@ -597,10 +620,11 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
                 f"{status_color}{status_text:>14}{reset}"
                 f"{dep_color}{dep_text:>8}{reset}"
                 f"{dominant_year_text:>10}"
-                f"{float(diagnostics.get('effective_positive_year_count', 0.0)):>10.2f}"
-                f"{float(diagnostics.get('effective_trade_count_in_dominant_year', 0.0)):>12.2f}"
-                f"{float(diagnostics.get('effective_symbol_count_in_dominant_year', 0.0)):>13.2f}"
+                f"{dominant_pnl_pct:>10.1f}"
+                f"{positive_trade_count:>12}"
+                f"{positive_symbol_count:>13}"
                 f"{top_trade_pct:>12.1f}"
+                f"{dep_reason_text:>14}"
                 f"{result_color}{result_text:>12}{reset}"
             )
         else:

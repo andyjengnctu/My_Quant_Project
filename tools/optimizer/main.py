@@ -173,7 +173,7 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
 
 def _resolve_candidate_best_selection_rule():
     if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
-        return "max_local_min_score_with_dominant_year_dependency_veto"
+        return "max_local_min_score_with_intuitive_dominant_year_dependency_veto"
     return "max_local_min_score"
 
 
