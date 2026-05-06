@@ -28,11 +28,7 @@ from core.output_paths import ensure_output_dir
 from core.runtime_utils import parse_float_strict
 from core.buy_sort import format_buy_sort_metric_value, get_buy_sort_metric_label, get_buy_sort_method
 from core.scanner_display import build_scanner_sort_probe_text
-from core.model_paths import (
-    resolve_candidate_best_params_path,
-    resolve_candidate_retention_best_params_path,
-    resolve_run_best_params_path,
-)
+from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from tools.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
     build_chart_hover_snapshot,
@@ -98,12 +94,6 @@ SIDEBAR_CHIP_INACTIVE_BG = "#04070c"
 WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKBENCH_OUTPUT_CATEGORY = "workbench_ui"
 WORKBENCH_CACHE_FILENAME = "reduced_stock_company_names_cache.json"
-PARAM_SOURCE_LABEL_TO_KEY = {
-    "run_best | 目前參數": "run_best",
-    "candidate_best | 候選參數": "candidate_best",
-    "candidate_retention_best | retention 最大候選": "candidate_retention_best",
-}
-DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 FIXED_RISK_LABELS = ("0.01", "0.02", "自訂")
 COMBOBOX_WIDTH_RULES = {
     "reduced": {"min_chars": 16, "max_chars": 24, "extra_px": 34},
@@ -449,7 +439,8 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
         self._status_var = tk.StringVar(value="尚未執行")
         self._ticker_var = tk.StringVar()
         self._reduced_stock_display_var = tk.StringVar()
-        self._param_source_display_var = tk.StringVar(value=DEFAULT_PARAM_SOURCE_LABEL)
+        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        self._param_source_display_var = tk.StringVar(value=default_param_source_label)
         self._fixed_risk_display_var = tk.StringVar(value="0.01")
         self._custom_fixed_risk_var = tk.StringVar(value="0.01")
         self._reduced_stock_map = {}
@@ -541,9 +532,10 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             width=20,
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
-            values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
+            values=self._param_source_labels,
+            postcommand=self._refresh_param_source_options,
         )
-        self._autosize_combobox(self._param_source_combo, values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()), current_text=self._param_source_display_var.get(), rule_key="param_source")
+        self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=9, padx=(0, 10), pady=uniform_pady, sticky="w")
         self._param_source_combo.bind("<<ComboboxSelected>>", self._on_param_source_selected)
         ttk.Label(controls_bar, text="固定風險", style="Workbench.TLabel").grid(row=0, column=10, padx=(0, 6), pady=uniform_pady, sticky="w")
@@ -968,17 +960,37 @@ class SingleStockBacktestInspectorPanel(ttk.Frame):
             messagebox.showerror("股票工具工作台", error_text)
         return error_text
 
+    def _refresh_param_source_options(self):
+        current_label = self._param_source_display_var.get().strip()
+        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        self._param_source_labels = labels
+        self._param_source_path_by_label = path_by_label
+        self._param_source_key_by_label = key_by_label
+        selected_label = current_label if current_label in path_by_label else default_label
+        if selected_label:
+            self._param_source_display_var.set(selected_label)
+        if hasattr(self, "_param_source_combo"):
+            self._param_source_combo.configure(values=self._param_source_labels)
+            self._autosize_combobox(
+                self._param_source_combo,
+                values=self._param_source_labels,
+                current_text=self._param_source_display_var.get(),
+                rule_key="param_source",
+            )
+
     def _get_selected_param_source(self):
+        self._refresh_param_source_options()
         selected_label = self._param_source_display_var.get().strip()
-        return PARAM_SOURCE_LABEL_TO_KEY.get(selected_label, "run_best")
+        return self._param_source_key_by_label.get(selected_label, "run_best")
 
     def _get_selected_params_path(self):
-        param_source = self._get_selected_param_source()
-        if param_source == "candidate_best":
-            return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
-        if param_source == "candidate_retention_best":
-            return resolve_candidate_retention_best_params_path(WORKBENCH_PROJECT_ROOT)
-        return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
+        self._refresh_param_source_options()
+        selected_label = self._param_source_display_var.get().strip()
+        params_path = self._param_source_path_by_label.get(selected_label)
+        if params_path:
+            return params_path
+        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        return path_by_label[default_label]
 
     def _on_fixed_risk_selected(self, _event=None):
         if self._fixed_risk_display_var.get() == "自訂":

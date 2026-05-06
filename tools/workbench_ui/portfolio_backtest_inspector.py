@@ -18,11 +18,7 @@ import pandas as pd
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
-from core.model_paths import (
-    resolve_candidate_best_params_path,
-    resolve_candidate_retention_best_params_path,
-    resolve_run_best_params_path,
-)
+from tools.workbench_ui.param_sources import DEFAULT_PARAM_SOURCE_LABEL, build_workbench_param_source_options
 from core.entry_plans import build_position_from_entry_fill
 from core.portfolio_fast_data import get_fast_close, get_fast_dates, get_fast_pos, get_fast_value
 from core.runtime_utils import parse_float_strict, parse_int_strict
@@ -74,13 +70,6 @@ else:
 
 
 WORKBENCH_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-PARAM_SOURCE_LABEL_TO_KEY = {
-    "run_best | 目前參數": "run_best",
-    "candidate_best | 候選參數": "candidate_best",
-    "candidate_retention_best | retention 最大候選": "candidate_retention_best",
-}
-PARAM_SOURCE_KEY_TO_LABEL = {value: key for key, value in PARAM_SOURCE_LABEL_TO_KEY.items()}
-DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 ROTATION_LABEL_TO_BOOL = {
     "關閉 (穩定鎖倉)": False,
     "啟用 (強勢輪動)": True,
@@ -982,7 +971,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._run_thread = None
         self._active_token = 0
         self._status_var = tk.StringVar(value="尚未執行")
-        self._param_source_display_var = tk.StringVar(value=DEFAULT_PARAM_SOURCE_LABEL)
+        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        self._param_source_display_var = tk.StringVar(value=default_param_source_label)
         self._rotation_display_var = tk.StringVar(value=DEFAULT_ROTATION_LABEL)
         self._max_positions_var = tk.StringVar(value="10")
         self._start_year_var = tk.StringVar(value=str(_resolve_default_portfolio_start_year_hint()))
@@ -1043,9 +1033,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             width=20,
             textvariable=self._param_source_display_var,
             style="Workbench.TCombobox",
-            values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()),
+            values=self._param_source_labels,
+            postcommand=self._refresh_param_source_options,
         )
-        self._autosize_combobox(self._param_source_combo, values=list(PARAM_SOURCE_LABEL_TO_KEY.keys()), current_text=self._param_source_display_var.get(), rule_key="param_source")
+        self._autosize_combobox(self._param_source_combo, values=self._param_source_labels, current_text=self._param_source_display_var.get(), rule_key="param_source")
         self._param_source_combo.grid(row=0, column=1, padx=(0, 10), pady=pady, sticky="w")
 
         ttk.Label(controls_bar, text="汰弱換股", style="Workbench.TLabel").grid(row=0, column=2, padx=(0, 6), pady=pady, sticky="w")
@@ -1446,16 +1437,37 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         else:
             self._custom_fixed_risk_entry.state(["disabled"])
 
+    def _refresh_param_source_options(self):
+        current_label = self._param_source_display_var.get().strip()
+        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        self._param_source_labels = labels
+        self._param_source_path_by_label = path_by_label
+        self._param_source_key_by_label = key_by_label
+        selected_label = current_label if current_label in path_by_label else default_label
+        if selected_label:
+            self._param_source_display_var.set(selected_label)
+        if hasattr(self, "_param_source_combo"):
+            self._param_source_combo.configure(values=self._param_source_labels)
+            self._autosize_combobox(
+                self._param_source_combo,
+                values=self._param_source_labels,
+                current_text=self._param_source_display_var.get(),
+                rule_key="param_source",
+            )
+
     def _get_selected_param_source(self):
-        return PARAM_SOURCE_LABEL_TO_KEY.get(self._param_source_display_var.get().strip(), "run_best")
+        self._refresh_param_source_options()
+        selected_label = self._param_source_display_var.get().strip()
+        return self._param_source_key_by_label.get(selected_label, "run_best")
 
     def _get_selected_params_path(self):
-        param_source = self._get_selected_param_source()
-        if param_source == "candidate_best":
-            return resolve_candidate_best_params_path(WORKBENCH_PROJECT_ROOT)
-        if param_source == "candidate_retention_best":
-            return resolve_candidate_retention_best_params_path(WORKBENCH_PROJECT_ROOT)
-        return resolve_run_best_params_path(WORKBENCH_PROJECT_ROOT)
+        self._refresh_param_source_options()
+        selected_label = self._param_source_display_var.get().strip()
+        params_path = self._param_source_path_by_label.get(selected_label)
+        if params_path:
+            return params_path
+        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        return path_by_label[default_label]
 
     def _resolve_fixed_risk(self):
         selected = self._fixed_risk_display_var.get().strip()
@@ -2169,7 +2181,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _build_performance_setting_title(self, *, options):
         end_year_label = "至今" if options.get("end_year") is None else str(options.get("end_year"))
         rotation_label = "開" if options.get("enable_rotation") else "關"
-        param_source = str(options.get("param_source_label") or PARAM_SOURCE_KEY_TO_LABEL.get(options.get("param_source"), options.get("param_source") or "-"))
+        param_source = str(options.get("param_source_label") or options.get("param_source") or "-")
         param_file = os.path.basename(str(options.get("params_path") or "")) or "-"
         return (
             f"設定：{param_source}｜{param_file}｜區間 {options.get('start_year', '-')}~{end_year_label}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import re
 import sys
 from typing import Callable
 
@@ -22,6 +23,7 @@ from tools.optimizer.objective_runner import (
     resolve_search_train_scope,
 )
 from tools.optimizer.prep import prepare_trial_inputs
+from tools.optimizer.walk_forward import evaluate_walk_forward
 from tools.optimizer.study_utils import (
     INVALID_TRIAL_VALUE,
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
@@ -62,6 +64,89 @@ def _get_inner_validate_cache(session):
     if not hasattr(session, "inner_validate_cache"):
         session.inner_validate_cache = {}
     return session.inner_validate_cache
+
+
+def _get_oos_cache(session):
+    if not hasattr(session, "oos_cache"):
+        session.oos_cache = {}
+    return session.oos_cache
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r'\x1b\[[0-9;]*m', '', str(text))
+
+
+def _format_year_range(start_year, end_year) -> str:
+    if start_year in (None, '', 0) and end_year in (None, '', 0):
+        return 'N/A'
+    if end_year in (None, '', 0):
+        return f"{start_year}~latest"
+    if start_year == end_year:
+        return str(start_year)
+    return f"{start_year}~{end_year}"
+
+
+def _resolve_report_periods(session, *, objective_mode: str) -> dict:
+    inner_policy = resolve_inner_validate_scope(session, getattr(session, 'sorted_master_dates', []), objective_mode=objective_mode).get('policy', {})
+    train_start_year = int(getattr(session, 'train_start_year', 0) or 0)
+    search_train_end_year = int(getattr(session, 'search_train_end_year', 0) or 0)
+    if bool(inner_policy.get('enabled', False)):
+        training_period = _format_year_range(train_start_year, inner_policy.get('inner_train_end_year'))
+        validate_period = _format_year_range(inner_policy.get('validate_start_year'), inner_policy.get('validate_end_year'))
+    else:
+        training_period = _format_year_range(train_start_year, search_train_end_year)
+        validate_period = 'disabled'
+    latest_year = None
+    sorted_master_dates = list(getattr(session, 'sorted_master_dates', []) or [])
+    if sorted_master_dates:
+        latest_year = int(getattr(sorted_master_dates[-1], 'year', 0) or 0) or None
+    oos_start_year = getattr(session, 'walk_forward_policy', {}).get('oos_start_year')
+    if oos_start_year is None:
+        oos_period = 'disabled'
+    else:
+        oos_period = _format_year_range(int(oos_start_year), latest_year)
+    return {
+        'training_period': training_period,
+        'validate_period': validate_period,
+        'oos_test_period': oos_period,
+    }
+
+
+def _build_gate_status_rows(finalists: list[dict], *, objective_mode: str) -> list[dict]:
+    gate_rows: list[dict] = []
+    gate_rows.append({
+        'name': 'LOCAL_MIN_SCORE',
+        'enabled': True,
+        'ratio_text': '-',
+    })
+    inner_enabled = is_inner_validate_anti_overfit_enabled(objective_mode)
+    ratio_text = '-'
+    if inner_enabled:
+        pass_items = [
+            item for item in finalists
+            if bool(item.get('gate_pass', False))
+            and isinstance(item.get('inner_validate_diagnostics'), dict)
+        ]
+        allowed_count = 0
+        total_count = len(pass_items)
+        if pass_items:
+            diagnostics = pass_items[0].get('inner_validate_diagnostics') or {}
+            allowed_count = int(diagnostics.get('inner_validate_rank_cutoff', 0) or 0)
+        ratio_pct = float(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE) * 100.0
+        ratio_text = f"{ratio_pct:.0f}%"
+        if total_count > 0:
+            ratio_text += f" ({allowed_count}/{total_count})"
+    gate_rows.append({
+        'name': 'INNER_VALIDATE_RANK',
+        'enabled': bool(inner_enabled),
+        'ratio_text': ratio_text,
+    })
+    gate_rows.append({
+        'name': 'DOMINANT_YEAR_DEPENDENCY',
+        'enabled': bool(is_dominant_year_dependency_anti_overfit_enabled()),
+        'ratio_text': '-',
+    })
+    return gate_rows
 
 
 def _build_payload_score_cache_key(payload: dict):
@@ -661,6 +746,71 @@ def _resolve_trial_inner_validate_diagnostics(session, trial, objective_mode: st
     return diagnostics
 
 
+def _normalize_oos_diagnostics(value):
+    if not isinstance(value, dict) or not bool(value.get('enabled', False)):
+        return None
+    return {
+        'enabled': True,
+        'oos_score': float(value.get('oos_score', INVALID_TRIAL_VALUE)),
+        'oos_start': str(value.get('oos_start') or ''),
+        'oos_end': str(value.get('oos_end') or ''),
+        'oos_start_year': value.get('oos_start_year'),
+        'period_count': int(value.get('period_count', 0) or 0),
+    }
+
+
+def _resolve_trial_oos_diagnostics(session, trial):
+    oos_start_year = getattr(session, 'walk_forward_policy', {}).get('oos_start_year')
+    if oos_start_year is None:
+        return {'enabled': False, 'oos_score': float(INVALID_TRIAL_VALUE)}
+
+    payload = build_best_params_payload_from_trial(
+        trial,
+        fixed_tp_percent=session.optimizer_fixed_tp_percent,
+    )
+    cache = _get_oos_cache(session)
+    cache_key = _build_payload_score_cache_key(payload)
+    cached = _normalize_oos_diagnostics(cache.get(cache_key))
+    if cached is not None:
+        return cached
+
+    ai_params = build_params_from_mapping(payload)
+    prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, 'optimizer_max_workers'))
+    prep_result = prepare_trial_inputs(
+        raw_data_cache=session.raw_data_cache,
+        params=ai_params,
+        default_max_workers=session.default_max_workers,
+        executor_bundle=prep_executor_bundle,
+        static_fast_cache=session.static_fast_cache,
+        static_master_dates=session.master_dates,
+        include_trade_logs=True,
+        include_pit_stats_index=True,
+    )
+    report = evaluate_walk_forward(
+        all_dfs_fast=prep_result['all_dfs_fast'],
+        all_trade_logs=prep_result['all_trade_logs'],
+        sorted_dates=sorted(prep_result['master_dates']),
+        params=ai_params,
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+        min_train_years=int(getattr(session, 'walk_forward_policy', {}).get('min_train_years', 1) or 1),
+        train_start_year=getattr(session, 'train_start_year', None),
+        oos_start_year=int(oos_start_year),
+        pit_stats_index=prep_result.get('all_pit_stats_index'),
+    )
+    summary = dict(report.get('summary') or {})
+    diagnostics = {
+        'enabled': True,
+        'oos_score': float(summary.get('test_score_romd', INVALID_TRIAL_VALUE)),
+        'oos_start': str(summary.get('oos_start') or ''),
+        'oos_end': str(summary.get('oos_end') or ''),
+        'oos_start_year': int(oos_start_year),
+        'period_count': int(summary.get('period_count', 0) or 0),
+    }
+    cache[cache_key] = diagnostics
+    return diagnostics
+
+
 def _list_qualified_trials_for_objective(study, objective_mode: str):
     qualified_trials = [
         trial
@@ -753,6 +903,7 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
                 trial,
                 objective_mode,
             )
+        enriched_item["oos_diagnostics"] = _resolve_trial_oos_diagnostics(session, trial)
         enriched_finalists.append(enriched_item)
     if is_inner_validate_anti_overfit_enabled(objective_mode):
         _annotate_inner_validate_ranks(enriched_finalists)
@@ -779,8 +930,6 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     )
     if not finalists:
         return [], winner_trial
-    retention_best_finalist = select_best_finalist_by_local_retention(finalists)
-    retention_best_trial = None if retention_best_finalist is None else retention_best_finalist["trial"]
     if winner_trial is None:
         best_finalist = _select_best_finalist_by_local_min_score(
             finalists,
@@ -791,61 +940,70 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     gray = colors.get("gray", "")
     green = colors.get("green", "")
     red = colors.get("red", "")
-    cyan = colors.get("cyan", "")
     yellow = colors.get("yellow", "")
     reset = colors.get("reset", "")
 
     inner_validate_enabled = is_inner_validate_anti_overfit_enabled(objective_mode)
     dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled()
-    separator_width = 96 + (46 if inner_validate_enabled else 0) + (72 if dependency_enabled else 0)
-    print(f"{gray}{'-' * separator_width}{reset}")
+    periods = _resolve_report_periods(session, objective_mode=objective_mode)
+    gate_rows = _build_gate_status_rows(finalists, objective_mode=objective_mode)
+
+    print(f"{gray}{'-' * 108}{reset}")
+    print(f"training period : {periods['training_period']}")
+    print(f"validate period : {periods['validate_period']}")
+    print(f"oos test period : {periods['oos_test_period']}")
+    print(f"{gray}{'-' * 108}{reset}")
+    print("gate config")
+    for gate_row in gate_rows:
+        enabled_text = 'ON' if bool(gate_row.get('enabled', False)) else 'OFF'
+        enabled_color = green if enabled_text == 'ON' else red
+        ratio_text = str(gate_row.get('ratio_text', '-') or '-')
+        print(f"  {str(gate_row.get('name', 'gate')):<28}: {enabled_color}{enabled_text:<3}{reset} | ratio={ratio_text}")
+    print(f"{gray}{'-' * 108}{reset}")
+
     header = (
-        f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}"
-        f"{'local_gate':>14}"
+        f"{'trial':<8} | "
+        f"{'base_score':>12} {'base_rank':>10} | "
+        f"{'local_min':>12} {'local_rank*':>12}"
     )
     if inner_validate_enabled:
-        header += f"{'val_year':>10}{'val_score':>12}{'val_rank':>10}{'val_gate':>12}"
+        header += f" | {'val_score':>10} {'val_rank':>10} {'val_gate':>10}"
     if dependency_enabled:
-        header += f"{'dep':>8}{'dom_year':>10}{'dom_pnl%':>10}{'pos_trades':>12}{'pos_symbols':>13}{'top_trade%':>12}{'dep_reason':>14}"
-    header += f"{'結果':>12}"
+        header += f" | {'dep_gate':>10} {'dep_reason':>18}"
+    header += f" | {'result':>10} {'oos_score':>10}"
+    separator_width = len(_strip_ansi(header))
     print(header)
-    for idx, item in enumerate(finalists, start=1):
-        trial = item["trial"]
-        gate_pass = bool(item["gate_pass"])
-        status_text = 'PASS' if gate_pass else 'FAIL'
-        status_color = green if gate_pass else red
+    print(f"{gray}{'-' * separator_width}{reset}")
+
+    for local_rank, item in enumerate(finalists, start=1):
+        trial = item['trial']
+        gate_pass = bool(item.get('gate_pass'))
         is_winner = winner_trial is not None and int(winner_trial.number) == int(trial.number)
-        is_retention_ref = (
-            retention_best_trial is not None
-            and int(retention_best_trial.number) == int(trial.number)
-            and not is_winner
-        )
         has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item)
         has_dependency_warning = dependency_enabled and _has_dependency_warning(item)
         if is_winner:
             result_text = 'winner'
-        elif gate_pass and has_inner_validate_fail:
+            result_color = yellow
+        elif not gate_pass:
+            result_text = 'reject'
+            result_color = red
+        elif has_inner_validate_fail:
             result_text = 'val_skip'
-        elif gate_pass and has_dependency_warning:
+            result_color = red
+        elif has_dependency_warning:
             result_text = 'dep_skip'
-        elif is_retention_ref:
-            result_text = 'ret_ref'
+            result_color = red
         else:
-            result_text = '保留' if gate_pass else '淘汰'
-        result_color = yellow if result_text in {'winner', 'ret_ref'} else (red if result_text in {'val_skip', 'dep_skip'} else status_color)
+            result_text = 'keep'
+            result_color = green
 
         line = (
-            f"#{int(trial.number) + 1:<13}"
-            f"#{int(item.get('base_rank', idx)):>7}"
-            f"{float(item['base_score']):>14.3f}"
-            f"{float(item['local_min_score']):>14.3f}"
-            f"{float(item['local_retention']):>12.3f}"
-            f"{status_color}{status_text:>14}{reset}"
+            f"#{int(trial.number) + 1:<7} | "
+            f"{float(item['base_score']):>12.3f} #{int(item.get('base_rank', 0)):>9} | "
+            f"{float(item['local_min_score']):>12.3f} #{int(local_rank):>11}"
         )
         if inner_validate_enabled:
-            val_diag = item.get("inner_validate_diagnostics") if isinstance(item.get("inner_validate_diagnostics"), dict) else {}
-            validate_year = val_diag.get('validate_year')
-            validate_year_text = 'N/A' if validate_year is None else str(validate_year)
+            val_diag = item.get('inner_validate_diagnostics') if isinstance(item.get('inner_validate_diagnostics'), dict) else {}
             try:
                 validate_score = float(val_diag.get('inner_validate_score', INVALID_TRIAL_VALUE))
             except (TypeError, ValueError):
@@ -860,34 +1018,73 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             validate_text = 'PASS' if validate_gate else 'FAIL'
             validate_color = green if validate_gate else red
             line += (
-                f"{validate_year_text:>10}"
-                f"{validate_score:>12.3f}"
-                f"{validate_rank_text:>10}"
-                f"{validate_color}{validate_text:>12}{reset}"
+                f" | {validate_score:>10.3f} {validate_rank_text:>10} "
+                f"{validate_color}{validate_text:>10}{reset}"
             )
         if dependency_enabled:
-            diagnostics = item.get("dominant_year_dependency_diagnostics") if isinstance(item.get("dominant_year_dependency_diagnostics"), dict) else {}
-            dep_text = 'WARN' if bool(diagnostics.get('dependency_warning', False)) else str(diagnostics.get('dependency_status') or 'OK')
-            dep_color = red if dep_text == 'WARN' else green
-            dominant_year = diagnostics.get('dominant_entry_year')
-            dominant_year_text = 'N/A' if dominant_year is None else str(dominant_year)
-            dominant_pnl_pct = float(diagnostics.get('dominant_year_positive_pnl_share', 0.0)) * 100.0
-            top_trade_pct = float(diagnostics.get('top_trade_pnl_share_in_dominant_year', 0.0)) * 100.0
-            positive_trade_count = int(diagnostics.get('dominant_year_positive_trade_count', 0) or 0)
-            positive_symbol_count = int(diagnostics.get('dominant_year_positive_symbol_count', 0) or 0)
+            diagnostics = item.get('dominant_year_dependency_diagnostics') if isinstance(item.get('dominant_year_dependency_diagnostics'), dict) else {}
+            dependency_pass = not bool(diagnostics.get('dependency_warning', False))
+            dep_text = 'PASS' if dependency_pass else 'FAIL'
+            dep_color = green if dependency_pass else red
             dep_reason_text = _format_dependency_reason(diagnostics)
-            line += (
-                f"{dep_color}{dep_text:>8}{reset}"
-                f"{dominant_year_text:>10}"
-                f"{dominant_pnl_pct:>10.1f}"
-                f"{positive_trade_count:>12}"
-                f"{positive_symbol_count:>13}"
-                f"{top_trade_pct:>12.1f}"
-                f"{dep_reason_text:>14}"
-            )
-        line += f"{result_color}{result_text:>12}{reset}"
+            line += f" | {dep_color}{dep_text:>10}{reset} {dep_reason_text:>18}"
+        oos_diag = item.get('oos_diagnostics') if isinstance(item.get('oos_diagnostics'), dict) else {}
+        try:
+            oos_score = float(oos_diag.get('oos_score', INVALID_TRIAL_VALUE))
+        except (TypeError, ValueError):
+            oos_score = float(INVALID_TRIAL_VALUE)
+        oos_score_text = 'N/A' if not bool(oos_diag.get('enabled', False)) else f"{oos_score:.3f}"
+        line += f" | {result_color}{result_text:>10}{reset} {oos_score_text:>10}"
         print(line)
+
     print(f"{gray}{'=' * separator_width}{reset}")
+    winner_count = 1 if winner_trial is not None else 0
+    keep_count = 0
+    reject_count = 0
+    for item in finalists:
+        item_trial = item['trial']
+        if winner_trial is not None and int(item_trial.number) == int(winner_trial.number):
+            continue
+        gate_pass = bool(item.get('gate_pass'))
+        has_inner_validate_fail = inner_validate_enabled and not _has_inner_validate_pass(item)
+        has_dependency_warning = dependency_enabled and _has_dependency_warning(item)
+        if gate_pass and not has_inner_validate_fail and not has_dependency_warning:
+            keep_count += 1
+        else:
+            reject_count += 1
+    best_local_item = finalists[0] if finalists else None
+    best_local_text = '-'
+    if best_local_item is not None:
+        best_local_text = f"{float(best_local_item.get('local_min_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(best_local_item['trial'].number) + 1})"
+    best_val_text = '-'
+    if inner_validate_enabled:
+        val_best = select_best_finalist_by_inner_validate_score(finalists)
+        if val_best is not None:
+            val_diag = val_best.get('inner_validate_diagnostics') if isinstance(val_best.get('inner_validate_diagnostics'), dict) else {}
+            best_val_text = f"{float(val_diag.get('inner_validate_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(val_best['trial'].number) + 1})"
+    best_oos_item = None
+    oos_enabled_items = [item for item in finalists if bool((item.get('oos_diagnostics') or {}).get('enabled', False))]
+    if oos_enabled_items:
+        best_oos_item = max(
+            oos_enabled_items,
+            key=lambda item: (
+                float((item.get('oos_diagnostics') or {}).get('oos_score', INVALID_TRIAL_VALUE)),
+                float(item.get('local_min_score', INVALID_TRIAL_VALUE)),
+                -int(item['trial'].number),
+            ),
+        )
+    best_oos_text = '-'
+    if best_oos_item is not None:
+        best_oos_text = f"{float((best_oos_item.get('oos_diagnostics') or {}).get('oos_score', INVALID_TRIAL_VALUE)):.3f} (trial #{int(best_oos_item['trial'].number) + 1})"
+    print(
+        "summary: "
+        f"{yellow}winner={winner_count}{reset}  "
+        f"{green}keep={keep_count}{reset}  "
+        f"{red}reject={reject_count}{reset}"
+        f" | best_local_min={best_local_text}"
+        f" | best_val_score={best_val_text}"
+        f" | best_oos_score={best_oos_text}"
+    )
     return finalists, winner_trial
 
 
