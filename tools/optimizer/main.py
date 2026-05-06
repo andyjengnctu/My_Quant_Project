@@ -498,7 +498,15 @@ def _resolve_cli_run_request(argv):
     from tools.optimizer.benchmark import OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS
 
     timing_mode = _has_cli_flag(argv, '--timing')
+    outer_oos_mode = _has_cli_flag(argv, '--outer-oos')
     cli_trials_raw = _extract_cli_value(argv, '--trials')
+    if outer_oos_mode:
+        return {
+            'timing_mode': False,
+            'n_trials': int(cli_trials_raw) if str(cli_trials_raw or '').strip() else 0,
+            'action': 'outer_rolling_oos',
+            'source': 'CLI:--outer-oos',
+        }
     if cli_trials_raw:
         cli_trials = parse_int_strict(cli_trials_raw, 'CLI 參數 --trials', min_value=0)
         if timing_mode and cli_trials <= 0:
@@ -559,11 +567,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials"), flag_options=("--timing",))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos]")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling next-1Y OOS test。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -646,6 +654,30 @@ def main(argv=None, environ=None):
         )
     if trial_count_exit is not None:
         return trial_count_exit
+    if str(getattr(session, "run_action", "train")) == "outer_rolling_oos":
+        from tools.optimizer.outer_rolling_oos import run_outer_rolling_oos
+        try:
+            optimizer_seed, seed_source = resolve_optimizer_seed(environ)
+        except ValueError as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
+        return run_outer_rolling_oos(
+            argv=argv,
+            environ=environ,
+            project_root=PROJECT_ROOT,
+            output_dir=OUTPUT_DIR,
+            base_policy=loaded_policy,
+            selected_data_dir=selected_data_dir,
+            dataset_label=dataset_label,
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=optimizer_required_min_rows,
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=_ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            optimizer_seed=optimizer_seed,
+            default_trials=int(getattr(session, "n_trials", 0) or 500),
+        )
     if str(getattr(session, "run_action", "train")) == "promote_candidate":
         ensure_runtime_dirs()
         return _promote_candidate_to_run_best()

@@ -844,7 +844,16 @@ def _resolve_local_min_score_finalist_top_k(session, top_k=None):
     return resolve_optimizer_local_min_score_finalist_top_k(getattr(session, "n_trials", 0))
 
 
-def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k=None, include_trial=None, show_progress: bool = False):
+def list_local_min_score_finalists(
+    study,
+    *,
+    session,
+    objective_mode: str,
+    top_k=None,
+    include_trial=None,
+    show_progress: bool = False,
+    include_oos_diagnostics: bool = True,
+):
     resolved_top_k = _resolve_local_min_score_finalist_top_k(session, top_k)
     sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
     if not sorted_trials:
@@ -903,7 +912,8 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
                 trial,
                 objective_mode,
             )
-        enriched_item["oos_diagnostics"] = _resolve_trial_oos_diagnostics(session, trial)
+        if bool(include_oos_diagnostics):
+            enriched_item["oos_diagnostics"] = _resolve_trial_oos_diagnostics(session, trial)
         enriched_finalists.append(enriched_item)
     if is_inner_validate_anti_overfit_enabled(objective_mode):
         _annotate_inner_validate_ranks(enriched_finalists)
@@ -927,6 +937,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
         top_k=top_k,
         include_trial=winner_trial,
         show_progress=True,
+        include_oos_diagnostics=True,
     )
     if not finalists:
         return [], winner_trial
@@ -1002,10 +1013,12 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
 
         local_gate_text = 'PASS' if gate_pass else 'FAIL'
         local_gate_color = green if gate_pass else red
+        base_rank_text = f"#{int(item.get('base_rank', 0))}"
+        local_rank_text = f"#{int(local_rank)}"
         line = (
             f"#{int(trial.number) + 1:<7} | "
-            f"{float(item['base_score']):>12.3f} #{int(item.get('base_rank', 0)):>9} | "
-            f"{float(item['local_min_score']):>12.3f} #{int(local_rank):>11} "
+            f"{float(item['base_score']):>12.3f} {base_rank_text:>10} | "
+            f"{float(item['local_min_score']):>12.3f} {local_rank_text:>12} "
             f"{local_gate_color}{local_gate_text:>12}{reset}"
         )
         if inner_validate_enabled:

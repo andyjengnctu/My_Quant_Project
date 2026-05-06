@@ -230,6 +230,7 @@ def print_resolved_run_request(*, n_trials, action, source, colors):
         "train": f"訓練 {int(n_trials)} 次",
         "export_candidate": "匯出 candidate_best + retention比較",
         "promote_candidate": "promote candidate",
+        "outer_rolling_oos": "outer rolling next-1Y OOS test",
     }
     print(f"{colors['gray']}🎯 Optimizer 動作: {action_labels.get(str(action), str(action))} | 來源: {source}{colors['reset']}")
 

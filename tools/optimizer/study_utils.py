@@ -38,6 +38,7 @@ def objective_modes_are_compatible(actual_mode: str, expected_mode: str) -> bool
 OPTIMIZER_MENU_ACTION_TRAIN = "train"
 OPTIMIZER_MENU_ACTION_EXPORT_CANDIDATE = "export_candidate"
 OPTIMIZER_MENU_ACTION_PROMOTE_CANDIDATE = "promote_candidate"
+OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS = "outer_rolling_oos"
 
 def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
     normalized = str(raw_value or "").strip()
@@ -52,6 +53,12 @@ def _parse_optimizer_run_request_raw(raw_value: str, *, source_label: str):
         return {
             "n_trials": 0,
             "action": OPTIMIZER_MENU_ACTION_PROMOTE_CANDIDATE,
+            "source": source_label,
+        }
+    if normalized_upper == "R":
+        return {
+            "n_trials": 0,
+            "action": OPTIMIZER_MENU_ACTION_OUTER_ROLLING_OOS,
             "source": source_label,
         }
     trial_count = parse_int_strict(normalized, "訓練次數", min_value=0)
@@ -71,7 +78,7 @@ def resolve_optimizer_run_request(environ):
         prompt = (
             "👉 Optimizer 動作："
             f"[Enter] 訓練 {DEFAULT_OPTIMIZER_TRIALS_INTERACTIVE:,} 次  "
-            "[數字] 訓練指定次數  [0] 匯出 candidate_best + retention比較  [P] promote candidate: "
+            "[數字] 訓練指定次數  [0] 匯出 candidate_best + retention比較  [P] promote candidate  [R] outer rolling OOS: "
         )
         raw_input = input(prompt)
         return _parse_optimizer_run_request_raw(raw_input, source_label="UI/MENU")
