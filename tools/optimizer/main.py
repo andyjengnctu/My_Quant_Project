@@ -73,6 +73,8 @@ CANDIDATE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_best_params.jso
 CANDIDATE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_best_summary.json")
 CANDIDATE_RETENTION_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_params.json")
 CANDIDATE_RETENTION_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_retention_best_summary.json")
+CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH = os.path.join(MODELS_DIR, "candidate_val_score_best_params.json")
+CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "candidate_val_score_best_summary.json")
 RUN_BEST_SUMMARY_PATH = os.path.join(MODELS_DIR, "run_best_summary.json")
 DEFAULT_WALK_FORWARD_POLICY = load_walk_forward_policy(PROJECT_ROOT)
 TRAIN_MAX_POSITIONS = 10
@@ -561,7 +563,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 作比較；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best 與 candidate_retention_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -582,6 +584,7 @@ def main(argv=None, environ=None):
         build_local_min_score_best_trial_resolver,
         print_local_min_score_finalist_review,
         print_local_min_score_winner_summary,
+        select_best_finalist_by_inner_validate_score,
         select_best_finalist_by_local_retention,
     )
     from tools.optimizer.session import close_study_storage
@@ -728,6 +731,26 @@ def main(argv=None, environ=None):
                 export_best_params_if_requested=export_best_params_if_requested,
                 is_qualified_trial_value=is_qualified_trial_value,
             )
+            if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
+                val_score_best_finalist = select_best_finalist_by_inner_validate_score(finalists)
+                val_score_best_trial = None if val_score_best_finalist is None else val_score_best_finalist["trial"]
+                _export_selected_candidate_artifacts(
+                    study=study,
+                    finalists=finalists,
+                    selected_trial=val_score_best_trial,
+                    params_path=CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH,
+                    summary_path=CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH,
+                    fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                    colors=COLORS,
+                    objective_mode=objective_mode,
+                    walk_forward_policy=walk_forward_policy,
+                    action_label="export_candidate",
+                    selection_rule="max_inner_validate_score_compare",
+                    compare_only=True,
+                    artifact_label="candidate_val_score_best",
+                    export_best_params_if_requested=export_best_params_if_requested,
+                    is_qualified_trial_value=is_qualified_trial_value,
+                )
             if selected_model_mode == 'split':
                 return finalize_best_trial_outputs(
                     session=session,
@@ -922,6 +945,26 @@ def main(argv=None, environ=None):
                     export_best_params_if_requested=export_best_params_if_requested,
                     is_qualified_trial_value=is_qualified_trial_value,
                 )
+                if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
+                    val_score_best_finalist = select_best_finalist_by_inner_validate_score(finalists)
+                    val_score_best_trial = None if val_score_best_finalist is None else val_score_best_finalist["trial"]
+                    _export_selected_candidate_artifacts(
+                        study=study,
+                        finalists=finalists,
+                        selected_trial=val_score_best_trial,
+                        params_path=CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH,
+                        summary_path=CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH,
+                        fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
+                        colors=COLORS,
+                        objective_mode=objective_mode,
+                        walk_forward_policy=walk_forward_policy,
+                        action_label="train",
+                        selection_rule="max_inner_validate_score_compare",
+                        compare_only=True,
+                        artifact_label="candidate_val_score_best",
+                        export_best_params_if_requested=export_best_params_if_requested,
+                        is_qualified_trial_value=is_qualified_trial_value,
+                    )
                 _promote_candidate_to_run_best()
                 if selected_model_mode == 'split':
                     finalize_best_trial_outputs(

@@ -329,6 +329,34 @@ def select_best_finalist_by_local_retention(finalists: list[dict]):
     return eligible[0]
 
 
+def select_best_finalist_by_inner_validate_score(finalists: list[dict]):
+    eligible = []
+    for item in finalists:
+        if not bool(item.get("gate_pass", False)):
+            continue
+        diagnostics = item.get("inner_validate_diagnostics")
+        if not isinstance(diagnostics, dict):
+            continue
+        try:
+            validate_score = float(diagnostics.get("inner_validate_score", float("-inf")))
+        except (TypeError, ValueError):
+            continue
+        eligible.append((validate_score, item))
+    if not eligible:
+        return None
+    eligible.sort(
+        key=lambda pair: (
+            pair[0],
+            float(pair[1].get("local_min_score", INVALID_TRIAL_VALUE)),
+            float(pair[1].get("local_retention", float("-inf"))),
+            float(pair[1].get("base_score", INVALID_TRIAL_VALUE)),
+            -int(pair[1]["trial"].number),
+        ),
+        reverse=True,
+    )
+    return eligible[0][1]
+
+
 def _trial_matches_objective_mode(trial, objective_mode: str) -> bool:
     expected = normalize_objective_mode(objective_mode)
     actual = str(trial.user_attrs.get("objective_mode", "")).strip()
