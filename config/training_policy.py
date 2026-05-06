@@ -37,7 +37,7 @@ OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist rev
 # inner validation anti-overfitting 開關。
 # True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。
 # False = 不切 inner validation，維持原本 selection 區間全段訓練。
-OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED = True
+OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED = False
 
 # inner validation score 下限。第一層 gate 仍要求 validate score > 0。
 OPTIMIZER_INNER_VALIDATE_MIN_SCORE = 0.0
@@ -51,7 +51,7 @@ OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS = 1
 # dominant-year dependency anti-overfitting 開關。
 # True  = candidate_best 會跳過「年度集中 + 來源狹窄」的脆弱型 finalist。
 # False = candidate_best 回到原本只看 local_min_score 的選法。
-OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = False
+OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED = True
 
 # 以下門檻只在上述開關啟用時使用；採直覺版「最大獲利年度佔比 + 該年度來源狹窄」判斷。
 # 物理意義：若單一進場年度貢獻全 train 正獲利 70% 以上，視為年度獲利高度集中。
