@@ -31,6 +31,7 @@ from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
 )
 
@@ -169,6 +170,7 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "compare_only": bool(compare_only),
         "inner_validate_anti_overfit_enabled": bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
         "inner_validate_min_score": float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE),
+        "inner_validate_max_rank_percentile": float(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE),
         "dominant_year_dependency_anti_overfit_enabled": bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
         "created_at": get_taipei_now().isoformat(),
     }
@@ -176,7 +178,13 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
     if isinstance(inner_validate_diagnostics, dict):
         payload["inner_validate_diagnostics"] = inner_validate_diagnostics
         payload["inner_validate_score"] = float(inner_validate_diagnostics.get("inner_validate_score", 0.0))
-        payload["inner_validate_gate"] = bool(payload["inner_validate_score"] > float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE))
+        payload["inner_validate_gate"] = bool(inner_validate_diagnostics.get("inner_validate_gate", False))
+        if inner_validate_diagnostics.get("inner_validate_rank") is not None:
+            payload["inner_validate_rank"] = int(inner_validate_diagnostics["inner_validate_rank"])
+        if inner_validate_diagnostics.get("inner_validate_rank_cutoff") is not None:
+            payload["inner_validate_rank_cutoff"] = int(inner_validate_diagnostics["inner_validate_rank_cutoff"])
+        if inner_validate_diagnostics.get("inner_validate_rank_total") is not None:
+            payload["inner_validate_rank_total"] = int(inner_validate_diagnostics["inner_validate_rank_total"])
         if inner_validate_diagnostics.get("validate_year") is not None:
             payload["inner_validate_year"] = int(inner_validate_diagnostics["validate_year"])
         if inner_validate_diagnostics.get("inner_train_end_year") is not None:
@@ -191,7 +199,7 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
 def _resolve_candidate_best_selection_rule():
     parts = ["max_local_min_score"]
     if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
-        parts.append("inner_validate_score_gt_0")
+        parts.append("inner_validate_score_gt_0_and_rank_top_half")
     if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
         parts.append("intuitive_dominant_year_dependency_veto")
     return "_with_".join(parts)
@@ -256,9 +264,8 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
     if candidate_base_score <= 0.0:
         return False, "candidate.base_score <= 0"
     if bool(candidate_summary.get("inner_validate_anti_overfit_enabled", False)):
-        candidate_inner_validate_score = float(candidate_summary.get("inner_validate_score", float("-inf")))
-        if candidate_inner_validate_score <= float(candidate_summary.get("inner_validate_min_score", 0.0)):
-            return False, "candidate.inner_validate_score <= 0"
+        if not bool(candidate_summary.get("inner_validate_gate", False)):
+            return False, "candidate.inner_validate_gate = FAIL"
     if run_best_summary is None:
         return True, "run_best summary 缺失，視同首次 promote"
     if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):

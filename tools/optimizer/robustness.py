@@ -8,6 +8,7 @@ from typing import Callable
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
     resolve_optimizer_local_min_score_finalist_top_k,
 )
@@ -205,7 +206,7 @@ def is_inner_validate_anti_overfit_enabled(objective_mode: str | None = None) ->
     return normalize_objective_mode(objective_mode) == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
 
 
-def _has_inner_validate_pass(item: dict) -> bool:
+def _inner_validate_score_is_positive(item: dict) -> bool:
     diagnostics = item.get("inner_validate_diagnostics")
     if not isinstance(diagnostics, dict):
         return False
@@ -214,6 +215,47 @@ def _has_inner_validate_pass(item: dict) -> bool:
     except (TypeError, ValueError):
         return False
     return score > float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE)
+
+
+def _has_inner_validate_pass(item: dict) -> bool:
+    if not _inner_validate_score_is_positive(item):
+        return False
+    diagnostics = item.get("inner_validate_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    return bool(diagnostics.get("inner_validate_rank_gate", True))
+
+
+def _annotate_inner_validate_ranks(finalists: list[dict]) -> list[dict]:
+    score_items = [
+        item for item in finalists
+        if bool(item.get("gate_pass", False))
+        and isinstance(item.get("inner_validate_diagnostics"), dict)
+    ]
+    if not score_items:
+        return finalists
+    score_items.sort(
+        key=lambda item: (
+            float(item["inner_validate_diagnostics"].get("inner_validate_score", float("-inf"))),
+            float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+            float(item.get("base_score", INVALID_TRIAL_VALUE)),
+            -int(item["trial"].number),
+        ),
+        reverse=True,
+    )
+    cutoff = max(1, int(
+        (Decimal(len(score_items)) * Decimal(str(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE)))
+        .to_integral_value(rounding="ROUND_CEILING")
+    ))
+    for rank, item in enumerate(score_items, start=1):
+        diagnostics = item["inner_validate_diagnostics"]
+        score_gate = _inner_validate_score_is_positive(item)
+        diagnostics["inner_validate_rank"] = int(rank)
+        diagnostics["inner_validate_rank_cutoff"] = int(cutoff)
+        diagnostics["inner_validate_rank_total"] = int(len(score_items))
+        diagnostics["inner_validate_rank_gate"] = bool(rank <= cutoff)
+        diagnostics["inner_validate_gate"] = bool(score_gate and rank <= cutoff)
+    return finalists
 
 
 def _has_dependency_warning(item: dict) -> bool:
@@ -528,6 +570,10 @@ def _normalize_inner_validate_diagnostics(value):
         "enabled",
         "inner_validate_score",
         "inner_validate_gate",
+        "inner_validate_rank",
+        "inner_validate_rank_cutoff",
+        "inner_validate_rank_total",
+        "inner_validate_rank_gate",
         "validate_year",
         "validate_start_year",
         "validate_end_year",
@@ -680,6 +726,8 @@ def list_local_min_score_finalists(study, *, session, objective_mode: str, top_k
                 objective_mode,
             )
         enriched_finalists.append(enriched_item)
+    if is_inner_validate_anti_overfit_enabled(objective_mode):
+        _annotate_inner_validate_ranks(enriched_finalists)
     enriched_finalists.sort(
         key=lambda item: (
             float(item["local_min_score"]),
@@ -721,14 +769,14 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
 
     inner_validate_enabled = is_inner_validate_anti_overfit_enabled(objective_mode)
     dependency_enabled = is_dominant_year_dependency_anti_overfit_enabled()
-    separator_width = 96 + (36 if inner_validate_enabled else 0) + (72 if dependency_enabled else 0)
+    separator_width = 96 + (46 if inner_validate_enabled else 0) + (72 if dependency_enabled else 0)
     print(f"{gray}{'-' * separator_width}{reset}")
     header = (
         f"{'trial':<14}{'rank':>8}{'base_score':>14}{'local_min':>14}{'retention':>12}"
         f"{'local_gate':>14}"
     )
     if inner_validate_enabled:
-        header += f"{'val_year':>10}{'val_score':>12}{'val_gate':>12}"
+        header += f"{'val_year':>10}{'val_score':>12}{'val_rank':>10}{'val_gate':>12}"
     if dependency_enabled:
         header += f"{'dep':>8}{'dom_year':>10}{'dom_pnl%':>10}{'pos_trades':>12}{'pos_symbols':>13}{'top_trade%':>12}{'dep_reason':>14}"
     header += f"{'結果':>12}"
@@ -774,12 +822,19 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
                 validate_score = float(val_diag.get('inner_validate_score', INVALID_TRIAL_VALUE))
             except (TypeError, ValueError):
                 validate_score = float(INVALID_TRIAL_VALUE)
-            validate_gate = bool(validate_score > float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE))
+            rank_value = val_diag.get('inner_validate_rank')
+            rank_cutoff = val_diag.get('inner_validate_rank_cutoff')
+            if rank_value is None or rank_cutoff is None:
+                validate_rank_text = 'N/A'
+            else:
+                validate_rank_text = f"#{int(rank_value)}/{int(rank_cutoff)}"
+            validate_gate = _has_inner_validate_pass(item)
             validate_text = 'PASS' if validate_gate else 'FAIL'
             validate_color = green if validate_gate else red
             line += (
                 f"{validate_year_text:>10}"
                 f"{validate_score:>12.3f}"
+                f"{validate_rank_text:>10}"
                 f"{validate_color}{validate_text:>12}{reset}"
             )
         if dependency_enabled:
@@ -841,7 +896,7 @@ def resolve_best_completed_trial_with_local_min_score_or_none(study, *, session,
     if show_progress:
         _print_progress_line(
             session,
-            f"🏁 winner(local_min{' + inner_val' if is_inner_validate_anti_overfit_enabled(objective_mode) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
+            f"🏁 winner(local_min{' + inner_val_rank' if is_inner_validate_anti_overfit_enabled(objective_mode) else ''}{' + dependency_safe' if is_dominant_year_dependency_anti_overfit_enabled() else ''}): trial #{int(trial.number) + 1} | base_score={float(best_finalist['base_score']):.3f} | local_min_score={float(best_finalist['local_min_score']):.3f} | retention={float(best_finalist['local_retention']):.3f}"
         )
     resolver_cache[cache_key] = trial
     return trial
