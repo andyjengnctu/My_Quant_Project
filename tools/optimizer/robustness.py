@@ -949,22 +949,25 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     gate_rows = _build_gate_status_rows(finalists, objective_mode=objective_mode)
 
     print(f"{gray}{'-' * 108}{reset}")
-    print(f"training period : {periods['training_period']}")
-    print(f"validate period : {periods['validate_period']}")
-    print(f"oos test period : {periods['oos_test_period']}")
-    print(f"{gray}{'-' * 108}{reset}")
-    print("gate config")
-    for gate_row in gate_rows:
-        enabled_text = 'ON' if bool(gate_row.get('enabled', False)) else 'OFF'
-        enabled_color = green if enabled_text == 'ON' else red
-        ratio_text = str(gate_row.get('ratio_text', '-') or '-')
-        print(f"  {str(gate_row.get('name', 'gate')):<28}: {enabled_color}{enabled_text:<3}{reset} | ratio={ratio_text}")
+    period_gate_pairs = [
+        ('training period', periods['training_period'], gate_rows[0]),
+        ('validate period', periods['validate_period'], gate_rows[1]),
+        ('oos test period', periods['oos_test_period'], gate_rows[2]),
+    ]
+    for period_label, period_value, gate_row in period_gate_pairs:
+        enabled_value = bool(gate_row.get('enabled', False))
+        enabled_text = 'True' if enabled_value else 'False'
+        enabled_color = green if enabled_value else red
+        print(
+            f"{period_label:<18}: {period_value:<18}"
+            f"{str(gate_row.get('name', 'gate')):<28}: {enabled_color}{enabled_text}{reset}"
+        )
     print(f"{gray}{'-' * 108}{reset}")
 
     header = (
         f"{'trial':<8} | "
         f"{'base_score':>12} {'base_rank':>10} | "
-        f"{'local_min':>12} {'local_rank*':>12}"
+        f"{'local_min':>12} {'local_rank*':>12} {'local_gate':>12}"
     )
     if inner_validate_enabled:
         header += f" | {'val_score':>10} {'val_rank':>10} {'val_gate':>10}"
@@ -997,10 +1000,13 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
             result_text = 'keep'
             result_color = green
 
+        local_gate_text = 'PASS' if gate_pass else 'FAIL'
+        local_gate_color = green if gate_pass else red
         line = (
             f"#{int(trial.number) + 1:<7} | "
             f"{float(item['base_score']):>12.3f} #{int(item.get('base_rank', 0)):>9} | "
-            f"{float(item['local_min_score']):>12.3f} #{int(local_rank):>11}"
+            f"{float(item['local_min_score']):>12.3f} #{int(local_rank):>11} "
+            f"{local_gate_color}{local_gate_text:>12}{reset}"
         )
         if inner_validate_enabled:
             val_diag = item.get('inner_validate_diagnostics') if isinstance(item.get('inner_validate_diagnostics'), dict) else {}
