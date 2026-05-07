@@ -25,6 +25,7 @@ from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
+from core.rolling_oos_params import format_rolling_oos_summary_lines, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -971,7 +972,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._run_thread = None
         self._active_token = 0
         self._status_var = tk.StringVar(value="尚未執行")
-        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
         self._param_source_display_var = tk.StringVar(value=default_param_source_label)
         self._rotation_display_var = tk.StringVar(value=DEFAULT_ROTATION_LABEL)
         self._max_positions_var = tk.StringVar(value="10")
@@ -1439,7 +1440,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _refresh_param_source_options(self):
         current_label = self._param_source_display_var.get().strip()
-        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
         self._param_source_labels = labels
         self._param_source_path_by_label = path_by_label
         self._param_source_key_by_label = key_by_label
@@ -1466,7 +1467,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         params_path = self._param_source_path_by_label.get(selected_label)
         if params_path:
             return params_path
-        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT)
+        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
         return path_by_label[default_label]
 
     def _resolve_fixed_risk(self):
@@ -1642,7 +1643,33 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             return
         self.after(0, self._finish_portfolio_success, request_token, result_payload)
 
+    def _execute_rolling_oos_validation_display(self, options):
+        payload = load_rolling_oos_param_set(options["params_path"])
+        print(f"{C_CYAN}================================================================================{C_RESET}")
+        print(f"⚙️ {C_YELLOW}Rolling OOS 驗證參數組檢視{C_RESET}")
+        print(f"{C_CYAN}================================================================================{C_RESET}")
+        print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+        for line in format_rolling_oos_summary_lines(payload):
+            print(f"{C_GRAY}{line}{C_RESET}")
+        print(f"{C_YELLOW}此檔案用途為 validation only；Workbench 目前顯示 rolling 訓練輸出的串連摘要，不重跑實盤單一參數模擬。{C_RESET}")
+        return {
+            "mode": "rolling_oos_validation",
+            "rolling_oos_payload": payload,
+            "options": dict(options),
+            "df_eq": pd.DataFrame(),
+            "df_tr": pd.DataFrame(),
+            "df_yearly": pd.DataFrame(),
+            "params": None,
+            "context": {},
+            "profile_stats": {},
+            "metrics": {},
+        }
+
+
     def _execute_portfolio_backtest(self, options):
+        if is_rolling_oos_param_set_file(options["params_path"]):
+            return self._execute_rolling_oos_validation_display(options)
+
         data_dir = get_dataset_dir(WORKBENCH_PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
         params = load_strict_params(options["params_path"])
         params.fixed_risk = float(options["fixed_risk"])
@@ -1763,6 +1790,10 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._run_thread = None
         self._result = result_payload
         self._history_summary_cache.clear()
+        if str((result_payload or {}).get("mode") or "") == "rolling_oos_validation":
+            self._status_var.set("完成：Rolling OOS 驗證摘要")
+            self._notebook.select(self._console_tab)
+            return
         self._render_performance_chart(result_payload)
         self._refresh_trade_ticker_dropdown(result_payload)
         self._status_var.set("完成：投組回測")

@@ -10,6 +10,7 @@ from core.strategy_params import (
 )
 from config.execution_policy import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
 from core.log_utils import format_exception_summary
+from core.rolling_oos_params import is_rolling_oos_param_set_payload
 
 
 PARAM_FIELDS = tuple(fields(V16StrategyParams))
@@ -134,6 +135,12 @@ def load_params_from_json(json_file):
     try:
         with open(json_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
+
+        if is_rolling_oos_param_set_payload(data):
+            raise ValueError(
+                "此檔案是 rolling OOS 驗證用年度參數組，不是實盤單一 param.json；"
+                "請在支援 rolling validation 的畫面/流程讀取，或改選最新單一參數檔。"
+            )
 
         return build_params_from_mapping(data)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as e:

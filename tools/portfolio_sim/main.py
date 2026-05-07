@@ -8,7 +8,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
-from core.model_paths import resolve_candidate_best_params_path, resolve_run_best_params_path
+from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_run_best_params_path
+from core.rolling_oos_params import format_rolling_oos_summary_lines, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 
@@ -38,7 +39,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 run_best（預設）或 candidate_best；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 run_best（預設）、candidate_best，或 rolling OOS 驗證參數組；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
         return 0
 
     from core.data_utils import normalize_ticker_from_csv_filename
@@ -83,14 +84,44 @@ def main(argv=None, env=None):
     )
 
     try:
+        rolling_records = [record for record in discover_model_param_sources(PROJECT_ROOT, include_rolling_oos=True) if str(record.get("kind")) == "rolling_oos_param_set"]
         param_source_choice = safe_prompt_choice(
-            "👉 參數來源：[Enter] run_best (預設)  [C] candidate_best :  ",
+            "👉 參數來源：[Enter] run_best (預設)  [C] candidate_best  [O] rolling OOS驗證 :  ",
             "R",
-            ("R", "C"),
+            ("R", "C", "O"),
             "參數來源",
         )
-        param_source = "candidate_best" if param_source_choice == "C" else "run_best"
+        if param_source_choice == "C":
+            param_source = "candidate_best"
+            params_path = resolve_candidate_best_params_path(PROJECT_ROOT)
+        elif param_source_choice == "O":
+            if not rolling_records:
+                raise ValueError("找不到 rolling OOS 年度參數組 JSON；請先執行 outer rolling OOS。")
+            if len(rolling_records) == 1:
+                selected_record = rolling_records[0]
+            else:
+                print(f"{C_GRAY}可用 rolling OOS 驗證參數組：{C_RESET}")
+                for idx, record in enumerate(rolling_records, start=1):
+                    print(f"  [{idx}] {record['label']}")
+                raw_idx = safe_prompt("👉 選擇 rolling OOS 參數組：[Enter] 1  [數字] 指定: ", "").strip()
+                selected_idx = 1 if raw_idx == "" else parse_int_strict(raw_idx, "rolling OOS 參數組序號", min_value=1)
+                if selected_idx > len(rolling_records):
+                    raise ValueError(f"rolling OOS 參數組序號超出範圍：{selected_idx}")
+                selected_record = rolling_records[selected_idx - 1]
+            param_source = str(selected_record.get("key") or "rolling_oos")
+            params_path = str(selected_record["path"])
+        else:
+            param_source = "run_best"
+            params_path = resolve_run_best_params_path(PROJECT_ROOT)
         print(f"{C_GRAY}ℹ️ 參數來源: {param_source}{C_RESET}")
+        if is_rolling_oos_param_set_file(params_path):
+            payload = load_rolling_oos_param_set(params_path)
+            print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS 驗證參數組！{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
+            for line in format_rolling_oos_summary_lines(payload):
+                print(f"{C_GRAY}{line}{C_RESET}")
+            print(f"{C_YELLOW}此檔案只用於驗證 rolling 結果；實際交易請使用最新單一 param.json。{C_RESET}")
+            return 0
         rotation_choice = safe_prompt_choice(
             "👉 汰弱換股：[N] 關閉 (預設)  [Y] 啟用 :  ",
             "N",
@@ -129,10 +160,6 @@ def main(argv=None, env=None):
     from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
 
     try:
-        if param_source == "candidate_best":
-            params_path = resolve_candidate_best_params_path(PROJECT_ROOT)
-        else:
-            params_path = resolve_run_best_params_path(PROJECT_ROOT)
         params = load_strict_params(params_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)

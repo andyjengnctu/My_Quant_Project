@@ -7,8 +7,8 @@ from core.model_paths import discover_model_param_sources, resolve_run_best_para
 DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
 
 
-def build_workbench_param_source_options(project_root: str) -> Tuple[List[str], Dict[str, str], Dict[str, str], str]:
-    records = discover_model_param_sources(project_root)
+def build_workbench_param_source_options(project_root: str, *, include_rolling_oos: bool = False) -> Tuple[List[str], Dict[str, str], Dict[str, str], str]:
+    records = discover_model_param_sources(project_root, include_rolling_oos=include_rolling_oos)
     labels = [str(record["label"]) for record in records]
     path_by_label = {str(record["label"]): str(record["path"]) for record in records}
     key_by_label = {str(record["label"]): str(record["key"]) for record in records}
