@@ -105,6 +105,33 @@ def enable_line_buffered_stdout(stream=None):
     return target
 
 
+
+def stdout_supports_inline_progress(stream=None):
+    target = sys.stdout if stream is None else stream
+    if target is None:
+        return False
+    try:
+        if not bool(target.isatty()):
+            return False
+    except (AttributeError, OSError, ValueError):
+        return False
+    term = str(os.getenv("TERM", "")).strip().lower()
+    if os.name != "nt" and term in {"", "dumb"}:
+        return False
+    return True
+
+
+def write_inline_progress(message, *, previous_width=0, stream=None):
+    target = sys.stdout if stream is None else stream
+    if not stdout_supports_inline_progress(target):
+        return 0
+    text = str(message).replace("\r", "").replace("\n", " ")
+    width = len(text)
+    padding = " " * max(0, int(previous_width or 0) - width)
+    target.write("\r" + text + padding)
+    target.flush()
+    return width
+
 def has_help_flag(argv):
     args = [] if argv is None else list(argv)
     return any(str(arg).strip() in {"-h", "--help"} for arg in args[1:])

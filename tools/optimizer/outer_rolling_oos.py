@@ -18,7 +18,7 @@ from config.training_policy import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
-from core.runtime_utils import get_taipei_now, is_interactive_console, safe_prompt_choice
+from core.runtime_utils import get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from tools.optimizer.prep import prepare_trial_inputs
@@ -288,6 +288,8 @@ class _SearchProgress:
         self.stage_start = time.perf_counter()
         self.best_score = float("-inf")
         self.last_render = 0.0
+        self.inline_progress_enabled = stdout_supports_inline_progress()
+        self.inline_progress_width = 0
 
     def _eta_stage(self, completed: int) -> float | None:
         if completed <= 0:
@@ -297,6 +299,8 @@ class _SearchProgress:
         return avg * max(0, self.total_trials - completed)
 
     def render(self, completed: int, *, force: bool = False):
+        if not self.inline_progress_enabled:
+            return
         now = time.perf_counter()
         if not force and now - self.last_render < 0.5 and completed < self.total_trials:
             return
@@ -311,12 +315,12 @@ class _SearchProgress:
             current_remaining = eta_stage or 0.0
             eta_total = current_remaining + avg_done * max(0, self.fold_count - self.fold_idx)
         line = (
-            f"\r[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS {self.oos_year} | "
+            f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS {self.oos_year} | "
             f"OPTIMIZER_SEARCH trial {completed}/{self.total_trials} ({pct:5.1f}%) | "
             f"best_score={self.best_score if self.best_score != float('-inf') else 0.0:.3f} | "
             f"elapsed={_fmt_duration(now - self.stage_start)} | eta_stage={_fmt_duration(eta_stage)} | eta_total={_fmt_duration(eta_total)}"
         )
-        print(line + "\033[K", end="", flush=True)
+        self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
 
     def callback(self, session):
         def _callback(study, trial):
@@ -327,8 +331,9 @@ class _SearchProgress:
         return _callback
 
     def done(self, completed: int):
-        self.render(completed, force=True)
-        print()
+        if self.inline_progress_enabled:
+            self.render(completed, force=True)
+            print()
 
 
 def _select_winner(finalists: list[dict], *, objective_mode: str):

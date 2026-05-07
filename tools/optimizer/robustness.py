@@ -15,6 +15,7 @@ from config.training_policy import (
     resolve_optimizer_local_min_score_finalist_top_k,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
+from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import (
@@ -201,6 +202,9 @@ class _FinalistProgressBoard:
         self.lines: list[str] = []
         self.rendered = False
         self.single_line_context = getattr(session, "outer_rolling_local_progress_context", None)
+        self.inline_progress_enabled = bool(self.single_line_context) and stdout_supports_inline_progress()
+        self.inline_progress_width = 0
+        self.inline_progress_closed = False
         self.stage_start = time.perf_counter()
         self.best_local_score = float("-inf")
         self.best_local_trial = None
@@ -278,6 +282,7 @@ class _FinalistProgressBoard:
                 status_text=f"{gate_status} cache",
                 done=True,
             )
+            self._close_single_line_if_finished()
             return
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         self.lines[idx] = self._format_line(
@@ -302,10 +307,7 @@ class _FinalistProgressBoard:
                 status_text=f"{gate_status}{stop_text}",
                 done=True,
             )
-            if len(self.completed_status) >= len(self.finalists):
-                out = sys.stdout
-                out.write("\n")
-                out.flush()
+            self._close_single_line_if_finished()
             return
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         stop_text = " | early stop" if bool(early_stopped) else ""
@@ -347,9 +349,22 @@ class _FinalistProgressBoard:
         avg_done = sum(float(row.get("elapsed_sec", 0.0)) for row in completed_results) / float(len(completed_results))
         return float(eta_stage or 0.0) + avg_done * max(0, fold_count - fold_idx)
 
+    def _close_single_line_if_finished(self):
+        if (
+            self.inline_progress_enabled
+            and not self.inline_progress_closed
+            and len(self.completed_status) >= len(self.finalists)
+        ):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self.inline_progress_closed = True
+
     def _render_single_line(self, idx: int, *, current_neighbor: int, total_neighbors: int, local_min_score, status_text: str, done: bool = False):
+        if not self.inline_progress_enabled or self.inline_progress_closed or not self.finalists:
+            return
         ctx = self.single_line_context or {}
-        trial = self.finalists[idx]["trial"] if self.finalists and idx < len(self.finalists) else None
+        safe_idx = min(max(0, int(idx)), len(self.finalists) - 1)
+        trial = self.finalists[safe_idx]["trial"]
         current_text = "N/A" if local_min_score is None else f"{float(local_min_score):.3f}"
         pass_count = sum(1 for _, passed, _ in self.completed_status.values() if passed)
         fail_count = sum(1 for _, passed, _ in self.completed_status.values() if not passed)
@@ -357,23 +372,24 @@ class _FinalistProgressBoard:
         best_text = "N/A"
         if self.best_local_trial is not None and self.best_local_score != float("-inf"):
             best_text = f"{self.best_local_score:.3f} #{int(self.best_local_trial.number) + 1}"
-        eta_stage = self._estimate_single_line_eta(idx, int(current_neighbor), int(total_neighbors))
+        eta_stage = self._estimate_single_line_eta(safe_idx, int(current_neighbor), int(total_neighbors))
         eta_total = self._estimate_total_eta(eta_stage)
         elapsed = time.perf_counter() - self.stage_start
         line = (
-            f"\r[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
+            f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
             f"selection={int(ctx.get('selection_start', 0) or 0)}~{int(ctx.get('selection_end', 0) or 0)} | OOS {int(ctx.get('oos_year', 0) or 0)} | LOCAL_MIN_REVIEW "
-            f"{min(int(idx) + 1, len(self.finalists))}/{len(self.finalists)} | "
-            f"trial #{int(trial.number) + 1 if trial is not None else 0} | "
+            f"{safe_idx + 1}/{len(self.finalists)} | "
+            f"trial #{int(trial.number) + 1} | "
             f"進度 {int(current_neighbor)}/{int(total_neighbors)} | "
             f"current={current_text} {status_text} | best={best_text} | "
             f"pass={pass_count} fail={fail_count} early={early_count} | "
             f"elapsed={self._format_duration(elapsed)} | eta_stage={self._format_duration(eta_stage)} | eta_total={self._format_duration(eta_total)}"
         )
-        sys.stdout.write(line + "\033[K")
-        sys.stdout.flush()
+        self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
 
     def _render(self):
+        if not stdout_supports_inline_progress():
+            return
         out = sys.stdout
         if self.rendered and self.lines:
             out.write(f"\x1b[{len(self.lines)}F")

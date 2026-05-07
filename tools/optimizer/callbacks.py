@@ -19,6 +19,7 @@ from core.walk_forward_policy import filter_search_train_dates
 from core.model_paths import resolve_run_best_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
 from core.portfolio_engine import run_portfolio_timeline
+from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
 from core.strategy_dashboard import (
     _format_float_diff,
@@ -760,8 +761,10 @@ def run_optimizer_monitoring_callback(session, study, trial):
         )
         if bool(getattr(session, "timing_mode", False)):
             print(line, flush=True)
-        else:
-            print(f"\r{line}\033[K", end="", flush=True)
+        elif stdout_supports_inline_progress():
+            previous_width = int(getattr(session, "optimizer_inline_progress_width", 0) or 0)
+            session.optimizer_inline_progress_width = write_inline_progress(line, previous_width=previous_width)
+            session.optimizer_inline_progress_rendered = True
         return max(0.0, time.perf_counter() - status_started_at)
 
     best_lookup_started_at = time.perf_counter()
@@ -795,8 +798,13 @@ def run_optimizer_monitoring_callback(session, study, trial):
         # 狀態列耗時 = 該 trial objective + 該 trial callback 已完成工作；不是 optimizer 累積 wall time。
         pre_status_elapsed = max(0.0, time.perf_counter() - callback_started_at)
         callback_status_line_sec += _print_status_line(float(duration) + float(pre_status_elapsed))
-        if not bool(getattr(session, "timing_mode", False)):
+        if (
+            not bool(getattr(session, "timing_mode", False))
+            and bool(getattr(session, "optimizer_inline_progress_rendered", False))
+        ):
             print()
+            session.optimizer_inline_progress_rendered = False
+            session.optimizer_inline_progress_width = 0
         if dashboard_text:
             print(dashboard_text, end="", flush=True)
 
