@@ -101,10 +101,6 @@ def build_test_holdout_period(
     }
 
 
-def _calc_romd(ret_pct: float, mdd_pct: float) -> float:
-    return float(ret_pct) / (abs(float(mdd_pct)) + 0.0001)
-
-
 def _evaluate_single_holdout_period(
     *,
     holdout_period: dict,
@@ -211,7 +207,13 @@ def _evaluate_single_holdout_period(
         'benchmark_mdd': float(bm_mdd),
         'benchmark_r_squared': float(bm_r_sq),
         'benchmark_monthly_win_rate': float(bm_m_win_rate),
-        'benchmark_score_romd': float(_calc_romd(bm_ret, bm_mdd)),
+        'benchmark_score_romd': float(calc_portfolio_score(
+            bm_ret,
+            bm_mdd,
+            bm_m_win_rate,
+            bm_r_sq,
+            annual_return_pct=bm_annual_return_pct,
+        )),
         'initial_capital': float(getattr(params, 'initial_capital', 0.0) or 0.0),
         'equity_curve': equity_curve_rows,
     }

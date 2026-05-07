@@ -264,18 +264,20 @@ period_seed = base_seed + period_index
 
 ## 7. 外層 rolling 的歷史績效口徑
 
-### 7.1 正式 stitched OOS
-正式 stitched OOS 代表：
+### 7.1 正式 OOS_CHAIN
+正式 OOS_CHAIN 代表：
 
-> 若歷史上每年重訓一次，並使用下一個 OOS 年作為實際運行期，所形成的 pseudo-live 歷史資產曲線。
+> 若歷史上每年重訓一次，並在下一個 OOS 年開始使用該年度已生效 active param，所形成的 pseudo-live 歷史資產曲線。
 
 ### 7.2 串接方式
-建議用 **連續資金口徑**：
+採用 **continuous active-param replay**：
 - 2021 OOS 用初始資金起跑
-- 2022 OOS 初始資金 = 2021 OOS 期末資金
-- 2023 以此類推
+- 2022 起資金、持股、延續候選與 benchmark 均從前一年自然延續
+- 每個交易日依該日 effective date 讀取 active param
+- 不在年度邊界強制 closeout
+- 不用年度 OOS score 平均、年度報酬複利或年度曲線 stitch 代替正式 chain score
 
-此口徑最接近真實每年重訓一次後的連續運行結果。
+此口徑必須與 workbench 投組 active-param replay 及實際操作一致。
 
 ---
 
@@ -285,7 +287,7 @@ period_seed = base_seed + period_index
 正式歷史驗證只統計到最後一個 **完整 OOS 年**。
 
 例如：
-- 正式 stitched OOS：`2021~2025`
+- 正式 OOS_CHAIN：`2021~2025`
 
 這一段作為：
 - 主報表
@@ -296,18 +298,18 @@ period_seed = base_seed + period_index
 若最新年度尚未完整，例如 `2026-01 ~ 2026-04`，則：
 - 可另外列為 `2026 YTD partial OOS`
 - 或 `partial OOS / live monitoring`
-- 但 **不併入正式 stitched OOS 主指標**
+- 但 **不併入正式 OOS_CHAIN 主指標**
 
 ### 8.3 版本 2 定版口徑
 採用版本 2：
-- 主報表：`Official stitched OOS (2021~2025)`
+- 主報表：`Official OOS_CHAIN (2021~2025)`
 - 附錄 / 觀察：`2026 YTD partial OOS`
 
 ### 8.4 正式主指標不得混入 partial 年度
 不得把未完整年度直接混入：
-- 正式 stitched CAGR
-- 正式 stitched MDD
-- 正式 stitched RoMD
+- 正式 OOS_CHAIN CAGR
+- 正式 OOS_CHAIN MDD
+- 正式 OOS_CHAIN RoMD
 - 正式主比較結果
 
 partial 年度應獨立標示。
@@ -316,8 +318,8 @@ partial 年度應獨立標示。
 
 ## 9. 實際上場參數的口徑
 
-### 9.1 歷史 stitched OOS 期間
-歷史 stitched OOS 期間不是只用最後一組參數，而是：
+### 9.1 歷史 OOS_CHAIN 期間
+歷史 OOS_CHAIN 期間不是只用最後一組參數，而是：
 - 每個 OOS 年，使用前一個 train period 訓出的 winner
 
 例如：
@@ -337,7 +339,7 @@ partial 年度應獨立標示。
 ### 9.3 與 partial OOS 的關係
 - 2026 實際上場使用 `2020~2025` 訓出的參數
 - `2026-01 ~ 最新日` 記為 `partial OOS / live monitoring`
-- 不混入正式 stitched OOS 主報表
+- 不混入正式 OOS_CHAIN 主報表
 
 ---
 
@@ -355,7 +357,7 @@ partial 年度應獨立標示。
 - trade_count
 - winner trial number
 
-### 10.2 official stitched report
+### 10.2 official OOS_CHAIN report
 - official stitched OOS period range
 - total return
 - CAGR
@@ -385,7 +387,7 @@ partial 年度應獨立標示。
 2. 將 study / db / artifact 改為 period-aware
 3. 逐 period 跑獨立 optimizer
 4. 每 period 產生獨立 OOS report
-5. 串接 official stitched OOS
+5. 以 continuous active-param replay 產生 official OOS_CHAIN
 6. 額外輸出 partial OOS / live monitoring
 
 ---

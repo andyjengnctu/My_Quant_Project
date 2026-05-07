@@ -653,6 +653,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
         "best_finalist_initial_capital": float(best_metrics.get("initial_capital", 0.0)),
         "best_finalist_equity_curve": list(best_metrics.get("equity_curve") or []),
+        "best_finalist_params": build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT) if best_trial is not None else {},
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(benchmark_return_pct),
         "benchmark_mdd_pct": float(benchmark_mdd_pct),
@@ -850,7 +851,284 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
     }
 
 
-def _build_chained_oos_summary(rows: list[dict]) -> dict:
+def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
+    params_by_oos_year: dict[str, dict] = {}
+    params_by_effective_date: dict[str, dict] = {}
+    for row in sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0)):
+        try:
+            oos_year = int(row.get("oos_year"))
+        except (TypeError, ValueError):
+            continue
+        if best_finalist:
+            params_payload = dict(row.get("best_finalist_params") or {})
+            effective_start = f"{oos_year}-01-01"
+        else:
+            schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
+            params_payload = dict(schedule.get("params") or {})
+            effective_start = str(schedule.get("effective_start") or f"{oos_year}-01-01")
+        if not params_payload:
+            continue
+        params_by_oos_year[str(oos_year)] = params_payload
+        params_by_effective_date[effective_start] = params_payload
+    return {
+        "schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
+        "schema_version": 1,
+        "usage": ROLLING_OOS_USAGE,
+        "type": "outer_rolling_oos_param_set",
+        "active_param_policy": "daily_active_param",
+        "params_by_oos_year": params_by_oos_year,
+        "params_by_effective_date": params_by_effective_date,
+    }
+
+
+def _active_replay_payload_has_params(payload: dict) -> bool:
+    return bool(dict(payload.get("params_by_effective_date") or {}) or dict(payload.get("params_by_oos_year") or {}))
+
+
+def _extract_active_replay_metrics(result) -> dict:
+    if not isinstance(result, tuple) or len(result) < 25:
+        raise RuntimeError("active-param replay 回傳格式不完整，無法建立 OOS_CHAIN")
+    ret_pct = float(result[2])
+    mdd_pct = float(result[3])
+    trade_count = int(result[4] or 0)
+    bm_ret_pct = float(result[11])
+    bm_mdd_pct = float(result[12])
+    r_squared = float(result[15])
+    monthly_win_rate = float(result[16])
+    bm_r_squared = float(result[17])
+    bm_monthly_win_rate = float(result[18])
+    annual_return_pct = float(result[23])
+    bm_annual_return_pct = float(result[24])
+    profile = dict(result[-1]) if isinstance(result[-1], dict) else {}
+    equity_curve_points = len(profile.get("equity_curve") or [])
+    score = calc_portfolio_score(
+        ret_pct,
+        mdd_pct,
+        monthly_win_rate,
+        r_squared,
+        annual_return_pct=annual_return_pct,
+    )
+    benchmark_score = calc_portfolio_score(
+        bm_ret_pct,
+        bm_mdd_pct,
+        bm_monthly_win_rate,
+        bm_r_squared,
+        annual_return_pct=bm_annual_return_pct,
+    )
+    return {
+        "score": float(score),
+        "return_pct": float(ret_pct),
+        "mdd_pct": float(mdd_pct),
+        "annual_return_pct": float(annual_return_pct),
+        "r_squared": float(r_squared),
+        "monthly_win_rate": float(monthly_win_rate),
+        "trade_count": int(trade_count),
+        "curve_points": int(equity_curve_points),
+        "benchmark_oos_score": float(benchmark_score),
+        "benchmark_return_pct": float(bm_ret_pct),
+        "benchmark_mdd_pct": float(bm_mdd_pct),
+        "benchmark_annual_return_pct": float(bm_annual_return_pct),
+        "benchmark_r_squared": float(bm_r_squared),
+        "benchmark_monthly_win_rate": float(bm_monthly_win_rate),
+    }
+
+
+def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
+    if not _active_replay_payload_has_params(payload):
+        return []
+    from tools.portfolio_sim.simulation_runner import _build_active_param_objects_from_payload
+
+    return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
+
+
+def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups: dict[str, list[dict]]) -> dict[str, dict]:
+    from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index
+    from tools.portfolio_sim.simulation_runner import load_portfolio_market_context
+
+    contexts_by_signature: dict[str, dict] = {}
+    records: list[dict] = []
+    seen: set[str] = set()
+    for group_records in dict(schedule_groups or {}).values():
+        for record in list(group_records or []):
+            signature = str(record.get("params_signature") or "")
+            if not signature or signature in seen:
+                continue
+            seen.add(signature)
+            records.append(record)
+    total = len(records)
+    for idx, record in enumerate(records, start=1):
+        signature = str(record["params_signature"])
+        context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
+        context = dict(context)
+        if not context.get("all_pit_stats_index"):
+            context["all_pit_stats_index"] = {
+                ticker: build_trade_stats_index(logs)
+                for ticker, logs in (context.get("all_trade_logs") or {}).items()
+            }
+        context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
+        contexts_by_signature[signature] = context
+        print(
+            f"{C_GRAY}OOS_CHAIN active replay context [{idx}/{total}] "
+            f"effective={record.get('effective_date_text')} signature={signature[:8]}{C_RESET}"
+        )
+    return contexts_by_signature
+
+
+def _merge_active_replay_market_dates(contexts_by_signature: dict[str, dict]) -> list:
+    market_dates = set()
+    for context in dict(contexts_by_signature or {}).values():
+        market_dates.update(context.get("sorted_dates") or [])
+    return sorted(market_dates)
+
+
+def _run_active_replay_metrics_from_schedule_records(*, schedule_records: list[dict], contexts_by_signature: dict[str, dict], start_year: int, end_year: int, max_positions: int, enable_rotation: bool, benchmark_ticker: str = "0050") -> dict:
+    if not schedule_records:
+        return {}
+    from core.portfolio_engine import run_portfolio_timeline
+    from core.portfolio_stats import find_sim_start_idx
+    from tools.portfolio_sim.simulation_runner import _filter_market_dates_by_end_year, _resolve_active_schedule_record
+
+    resolved_sorted_dates = _filter_market_dates_by_end_year(
+        _merge_active_replay_market_dates(contexts_by_signature),
+        start_year=int(start_year),
+        end_year=int(end_year),
+    )
+    if not resolved_sorted_dates:
+        raise ValueError("active-param replay 沒有可回測日期")
+    first_sim_idx = find_sim_start_idx(resolved_sorted_dates, int(start_year))
+    if first_sim_idx >= len(resolved_sorted_dates):
+        raise ValueError("active-param replay 起始年份沒有可回測日期")
+    first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
+    base_context = contexts_by_signature[str(first_record["params_signature"])]
+    benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
+
+    def active_params_resolver(trade_date):
+        return _resolve_active_schedule_record(schedule_records, trade_date)["params_obj"]
+
+    def active_context_resolver(trade_date):
+        record = _resolve_active_schedule_record(schedule_records, trade_date)
+        return contexts_by_signature[str(record["params_signature"])]
+
+    pf_profile = {
+        "param_policy": "active_param_replay",
+        "capture_equity_curve": True,
+        "active_param_schedule": [
+            {
+                "effective_date": str(record.get("effective_date_text")),
+                "year": int(record.get("year", 0) or 0),
+                "params_signature": str(record.get("params_signature")),
+            }
+            for record in schedule_records
+        ],
+    }
+    result = run_portfolio_timeline(
+        base_context.get("all_dfs_fast") or {},
+        base_context.get("all_trade_logs") or {},
+        resolved_sorted_dates,
+        int(start_year),
+        first_record["params_obj"],
+        int(max_positions),
+        bool(enable_rotation),
+        benchmark_ticker=str(benchmark_ticker),
+        benchmark_data=benchmark_data,
+        is_training=False,
+        profile_stats=pf_profile,
+        verbose=False,
+        pit_stats_index=base_context.get("all_pit_stats_index"),
+        active_params_resolver=active_params_resolver,
+        active_context_resolver=active_context_resolver,
+    )
+    return _extract_active_replay_metrics((*result, pf_profile))
+
+
+def _build_active_replay_chained_oos_summary(*, rows: list[dict], config: OuterRollingConfig, selected_data_dir: str, max_positions: int, enable_rotation: bool) -> dict:
+    if not rows:
+        return {}
+    first_year = min(int(row["oos_year"]) for row in rows)
+    last_year = max(int(row["oos_year"]) for row in rows)
+    selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in rows)
+    selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in rows)
+
+    payloads = {
+        "best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True),
+        "base": _build_active_param_replay_payload_from_rows(rows, policy_name="base"),
+        "local": _build_active_param_replay_payload_from_rows(rows, policy_name="local"),
+        "retention": _build_active_param_replay_payload_from_rows(rows, policy_name="retention"),
+    }
+    schedule_groups = {name: _build_active_replay_schedule_records(payload) for name, payload in payloads.items()}
+    contexts_by_signature = _load_active_replay_contexts_by_signature(
+        data_dir=selected_data_dir,
+        schedule_groups=schedule_groups,
+    )
+
+    replay_metrics: dict[str, dict] = {}
+    for name, records in schedule_groups.items():
+        replay_metrics[name] = _run_active_replay_metrics_from_schedule_records(
+            schedule_records=records,
+            contexts_by_signature=contexts_by_signature,
+            start_year=first_year,
+            end_year=last_year,
+            max_positions=max_positions,
+            enable_rotation=enable_rotation,
+        )
+
+    best_metrics = dict(replay_metrics.get("best") or {})
+    benchmark_source = dict(best_metrics)
+    for policy_name in ("base", "local", "retention"):
+        if not benchmark_source and replay_metrics.get(policy_name):
+            benchmark_source = dict(replay_metrics[policy_name])
+            break
+
+    best_score = float(best_metrics.get("score", 0.0))
+    best_return = float(best_metrics.get("return_pct", 0.0))
+    benchmark_score = float(benchmark_source.get("benchmark_oos_score", 0.0))
+    benchmark_return = float(benchmark_source.get("benchmark_return_pct", 0.0))
+    summary = {
+        "method": "continuous_active_param_replay",
+        "score_aggregation_method": "continuous_active_param_replay_recomputed_score",
+        "return_aggregation_method": "continuous_active_param_replay_total_return",
+        "note": "OOS_CHAIN 由 portfolio_sim active-param replay 連續重跑後重算 score；持股、現金與 benchmark 跨年延續，不使用年度 closeout stitch 或年度 score mean。",
+        "selection_period": f"{selection_start}~{selection_end}",
+        "oos_period": f"{first_year}~{last_year}",
+        "max_positions": int(max_positions),
+        "enable_rotation": bool(enable_rotation),
+        "best_finalist_oos_score": float(best_score),
+        "benchmark_oos_score": float(benchmark_score),
+        "best_finalist_return_pct": float(best_return),
+        "benchmark_return_pct": float(benchmark_return),
+        "benchmark_alpha_pct": float(best_return - benchmark_return),
+        "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
+        "benchmark_mdd_pct": float(benchmark_source.get("benchmark_mdd_pct", 0.0)),
+        "best_finalist_annual_return_pct": float(best_metrics.get("annual_return_pct", 0.0)),
+        "benchmark_annual_return_pct": float(benchmark_source.get("benchmark_annual_return_pct", 0.0)),
+        "best_finalist_curve_points": int(best_metrics.get("curve_points", 0)),
+        "benchmark_curve_points": int(benchmark_source.get("curve_points", 0)),
+        "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
+        "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
+    }
+    for policy_name in ("base", "local", "retention"):
+        metrics = dict(replay_metrics.get(policy_name) or {})
+        chain_score = float(metrics.get("score", 0.0))
+        chain_return = float(metrics.get("return_pct", 0.0))
+        summary[policy_name] = {
+            "rank_1_oos": float(chain_score),
+            "best_gap": float(chain_score - best_score),
+            "benchmark_0050_gap": float(chain_score - benchmark_score),
+            "rank_1_return_pct": float(chain_return),
+            "best_gap_pct": float(chain_return - best_return),
+            "benchmark_0050_gap_pct": float(chain_return - benchmark_return),
+            "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
+            "rank_1_annual_return_pct": float(metrics.get("annual_return_pct", 0.0)),
+            "rank_1_curve_points": int(metrics.get("curve_points", 0)),
+            "rank_1_trades": int(metrics.get("trade_count", 0)),
+            "yearly_oos_score": [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows],
+            "yearly_return_pct": [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows],
+        }
+    return summary
+
+def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | None = None) -> dict:
+    if chained_override is not None:
+        return dict(chained_override)
     if not rows:
         return {}
     first_year = min(int(row["oos_year"]) for row in rows)
@@ -868,10 +1146,10 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
     benchmark_return = float(benchmark_metrics.get("return_pct", 0.0))
 
     summary = {
-        "method": "stitched_daily_equity_recomputed_score",
-        "score_aggregation_method": "stitched_daily_equity_recomputed_score",
-        "return_aggregation_method": "stitched_daily_equity_curve_total_return",
-        "note": "OOS_CHAIN 表格列由各年度 next-1Y OOS daily equity 串接後重新計算 score，不使用年度 score mean。",
+        "method": "fallback_yearly_closeout_stitched_daily_equity",
+        "score_aggregation_method": "fallback_yearly_closeout_stitched_daily_equity",
+        "return_aggregation_method": "fallback_yearly_closeout_stitched_daily_equity_total_return",
+        "note": "fallback：由各年度 next-1Y OOS daily equity 串接後重新計算 score；正式輸出應優先使用 continuous_active_param_replay。",
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_year}~{last_year}",
         "best_finalist_oos_score": float(best_score),
@@ -909,10 +1187,10 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
     return summary
 
 
-def _build_chained_oos_row(rows: list[dict]) -> dict | None:
+def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = None) -> dict | None:
     if not rows:
         return None
-    chained = _build_chained_oos_summary(rows)
+    chained = _build_chained_oos_summary(rows, chained_override=chained_override)
     row = {
         "fold": "OOS_CHAIN",
         "selection_period": chained.get("selection_period", ""),
@@ -957,10 +1235,10 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True) -> str:
+def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, chained_override: dict | None = None) -> str:
     display_rows = list(rows or [])
     if include_chain:
-        chain_row = _build_chained_oos_row(display_rows)
+        chain_row = _build_chained_oos_row(display_rows, chained_override=chained_override)
         if chain_row is not None:
             display_rows = display_rows + [chain_row]
     if not display_rows:
@@ -1016,7 +1294,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return
-    print("\n" + _render_results_table(rows, color=True, include_chain=True))
+    print("\n" + _render_results_table(rows, color=True, include_chain=False))
 
 
 def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
@@ -1176,7 +1454,7 @@ def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: O
     return paths
 
 
-def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig) -> dict:
+def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig, chained_override: dict | None = None) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
     os.makedirs(report_dir, exist_ok=True)
     models_dir = os.path.join(project_root, "models")
@@ -1184,13 +1462,14 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
     json_path = base + ".json"
     csv_path = base + ".csv"
     txt_path = base + ".txt"
-    summary = _build_summary(rows, config=config)
+    summary = _build_summary(rows, config=config, chained_override=chained_override)
     paramset_paths = _write_policy_paramset_files(models_dir=models_dir, rows=rows, config=config, summary=summary)
     yearly_results = []
     for row in rows:
         light_row = dict(row)
         light_row.pop("policy_schedules", None)
         light_row.pop("best_finalist_equity_curve", None)
+        light_row.pop("best_finalist_params", None)
         for policy_name in ("base", "local", "retention"):
             if isinstance(light_row.get(policy_name), dict):
                 policy_copy = dict(light_row[policy_name])
@@ -1235,21 +1514,21 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
     return {"json": json_path, "csv": csv_path, "txt": txt_path, "paramsets": paramset_paths}
 
 
-def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None) -> dict:
+def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:
     if not rows:
         return {"folds": 0}
     selection_start = min(int(row.get("selection_start_year", 0) or 0) for row in rows)
     selection_end = max(int(row.get("selection_end_year", 0) or 0) for row in rows)
     first_oos = min(int(row["oos_year"]) for row in rows)
     last_oos = max(int(row["oos_year"]) for row in rows)
-    chained = _build_chained_oos_summary(rows)
+    chained = _build_chained_oos_summary(rows, chained_override=chained_override)
     summary = {
         "folds": len(rows),
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_oos}~{last_oos}",
-        "aggregation_method": "stitched_daily_equity_recomputed_score",
-        "return_aggregation_method": "stitched_daily_equity_curve_total_return",
-        "note": "OOS_CHAIN 由各 fold daily equity 串接後重新計算 score；不使用年度 score mean。",
+        "aggregation_method": chained.get("score_aggregation_method") or chained.get("method"),
+        "return_aggregation_method": chained.get("return_aggregation_method"),
+        "note": chained.get("note"),
         "chained_oos": chained,
     }
     for policy_name in ("base", "local", "retention"):
@@ -1318,7 +1597,7 @@ def _format_final_report(rows: list[dict], summary: dict) -> str:
             f"positive_years={int(bench.get('positive_years', 0))}/{int(bench.get('total_years', 0))}"
         )
     lines.append("-" * 218)
-    rendered = _render_results_table(rows, color=False, include_chain=True)
+    rendered = _render_results_table(rows, color=False, include_chain=True, chained_override=summary.get("chained_oos"))
     if rendered:
         lines.append(rendered)
     lines.append("oos_feedback_used : False")
@@ -1358,6 +1637,8 @@ def run_outer_rolling_oos(
 
     configure_optuna_logging()
     rows: list[dict] = []
+    chain_max_positions: int | None = None
+    chain_enable_rotation: bool | None = None
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     overall_start = time.perf_counter()
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
@@ -1374,6 +1655,8 @@ def run_outer_rolling_oos(
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
+        chain_max_positions = int(session.train_max_positions)
+        chain_enable_rotation = bool(session.train_enable_rotation)
         session.n_trials = int(config.trials_per_fold)
         session.disable_milestone_dashboard = True
         session.timing_mode = False
@@ -1467,6 +1750,7 @@ def run_outer_rolling_oos(
                 "best_finalist_trades": int(diagnostics.get("best_finalist_trades", 0) or 0),
                 "best_finalist_initial_capital": float(diagnostics.get("best_finalist_initial_capital", 0.0)),
                 "best_finalist_equity_curve": list(diagnostics.get("best_finalist_equity_curve") or []),
+                "best_finalist_params": dict(diagnostics.get("best_finalist_params") or {}),
                 "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", 0.0)),
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
@@ -1491,11 +1775,20 @@ def run_outer_rolling_oos(
             if study is not None:
                 close_study_storage(study)
 
-    paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config)
+    resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else 10)
+    resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)
+    active_replay_chained = _build_active_replay_chained_oos_summary(
+        rows=rows,
+        config=config,
+        selected_data_dir=selected_data_dir,
+        max_positions=resolved_chain_max_positions,
+        enable_rotation=resolved_chain_enable_rotation,
+    ) if rows else {}
+    paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained)
     print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config)))
+    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained)))
     print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")

@@ -163,7 +163,7 @@ def format_rolling_oos_summary_lines(payload: Mapping[str, Any]) -> list[str]:
     chained = payload.get("chained_oos") or summary.get("chained_oos") or {}
     lines = [
         "參數模式：Rolling OOS active-param replay 參數組",
-        "用途：validation only；模擬時每日使用該歷史日期已生效的 active param",
+        "用途：歷史 active-param replay；模擬口徑與實際操作一致，每日使用該日期已生效的 active param",
         f"selector：{selector}",
         f"OOS：{summary.get('oos_period') or chained.get('oos_period') or '-'}",
     ]

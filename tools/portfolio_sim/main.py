@@ -39,7 +39,7 @@ def main(argv=None, env=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/portfolio_sim/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full]")
-        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 run_best（預設）、candidate_best，或 rolling OOS 驗證參數組；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
+        print("說明: 非互動模式會自動套用預設輸入；預設資料集為完整；參數來源可選 run_best（預設）、candidate_best，或 rolling OOS active-param replay 參數組；大盤比較固定使用 0050；開始回測年份預設取自目前資料集的 OOS 起始日期。")
         return 0
 
     from core.data_utils import normalize_ticker_from_csv_filename
@@ -86,7 +86,7 @@ def main(argv=None, env=None):
     try:
         rolling_records = [record for record in discover_model_param_sources(PROJECT_ROOT, include_rolling_oos=True) if str(record.get("kind")) == "rolling_oos_param_set"]
         param_source_choice = safe_prompt_choice(
-            "👉 參數來源：[Enter] run_best (預設)  [C] candidate_best  [O] rolling OOS驗證 :  ",
+            "👉 參數來源：[Enter] run_best (預設)  [C] candidate_best  [O] rolling OOS replay :  ",
             "R",
             ("R", "C", "O"),
             "參數來源",
@@ -100,7 +100,7 @@ def main(argv=None, env=None):
             if len(rolling_records) == 1:
                 selected_record = rolling_records[0]
             else:
-                print(f"{C_GRAY}可用 rolling OOS 驗證參數組：{C_RESET}")
+                print(f"{C_GRAY}可用 rolling OOS active-param replay 參數組：{C_RESET}")
                 for idx, record in enumerate(rolling_records, start=1):
                     print(f"  [{idx}] {record['label']}")
                 raw_idx = safe_prompt("👉 選擇 rolling OOS 參數組：[Enter] 1  [數字] 指定: ", "").strip()
