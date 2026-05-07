@@ -18,6 +18,7 @@ from config.training_policy import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
+from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_portfolio_score
 from core.runtime_utils import choose_inline_progress_message, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
 from core.strategy_params import build_runtime_param_raw_value
@@ -500,7 +501,7 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
     }
 
 
-def _evaluate_next_1y_oos(*, session, trial, oos_year: int):
+def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False):
     payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
     params = build_params_from_mapping(payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
@@ -539,6 +540,7 @@ def _evaluate_next_1y_oos(*, session, trial, oos_year: int):
         oos_start_year=int(oos_year),
         pit_stats_index=prep_result.get("all_pit_stats_index"),
         holdout_period=holdout_period,
+        include_equity_curve=bool(include_equity_curve),
     )
 
 
@@ -552,6 +554,8 @@ def _extract_period_metrics(report: dict) -> dict:
         "benchmark_oos_score": float(period.get("benchmark_score_romd", 0.0)),
         "benchmark_return_pct": float(period.get("benchmark_return_pct", 0.0)),
         "benchmark_mdd_pct": float(period.get("benchmark_mdd", 0.0)),
+        "initial_capital": float(period.get("initial_capital", 0.0)),
+        "equity_curve": list(period.get("equity_curve") or []),
     }
 
 
@@ -564,23 +568,37 @@ def _format_oos_delta(reference_score, selected_score) -> str:
 def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int) -> dict:
     best_score = float("-inf")
     best_trial_number = None
+    best_trial = None
     best_metrics: dict = {}
-    report_cache: dict[int, dict] = {}
+    report_cache: dict[tuple[int, bool], dict] = {}
     metrics_by_trial: dict[int, dict] = {}
     benchmark_score = 0.0
     benchmark_return_pct = 0.0
     benchmark_mdd_pct = 0.0
+
+    def _load_trial_metrics(trial, *, include_equity_curve: bool) -> dict:
+        trial_number = int(trial.number)
+        key = (trial_number, bool(include_equity_curve))
+        report = report_cache.get(key)
+        if report is None:
+            report = _evaluate_next_1y_oos(
+                session=session,
+                trial=trial,
+                oos_year=int(oos_year),
+                include_equity_curve=bool(include_equity_curve),
+            )
+            report_cache[key] = report
+        metrics = _extract_period_metrics(report)
+        if bool(include_equity_curve) or trial_number not in metrics_by_trial:
+            metrics_by_trial[trial_number] = dict(metrics)
+        return dict(metrics)
+
     for item in list(finalists or []):
         trial = item.get("trial")
         if trial is None:
             continue
         trial_number = int(trial.number)
-        report = report_cache.get(trial_number)
-        if report is None:
-            report = _evaluate_next_1y_oos(session=session, trial=trial, oos_year=int(oos_year))
-            report_cache[trial_number] = report
-        metrics = _extract_period_metrics(report)
-        metrics_by_trial[trial_number] = metrics
+        metrics = _load_trial_metrics(trial, include_equity_curve=False)
         benchmark_score = float(metrics.get("benchmark_oos_score", benchmark_score))
         benchmark_return_pct = float(metrics.get("benchmark_return_pct", benchmark_return_pct))
         benchmark_mdd_pct = float(metrics.get("benchmark_mdd_pct", benchmark_mdd_pct))
@@ -588,10 +606,13 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         if score > best_score:
             best_score = score
             best_trial_number = trial_number
+            best_trial = trial
             best_metrics = dict(metrics)
     if best_score == float("-inf"):
         best_score = 0.0
         best_metrics = {}
+    elif best_trial is not None:
+        best_metrics = _load_trial_metrics(best_trial, include_equity_curve=True)
     policies: dict[str, dict] = {}
     for policy_name, item in dict(policy_items or {}).items():
         if item is None or item.get("trial") is None:
@@ -603,13 +624,12 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
                 "rank_1_trades": 0,
                 "best_gap": 0.0 - float(best_score),
                 "benchmark_0050_gap": 0.0 - float(benchmark_score),
+                "rank_1_initial_capital": 0.0,
+                "rank_1_equity_curve": [],
             }
             continue
         trial_number = int(item["trial"].number)
-        if trial_number not in metrics_by_trial:
-            report = _evaluate_next_1y_oos(session=session, trial=item["trial"], oos_year=int(oos_year))
-            metrics_by_trial[trial_number] = _extract_period_metrics(report)
-        metrics = dict(metrics_by_trial[trial_number])
+        metrics = _load_trial_metrics(item["trial"], include_equity_curve=True)
         rank_1_oos = float(metrics.get("oos_score", 0.0))
         benchmark_score = float(metrics.get("benchmark_oos_score", benchmark_score))
         benchmark_return_pct = float(metrics.get("benchmark_return_pct", benchmark_return_pct))
@@ -622,6 +642,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
             "rank_1_trades": int(metrics.get("trades", 0) or 0),
             "best_gap": rank_1_oos - float(best_score),
             "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
+            "rank_1_initial_capital": float(metrics.get("initial_capital", 0.0)),
+            "rank_1_equity_curve": list(metrics.get("equity_curve") or []),
         }
     return {
         "best_finalist_oos_score": float(best_score),
@@ -629,6 +651,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         "best_finalist_return_pct": float(best_metrics.get("ret_pct", 0.0)),
         "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
         "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
+        "best_finalist_initial_capital": float(best_metrics.get("initial_capital", 0.0)),
+        "best_finalist_equity_curve": list(best_metrics.get("equity_curve") or []),
         "benchmark_oos_score": float(benchmark_score),
         "benchmark_return_pct": float(benchmark_return_pct),
         "benchmark_mdd_pct": float(benchmark_mdd_pct),
@@ -650,6 +674,182 @@ def _average_float(values: list[float]) -> float:
     return sum(nums) / float(len(nums))
 
 
+def _normalize_equity_curve_rows(curve_rows: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for raw in list(curve_rows or []):
+        try:
+            date = pd.Timestamp(raw.get("date") or raw.get("Date")).strftime("%Y-%m-%d")
+            equity = float(raw.get("equity", raw.get("Equity", 0.0)) or 0.0)
+            strategy_return_pct = float(raw.get("strategy_return_pct", raw.get("Strategy_Return_Pct", 0.0)) or 0.0)
+            benchmark_return_pct = float(raw.get("benchmark_return_pct", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if not date or equity <= 0.0:
+            continue
+        normalized.append({
+            "date": date,
+            "equity": equity,
+            "strategy_return_pct": strategy_return_pct,
+            "benchmark_return_pct": benchmark_return_pct,
+        })
+    return sorted(normalized, key=lambda row: row["date"])
+
+
+def _derive_curve_initial_capital(curve_rows: list[dict], explicit_initial_capital: float | int | None = None) -> float:
+    explicit = _safe_float(explicit_initial_capital, 0.0)
+    if explicit > 0.0:
+        return explicit
+    curve = _normalize_equity_curve_rows(curve_rows)
+    if not curve:
+        return 0.0
+    first = curve[0]
+    denominator = 1.0 + float(first.get("strategy_return_pct", 0.0)) / 100.0
+    if denominator <= 0.0:
+        return float(first.get("equity", 0.0))
+    return float(first.get("equity", 0.0)) / denominator
+
+
+def _stitch_strategy_equity_curves(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
+    ordered_rows = sorted(list(rows or []), key=lambda row: int(row.get("oos_year", 0) or 0))
+    stitched: list[dict] = []
+    chain_initial = 0.0
+    current_start = 0.0
+    for row in ordered_rows:
+        if best_finalist:
+            raw_curve = _normalize_equity_curve_rows(list(row.get("best_finalist_equity_curve") or []))
+            raw_initial = _derive_curve_initial_capital(raw_curve, row.get("best_finalist_initial_capital"))
+        else:
+            policy = dict(row.get(str(policy_name)) or {})
+            raw_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
+            raw_initial = _derive_curve_initial_capital(raw_curve, policy.get("rank_1_initial_capital"))
+        if not raw_curve or raw_initial <= 0.0:
+            continue
+        if current_start <= 0.0:
+            current_start = raw_initial
+            chain_initial = raw_initial
+        scale = current_start / raw_initial
+        for point in raw_curve:
+            stitched.append({
+                "date": point["date"],
+                "equity": float(point["equity"]) * scale,
+            })
+        current_start = float(stitched[-1]["equity"])
+    return {"initial_equity": float(chain_initial), "curve": stitched}
+
+
+def _stitch_benchmark_equity_curve(rows: list[dict]) -> dict:
+    ordered_rows = sorted(list(rows or []), key=lambda row: int(row.get("oos_year", 0) or 0))
+    stitched: list[dict] = []
+    chain_initial = 0.0
+    current_start = 0.0
+    for row in ordered_rows:
+        curve_source = None
+        best_curve = _normalize_equity_curve_rows(list(row.get("best_finalist_equity_curve") or []))
+        if best_curve:
+            curve_source = best_curve
+            raw_initial = _derive_curve_initial_capital(best_curve, row.get("best_finalist_initial_capital"))
+        else:
+            raw_initial = 0.0
+            for policy_name in ("base", "local", "retention"):
+                policy = dict(row.get(policy_name) or {})
+                policy_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
+                if policy_curve:
+                    curve_source = policy_curve
+                    raw_initial = _derive_curve_initial_capital(policy_curve, policy.get("rank_1_initial_capital"))
+                    break
+        if not curve_source:
+            continue
+        if current_start <= 0.0:
+            current_start = raw_initial if raw_initial > 0.0 else 1.0
+            chain_initial = current_start
+        for point in curve_source:
+            benchmark_factor = 1.0 + float(point.get("benchmark_return_pct", 0.0)) / 100.0
+            stitched.append({
+                "date": point["date"],
+                "equity": current_start * benchmark_factor,
+            })
+        current_start = float(stitched[-1]["equity"])
+    return {"initial_equity": float(chain_initial), "curve": stitched}
+
+
+def _month_end_equities_from_curve(curve: list[dict], *, initial_equity: float) -> list[float]:
+    values = []
+    if initial_equity > 0.0:
+        values.append(float(initial_equity))
+    current_month = None
+    previous_equity = None
+    for point in list(curve or []):
+        try:
+            ts = pd.Timestamp(point.get("date"))
+            equity = float(point.get("equity", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        month_key = (int(ts.year), int(ts.month))
+        if current_month is None:
+            current_month = month_key
+        elif month_key != current_month:
+            if previous_equity is not None:
+                values.append(float(previous_equity))
+            current_month = month_key
+        previous_equity = equity
+    if previous_equity is not None:
+        values.append(float(previous_equity))
+    return values
+
+
+def _calc_stitched_curve_metrics(stitched: dict) -> dict:
+    initial_equity = _safe_float(stitched.get("initial_equity"), 0.0)
+    curve = list(stitched.get("curve") or [])
+    if initial_equity <= 0.0 or not curve:
+        return {
+            "score": 0.0,
+            "return_pct": 0.0,
+            "mdd_pct": 0.0,
+            "annual_return_pct": 0.0,
+            "r_squared": 0.0,
+            "monthly_win_rate": 0.0,
+            "curve_points": 0,
+        }
+    final_equity = float(curve[-1].get("equity", initial_equity) or initial_equity)
+    return_pct = (final_equity / initial_equity - 1.0) * 100.0
+    peak = initial_equity
+    max_drawdown = 0.0
+    for point in curve:
+        equity = float(point.get("equity", 0.0) or 0.0)
+        if equity > peak:
+            peak = equity
+        if peak > 0.0:
+            drawdown = (peak - equity) / peak * 100.0
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+    first_date = pd.Timestamp(curve[0]["date"])
+    last_date = pd.Timestamp(curve[-1]["date"])
+    years = max(0.0, ((last_date - first_date).days + 1) / 365.25)
+    annual_return_pct = calc_annual_return_pct(initial_equity, final_equity, years)
+    monthly_equities = _month_end_equities_from_curve(curve, initial_equity=initial_equity)
+    r_squared, monthly_win_rate = calc_curve_stats(monthly_equities)
+    score = calc_portfolio_score(
+        return_pct,
+        max_drawdown,
+        monthly_win_rate,
+        r_squared,
+        annual_return_pct=annual_return_pct,
+    )
+    return {
+        "score": float(score),
+        "return_pct": float(return_pct),
+        "mdd_pct": float(max_drawdown),
+        "annual_return_pct": float(annual_return_pct),
+        "r_squared": float(r_squared),
+        "monthly_win_rate": float(monthly_win_rate),
+        "curve_points": int(len(curve)),
+        "start_date": str(curve[0].get("date", "")),
+        "end_date": str(curve[-1].get("date", "")),
+        "initial_equity": float(initial_equity),
+        "final_equity": float(final_equity),
+    }
+
+
 def _build_chained_oos_summary(rows: list[dict]) -> dict:
     if not rows:
         return {}
@@ -658,18 +858,20 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
     selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in rows)
     selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in rows)
 
-    best_scores = [float(row.get("best_finalist_oos_score", 0.0)) for row in rows]
-    benchmark_scores = [float(row.get("benchmark_oos_score", 0.0)) for row in rows]
-    best_score = _average_float(best_scores)
-    benchmark_score = _average_float(benchmark_scores)
+    best_stitched = _stitch_strategy_equity_curves(rows, best_finalist=True)
+    benchmark_stitched = _stitch_benchmark_equity_curve(rows)
+    best_metrics = _calc_stitched_curve_metrics(best_stitched)
+    benchmark_metrics = _calc_stitched_curve_metrics(benchmark_stitched)
+    best_score = float(best_metrics.get("score", 0.0))
+    benchmark_score = float(benchmark_metrics.get("score", 0.0))
+    best_return = float(best_metrics.get("return_pct", 0.0))
+    benchmark_return = float(benchmark_metrics.get("return_pct", 0.0))
 
-    best_return = _compound_return_pct([float(row.get("best_finalist_return_pct", 0.0)) for row in rows])
-    benchmark_return = _compound_return_pct([float(row.get("benchmark_return_pct", 0.0)) for row in rows])
     summary = {
-        "method": "average_yearly_oos_scores",
-        "score_aggregation_method": "average_yearly_oos_scores",
-        "return_aggregation_method": "compound_yearly_oos_returns",
-        "note": "OOS_CHAIN 表格列使用各年度 next-1Y OOS score 平均，與年度列同為 score 口徑；*_return_pct 欄位只保留複利報酬診斷。完整實盤口徑請用 rolling paramset 在 portfolio/workbench 進行 active-param replay。",
+        "method": "stitched_daily_equity_recomputed_score",
+        "score_aggregation_method": "stitched_daily_equity_recomputed_score",
+        "return_aggregation_method": "stitched_daily_equity_curve_total_return",
+        "note": "OOS_CHAIN 表格列由各年度 next-1Y OOS daily equity 串接後重新計算 score，不使用年度 score mean。",
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_year}~{last_year}",
         "best_finalist_oos_score": float(best_score),
@@ -677,23 +879,32 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
         "best_finalist_return_pct": float(best_return),
         "benchmark_return_pct": float(benchmark_return),
         "benchmark_alpha_pct": float(best_return - benchmark_return),
-        "yearly_best_finalist_oos_score": best_scores,
-        "yearly_benchmark_oos_score": benchmark_scores,
+        "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
+        "benchmark_mdd_pct": float(benchmark_metrics.get("mdd_pct", 0.0)),
+        "best_finalist_annual_return_pct": float(best_metrics.get("annual_return_pct", 0.0)),
+        "benchmark_annual_return_pct": float(benchmark_metrics.get("annual_return_pct", 0.0)),
+        "best_finalist_curve_points": int(best_metrics.get("curve_points", 0)),
+        "benchmark_curve_points": int(benchmark_metrics.get("curve_points", 0)),
+        "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
+        "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
     }
     for policy_name in ("base", "local", "retention"):
-        scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows]
-        returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
-        avg_score = _average_float(scores)
-        chain_return = _compound_return_pct(returns)
+        stitched = _stitch_strategy_equity_curves(rows, policy_name=policy_name)
+        metrics = _calc_stitched_curve_metrics(stitched)
+        chain_score = float(metrics.get("score", 0.0))
+        chain_return = float(metrics.get("return_pct", 0.0))
         summary[policy_name] = {
-            "rank_1_oos": float(avg_score),
-            "best_gap": float(avg_score - best_score),
-            "benchmark_0050_gap": float(avg_score - benchmark_score),
+            "rank_1_oos": float(chain_score),
+            "best_gap": float(chain_score - best_score),
+            "benchmark_0050_gap": float(chain_score - benchmark_score),
             "rank_1_return_pct": float(chain_return),
             "best_gap_pct": float(chain_return - best_return),
             "benchmark_0050_gap_pct": float(chain_return - benchmark_return),
-            "yearly_oos_score": scores,
-            "yearly_return_pct": returns,
+            "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
+            "rank_1_annual_return_pct": float(metrics.get("annual_return_pct", 0.0)),
+            "rank_1_curve_points": int(metrics.get("curve_points", 0)),
+            "yearly_oos_score": [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows],
+            "yearly_return_pct": [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows],
         }
     return summary
 
@@ -720,6 +931,7 @@ def _build_chained_oos_row(rows: list[dict]) -> dict | None:
             "rank_1_trial": None,
             "rank_1_oos": rank_score,
             "rank_1_return_pct": float(item.get("rank_1_return_pct", 0.0)),
+            "rank_1_mdd_pct": float(item.get("rank_1_mdd_pct", 0.0)),
             "best_gap": rank_score - float(chained.get("best_finalist_oos_score", 0.0)),
             "benchmark_0050_gap": rank_score - float(chained.get("benchmark_oos_score", 0.0)),
         }
@@ -933,8 +1145,10 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "aggregation_method": summary.get("aggregation_method"),
             "return_aggregation_method": summary.get("return_aggregation_method"),
             "selector": str(policy_name),
+            "chained_oos_score": float(policy_summary.get("chained_oos_score", 0.0)),
             "chained_return_pct": float(policy_summary.get("chained_return_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(policy_summary.get("chained_gap_vs_0050_pct", 0.0)),
+            "yearly_avg_oos_score": float(policy_summary.get("yearly_avg_oos_score", policy_summary.get("avg_oos_score", 0.0))),
             "avg_oos_score": float(policy_summary.get("avg_oos_score", 0.0)),
             "median_oos_score": float(policy_summary.get("median_oos_score", 0.0)),
             "worst_oos_score": float(policy_summary.get("worst_oos_score", 0.0)),
@@ -976,6 +1190,12 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
     for row in rows:
         light_row = dict(row)
         light_row.pop("policy_schedules", None)
+        light_row.pop("best_finalist_equity_curve", None)
+        for policy_name in ("base", "local", "retention"):
+            if isinstance(light_row.get(policy_name), dict):
+                policy_copy = dict(light_row[policy_name])
+                policy_copy.pop("rank_1_equity_curve", None)
+                light_row[policy_name] = policy_copy
         yearly_results.append(light_row)
     payload = {
         "type": "outer_rolling_oos_next1y",
@@ -1027,9 +1247,9 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         "folds": len(rows),
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_oos}~{last_oos}",
-        "aggregation_method": "average_yearly_oos_scores",
-        "return_aggregation_method": "compound_yearly_oos_returns",
-        "note": "OOS_CHAIN 表格與 avg/median/worst 欄位使用 yearly OOS score；chained_return_pct 才是年度 next-1Y OOS 報酬複利診斷。",
+        "aggregation_method": "stitched_daily_equity_recomputed_score",
+        "return_aggregation_method": "stitched_daily_equity_curve_total_return",
+        "note": "OOS_CHAIN 由各 fold daily equity 串接後重新計算 score；不使用年度 score mean。",
         "chained_oos": chained,
     }
     for policy_name in ("base", "local", "retention"):
@@ -1037,11 +1257,14 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
         benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in rows]
         chain_policy = dict(chained.get(policy_name) or {})
+        yearly_avg_score = sum(scores) / float(len(scores))
         summary[policy_name] = {
+            "chained_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
             "chained_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
             "chained_gap_vs_best_pct": float(chain_policy.get("best_gap_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
-            "avg_oos_score": sum(scores) / float(len(scores)),
+            "yearly_avg_oos_score": float(yearly_avg_score),
+            "avg_oos_score": float(yearly_avg_score),
             "median_oos_score": float(statistics.median(scores)),
             "worst_oos_score": min(scores),
             "positive_years": sum(1 for value in returns if value > 0.0),
@@ -1052,9 +1275,12 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         }
     benchmark_returns = [float(row.get("benchmark_return_pct", 0.0)) for row in rows]
     benchmark_scores = [float(row.get("benchmark_oos_score", 0.0)) for row in rows]
+    benchmark_yearly_avg_score = sum(benchmark_scores) / float(len(benchmark_scores))
     summary["benchmark_0050"] = {
+        "chained_oos_score": float(chained.get("benchmark_oos_score", 0.0)),
         "chained_return_pct": float(chained.get("benchmark_return_pct", 0.0)),
-        "avg_oos_score": sum(benchmark_scores) / float(len(benchmark_scores)),
+        "yearly_avg_oos_score": float(benchmark_yearly_avg_score),
+        "avg_oos_score": float(benchmark_yearly_avg_score),
         "positive_years": sum(1 for value in benchmark_returns if value > 0.0),
         "total_years": len(benchmark_returns),
         "yearly_return_pct": benchmark_returns,
@@ -1080,17 +1306,15 @@ def _format_final_report(rows: list[dict], summary: dict) -> str:
         for policy_name in ("base", "local", "retention"):
             item = summary.get(policy_name) or {}
             lines.append(
-                f"{policy_name:<24}: chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
+                f"{policy_name:<24}: chain_score={float(item.get('chained_oos_score', 0.0)):.3f} | "
+                f"chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
                 f"gap_vs_0050={float(item.get('chained_gap_vs_0050_pct', 0.0)):+.2f}% | "
-                f"avg_score={float(item.get('avg_oos_score', 0.0)):.3f} | "
-                f"median_score={float(item.get('median_oos_score', 0.0)):.3f} | "
-                f"worst_score={float(item.get('worst_oos_score', 0.0)):.3f} | "
                 f"positive_years={int(item.get('positive_years', 0))}/{int(item.get('total_years', 0))}"
             )
         bench = summary.get("benchmark_0050") or {}
         lines.append(
-            f"benchmark_0050           : chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
-            f"avg_score={float(bench.get('avg_oos_score', 0.0)):.3f} | "
+            f"benchmark_0050           : chain_score={float(bench.get('chained_oos_score', 0.0)):.3f} | "
+            f"chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
             f"positive_years={int(bench.get('positive_years', 0))}/{int(bench.get('total_years', 0))}"
         )
     lines.append("-" * 218)
@@ -1241,6 +1465,8 @@ def run_outer_rolling_oos(
                 "best_finalist_return_pct": float(diagnostics.get("best_finalist_return_pct", 0.0)),
                 "best_finalist_mdd_pct": float(diagnostics.get("best_finalist_mdd_pct", 0.0)),
                 "best_finalist_trades": int(diagnostics.get("best_finalist_trades", 0) or 0),
+                "best_finalist_initial_capital": float(diagnostics.get("best_finalist_initial_capital", 0.0)),
+                "best_finalist_equity_curve": list(diagnostics.get("best_finalist_equity_curve") or []),
                 "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", 0.0)),
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),

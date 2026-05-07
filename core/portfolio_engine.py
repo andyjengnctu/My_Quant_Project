@@ -230,6 +230,7 @@ def run_portfolio_timeline(
     active_context_resolver=None,
 ):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
+    capture_equity_curve = bool(profile_stats.get("capture_equity_curve", False)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
     candidate_scan_sec = 0.0
     day_loop_sec = 0.0
@@ -244,7 +245,7 @@ def run_portfolio_timeline(
     t0 = time.perf_counter() if profile_timing_enabled else None
     start_idx = find_sim_start_idx(sorted_dates, start_year)
     benchmark_period_stats = None
-    use_benchmark_period_cache = bool(is_training and replay_counts is None and benchmark_data is not None and start_idx < len(sorted_dates))
+    use_benchmark_period_cache = bool(is_training and (not capture_equity_curve) and replay_counts is None and benchmark_data is not None and start_idx < len(sorted_dates))
     if use_benchmark_period_cache:
         benchmark_period_stats = _get_benchmark_period_stats(
             benchmark_data=benchmark_data,
@@ -546,7 +547,7 @@ def run_portfolio_timeline(
         year_end_equity[today.year] = current_equity_money
         year_last_sim_date[today.year] = pd.Timestamp(today)
 
-        if not is_training:
+        if (not is_training) or capture_equity_curve:
             equity_curve.append({
                 "Date": today.strftime('%Y-%m-%d'),
                 "Equity": current_equity_money,
@@ -612,7 +613,7 @@ def run_portfolio_timeline(
     final_equity_money = milli_to_money(today_equity)
     total_return = (final_equity_money - initial_capital) / initial_capital * 100
 
-    if not is_training and len(equity_curve) > 0:
+    if ((not is_training) or capture_equity_curve) and len(equity_curve) > 0:
         equity_curve[-1]['Equity'] = final_equity_money
         equity_curve[-1]['Strategy_Return_Pct'] = total_return
         equity_curve[-1]['Invested_Amount'] = 0.0
@@ -708,6 +709,8 @@ def run_portfolio_timeline(
         profile_stats['filled_buy_count'] = filled_buy_count
         if active_level_rows is not None:
             profile_stats['portfolio_active_level_rows'] = list(active_level_rows)
+        if capture_equity_curve:
+            profile_stats['equity_curve'] = list(equity_curve)
         profile_stats.update(yearly_stats)
         profile_stats.update(bm_yearly_stats)
 

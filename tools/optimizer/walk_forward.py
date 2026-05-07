@@ -115,12 +115,14 @@ def _evaluate_single_holdout_period(
     enable_rotation,
     benchmark_ticker: str,
     pit_stats_index=None,
+    include_equity_curve: bool = False,
 ) -> dict | None:
     test_dates = list(holdout_period.get('test_dates') or [])
     if not test_dates:
         return None
     benchmark_data = all_dfs_fast.get(str(benchmark_ticker), None)
-    pf_profile = {"_timing_enabled": False}
+    pf_profile = {"_timing_enabled": False, "capture_equity_curve": bool(include_equity_curve)}
+    equity_curve_rows = []
     (
         ret_pct,
         mdd,
@@ -160,6 +162,15 @@ def _evaluate_single_holdout_period(
         verbose=False,
         pit_stats_index=pit_stats_index,
     )
+    if include_equity_curve:
+        benchmark_col = f"Benchmark_{benchmark_ticker}_Pct"
+        for row in list(pf_profile.get("equity_curve") or []):
+            equity_curve_rows.append({
+                "date": str(row.get("Date") or ""),
+                "equity": float(row.get("Equity", 0.0) or 0.0),
+                "strategy_return_pct": float(row.get("Strategy_Return_Pct", 0.0) or 0.0),
+                "benchmark_return_pct": float(row.get(benchmark_col, 0.0) or 0.0),
+            })
     test_score_romd = calc_portfolio_score(
         ret_pct,
         mdd,
@@ -201,6 +212,8 @@ def _evaluate_single_holdout_period(
         'benchmark_r_squared': float(bm_r_sq),
         'benchmark_monthly_win_rate': float(bm_m_win_rate),
         'benchmark_score_romd': float(_calc_romd(bm_ret, bm_mdd)),
+        'initial_capital': float(getattr(params, 'initial_capital', 0.0) or 0.0),
+        'equity_curve': equity_curve_rows,
     }
 
 
@@ -218,6 +231,7 @@ def evaluate_walk_forward(
     oos_start_year: int | None = None,
     pit_stats_index=None,
     holdout_period: dict | None = None,
+    include_equity_curve: bool = False,
 ):
     if holdout_period is None:
         holdout_period = build_test_holdout_period(
@@ -237,6 +251,7 @@ def evaluate_walk_forward(
             enable_rotation=enable_rotation,
             benchmark_ticker=benchmark_ticker,
             pit_stats_index=pit_stats_index,
+            include_equity_curve=bool(include_equity_curve),
         )
 
     summary = {
