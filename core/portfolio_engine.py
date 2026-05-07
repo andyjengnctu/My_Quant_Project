@@ -211,7 +211,24 @@ def _append_portfolio_extended_shadow_level_rows(active_level_rows, active_exten
         })
 
 
-def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, start_year, params, max_positions, enable_rotation, benchmark_ticker="0050", benchmark_data=None, is_training=True, profile_stats=None, verbose=True, replay_counts=None, pit_stats_index=None):
+def run_portfolio_timeline(
+    all_dfs_fast,
+    all_standalone_logs,
+    sorted_dates,
+    start_year,
+    params,
+    max_positions,
+    enable_rotation,
+    benchmark_ticker="0050",
+    benchmark_data=None,
+    is_training=True,
+    profile_stats=None,
+    verbose=True,
+    replay_counts=None,
+    pit_stats_index=None,
+    active_params_resolver=None,
+    active_context_resolver=None,
+):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     t_portfolio_start = time.perf_counter() if profile_timing_enabled else None
     candidate_scan_sec = 0.0
@@ -238,15 +255,19 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         ticker_dates_sec = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_timing_enabled else None
-    if pit_stats_index is None:
-        pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
+    if active_context_resolver is None:
+        if pit_stats_index is None:
+            pit_stats_index = {t: build_trade_stats_index(logs) for t, logs in all_standalone_logs.items()}
+        else:
+            pit_stats_index = dict(pit_stats_index)
+            if all_standalone_logs:
+                for ticker, logs in all_standalone_logs.items():
+                    if pit_stats_index.get(ticker) is None:
+                        pit_stats_index[ticker] = build_trade_stats_index(logs)
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     else:
-        pit_stats_index = dict(pit_stats_index)
-        if all_standalone_logs:
-            for ticker, logs in all_standalone_logs.items():
-                if pit_stats_index.get(ticker) is None:
-                    pit_stats_index[ticker] = build_trade_stats_index(logs)
-    normal_setup_index = build_normal_setup_index(all_dfs_fast)
+        pit_stats_index = dict(pit_stats_index or {})
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
 
@@ -302,6 +323,19 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
         today = sorted_dates[i]
+        day_params = active_params_resolver(today) if active_params_resolver is not None else params
+        day_context = active_context_resolver(today) if active_context_resolver is not None else None
+        if day_context is None:
+            day_all_dfs_fast = all_dfs_fast
+            day_pit_stats_index = pit_stats_index
+            day_normal_setup_index = normal_setup_index
+            day_pit_stats_cursor = pit_stats_cursor
+        else:
+            day_all_dfs_fast = day_context.get('all_dfs_fast') or all_dfs_fast
+            day_pit_stats_index = day_context.get('all_pit_stats_index') or pit_stats_index
+            day_normal_setup_index = day_context.get('normal_setup_index') or normal_setup_index
+            day_cursor_key = id(day_pit_stats_index)
+            day_pit_stats_cursor = pit_stats_cursor.setdefault(day_cursor_key, {})
 
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
@@ -311,7 +345,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
         cash_money = milli_to_money(cash)
 
         sold_today = set()
-        normal_setup_entries_today = normal_setup_index.get(today, [])
+        normal_setup_entries_today = day_normal_setup_index.get(today, [])
         has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
 
         if verbose and (not is_training) and i % 20 == 0:
@@ -320,7 +354,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         if has_portfolio_work_today:
             available_cash = cash
-            sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params)
+            sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
             pre_market_occupied = len(portfolio) + len(sold_today)
             candidate_sources_today = bool(normal_setup_entries_today) or bool(active_extended_signals)
             orderable_candidates_today = []
@@ -338,12 +372,12 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         normal_setup_entries=normal_setup_entries_today,
                         portfolio=portfolio,
                         sold_today=sold_today,
-                        all_dfs_fast=all_dfs_fast,
+                        all_dfs_fast=day_all_dfs_fast,
                         active_extended_signals=active_extended_signals,
-                        pit_stats_index=pit_stats_index,
-                        pit_stats_cursor=pit_stats_cursor,
+                        pit_stats_index=day_pit_stats_index,
+                        pit_stats_cursor=day_pit_stats_cursor,
                         today=today,
-                        params=params,
+                        params=day_params,
                     )
                     if profile_timing_enabled:
                         candidate_scan_sec += time.perf_counter() - t0
@@ -351,16 +385,16 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             elif candidate_sources_today:
                 t0 = time.perf_counter() if profile_timing_enabled else None
                 candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
-                    normal_setup_index=normal_setup_index,
+                    normal_setup_index=day_normal_setup_index,
                     active_extended_signals=active_extended_signals,
                     portfolio=portfolio,
                     sold_today=sold_today,
-                    all_dfs_fast=all_dfs_fast,
-                    pit_stats_index=pit_stats_index,
-                    pit_stats_cursor=pit_stats_cursor,
+                    all_dfs_fast=day_all_dfs_fast,
+                    pit_stats_index=day_pit_stats_index,
+                    pit_stats_cursor=day_pit_stats_cursor,
                     today=today,
                     sizing_equity=sizing_equity,
-                    params=params,
+                    params=day_params,
                     collect_all_candidates=replay_counts is not None,
                 )
                 if profile_timing_enabled:
@@ -389,10 +423,10 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                         max_positions=max_positions,
                         enable_rotation=enable_rotation,
                         sold_today=sold_today,
-                        all_dfs_fast=all_dfs_fast,
+                        all_dfs_fast=day_all_dfs_fast,
                         today=today,
-                        pit_stats_index=pit_stats_index,
-                        params=params,
+                        pit_stats_index=day_pit_stats_index,
+                        params=day_params,
                         cash=cash,
                         closed_trades_stats=closed_trades_stats,
                         trade_history=trade_history,
@@ -410,9 +444,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             cash, total_missed_sells, normal_trade_count, extended_trade_count = settle_portfolio_positions(
                 portfolio=portfolio,
                 sold_today=sold_today,
-                all_dfs_fast=all_dfs_fast,
+                all_dfs_fast=day_all_dfs_fast,
                 today=today,
-                params=params,
+                params=day_params,
                 cash=cash,
                 closed_trades_stats=closed_trades_stats,
                 trade_history=trade_history,
@@ -437,9 +471,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
                     active_extended_signals=active_extended_signals,
                     orderable_candidates_today=orderable_candidates_today,
                     sold_today=sold_today,
-                    all_dfs_fast=all_dfs_fast,
+                    all_dfs_fast=day_all_dfs_fast,
                     today=today,
-                    params=params,
+                    params=day_params,
                     cash=cash,
                     available_cash=available_cash,
                     sizing_equity=sizing_equity,
@@ -455,9 +489,9 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
             cleanup_extended_signals_for_day(
                 active_extended_signals=active_extended_signals,
                 portfolio=portfolio,
-                all_dfs_fast=all_dfs_fast,
+                all_dfs_fast=day_all_dfs_fast,
                 today=today,
-                params=params,
+                params=day_params,
                 sizing_capital=sizing_equity,
             )
         elif replay_counts is not None:
@@ -467,7 +501,7 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
         t0 = time.perf_counter() if profile_timing_enabled else None
         if portfolio:
-            today_equity = calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params)
+            today_equity = calc_mark_to_market_equity(cash, portfolio, day_all_dfs_fast, today, day_params)
         else:
             today_equity = cash
         today_equity_money = milli_to_money(today_equity)
@@ -542,10 +576,11 @@ def run_portfolio_timeline(all_dfs_fast, all_standalone_logs, sorted_dates, star
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     last_date = sorted_dates[-1] if len(sorted_dates) > 0 else None
+    closeout_params = active_params_resolver(last_date) if (active_params_resolver is not None and last_date is not None) else params
     today_equity, normal_trade_count, extended_trade_count = closeout_open_positions(
         portfolio=portfolio,
         cash=cash,
-        params=params,
+        params=closeout_params,
         trade_history=trade_history,
         is_training=is_training,
         closed_trades_stats=closed_trades_stats,

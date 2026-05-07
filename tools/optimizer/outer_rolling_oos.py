@@ -654,7 +654,7 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
     benchmark_return = _compound_return_pct([float(row.get("benchmark_return_pct", 0.0)) for row in rows])
     summary = {
         "method": "compound_yearly_oos_returns",
-        "note": "由各年度 next-1Y OOS 報酬按時間順序複利串接；不是年度 score 平均。現有年度 diagnostic 會在每年 OOS 結束結算，尚不是跨年度持倉不斷線的完整每日 equity curve。",
+        "note": "由各年度 next-1Y OOS 報酬按時間順序複利串接；不是年度 score 平均。完整實盤口徑請用 rolling paramset 在 portfolio/workbench 進行 active-param replay。",
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_year}~{last_year}",
         "best_finalist_return_pct": float(best_return),
@@ -772,7 +772,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     lines.append(_table_separator())
     lines.append("best / 0050 括號內 = rank_1_oos - 對照分數；best_finalist_oos / 0050_oos 均為 diagnostic only，不參與 selection。")
     if include_chain:
-        lines.append("OOS_CHAIN 列為年度 next-1Y OOS 報酬的時間序複利串接；不是年度 score 平均，也不取代實盤單一 param.json。")
+        lines.append("OOS_CHAIN 列為年度 next-1Y OOS 報酬的時間序複利串接；完整每日 active-param replay 請用輸出的 paramset 在 portfolio/workbench 重跑。")
     return "\n".join(lines)
 
 
@@ -826,13 +826,16 @@ def _build_policies_schedule(rows: list[dict]) -> dict:
 
 def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     params_by_oos_year = {}
+    params_by_effective_date = {}
     fold_entries = []
     for row in rows:
         schedule = dict((row.get("policy_schedules") or {}).get(policy_name) or {})
         if not schedule:
             continue
         oos_year = str(int(schedule.get("oos_year") or row.get("oos_year")))
-        params_by_oos_year[oos_year] = dict(schedule.get("params") or {})
+        params_payload = dict(schedule.get("params") or {})
+        params_by_oos_year[oos_year] = params_payload
+        params_by_effective_date[str(schedule.get("effective_start") or f"{oos_year}-01-01")] = params_payload
         policy_metrics = dict(row.get(policy_name) or {})
         fold_entries.append({
             "fold": row.get("fold"),
@@ -888,6 +891,8 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "promotion_enabled": False,
             "trials_per_fold": int(config.trials_per_fold),
             "live_trading_param": False,
+            "active_param_policy": "daily_active_param",
+            "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active param；實盤同理使用當下正式 promote 的最新 param.json。",
         },
         "summary": {
             "folds": int(summary.get("folds", 0)),
@@ -903,7 +908,10 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "positive_years": int(policy_summary.get("positive_years", 0)),
             "total_years": int(policy_summary.get("total_years", 0)),
         },
+        "active_param_policy": "daily_active_param",
+        "active_param_policy_note": "每日決策使用該日 active param；rolling 只是用歷史 effective date replay，不代表實盤使用年度參數組。",
         "chained_oos": chained_oos,
+        "params_by_effective_date": params_by_effective_date,
         "params_by_oos_year": params_by_oos_year,
         "folds": fold_entries,
     }

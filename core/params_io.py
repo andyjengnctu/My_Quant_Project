@@ -138,8 +138,8 @@ def load_params_from_json(json_file):
 
         if is_rolling_oos_param_set_payload(data):
             raise ValueError(
-                "此檔案是 rolling OOS 驗證用年度參數組，不是實盤單一 param.json；"
-                "請在支援 rolling validation 的畫面/流程讀取，或改選最新單一參數檔。"
+                "此檔案是 rolling OOS active-param replay 驗證參數組，不是實盤單一 param.json；"
+                "請在支援 rolling validation / portfolio replay 的畫面讀取，或改選最新單一參數檔。"
             )
 
         return build_params_from_mapping(data)

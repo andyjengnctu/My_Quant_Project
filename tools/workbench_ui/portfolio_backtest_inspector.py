@@ -25,12 +25,14 @@ from core.runtime_utils import parse_float_strict, parse_int_strict
 from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
-from core.rolling_oos_params import format_rolling_oos_summary_lines, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.params_io import build_params_from_mapping
+from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
     run_portfolio_simulation_prepared,
+    run_portfolio_simulation_with_param_schedule,
 )
 from tools.trade_analysis.charting import (
     bind_matplotlib_chart_navigation,
@@ -1667,38 +1669,59 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
 
     def _execute_portfolio_backtest(self, options):
-        if is_rolling_oos_param_set_file(options["params_path"]):
-            return self._execute_rolling_oos_validation_display(options)
-
         data_dir = get_dataset_dir(WORKBENCH_PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
-        params = load_strict_params(options["params_path"])
-        params.fixed_risk = float(options["fixed_risk"])
+        is_rolling_paramset = is_rolling_oos_param_set_file(options["params_path"])
+        rolling_payload = None
+        context = {}
 
         print(f"{C_CYAN}================================================================================{C_RESET}")
-        print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (終極模組化對齊版){C_RESET}")
+        print(f"⚙️ {C_YELLOW}V16 投資組合模擬器：機構級實戰期望值 (active-param replay 對齊版){C_RESET}")
         print(f"{C_CYAN}================================================================================{C_RESET}")
         print(f"{C_GRAY}📁 使用資料集: {get_dataset_profile_label(DEFAULT_DATASET_PROFILE)} | 來源: workbench | 路徑: {data_dir}{C_RESET}")
         print(f"{C_GRAY}ℹ️ 參數來源: {options['param_source']}{C_RESET}")
-        print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-        print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
-        print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
 
         ensure_runtime_dirs()
         start_time = time.time()
-        context = load_portfolio_market_context(data_dir, params, verbose=True)
-        result = run_portfolio_simulation_prepared(
-            context["all_dfs_fast"],
-            context["all_trade_logs"],
-            context["sorted_dates"],
-            params,
-            max_positions=options["max_positions"],
-            enable_rotation=options["enable_rotation"],
-            start_year=options["start_year"],
-            end_year=options["end_year"],
-            benchmark_ticker=options["benchmark_ticker"],
-            verbose=True,
-            pit_stats_index=context.get("all_pit_stats_index"),
-        )
+        if is_rolling_paramset:
+            rolling_payload = load_rolling_oos_param_set(options["params_path"])
+            params = build_params_from_mapping(get_active_params_for_date(rolling_payload, f"{options['start_year']}-01-01"))
+            params.fixed_risk = float(options["fixed_risk"])
+            print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            for line in format_rolling_oos_summary_lines(rolling_payload):
+                print(f"{C_GRAY}{line}{C_RESET}")
+            print(f"{C_GRAY}ℹ️ 單筆固定風險覆寫到每個 active param: {params.fixed_risk:.4f}{C_RESET}")
+            result = run_portfolio_simulation_with_param_schedule(
+                data_dir,
+                rolling_payload,
+                max_positions=options["max_positions"],
+                enable_rotation=options["enable_rotation"],
+                start_year=options["start_year"],
+                end_year=options["end_year"],
+                benchmark_ticker=options["benchmark_ticker"],
+                fixed_risk=float(options["fixed_risk"]),
+                verbose=True,
+            )
+        else:
+            params = load_strict_params(options["params_path"])
+            params.fixed_risk = float(options["fixed_risk"])
+            print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
+            context = load_portfolio_market_context(data_dir, params, verbose=True)
+            result = run_portfolio_simulation_prepared(
+                context["all_dfs_fast"],
+                context["all_trade_logs"],
+                context["sorted_dates"],
+                params,
+                max_positions=options["max_positions"],
+                enable_rotation=options["enable_rotation"],
+                start_year=options["start_year"],
+                end_year=options["end_year"],
+                benchmark_ticker=options["benchmark_ticker"],
+                verbose=True,
+                pit_stats_index=context.get("all_pit_stats_index"),
+            )
         end_time = time.time()
 
         (

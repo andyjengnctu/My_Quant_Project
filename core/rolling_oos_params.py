@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
+from datetime import date, datetime
 from typing import Any, Mapping
 
 ROLLING_OOS_PARAM_SET_SCHEMA_TYPE = "rolling_oos_param_set"
@@ -17,7 +19,9 @@ def is_rolling_oos_param_set_payload(payload: Mapping[str, Any] | None) -> bool:
         return True
     if schema_type == "outer_rolling_oos_param_set":
         return True
-    return isinstance(payload.get("params_by_oos_year"), Mapping) and str(payload.get("usage") or "").strip() == ROLLING_OOS_USAGE
+    if str(payload.get("usage") or "").strip() != ROLLING_OOS_USAGE:
+        return False
+    return isinstance(payload.get("params_by_oos_year"), Mapping) or isinstance(payload.get("params_by_effective_date"), Mapping)
 
 
 def load_json_file(path: str | os.PathLike[str]) -> dict:
@@ -33,9 +37,94 @@ def load_rolling_oos_param_set(path: str | os.PathLike[str]) -> dict:
     if not is_rolling_oos_param_set_payload(payload):
         raise ValueError(f"不是 rolling OOS 年度參數組 JSON: {path}")
     params_by_year = payload.get("params_by_oos_year")
-    if not isinstance(params_by_year, Mapping) or not params_by_year:
-        raise ValueError(f"rolling OOS 參數組缺少 params_by_oos_year: {path}")
+    params_by_effective_date = payload.get("params_by_effective_date")
+    if (not isinstance(params_by_year, Mapping) or not params_by_year) and (
+        not isinstance(params_by_effective_date, Mapping) or not params_by_effective_date
+    ):
+        raise ValueError(f"rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date: {path}")
     return payload
+
+
+def _parse_effective_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if len(text) == 4 and text.isdigit():
+        text = f"{text}-01-01"
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"無法解析參數生效日: {value!r}") from exc
+
+
+def _coerce_trade_date(value: Any) -> date:
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    return _parse_effective_date(value)
+
+
+def build_active_param_schedule(payload: Mapping[str, Any]) -> list[dict]:
+    params_by_effective_date = payload.get("params_by_effective_date")
+    records: list[dict] = []
+    if isinstance(params_by_effective_date, Mapping) and params_by_effective_date:
+        for raw_date, params in params_by_effective_date.items():
+            if not isinstance(params, Mapping):
+                raise ValueError(f"生效日 {raw_date} 的參數必須是 object/dict")
+            effective_date = _parse_effective_date(raw_date)
+            records.append({
+                "effective_date": effective_date,
+                "effective_date_text": effective_date.isoformat(),
+                "year": int(effective_date.year),
+                "params": dict(params),
+            })
+    else:
+        params_by_year = payload.get("params_by_oos_year") or {}
+        if not isinstance(params_by_year, Mapping) or not params_by_year:
+            raise ValueError("rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date")
+        for raw_year, params in params_by_year.items():
+            if not isinstance(params, Mapping):
+                raise ValueError(f"OOS 年份 {raw_year} 的參數必須是 object/dict")
+            try:
+                year = int(raw_year)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"OOS 年份必須是整數年份，收到: {raw_year!r}") from exc
+            effective_date = date(year, 1, 1)
+            records.append({
+                "effective_date": effective_date,
+                "effective_date_text": effective_date.isoformat(),
+                "year": int(year),
+                "params": dict(params),
+            })
+    records.sort(key=lambda item: item["effective_date"])
+    if not records:
+        raise ValueError("rolling OOS 參數組沒有任何可用 active param")
+    return records
+
+
+def get_active_param_record_for_date(payload: Mapping[str, Any], trade_date: Any) -> dict:
+    schedule = build_active_param_schedule(payload)
+    current_date = _coerce_trade_date(trade_date)
+    selected = None
+    for record in schedule:
+        if record["effective_date"] <= current_date:
+            selected = record
+        else:
+            break
+    if selected is None:
+        first_date = schedule[0]["effective_date_text"]
+        raise KeyError(f"{current_date.isoformat()} 早於 rolling OOS 第一個參數生效日 {first_date}")
+    return dict(selected)
+
+
+def get_active_params_for_date(payload: Mapping[str, Any], trade_date: Any) -> dict:
+    return copy.deepcopy(get_active_param_record_for_date(payload, trade_date)["params"])
+
+
+def get_active_param_year_range(payload: Mapping[str, Any]) -> tuple[int, int]:
+    schedule = build_active_param_schedule(payload)
+    return int(schedule[0]["year"]), int(schedule[-1]["year"])
 
 
 def is_rolling_oos_param_set_file(path: str | os.PathLike[str]) -> bool:
@@ -46,17 +135,7 @@ def is_rolling_oos_param_set_file(path: str | os.PathLike[str]) -> bool:
 
 
 def get_rolling_oos_params_for_year(payload: Mapping[str, Any], year: int) -> dict:
-    params_by_year = payload.get("params_by_oos_year") or {}
-    if not isinstance(params_by_year, Mapping):
-        raise ValueError("rolling OOS 參數組 params_by_oos_year 必須是 object/dict")
-    key = str(int(year))
-    params = params_by_year.get(key)
-    if params is None:
-        available = ", ".join(sorted(str(k) for k in params_by_year.keys()))
-        raise KeyError(f"rolling OOS 參數組沒有 {key} 年參數；可用年份: {available}")
-    if not isinstance(params, Mapping):
-        raise ValueError(f"rolling OOS 參數 {key} 必須是 object/dict")
-    return dict(params)
+    return get_active_params_for_date(payload, date(int(year), 1, 1))
 
 
 def build_rolling_oos_display_label(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> str:
@@ -65,8 +144,8 @@ def build_rolling_oos_display_label(path: str | os.PathLike[str], payload: Mappi
     oos_period = str(summary.get("oos_period") or payload.get("oos_period") or "").strip()
     basename = os.path.basename(str(path))
     if oos_period:
-        return f"rolling_oos_{selector} | validation only | OOS {oos_period} | {basename}"
-    return f"rolling_oos_{selector} | validation only | {basename}"
+        return f"rolling_oos_{selector} | active-param replay | OOS {oos_period} | {basename}"
+    return f"rolling_oos_{selector} | active-param replay | {basename}"
 
 
 def _fmt_pct(value: Any) -> str:
@@ -83,8 +162,8 @@ def format_rolling_oos_summary_lines(payload: Mapping[str, Any]) -> list[str]:
     summary = payload.get("summary") or {}
     chained = payload.get("chained_oos") or summary.get("chained_oos") or {}
     lines = [
-        "參數模式：Rolling OOS 驗證參數組",
-        "用途：validation only，不是實盤單一 param.json",
+        "參數模式：Rolling OOS active-param replay 參數組",
+        "用途：validation only；模擬時每日使用該歷史日期已生效的 active param",
         f"selector：{selector}",
         f"OOS：{summary.get('oos_period') or chained.get('oos_period') or '-'}",
     ]
@@ -96,9 +175,12 @@ def format_rolling_oos_summary_lines(payload: Mapping[str, Any]) -> list[str]:
             lines.append(f"0050 串連報酬：{_fmt_pct(chained.get('benchmark_return_pct'))}")
         if "alpha_return_pct" in chained:
             lines.append(f"相對 0050：{_fmt_pct(chained.get('alpha_return_pct'))}")
-    params_by_year = payload.get("params_by_oos_year") or {}
-    if isinstance(params_by_year, Mapping):
-        years = sorted(str(year) for year in params_by_year.keys())
-        if years:
-            lines.append(f"年度參數：{years[0]}~{years[-1]}（共 {len(years)} 年）")
+    try:
+        schedule = build_active_param_schedule(payload)
+    except ValueError:
+        schedule = []
+    if schedule:
+        lines.append(
+            f"active param 生效日：{schedule[0]['effective_date_text']}~{schedule[-1]['effective_date_text']}（共 {len(schedule)} 版）"
+        )
     return lines

@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_run_best_params_path
-from core.rolling_oos_params import format_rolling_oos_summary_lines, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 
@@ -114,14 +114,19 @@ def main(argv=None, env=None):
             param_source = "run_best"
             params_path = resolve_run_best_params_path(PROJECT_ROOT)
         print(f"{C_GRAY}ℹ️ 參數來源: {param_source}{C_RESET}")
-        if is_rolling_oos_param_set_file(params_path):
-            payload = load_rolling_oos_param_set(params_path)
-            print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS 驗證參數組！{C_RESET}")
+        is_rolling_paramset = is_rolling_oos_param_set_file(params_path)
+        rolling_payload = None
+        rolling_first_year = None
+        rolling_last_year = None
+        if is_rolling_paramset:
+            rolling_payload = load_rolling_oos_param_set(params_path)
+            rolling_first_year, rolling_last_year = get_active_param_year_range(rolling_payload)
+            default_start_year_hint = int(rolling_first_year)
+            print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
-            for line in format_rolling_oos_summary_lines(payload):
+            for line in format_rolling_oos_summary_lines(rolling_payload):
                 print(f"{C_GRAY}{line}{C_RESET}")
             print(f"{C_YELLOW}此檔案只用於驗證 rolling 結果；實際交易請使用最新單一 param.json。{C_RESET}")
-            return 0
         rotation_choice = safe_prompt_choice(
             "👉 汰弱換股：[N] 關閉 (預設)  [Y] 啟用 :  ",
             "N",
@@ -152,40 +157,58 @@ def main(argv=None, env=None):
         else:
             user_start_year = parse_int_strict(raw_start_year, "開始回測年份", min_value=1900)
             user_benchmark = PORTFOLIO_DEFAULT_BENCHMARK_TICKER
+        if is_rolling_paramset and rolling_last_year is not None and user_start_year > int(rolling_last_year):
+            raise ValueError(f"開始回測年份 {user_start_year} 晚於 rolling active param 最後年份 {rolling_last_year}")
     except ValueError as e:
         print(f"{C_RED}❌ {e}{C_RESET}", file=sys.stderr)
         return 1
 
     from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
     from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params, run_portfolio_simulation
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_schedule
 
-    try:
-        params = load_strict_params(params_path)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
+    params = None
+    if not is_rolling_paramset:
+        try:
+            params = load_strict_params(params_path)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
 
-    try:
-        params.fixed_risk = user_fixed_risk
-    except ValueError as exc:
-        print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
-        return 1
+        try:
+            params.fixed_risk = user_fixed_risk
+        except ValueError as exc:
+            print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
+            return 1
 
-    print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
-    print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
-    print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
+        print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
+        print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
+        print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
+    else:
+        print(f"{C_GRAY}ℹ️ 單筆固定風險覆寫到每個 active param: {user_fixed_risk:.4f}{C_RESET}")
 
     ensure_runtime_dirs()
     try:
         start_time = time.time()
-        result = run_portfolio_simulation(
-            selected_data_dir,
-            params,
-            max_positions=user_max_pos,
-            enable_rotation=user_rotation,
-            start_year=user_start_year,
-            benchmark_ticker=user_benchmark,
-        )
+        if is_rolling_paramset:
+            result = run_portfolio_simulation_with_param_schedule(
+                selected_data_dir,
+                rolling_payload,
+                max_positions=user_max_pos,
+                enable_rotation=user_rotation,
+                start_year=user_start_year,
+                benchmark_ticker=user_benchmark,
+                fixed_risk=user_fixed_risk,
+            )
+        else:
+            result = run_portfolio_simulation(
+                selected_data_dir,
+                params,
+                max_positions=user_max_pos,
+                enable_rotation=user_rotation,
+                start_year=user_start_year,
+                benchmark_ticker=user_benchmark,
+            )
         end_time = time.time()
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -208,8 +231,14 @@ def main(argv=None, env=None):
     print(f"{C_CYAN}================================================================================{C_RESET}")
     print(f"回測總耗時: {end_time - start_time:.2f} 秒")
 
+    dashboard_params = params
+    if dashboard_params is None and rolling_payload is not None:
+        from core.params_io import build_params_from_mapping
+        dashboard_params = build_params_from_mapping(get_active_params_for_date(rolling_payload, f"{user_start_year}-01-01"))
+        dashboard_params.fixed_risk = user_fixed_risk
+
     print_strategy_dashboard(
-        params=params, title="績效與風險對比表", mode_display=mode_display, max_pos=user_max_pos,
+        params=dashboard_params, title="績效與風險對比表", mode_display=mode_display, max_pos=user_max_pos,
         trades=trade_count, missed_b=total_missed, missed_s=total_missed_sells,
         final_eq=final_eq, avg_exp=avg_exp, sys_ret=tot_ret, bm_ret=bm_ret,
         sys_mdd=mdd, bm_mdd=bm_mdd, win_rate=win_rate, payoff=pf_payoff, ev=pf_ev,

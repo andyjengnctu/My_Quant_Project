@@ -13,10 +13,12 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_YELLOW, C_RESET
 from core.log_utils import format_exception_summary, write_issue_log
-from core.params_io import params_to_json_dict
+from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.walk_forward_policy import load_walk_forward_policy
+from core.portfolio_stats import find_sim_start_idx
+from core.rolling_oos_params import build_active_param_schedule
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_fast_data import merge_static_market_with_dynamic, pack_static_market_data, pack_prepared_stock_data, prep_optimizer_stock_data_bundle, prep_stock_data_and_trades
+from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, merge_static_market_with_dynamic, pack_static_market_data, pack_prepared_stock_data, prep_optimizer_stock_data_bundle, prep_stock_data_and_trades
 from tools.optimizer.raw_cache import load_all_raw_data
 from tools.optimizer.trial_inputs import prepare_trial_inputs
 from tools.optimizer.walk_forward import resolve_first_walk_forward_test_boundary
@@ -25,6 +27,73 @@ from .runtime_common import LOAD_PROGRESS_EVERY, OUTPUT_DIR, PROJECT_ROOT, ensur
 PORTFOLIO_DEFAULT_BENCHMARK_TICKER = "0050"
 PORTFOLIO_PREP_CACHE_SCHEMA_VERSION = 1
 
+
+
+def _coerce_schedule_trade_date(value):
+    if hasattr(value, "to_pydatetime"):
+        value = value.to_pydatetime()
+    if hasattr(value, "date"):
+        return value.date()
+    return pd.Timestamp(value).date()
+
+
+def _resolve_active_schedule_record(schedule_records, trade_date):
+    current_date = _coerce_schedule_trade_date(trade_date)
+    selected = None
+    for record in schedule_records:
+        if record["effective_date"] <= current_date:
+            selected = record
+        else:
+            break
+    if selected is None:
+        first_date = schedule_records[0]["effective_date_text"] if schedule_records else "N/A"
+        raise ValueError(f"{current_date.isoformat()} 早於第一個 active param 生效日 {first_date}")
+    return selected
+
+
+def _build_active_param_objects_from_payload(payload, *, fixed_risk=None):
+    schedule = build_active_param_schedule(payload)
+    resolved = []
+    for record in schedule:
+        params = build_params_from_mapping(record["params"])
+        if fixed_risk is not None:
+            params.fixed_risk = float(fixed_risk)
+        item = dict(record)
+        item["params_obj"] = params
+        item["params_signature"] = _build_portfolio_params_signature(params)
+        resolved.append(item)
+    return resolved
+
+
+def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=True):
+    contexts_by_signature = {}
+    contexts_by_effective_date = {}
+    for idx, record in enumerate(schedule_records, start=1):
+        signature = str(record["params_signature"])
+        if signature not in contexts_by_signature:
+            if verbose:
+                print(
+                    f"{C_CYAN}📦 建立 active param 快取 [{idx}/{len(schedule_records)}] "
+                    f"生效日={record['effective_date_text']}...{C_RESET}"
+                )
+            context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=verbose)
+            context = dict(context)
+            if not context.get("all_pit_stats_index"):
+                context["all_pit_stats_index"] = {
+                    ticker: build_trade_stats_index(logs)
+                    for ticker, logs in (context.get("all_trade_logs") or {}).items()
+                }
+            context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
+            contexts_by_signature[signature] = context
+        contexts_by_effective_date[record["effective_date_text"]] = contexts_by_signature[signature]
+    return contexts_by_effective_date
+
+
+def _merge_context_market_dates(contexts_by_effective_date):
+    market_dates = set()
+    for context in contexts_by_effective_date.values():
+        market_dates.update(context.get("sorted_dates") or [])
+    return sorted(market_dates)
 
 def _collect_dataset_market_dates(data_dir: str):
     csv_inputs, _ = discover_unique_csv_inputs(data_dir)
@@ -436,6 +505,91 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
     )
     return (*result, pf_profile)
 
+
+
+def run_portfolio_simulation_with_param_schedule(
+    data_dir,
+    rolling_payload,
+    max_positions=5,
+    enable_rotation=False,
+    start_year=None,
+    end_year=None,
+    benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
+    fixed_risk=None,
+    verbose=True,
+):
+    schedule_records = _build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
+    if not schedule_records:
+        raise ValueError("rolling OOS active-param schedule 為空")
+
+    resolved_start_year = int(schedule_records[0]["year"] if start_year is None else start_year)
+    contexts_by_effective_date = _load_contexts_for_active_schedule(data_dir, schedule_records, verbose=verbose)
+    merged_dates = _merge_context_market_dates(contexts_by_effective_date)
+    resolved_sorted_dates = _filter_market_dates_by_end_year(
+        merged_dates,
+        start_year=resolved_start_year,
+        end_year=end_year,
+    )
+    if not resolved_sorted_dates:
+        raise ValueError("active-param replay 沒有可回測日期")
+
+    first_sim_idx = find_sim_start_idx(resolved_sorted_dates, resolved_start_year)
+    if first_sim_idx >= len(resolved_sorted_dates):
+        raise ValueError("active-param replay 起始年份沒有可回測日期")
+    first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
+    base_context = contexts_by_effective_date[first_record["effective_date_text"]]
+    base_params = first_record["params_obj"]
+    benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
+
+    def active_params_resolver(trade_date):
+        return _resolve_active_schedule_record(schedule_records, trade_date)["params_obj"]
+
+    def active_context_resolver(trade_date):
+        record = _resolve_active_schedule_record(schedule_records, trade_date)
+        return contexts_by_effective_date[record["effective_date_text"]]
+
+    pf_profile = {
+        "param_policy": "active_param_replay",
+        "active_param_schedule": [
+            {
+                "effective_date": str(record["effective_date_text"]),
+                "year": int(record["year"]),
+                "params_signature": str(record["params_signature"]),
+            }
+            for record in schedule_records
+        ],
+    }
+    if verbose:
+        print(
+            f"{C_GREEN}✅ active-param replay 準備完成："
+            f"{schedule_records[0]['effective_date_text']}~{schedule_records[-1]['effective_date_text']}，"
+            f"共 {len(schedule_records)} 版參數。{C_RESET}"
+        )
+
+    result = run_portfolio_timeline(
+        base_context.get("all_dfs_fast") or {},
+        base_context.get("all_trade_logs") or {},
+        resolved_sorted_dates,
+        resolved_start_year,
+        base_params,
+        max_positions,
+        enable_rotation,
+        benchmark_ticker=benchmark_ticker,
+        benchmark_data=benchmark_data,
+        is_training=False,
+        profile_stats=pf_profile,
+        verbose=verbose,
+        pit_stats_index=base_context.get("all_pit_stats_index"),
+        active_params_resolver=active_params_resolver,
+        active_context_resolver=active_context_resolver,
+    )
+    prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for ctx in contexts_by_effective_date.values())
+    pf_profile.update({
+        "param_policy": "active_param_replay",
+        "prep_wall_sec": prep_wall_sec,
+        "prep_mode": "active_param_replay",
+    })
+    return (*result, pf_profile)
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):
     context = load_portfolio_market_context(data_dir, params, verbose=verbose)
