@@ -1,5 +1,6 @@
 import inspect
 import os
+import re
 import sys
 import tracemalloc
 import warnings
@@ -106,6 +107,11 @@ def enable_line_buffered_stdout(stream=None):
 
 
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_INLINE_PROGRESS_MIN_WIDTH = 40
+_INLINE_PROGRESS_RIGHT_MARGIN = 1
+
+
 def stdout_supports_inline_progress(stream=None):
     target = sys.stdout if stream is None else stream
     if target is None:
@@ -121,14 +127,61 @@ def stdout_supports_inline_progress(stream=None):
     return True
 
 
+def _visible_text_width(text):
+    return len(_ANSI_ESCAPE_RE.sub("", str(text)))
+
+
+def _resolve_inline_progress_width(stream=None):
+    target = sys.stdout if stream is None else stream
+    try:
+        columns = int(os.get_terminal_size(target.fileno()).columns)
+    except (AttributeError, OSError, ValueError):
+        try:
+            columns = int(os.getenv("COLUMNS", "0") or 0)
+        except ValueError:
+            columns = 0
+    if columns <= _INLINE_PROGRESS_MIN_WIDTH:
+        return 0
+    return max(_INLINE_PROGRESS_MIN_WIDTH, columns - _INLINE_PROGRESS_RIGHT_MARGIN)
+
+
+def _fit_inline_progress_text(text, max_width):
+    raw_text = str(text).replace("\r", "").replace("\n", " ")
+    if int(max_width or 0) <= 0:
+        return raw_text, _visible_text_width(raw_text)
+    if _visible_text_width(raw_text) <= int(max_width):
+        return raw_text, _visible_text_width(raw_text)
+
+    visible_text = _ANSI_ESCAPE_RE.sub("", raw_text)
+    if int(max_width) <= 1:
+        fitted = visible_text[: int(max_width)]
+    else:
+        fitted = visible_text[: max(0, int(max_width) - 1)].rstrip() + "…"
+    return fitted, _visible_text_width(fitted)
+
+
+
+
+def choose_inline_progress_message(candidates, *, stream=None):
+    options = [str(candidate).replace("\r", "").replace("\n", " ") for candidate in candidates if str(candidate).strip() != ""]
+    if not options:
+        return ""
+    max_width = _resolve_inline_progress_width(stream)
+    if int(max_width or 0) <= 0:
+        return options[0]
+    for option in options:
+        if _visible_text_width(option) <= int(max_width):
+            return option
+    return options[-1]
+
 def write_inline_progress(message, *, previous_width=0, stream=None):
     target = sys.stdout if stream is None else stream
     if not stdout_supports_inline_progress(target):
         return 0
-    text = str(message).replace("\r", "").replace("\n", " ")
-    width = len(text)
+    max_width = _resolve_inline_progress_width(target)
+    text, width = _fit_inline_progress_text(message, max_width)
     padding = " " * max(0, int(previous_width or 0) - width)
-    target.write("\r" + text + padding)
+    target.write("\r\x1b[2K" + text + padding)
     target.flush()
     return width
 

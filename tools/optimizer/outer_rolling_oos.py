@@ -18,7 +18,7 @@ from config.training_policy import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
-from core.runtime_utils import get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
+from core.runtime_utils import choose_inline_progress_message, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from tools.optimizer.prep import prepare_trial_inputs
@@ -55,6 +55,13 @@ def _fmt_duration(seconds: float | int | None) -> str:
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _fmt_duration_compact(seconds: float | int | None) -> str:
+    text = _fmt_duration(seconds)
+    if text.startswith("00:"):
+        return text[3:]
+    return text
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -314,12 +321,26 @@ class _SearchProgress:
             avg_done = sum(float(row.get("elapsed_sec", 0.0)) for row in self.completed_results) / float(done_folds)
             current_remaining = eta_stage or 0.0
             eta_total = current_remaining + avg_done * max(0, self.fold_count - self.fold_idx)
-        line = (
-            f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS {self.oos_year} | "
-            f"OPTIMIZER_SEARCH trial {completed}/{self.total_trials} ({pct:5.1f}%) | "
-            f"best_score={self.best_score if self.best_score != float('-inf') else 0.0:.3f} | "
-            f"elapsed={_fmt_duration(now - self.stage_start)} | eta_stage={_fmt_duration(eta_stage)} | eta_total={_fmt_duration(eta_total)}"
-        )
+        best_score = self.best_score if self.best_score != float("-inf") else 0.0
+        elapsed_text = _fmt_duration_compact(now - self.stage_start)
+        eta_stage_text = _fmt_duration_compact(eta_stage)
+        eta_total_text = _fmt_duration_compact(eta_total)
+        line = choose_inline_progress_message((
+            (
+                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
+                f"OPTIMIZER_SEARCH | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
+                f"best_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+            ),
+            (
+                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start % 100:02d}~{self.selection_end % 100:02d} | OOS={self.oos_year % 100:02d} | "
+                f"search | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
+                f"best={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+            ),
+            (
+                f"[{self.fold_idx}/{self.fold_count}] {self.selection_start % 100:02d}~{self.selection_end % 100:02d}>OOS{self.oos_year % 100:02d} | "
+                f"search {completed}/{self.total_trials} | best={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
+            ),
+        ))
         self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
 
     def callback(self, session):

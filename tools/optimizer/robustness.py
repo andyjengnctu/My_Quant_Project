@@ -15,7 +15,7 @@ from config.training_policy import (
     resolve_optimizer_local_min_score_finalist_top_k,
 )
 from core.params_io import build_params_from_mapping, params_to_json_dict
-from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
+from core.runtime_utils import choose_inline_progress_message, stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
 from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
 from tools.optimizer.objective_runner import (
@@ -218,6 +218,12 @@ class _FinalistProgressBoard:
         m, s = divmod(rem, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _format_duration_compact(self, seconds) -> str:
+        text = self._format_duration(seconds)
+        if text.startswith("00:"):
+            return text[3:]
+        return text
+
     def _format_line(self, idx: int, *, prefix: str, progress_text: str, local_text: str, status_text: str):
         finalist = self.finalists[idx]
         trial = finalist["trial"]
@@ -375,16 +381,43 @@ class _FinalistProgressBoard:
         eta_stage = self._estimate_single_line_eta(safe_idx, int(current_neighbor), int(total_neighbors))
         eta_total = self._estimate_total_eta(eta_stage)
         elapsed = time.perf_counter() - self.stage_start
-        line = (
-            f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
-            f"selection={int(ctx.get('selection_start', 0) or 0)}~{int(ctx.get('selection_end', 0) or 0)} | OOS {int(ctx.get('oos_year', 0) or 0)} | LOCAL_MIN_REVIEW "
-            f"{safe_idx + 1}/{len(self.finalists)} | "
-            f"trial #{int(trial.number) + 1} | "
-            f"進度 {int(current_neighbor)}/{int(total_neighbors)} | "
-            f"current={current_text} {status_text} | best={best_text} | "
-            f"pass={pass_count} fail={fail_count} early={early_count} | "
-            f"elapsed={self._format_duration(elapsed)} | eta_stage={self._format_duration(eta_stage)} | eta_total={self._format_duration(eta_total)}"
-        )
+        selection_start = int(ctx.get('selection_start', 0) or 0)
+        selection_end = int(ctx.get('selection_end', 0) or 0)
+        oos_year = int(ctx.get('oos_year', 0) or 0)
+        readable_status = str(status_text).strip()
+        compact_status = readable_status.replace(" early_stop", " early").replace(" cache", " cache")
+        best_compact = best_text.replace(" #", "#")
+        elapsed_text = self._format_duration_compact(elapsed)
+        eta_stage_text = self._format_duration_compact(eta_stage)
+        eta_total_text = self._format_duration_compact(eta_total)
+        line = choose_inline_progress_message((
+            (
+                f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
+                f"selection={selection_start}~{selection_end} | OOS={oos_year} | "
+                f"LOCAL_MIN_REVIEW={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
+                f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
+                f"current={current_text} {readable_status} | best={best_text} | "
+                f"pass/fail/early={pass_count}/{fail_count}/{early_count} | "
+                f"elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+            ),
+            (
+                f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
+                f"selection={selection_start % 100:02d}~{selection_end % 100:02d} | OOS={oos_year % 100:02d} | "
+                f"review={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
+                f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
+                f"current={current_text} {readable_status} | best={best_text} | "
+                f"pass/fail/early={pass_count}/{fail_count}/{early_count} | "
+                f"elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+            ),
+            (
+                f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
+                f"{selection_start % 100:02d}~{selection_end % 100:02d}>{oos_year % 100:02d} | "
+                f"review {safe_idx + 1}/{len(self.finalists)} #{int(trial.number) + 1} | "
+                f"{int(current_neighbor)}/{int(total_neighbors)} | "
+                f"current={current_text} {compact_status} | best={best_compact} | "
+                f"pass/fail/early={pass_count}/{fail_count}/{early_count}"
+            ),
+        ))
         self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
 
     def _render(self):
