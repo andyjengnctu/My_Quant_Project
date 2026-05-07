@@ -165,6 +165,39 @@ def _resolve_latest_year_from_dates(dates) -> int | None:
     return max(years) if years else None
 
 
+def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
+    # AI註: outer rolling OOS 的互動設定只需要 last OOS 預設值；
+    # 不應為此先觸發 optimizer 完整資料清洗、快取摘要與 issue log。
+    if not os.path.isdir(str(data_dir)):
+        return None
+    try:
+        from core.data_utils import discover_unique_csv_inputs
+        csv_inputs, _duplicate_file_issue_lines = discover_unique_csv_inputs(str(data_dir))
+    except (OSError, ValueError, TypeError):
+        return None
+
+    latest_year = None
+    date_column_names = {"date", "datetime", "time", "timestamp", "日期"}
+    for _ticker, file_path in list(csv_inputs or []):
+        try:
+            columns = list(pd.read_csv(file_path, nrows=0).columns)
+            date_col = next((col for col in columns if str(col).strip().lower() in date_column_names), None)
+            if date_col is None:
+                continue
+            date_values = pd.read_csv(file_path, usecols=[date_col])[date_col]
+            if date_values.empty:
+                continue
+            parsed_dates = pd.to_datetime(date_values, errors="coerce")
+            if parsed_dates.isna().all():
+                continue
+            file_year = int(parsed_dates.dt.year.max())
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError):
+            continue
+        if latest_year is None or file_year > latest_year:
+            latest_year = file_year
+    return latest_year
+
+
 def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, default_trials: int) -> OuterRollingConfig:
     env = os.environ if environ is None else environ
     train_start_default = int(base_policy.get("train_start_year", 2016) or 2016)
@@ -869,11 +902,7 @@ def run_outer_rolling_oos(
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(os.path.join(output_dir, "outer_rolling_oos"), exist_ok=True)
 
-    probe_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
-    probe_session = build_optimizer_session(walk_forward_policy=probe_policy)
-    probe_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
-    latest_year = _resolve_latest_year_from_dates(probe_session.sorted_master_dates)
-    probe_session.close_trial_prep_executor()
+    latest_year = _resolve_latest_year_from_csv_data_dir(selected_data_dir)
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials)
     _print_plan(config)
