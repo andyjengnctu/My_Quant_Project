@@ -362,7 +362,7 @@ class _FinalistProgressBoard:
         elapsed = time.perf_counter() - self.stage_start
         line = (
             f"\r[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
-            f"OOS {int(ctx.get('oos_year', 0) or 0)} | LOCAL_MIN_REVIEW "
+            f"selection={int(ctx.get('selection_start', 0) or 0)}~{int(ctx.get('selection_end', 0) or 0)} | OOS {int(ctx.get('oos_year', 0) or 0)} | LOCAL_MIN_REVIEW "
             f"{min(int(idx) + 1, len(self.finalists))}/{len(self.finalists)} | "
             f"trial #{int(trial.number) + 1 if trial is not None else 0} | "
             f"進度 {int(current_neighbor)}/{int(total_neighbors)} | "
