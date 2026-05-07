@@ -18,9 +18,6 @@ from config.training_policy import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
-from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_fast_data import build_normal_setup_index
-from core.portfolio_stats import calc_portfolio_score
 from core.runtime_utils import choose_inline_progress_message, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
 from core.strategy_params import build_runtime_param_raw_value
@@ -39,10 +36,6 @@ from tools.optimizer.study_utils import (
     is_qualified_trial_value,
 )
 from tools.optimizer.walk_forward import evaluate_walk_forward
-
-
-POLICY_NAMES = ("base", "local", "retention")
-CHAIN_SCHEDULE_NAMES = ("best", "base", "local", "retention")
 
 
 @dataclass
@@ -571,7 +564,6 @@ def _format_oos_delta(reference_score, selected_score) -> str:
 def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int) -> dict:
     best_score = float("-inf")
     best_trial_number = None
-    best_item = None
     best_metrics: dict = {}
     report_cache: dict[int, dict] = {}
     metrics_by_trial: dict[int, dict] = {}
@@ -596,7 +588,6 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         if score > best_score:
             best_score = score
             best_trial_number = trial_number
-            best_item = item
             best_metrics = dict(metrics)
     if best_score == float("-inf"):
         best_score = 0.0
@@ -635,7 +626,6 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     return {
         "best_finalist_oos_score": float(best_score),
         "best_finalist_trial": int(best_trial_number) + 1 if best_trial_number is not None else None,
-        "_best_finalist_item": best_item,
         "best_finalist_return_pct": float(best_metrics.get("ret_pct", 0.0)),
         "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
         "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
@@ -653,6 +643,13 @@ def _compound_return_pct(return_pcts: list[float]) -> float:
     return (equity - 1.0) * 100.0
 
 
+def _average_float(values: list[float]) -> float:
+    nums = [float(value) for value in list(values or [])]
+    if not nums:
+        return 0.0
+    return sum(nums) / float(len(nums))
+
+
 def _build_chained_oos_summary(rows: list[dict]) -> dict:
     if not rows:
         return {}
@@ -660,359 +657,73 @@ def _build_chained_oos_summary(rows: list[dict]) -> dict:
     last_year = max(int(row["oos_year"]) for row in rows)
     selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in rows)
     selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in rows)
+
+    best_scores = [float(row.get("best_finalist_oos_score", 0.0)) for row in rows]
+    benchmark_scores = [float(row.get("benchmark_oos_score", 0.0)) for row in rows]
+    best_score = _average_float(best_scores)
+    benchmark_score = _average_float(benchmark_scores)
+
     best_return = _compound_return_pct([float(row.get("best_finalist_return_pct", 0.0)) for row in rows])
     benchmark_return = _compound_return_pct([float(row.get("benchmark_return_pct", 0.0)) for row in rows])
     summary = {
-        "method": "compound_yearly_oos_returns",
-        "note": "由各年度 next-1Y OOS 報酬按時間順序複利串接；不是年度 score 平均。完整實盤口徑請用 rolling paramset 在 portfolio/workbench 進行 active-param replay。",
+        "method": "average_yearly_oos_scores",
+        "score_aggregation_method": "average_yearly_oos_scores",
+        "return_aggregation_method": "compound_yearly_oos_returns",
+        "note": "OOS_CHAIN 表格列使用各年度 next-1Y OOS score 平均，與年度列同為 score 口徑；*_return_pct 欄位只保留複利報酬診斷。完整實盤口徑請用 rolling paramset 在 portfolio/workbench 進行 active-param replay。",
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_year}~{last_year}",
+        "best_finalist_oos_score": float(best_score),
+        "benchmark_oos_score": float(benchmark_score),
         "best_finalist_return_pct": float(best_return),
         "benchmark_return_pct": float(benchmark_return),
         "benchmark_alpha_pct": float(best_return - benchmark_return),
+        "yearly_best_finalist_oos_score": best_scores,
+        "yearly_benchmark_oos_score": benchmark_scores,
     }
     for policy_name in ("base", "local", "retention"):
+        scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows]
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
+        avg_score = _average_float(scores)
         chain_return = _compound_return_pct(returns)
         summary[policy_name] = {
+            "rank_1_oos": float(avg_score),
+            "best_gap": float(avg_score - best_score),
+            "benchmark_0050_gap": float(avg_score - benchmark_score),
             "rank_1_return_pct": float(chain_return),
             "best_gap_pct": float(chain_return - best_return),
             "benchmark_0050_gap_pct": float(chain_return - benchmark_return),
+            "yearly_oos_score": scores,
             "yearly_return_pct": returns,
         }
     return summary
 
 
-def _calc_romd_score(ret_pct: float, mdd_pct: float) -> float:
-    return float(ret_pct) / (abs(float(mdd_pct)) + 0.0001)
-
-
-def _build_chained_oos_row(chained: dict | None) -> dict | None:
-    if not chained:
+def _build_chained_oos_row(rows: list[dict]) -> dict | None:
+    if not rows:
         return None
+    chained = _build_chained_oos_summary(rows)
     row = {
         "fold": "OOS_CHAIN",
         "selection_period": chained.get("selection_period", ""),
         "oos_year": chained.get("oos_period", ""),
         "best_finalist_oos_score": float(chained.get("best_finalist_oos_score", 0.0)),
-        "best_finalist_return_pct": float(chained.get("best_finalist_return_pct", 0.0)),
-        "best_finalist_mdd_pct": float(chained.get("best_finalist_mdd_pct", 0.0)),
-        "best_finalist_trades": int(chained.get("best_finalist_trades", 0) or 0),
         "benchmark_oos_score": float(chained.get("benchmark_oos_score", 0.0)),
+        "best_finalist_return_pct": float(chained.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(chained.get("benchmark_return_pct", 0.0)),
-        "benchmark_mdd_pct": float(chained.get("benchmark_mdd_pct", 0.0)),
-        "elapsed_sec": float(chained.get("elapsed_sec", 0.0)),
-        "aggregation_method": chained.get("method"),
+        "elapsed_sec": sum(float(item.get("elapsed_sec", 0.0)) for item in rows),
+        "aggregation_method": chained.get("score_aggregation_method") or chained.get("method"),
     }
-    best_score = float(row["best_finalist_oos_score"])
-    benchmark_score = float(row["benchmark_oos_score"])
-    for policy_name in POLICY_NAMES:
+    for policy_name in ("base", "local", "retention"):
         item = dict(chained.get(policy_name) or {})
         rank_score = float(item.get("rank_1_oos", 0.0))
         row[policy_name] = {
             "rank_1_trial": None,
             "rank_1_oos": rank_score,
             "rank_1_return_pct": float(item.get("rank_1_return_pct", 0.0)),
-            "rank_1_mdd_pct": float(item.get("rank_1_mdd_pct", 0.0)),
-            "rank_1_trades": int(item.get("rank_1_trades", 0) or 0),
-            "best_gap": rank_score - best_score,
-            "benchmark_0050_gap": rank_score - benchmark_score,
+            "best_gap": rank_score - float(chained.get("best_finalist_oos_score", 0.0)),
+            "benchmark_0050_gap": rank_score - float(chained.get("benchmark_oos_score", 0.0)),
         }
     return row
-
-
-def _coerce_replay_date(value: Any):
-    if hasattr(value, "to_pydatetime"):
-        value = value.to_pydatetime()
-    if hasattr(value, "date"):
-        return value.date()
-    return pd.Timestamp(value).date()
-
-
-def _params_payload_signature(payload: dict) -> str:
-    return json.dumps(dict(payload or {}), sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-
-
-def _build_chain_schedule_entries(rows: list[dict], schedule_name: str) -> list[dict]:
-    entries: list[dict] = []
-    for row in sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0)):
-        schedule = dict((row.get("policy_schedules") or {}).get(schedule_name) or {})
-        if not schedule:
-            continue
-        entries.append(schedule)
-    return entries
-
-
-def _prepare_active_replay_context(*, session, params, context_cache: dict[str, dict]) -> dict:
-    params_payload = build_runtime_param_raw_value(params, "optimizer_max_workers")
-    max_workers = params_payload
-    signature = _params_payload_signature(build_best_params_payload_from_params(params))
-    cached = context_cache.get(signature)
-    if cached is not None:
-        return cached
-    prep_executor_bundle = session.get_trial_prep_executor_bundle(max_workers)
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=True,
-        include_pit_stats_index=True,
-    )
-    context = {
-        "all_dfs_fast": prep_result["all_dfs_fast"],
-        "all_trade_logs": prep_result["all_trade_logs"],
-        "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
-        "normal_setup_index": build_normal_setup_index(prep_result["all_dfs_fast"]),
-        "master_dates": set(prep_result.get("master_dates") or []),
-        "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0)),
-        "prep_mode": prep_result.get("prep_mode"),
-    }
-    context_cache[signature] = context
-    return context
-
-
-def _build_best_params_payload_from_schedule(schedule: dict) -> dict:
-    return dict(schedule.get("params") or {})
-
-
-def build_best_params_payload_from_params(params) -> dict:
-    from core.params_io import params_to_json_dict
-
-    payload = params_to_json_dict(params)
-    payload["fixed_tp_percent"] = float(OPTIMIZER_FIXED_TP_PERCENT)
-    return payload
-
-
-def _build_active_replay_records(*, session, schedule_entries: list[dict], context_cache: dict[str, dict]) -> list[dict]:
-    records: list[dict] = []
-    for schedule in list(schedule_entries or []):
-        params_payload = _build_best_params_payload_from_schedule(schedule)
-        params = build_params_from_mapping(params_payload)
-        context = _prepare_active_replay_context(session=session, params=params, context_cache=context_cache)
-        effective_start = str(schedule.get("effective_start") or f"{int(schedule.get('oos_year'))}-01-01")
-        effective_date = _coerce_replay_date(effective_start)
-        records.append({
-            "effective_date": effective_date,
-            "effective_date_text": effective_date.isoformat(),
-            "year": int(schedule.get("oos_year") or effective_date.year),
-            "params_obj": params,
-            "context": context,
-            "schedule": dict(schedule),
-        })
-    records.sort(key=lambda item: item["effective_date"])
-    return records
-
-
-def _resolve_active_replay_record(records: list[dict], trade_date) -> dict:
-    current_date = _coerce_replay_date(trade_date)
-    selected = None
-    for record in records:
-        if record["effective_date"] <= current_date:
-            selected = record
-        else:
-            break
-    if selected is None:
-        first_date = records[0]["effective_date_text"] if records else "N/A"
-        raise RuntimeError(f"{current_date.isoformat()} is before first active replay param date {first_date}")
-    return selected
-
-
-def _evaluate_schedule_active_replay(*, session, schedule_entries: list[dict], first_oos_year: int, last_oos_year: int, context_cache: dict[str, dict]) -> dict:
-    records = _build_active_replay_records(session=session, schedule_entries=schedule_entries, context_cache=context_cache)
-    if not records:
-        return {}
-    merged_dates = set()
-    for record in records:
-        merged_dates.update(record["context"].get("master_dates") or [])
-    test_dates = [
-        dt for dt in sorted(merged_dates)
-        if int(first_oos_year) <= int(getattr(dt, "year", 0) or 0) <= int(last_oos_year)
-    ]
-    if not test_dates:
-        raise RuntimeError(f"active-param replay has no market dates for OOS {first_oos_year}~{last_oos_year}")
-
-    first_record = _resolve_active_replay_record(records, test_dates[0])
-    base_context = first_record["context"]
-    base_params = first_record["params_obj"]
-    benchmark_ticker = "0050"
-    benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
-
-    def active_params_resolver(trade_date):
-        return _resolve_active_replay_record(records, trade_date)["params_obj"]
-
-    def active_context_resolver(trade_date):
-        return _resolve_active_replay_record(records, trade_date)["context"]
-
-    pf_profile = {"_timing_enabled": False}
-    (
-        ret_pct,
-        mdd,
-        trade_count,
-        final_eq,
-        avg_exp,
-        max_exp,
-        bm_ret,
-        bm_mdd,
-        win_rate,
-        pf_ev,
-        pf_payoff,
-        total_missed,
-        total_missed_sells,
-        r_sq,
-        m_win_rate,
-        bm_r_sq,
-        bm_m_win_rate,
-        normal_trade_count,
-        extended_trade_count,
-        annual_trades,
-        reserved_buy_fill_rate,
-        annual_return_pct,
-        bm_annual_return_pct,
-    ) = run_portfolio_timeline(
-        base_context.get("all_dfs_fast") or {},
-        base_context.get("all_trade_logs") or {},
-        test_dates,
-        int(first_oos_year),
-        base_params,
-        session.train_max_positions,
-        session.train_enable_rotation,
-        benchmark_ticker=benchmark_ticker,
-        benchmark_data=benchmark_data,
-        is_training=True,
-        profile_stats=pf_profile,
-        verbose=False,
-        pit_stats_index=base_context.get("all_pit_stats_index"),
-        active_params_resolver=active_params_resolver,
-        active_context_resolver=active_context_resolver,
-    )
-    oos_score = calc_portfolio_score(ret_pct, mdd, m_win_rate, r_sq, annual_return_pct=annual_return_pct)
-    return {
-        "oos_score": float(oos_score),
-        "return_pct": float(ret_pct),
-        "annual_return_pct": float(annual_return_pct),
-        "mdd_pct": float(mdd),
-        "trades": int(trade_count),
-        "normal_trades": int(normal_trade_count),
-        "extended_trades": int(extended_trade_count),
-        "annual_trades": float(annual_trades),
-        "reserved_buy_fill_rate": float(reserved_buy_fill_rate),
-        "win_rate": float(win_rate),
-        "pf_payoff": float(pf_payoff),
-        "pf_ev": float(pf_ev),
-        "r_squared": float(r_sq),
-        "monthly_win_rate": float(m_win_rate),
-        "final_equity": float(final_eq),
-        "avg_exposure": float(avg_exp),
-        "max_exposure": float(max_exp),
-        "missed_buys": int(total_missed),
-        "missed_sells": int(total_missed_sells),
-        "benchmark_oos_score": float(_calc_romd_score(bm_ret, bm_mdd)),
-        "benchmark_return_pct": float(bm_ret),
-        "benchmark_annual_return_pct": float(bm_annual_return_pct),
-        "benchmark_mdd_pct": float(bm_mdd),
-        "benchmark_r_squared": float(bm_r_sq),
-        "benchmark_monthly_win_rate": float(bm_m_win_rate),
-        "yearly_return_rows": list(pf_profile.get("yearly_return_rows") or []),
-        "benchmark_yearly_return_rows": list(pf_profile.get("bm_yearly_return_rows") or []),
-        "active_param_schedule": [
-            {
-                "effective_date": record["effective_date_text"],
-                "oos_year": int(record["year"]),
-                "selected_trial": record["schedule"].get("selected_trial"),
-                "selection": record["schedule"].get("selection"),
-            }
-            for record in records
-        ],
-    }
-
-
-def _evaluate_active_param_chain_replays(
-    *,
-    rows: list[dict],
-    config: OuterRollingConfig,
-    base_policy: dict,
-    selected_data_dir: str,
-    load_all_raw_data,
-    optimizer_required_min_rows: int,
-    build_optimizer_session,
-) -> dict:
-    if not rows:
-        return {}
-    first_year = min(int(row["oos_year"]) for row in rows)
-    last_year = max(int(row["oos_year"]) for row in rows)
-    selection_start = min(int(row.get("selection_start_year", 0) or 0) for row in rows)
-    selection_end = max(int(row.get("selection_end_year", 0) or 0) for row in rows)
-    replay_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
-    session = build_optimizer_session(walk_forward_policy=replay_policy)
-    started = time.perf_counter()
-    try:
-        session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
-        context_cache: dict[str, dict] = {}
-        replay_by_name: dict[str, dict] = {}
-        for schedule_name in CHAIN_SCHEDULE_NAMES:
-            entries = _build_chain_schedule_entries(rows, schedule_name)
-            if not entries:
-                continue
-            replay_by_name[schedule_name] = _evaluate_schedule_active_replay(
-                session=session,
-                schedule_entries=entries,
-                first_oos_year=first_year,
-                last_oos_year=last_year,
-                context_cache=context_cache,
-            )
-    finally:
-        session.close_trial_prep_executor()
-
-    best_metrics = dict(replay_by_name.get("best") or {})
-    if not best_metrics:
-        policy_metrics = [dict(replay_by_name.get(policy_name) or {}) for policy_name in POLICY_NAMES]
-        best_metrics = max(policy_metrics, key=lambda item: float(item.get("oos_score", float("-inf"))), default={})
-    benchmark_score = float(best_metrics.get("benchmark_oos_score", 0.0))
-    benchmark_return = float(best_metrics.get("benchmark_return_pct", 0.0))
-    best_score = float(best_metrics.get("oos_score", 0.0))
-    best_return = float(best_metrics.get("return_pct", 0.0))
-    replay_elapsed = time.perf_counter() - started
-    total_elapsed = sum(float(row.get("elapsed_sec", 0.0)) for row in rows) + replay_elapsed
-    summary = {
-        "method": "active_param_replay_oos_score",
-        "note": "Continuous portfolio replay over completed OOS years using each year's selected active params; OOS_CHAIN values are OOS scores, not compounded returns.",
-        "selection_period": f"{selection_start}~{selection_end}",
-        "oos_period": f"{first_year}~{last_year}",
-        "best_finalist_oos_score": best_score,
-        "best_finalist_return_pct": best_return,
-        "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
-        "best_finalist_trades": int(best_metrics.get("trades", 0) or 0),
-        "benchmark_oos_score": benchmark_score,
-        "benchmark_return_pct": benchmark_return,
-        "benchmark_mdd_pct": float(best_metrics.get("benchmark_mdd_pct", 0.0)),
-        "elapsed_sec": total_elapsed,
-        "replay_elapsed_sec": replay_elapsed,
-        "window_mode": str(config.window_mode),
-        "train_window_years": int(config.train_window_years),
-    }
-    for policy_name in POLICY_NAMES:
-        metrics = dict(replay_by_name.get(policy_name) or {})
-        policy_score = float(metrics.get("oos_score", 0.0))
-        policy_return = float(metrics.get("return_pct", 0.0))
-        summary[policy_name] = {
-            "rank_1_oos": policy_score,
-            "rank_1_return_pct": policy_return,
-            "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
-            "rank_1_trades": int(metrics.get("trades", 0) or 0),
-            "best_gap": policy_score - best_score,
-            "benchmark_0050_gap": policy_score - benchmark_score,
-            "return_gap_vs_best_pct": policy_return - best_return,
-            "return_gap_vs_0050_pct": policy_return - benchmark_return,
-            "annual_return_pct": float(metrics.get("annual_return_pct", 0.0)),
-            "annual_trades": float(metrics.get("annual_trades", 0.0)),
-            "reserved_buy_fill_rate": float(metrics.get("reserved_buy_fill_rate", 0.0)),
-            "yearly_return_rows": list(metrics.get("yearly_return_rows") or []),
-            "active_param_schedule": list(metrics.get("active_param_schedule") or []),
-        }
-    return summary
 
 
 def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: float, color: bool = True) -> tuple[str, str, str]:
@@ -1034,10 +745,10 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, chained_oos: dict | None = None) -> str:
+def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True) -> str:
     display_rows = list(rows or [])
     if include_chain:
-        chain_row = _build_chained_oos_row(chained_oos)
+        chain_row = _build_chained_oos_row(display_rows)
         if chain_row is not None:
             display_rows = display_rows + [chain_row]
     if not display_rows:
@@ -1087,16 +798,13 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         )
         lines.append(line)
     lines.append(_table_separator())
-    lines.append("best / 0050 括號內 = rank_1_oos - 對照分數；best_finalist_oos / 0050_oos 均為 diagnostic only，不參與 selection。")
-    if include_chain and chained_oos:
-        lines.append("OOS_CHAIN uses continuous active-param replay over the completed OOS years; values are OOS scores, not compounded returns.")
     return "\n".join(lines)
 
 
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return
-    print("\n" + _render_results_table(rows, color=True, include_chain=False))
+    print("\n" + _render_results_table(rows, color=True, include_chain=True))
 
 
 def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
@@ -1125,7 +833,7 @@ def _flatten_row_for_csv(row: dict) -> dict:
         "best_finalist_return_pct": float(row.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(row.get("benchmark_return_pct", 0.0)),
     }
-    for policy_name in POLICY_NAMES:
+    for policy_name in ("base", "local", "retention"):
         flat.update(_flatten_policy_for_csv(row, policy_name))
     flat["elapsed"] = _fmt_duration(row.get("elapsed_sec", 0.0))
     return flat
@@ -1133,7 +841,7 @@ def _flatten_row_for_csv(row: dict) -> dict:
 
 def _build_policies_schedule(rows: list[dict]) -> dict:
     policies: dict[str, dict] = {}
-    for policy_name in POLICY_NAMES:
+    for policy_name in ("base", "local", "retention"):
         policies[policy_name] = {
             "description": _policy_description(policy_name),
             "schedule": [dict(row.get("policy_schedules", {}).get(policy_name) or {}) for row in rows if row.get("policy_schedules", {}).get(policy_name)],
@@ -1180,23 +888,21 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     chain_policy = dict(chain_all.get(policy_name) or {})
     chained_oos = {
         "method": chain_all.get("method"),
+        "score_aggregation_method": chain_all.get("score_aggregation_method"),
+        "return_aggregation_method": chain_all.get("return_aggregation_method"),
         "note": chain_all.get("note"),
         "selection_period": chain_all.get("selection_period"),
         "oos_period": chain_all.get("oos_period"),
         "rank_1_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
-        "rank_1_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
-        "rank_1_mdd_pct": float(chain_policy.get("rank_1_mdd_pct", 0.0)),
-        "rank_1_trades": int(chain_policy.get("rank_1_trades", 0) or 0),
         "best_finalist_oos_score": float(chain_all.get("best_finalist_oos_score", 0.0)),
-        "best_finalist_return_pct": float(chain_all.get("best_finalist_return_pct", 0.0)),
-        "best_finalist_mdd_pct": float(chain_all.get("best_finalist_mdd_pct", 0.0)),
         "benchmark_oos_score": float(chain_all.get("benchmark_oos_score", 0.0)),
-        "benchmark_return_pct": float(chain_all.get("benchmark_return_pct", 0.0)),
-        "benchmark_mdd_pct": float(chain_all.get("benchmark_mdd_pct", 0.0)),
         "alpha_oos_score": float(chain_policy.get("benchmark_0050_gap", 0.0)),
-        "alpha_return_pct": float(chain_policy.get("return_gap_vs_0050_pct", 0.0)),
-        "best_gap_oos_score": float(chain_policy.get("best_gap", 0.0)),
-        "best_gap_return_pct": float(chain_policy.get("return_gap_vs_best_pct", 0.0)),
+        "best_gap_score": float(chain_policy.get("best_gap", 0.0)),
+        "rank_1_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
+        "best_finalist_return_pct": float(chain_all.get("best_finalist_return_pct", 0.0)),
+        "benchmark_return_pct": float(chain_all.get("benchmark_return_pct", 0.0)),
+        "alpha_return_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
+        "best_gap_pct": float(chain_policy.get("best_gap_pct", 0.0)),
     }
     policy_summary = dict(summary.get(policy_name) or {})
     return {
@@ -1225,10 +931,8 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "selection_period": summary.get("selection_period"),
             "oos_period": summary.get("oos_period"),
             "aggregation_method": summary.get("aggregation_method"),
+            "return_aggregation_method": summary.get("return_aggregation_method"),
             "selector": str(policy_name),
-            "chain_oos_score": float(policy_summary.get("chain_oos_score", 0.0)),
-            "chain_gap_vs_best_oos": float(policy_summary.get("chain_gap_vs_best_oos", 0.0)),
-            "chain_gap_vs_0050_oos": float(policy_summary.get("chain_gap_vs_0050_oos", 0.0)),
             "chained_return_pct": float(policy_summary.get("chained_return_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(policy_summary.get("chained_gap_vs_0050_pct", 0.0)),
             "avg_oos_score": float(policy_summary.get("avg_oos_score", 0.0)),
@@ -1246,26 +950,28 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     }
 
 
-def _write_policy_paramset_files(*, report_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
+def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
+    os.makedirs(models_dir, exist_ok=True)
     paths = {}
-    for policy_name in POLICY_NAMES:
+    for policy_name in ("base", "local", "retention"):
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
-        path = os.path.join(report_dir, f"outer_rolling_oos_{policy_name}_paramset_{session_ts}.json")
+        path = os.path.join(models_dir, f"rolling_oos_{policy_name}_paramset.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
         paths[policy_name] = path
     return paths
 
 
-def _write_reports(*, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig, chained_oos: dict | None = None) -> dict:
+def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
     os.makedirs(report_dir, exist_ok=True)
+    models_dir = os.path.join(project_root, "models")
     base = os.path.join(report_dir, f"outer_rolling_oos_next1y_{session_ts}")
     json_path = base + ".json"
     csv_path = base + ".csv"
     txt_path = base + ".txt"
-    summary = _build_summary(rows, config=config, chained_oos=chained_oos)
-    paramset_paths = _write_policy_paramset_files(report_dir=report_dir, session_ts=session_ts, rows=rows, config=config, summary=summary)
+    summary = _build_summary(rows, config=config)
+    paramset_paths = _write_policy_paramset_files(models_dir=models_dir, rows=rows, config=config, summary=summary)
     yearly_results = []
     for row in rows:
         light_row = dict(row)
@@ -1309,34 +1015,32 @@ def _write_reports(*, output_dir: str, session_ts: str, rows: list[dict], config
     return {"json": json_path, "csv": csv_path, "txt": txt_path, "paramsets": paramset_paths}
 
 
-def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_oos: dict | None = None) -> dict:
+def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None) -> dict:
     if not rows:
         return {"folds": 0}
     selection_start = min(int(row.get("selection_start_year", 0) or 0) for row in rows)
     selection_end = max(int(row.get("selection_end_year", 0) or 0) for row in rows)
     first_oos = min(int(row["oos_year"]) for row in rows)
     last_oos = max(int(row["oos_year"]) for row in rows)
-    chained = dict(chained_oos or {})
+    chained = _build_chained_oos_summary(rows)
     summary = {
         "folds": len(rows),
         "selection_period": f"{selection_start}~{selection_end}",
         "oos_period": f"{first_oos}~{last_oos}",
-        "aggregation_method": chained.get("method") or "yearly_oos_score_diagnostics",
-        "note": chained.get("note") or "OOS_CHAIN is unavailable until active-param replay is computed.",
+        "aggregation_method": "average_yearly_oos_scores",
+        "return_aggregation_method": "compound_yearly_oos_returns",
+        "note": "OOS_CHAIN 表格與 avg/median/worst 欄位使用 yearly OOS score；chained_return_pct 才是年度 next-1Y OOS 報酬複利診斷。",
         "chained_oos": chained,
     }
-    for policy_name in POLICY_NAMES:
+    for policy_name in ("base", "local", "retention"):
         scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows]
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
         benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in rows]
         chain_policy = dict(chained.get(policy_name) or {})
         summary[policy_name] = {
-            "chain_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
-            "chain_gap_vs_best_oos": float(chain_policy.get("best_gap", 0.0)),
-            "chain_gap_vs_0050_oos": float(chain_policy.get("benchmark_0050_gap", 0.0)),
             "chained_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
-            "chained_gap_vs_best_pct": float(chain_policy.get("return_gap_vs_best_pct", 0.0)),
-            "chained_gap_vs_0050_pct": float(chain_policy.get("return_gap_vs_0050_pct", 0.0)),
+            "chained_gap_vs_best_pct": float(chain_policy.get("best_gap_pct", 0.0)),
+            "chained_gap_vs_0050_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
             "avg_oos_score": sum(scores) / float(len(scores)),
             "median_oos_score": float(statistics.median(scores)),
             "worst_oos_score": min(scores),
@@ -1349,7 +1053,6 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
     benchmark_returns = [float(row.get("benchmark_return_pct", 0.0)) for row in rows]
     benchmark_scores = [float(row.get("benchmark_oos_score", 0.0)) for row in rows]
     summary["benchmark_0050"] = {
-        "chain_oos_score": float(chained.get("benchmark_oos_score", 0.0)),
         "chained_return_pct": float(chained.get("benchmark_return_pct", 0.0)),
         "avg_oos_score": sum(benchmark_scores) / float(len(benchmark_scores)),
         "positive_years": sum(1 for value in benchmark_returns if value > 0.0),
@@ -1374,13 +1077,11 @@ def _format_final_report(rows: list[dict], summary: dict) -> str:
         lines.append(f"selection_period         : {summary['selection_period']}")
         lines.append(f"oos_period               : {summary['oos_period']}")
         lines.append(f"aggregation_method       : {summary.get('aggregation_method', 'N/A')}")
-        lines.append("note                     : OOS_CHAIN is continuous active-param replay using the same OOS score units as yearly rows.")
-        for policy_name in POLICY_NAMES:
+        for policy_name in ("base", "local", "retention"):
             item = summary.get(policy_name) or {}
             lines.append(
-                f"{policy_name:<24}: chain_score={float(item.get('chain_oos_score', 0.0)):.3f} | "
-                f"score_gap_vs_0050={float(item.get('chain_gap_vs_0050_oos', 0.0)):+.3f} | "
-                f"chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
+                f"{policy_name:<24}: chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
+                f"gap_vs_0050={float(item.get('chained_gap_vs_0050_pct', 0.0)):+.2f}% | "
                 f"avg_score={float(item.get('avg_oos_score', 0.0)):.3f} | "
                 f"median_score={float(item.get('median_oos_score', 0.0)):.3f} | "
                 f"worst_score={float(item.get('worst_oos_score', 0.0)):.3f} | "
@@ -1388,13 +1089,12 @@ def _format_final_report(rows: list[dict], summary: dict) -> str:
             )
         bench = summary.get("benchmark_0050") or {}
         lines.append(
-            f"benchmark_0050           : chain_score={float(bench.get('chain_oos_score', 0.0)):.3f} | "
-            f"chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
+            f"benchmark_0050           : chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
             f"avg_score={float(bench.get('avg_oos_score', 0.0)):.3f} | "
             f"positive_years={int(bench.get('positive_years', 0))}/{int(bench.get('total_years', 0))}"
         )
     lines.append("-" * 218)
-    rendered = _render_results_table(rows, color=False, include_chain=True, chained_oos=summary.get("chained_oos"))
+    rendered = _render_results_table(rows, color=False, include_chain=True)
     if rendered:
         lines.append(rendered)
     lines.append("oos_feedback_used : False")
@@ -1530,16 +1230,6 @@ def run_outer_rolling_oos(
                 for name, item in policy_items.items()
                 if item is not None
             }
-            best_finalist_item = diagnostics.get("_best_finalist_item")
-            if best_finalist_item is not None:
-                policy_schedules["best"] = _build_policy_schedule_entry(
-                    item=best_finalist_item,
-                    policy_name="best",
-                    oos_year=int(oos_year),
-                    selection_period=selection_period,
-                    local_rank_map=local_rank_map,
-                    retention_rank_map=retention_rank_map,
-                )
             row = {
                 "fold": f"{fold_idx}/{len(years)}",
                 "oos_year": int(oos_year),
@@ -1575,23 +1265,11 @@ def run_outer_rolling_oos(
             if study is not None:
                 close_study_storage(study)
 
-    chained_oos = {}
-    if rows:
-        print(f"\n{C_CYAN}ACTIVE-PARAM OOS_CHAIN REPLAY | OOS {rows[0]['oos_year']}~{rows[-1]['oos_year']}{C_RESET}")
-        chained_oos = _evaluate_active_param_chain_replays(
-            rows=rows,
-            config=config,
-            base_policy=base_policy,
-            selected_data_dir=selected_data_dir,
-            load_all_raw_data=load_all_raw_data,
-            optimizer_required_min_rows=optimizer_required_min_rows,
-            build_optimizer_session=build_optimizer_session,
-        )
-    paths = _write_reports(output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_oos=chained_oos)
+    paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config)
     print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config, chained_oos=chained_oos)))
+    print(_format_final_report(rows, _build_summary(rows, config=config)))
     print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")
