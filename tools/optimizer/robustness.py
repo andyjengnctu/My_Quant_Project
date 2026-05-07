@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 import re
 import sys
+import time
 from typing import Callable
 
 
@@ -199,6 +200,19 @@ class _FinalistProgressBoard:
         self.finalists = finalists
         self.lines: list[str] = []
         self.rendered = False
+        self.single_line_context = getattr(session, "outer_rolling_local_progress_context", None)
+        self.stage_start = time.perf_counter()
+        self.best_local_score = float("-inf")
+        self.best_local_trial = None
+        self.completed_status: dict[int, tuple[float, bool, bool]] = {}
+
+    def _format_duration(self, seconds) -> str:
+        if seconds is None:
+            return "N/A"
+        total = max(0, int(float(seconds)))
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
 
     def _format_line(self, idx: int, *, prefix: str, progress_text: str, local_text: str, status_text: str):
         finalist = self.finalists[idx]
@@ -210,6 +224,9 @@ class _FinalistProgressBoard:
         )
 
     def initialize(self):
+        if self.single_line_context:
+            self._render_single_line(0, current_neighbor=0, total_neighbors=0, local_min_score=None, status_text="WAIT")
+            return
         self.lines = [
             self._format_line(idx, prefix="⏳", progress_text="進度 0/0", local_text="N/A", status_text="等待中")
             for idx in range(len(self.finalists))
@@ -217,6 +234,9 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_pending(self, idx: int, *, total_neighbors: int):
+        if self.single_line_context:
+            self._render_single_line(idx, current_neighbor=0, total_neighbors=total_neighbors, local_min_score=None, status_text="RUN")
+            return
         self.lines[idx] = self._format_line(
             idx,
             prefix="⏳",
@@ -227,6 +247,15 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_neighbor(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min):
+        if self.single_line_context:
+            self._render_single_line(
+                idx,
+                current_neighbor=current_neighbor,
+                total_neighbors=total_neighbors,
+                local_min_score=current_local_min,
+                status_text="RUN",
+            )
+            return
         local_text = "N/A" if current_local_min is None else f"{float(current_local_min):.3f}"
         self.lines[idx] = self._format_line(
             idx,
@@ -238,6 +267,18 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_cache(self, idx: int, *, total_neighbors: int, local_min_score: float):
+        if self.single_line_context:
+            gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
+            self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False)
+            self._render_single_line(
+                idx,
+                current_neighbor=total_neighbors,
+                total_neighbors=total_neighbors,
+                local_min_score=local_min_score,
+                status_text=f"{gate_status} cache",
+                done=True,
+            )
+            return
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         self.lines[idx] = self._format_line(
             idx,
@@ -249,6 +290,23 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_done(self, idx: int, *, evaluated_neighbors: int, total_neighbors: int, local_min_score: float, early_stopped: bool = False):
+        if self.single_line_context:
+            gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
+            stop_text = " early_stop" if bool(early_stopped) else ""
+            self._record_done(idx, local_min_score=float(local_min_score), early_stopped=bool(early_stopped))
+            self._render_single_line(
+                idx,
+                current_neighbor=evaluated_neighbors,
+                total_neighbors=total_neighbors,
+                local_min_score=local_min_score,
+                status_text=f"{gate_status}{stop_text}",
+                done=True,
+            )
+            if len(self.completed_status) >= len(self.finalists):
+                out = sys.stdout
+                out.write("\n")
+                out.flush()
+            return
         gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
         stop_text = " | early stop" if bool(early_stopped) else ""
         self.lines[idx] = self._format_line(
@@ -259,6 +317,61 @@ class _FinalistProgressBoard:
             status_text=f"{gate_status}{stop_text}",
         )
         self._render()
+
+    def _record_done(self, idx: int, *, local_min_score: float, early_stopped: bool):
+        score = float(local_min_score)
+        passed = bool(score > 0.0)
+        self.completed_status[int(idx)] = (score, passed, bool(early_stopped))
+        if score > self.best_local_score:
+            self.best_local_score = score
+            self.best_local_trial = self.finalists[idx]["trial"]
+
+    def _estimate_single_line_eta(self, idx: int, current_neighbor: int, total_neighbors: int):
+        total_finalists = max(1, len(self.finalists))
+        current_units = float(len(self.completed_status))
+        if int(idx) not in self.completed_status and int(total_neighbors) > 0:
+            current_units = max(current_units, float(idx) + max(0.0, min(1.0, float(current_neighbor) / float(total_neighbors))))
+        if current_units <= 0.0:
+            return None
+        elapsed = max(0.0, time.perf_counter() - self.stage_start)
+        avg = elapsed / current_units
+        return avg * max(0.0, float(total_finalists) - current_units)
+
+    def _estimate_total_eta(self, eta_stage):
+        ctx = self.single_line_context or {}
+        completed_results = list(ctx.get("completed_results") or [])
+        fold_count = int(ctx.get("fold_count", 0) or 0)
+        fold_idx = int(ctx.get("fold_idx", 0) or 0)
+        if not completed_results:
+            return None
+        avg_done = sum(float(row.get("elapsed_sec", 0.0)) for row in completed_results) / float(len(completed_results))
+        return float(eta_stage or 0.0) + avg_done * max(0, fold_count - fold_idx)
+
+    def _render_single_line(self, idx: int, *, current_neighbor: int, total_neighbors: int, local_min_score, status_text: str, done: bool = False):
+        ctx = self.single_line_context or {}
+        trial = self.finalists[idx]["trial"] if self.finalists and idx < len(self.finalists) else None
+        current_text = "N/A" if local_min_score is None else f"{float(local_min_score):.3f}"
+        pass_count = sum(1 for _, passed, _ in self.completed_status.values() if passed)
+        fail_count = sum(1 for _, passed, _ in self.completed_status.values() if not passed)
+        early_count = sum(1 for _, _, early in self.completed_status.values() if early)
+        best_text = "N/A"
+        if self.best_local_trial is not None and self.best_local_score != float("-inf"):
+            best_text = f"{self.best_local_score:.3f} #{int(self.best_local_trial.number) + 1}"
+        eta_stage = self._estimate_single_line_eta(idx, int(current_neighbor), int(total_neighbors))
+        eta_total = self._estimate_total_eta(eta_stage)
+        elapsed = time.perf_counter() - self.stage_start
+        line = (
+            f"\r[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
+            f"OOS {int(ctx.get('oos_year', 0) or 0)} | LOCAL_MIN_REVIEW "
+            f"{min(int(idx) + 1, len(self.finalists))}/{len(self.finalists)} | "
+            f"trial #{int(trial.number) + 1 if trial is not None else 0} | "
+            f"進度 {int(current_neighbor)}/{int(total_neighbors)} | "
+            f"current={current_text} {status_text} | best={best_text} | "
+            f"pass={pass_count} fail={fail_count} early={early_count} | "
+            f"elapsed={self._format_duration(elapsed)} | eta_stage={self._format_duration(eta_stage)} | eta_total={self._format_duration(eta_total)}"
+        )
+        sys.stdout.write(line + "\033[K")
+        sys.stdout.flush()
 
     def _render(self):
         out = sys.stdout

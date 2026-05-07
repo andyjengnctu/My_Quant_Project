@@ -43,6 +43,8 @@ class OuterRollingConfig:
     first_oos_year: int
     last_oos_year: int
     trials_per_fold: int
+    window_mode: str = "fixed"
+    train_window_years: int = 5
     confirm: bool = True
 
 
@@ -75,6 +77,16 @@ def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
     return int(value)
 
 
+def _prompt_str(label: str, default: str, *, allowed: tuple[str, ...] | None = None) -> str:
+    if not is_interactive_console():
+        return str(default)
+    raw = input(f"{label:<28} [{default}] : ").strip()
+    value = str(default if raw == "" else raw).strip().lower()
+    if allowed is not None and value not in allowed:
+        raise ValueError(f"{label} 必須是 {allowed}，收到: {value}")
+    return value
+
+
 def _extract_cli_value(argv, option_name: str) -> str:
     args = list(argv or [])
     for idx in range(1, len(args)):
@@ -105,11 +117,29 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     first_oos_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", train_start_default + 4) + 1)
     last_oos_default = int(latest_year or first_oos_default)
     trials_default = int(default_trials if int(default_trials or 0) > 0 else int(env.get("V16_OUTER_ROLLING_OOS_TRIALS", "500") or 500))
+    window_mode_default = str(env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
+    if window_mode_default not in ("fixed", "expanding"):
+        window_mode_default = "fixed"
+    train_window_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "5") or 5))
 
     cli_train_start = _extract_cli_value(argv, "--outer-train-start")
     cli_first = _extract_cli_value(argv, "--outer-first-oos")
     cli_last = _extract_cli_value(argv, "--outer-last-oos")
     cli_trials = _extract_cli_value(argv, "--trials")
+    cli_window_mode = _extract_cli_value(argv, "--outer-window-mode")
+    cli_train_window_years = _extract_cli_value(argv, "--outer-train-window-years")
+
+    if cli_window_mode:
+        window_mode = str(cli_window_mode).strip().lower()
+        if window_mode not in ("fixed", "expanding"):
+            raise ValueError("--outer-window-mode 必須是 fixed 或 expanding")
+    else:
+        window_mode = _prompt_str("window mode", window_mode_default, allowed=("fixed", "expanding"))
+
+    if cli_train_window_years:
+        train_window_years = int(cli_train_window_years)
+    else:
+        train_window_years = _prompt_int("train window years", train_window_default, minimum=1)
 
     if cli_train_start:
         train_start = int(cli_train_start)
@@ -141,9 +171,27 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         raise ValueError("first OOS year 不可大於 last OOS year")
     if train_start >= first_oos:
         raise ValueError("training start year 必須小於 first OOS year")
+    if train_window_years <= 0:
+        raise ValueError("train window years 必須大於 0")
+    if window_mode == "fixed" and first_oos - train_window_years < train_start:
+        raise ValueError("fixed window 下 first OOS year - train_window_years 不可早於 training start year")
     if trials <= 0:
         raise ValueError("optimizer trials per fold 必須大於 0")
-    return OuterRollingConfig(train_start, first_oos, last_oos, trials, confirm=not _has_cli_flag(argv, "--yes"))
+    return OuterRollingConfig(
+        train_start,
+        first_oos,
+        last_oos,
+        trials,
+        window_mode=window_mode,
+        train_window_years=train_window_years,
+        confirm=not _has_cli_flag(argv, "--yes"),
+    )
+
+
+def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
+    if str(config.window_mode).lower() == "fixed":
+        return int(oos_year) - int(config.train_window_years)
+    return int(config.training_start_year)
 
 
 def _print_plan(config: OuterRollingConfig):
@@ -151,6 +199,11 @@ def _print_plan(config: OuterRollingConfig):
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
+    print(f"window mode      : {config.window_mode}")
+    if str(config.window_mode).lower() == "fixed":
+        print(f"train window     : {config.train_window_years} years")
+    else:
+        print(f"training start   : {config.training_start_year}")
     print("oos feedback     : False")
     print("promotion        : disabled")
     print("oos horizon      : next 1 year only")
@@ -159,7 +212,8 @@ def _print_plan(config: OuterRollingConfig):
     print(f"{'fold':<6} | {'selection period':<18} | {'OOS test period':<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     for idx, oos_year in enumerate(years, start=1):
-        print(f"{idx}/{len(years):<4} | {config.training_start_year}~{oos_year - 1:<13} | {oos_year}")
+        selection_start = _selection_start_for_oos(config, oos_year)
+        print(f"{idx}/{len(years):<4} | {selection_start}~{oos_year - 1:<13} | {oos_year}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"LOCAL_MIN_SCORE              : True")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
@@ -295,24 +349,81 @@ def _evaluate_next_1y_oos(*, session, trial, oos_year: int):
     )
 
 
+def _extract_period_metrics(report: dict) -> dict:
+    period = dict(report.get("period") or {})
+    return {
+        "oos_score": float(period.get("test_score_romd", 0.0)),
+        "ret_pct": float(period.get("ret_pct", 0.0)),
+        "mdd_pct": float(period.get("mdd", 0.0)),
+        "trades": int(period.get("trade_count", 0) or 0),
+        "benchmark_oos_score": float(period.get("benchmark_score_romd", 0.0)),
+    }
+
+
+def _format_oos_delta(reference_score, selected_score) -> str:
+    ref = _safe_float(reference_score, 0.0)
+    selected = _safe_float(selected_score, 0.0)
+    return f"{ref:.3f} ({selected - ref:+.3f})"
+
+
+def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], selected_trial_number: int, selected_report: dict, oos_year: int) -> dict:
+    best_score = float("-inf")
+    best_trial_number = None
+    selected_metrics = _extract_period_metrics(selected_report)
+    report_cache: dict[int, dict] = {int(selected_trial_number): selected_report}
+    for item in list(finalists or []):
+        trial = item.get("trial")
+        if trial is None:
+            continue
+        trial_number = int(trial.number)
+        report = report_cache.get(trial_number)
+        if report is None:
+            report = _evaluate_next_1y_oos(session=session, trial=trial, oos_year=int(oos_year))
+            report_cache[trial_number] = report
+        metrics = _extract_period_metrics(report)
+        score = float(metrics["oos_score"])
+        if score > best_score:
+            best_score = score
+            best_trial_number = trial_number
+    if best_score == float("-inf"):
+        best_score = float(selected_metrics["oos_score"])
+        best_trial_number = int(selected_trial_number)
+    return {
+        "selected_metrics": selected_metrics,
+        "best_finalist_oos_score": float(best_score),
+        "best_finalist_trial": int(best_trial_number) + 1 if best_trial_number is not None else None,
+        "benchmark_oos_score": float(selected_metrics.get("benchmark_oos_score", 0.0)),
+    }
+
+
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return
-    print("\nCOMPLETED OOS RESULTS")
-    print("-" * 112)
-    print(f"{'oos_year':<8} | {'selection':<11} | {'selected':<8} | {'oos_score':>9} | {'ret%':>8} | {'mdd%':>8} | {'trades':>6} | {'elapsed':>8}")
-    print("-" * 112)
-    for row in rows:
+    print("\nROLLING NEXT-1Y OOS RESULTS")
+    print("-" * 132)
+    print(
+        f"{'fold':<5} | {'oos_year':<8} | {'selection':<11} | {'selected':<8} | "
+        f"{'base_rank':<9} | {'local_rank':<10} | {'selected_oos':>12} | "
+        f"{'best_finalist_oos':>22} | {'0050_oos':>18} | {'elapsed':>8}"
+    )
+    print("-" * 132)
+    total = len(rows)
+    for idx, row in enumerate(rows, start=1):
+        selected_oos = float(row["oos_score"])
+        best_text = _format_oos_delta(row.get("best_finalist_oos_score", selected_oos), selected_oos)
+        benchmark_text = _format_oos_delta(row.get("benchmark_oos_score", 0.0), selected_oos)
         print(
-            f"{int(row['oos_year']):<8} | {row['selection_period']:<11} | #{int(row['selected_trial']):<7} | "
-            f"{float(row['oos_score']):>9.3f} | {float(row['ret_pct']):>7.1f}% | {float(row['mdd_pct']):>7.1f}% | "
-            f"{int(row['trades']):>6} | {_fmt_duration(row.get('elapsed_sec', 0.0)):>8}"
+            f"{idx}/{total:<3} | {int(row['oos_year']):<8} | {row['selection_period']:<11} | #{int(row['selected_trial']):<7} | "
+            f"#{int(row['base_rank']):<8} | #{int(row['local_rank']):<9} | {selected_oos:>12.3f} | "
+            f"{best_text:>22} | {benchmark_text:>18} | {_fmt_duration(row.get('elapsed_sec', 0.0)):>8}"
         )
     scores = [float(row["oos_score"]) for row in rows]
-    print("-" * 112)
+    benchmark_wins = sum(1 for row in rows if float(row["oos_score"]) > float(row.get("benchmark_oos_score", 0.0)))
+    print("-" * 132)
     print(
         f"running median_oos={statistics.median(scores):.3f} | "
-        f"worst_oos={min(scores):.3f} | positive_years={sum(1 for s in scores if s > 0)}/{len(scores)}"
+        f"worst_oos={min(scores):.3f} | positive_years={sum(1 for s in scores if s > 0)}/{len(scores)} | "
+        f"win_vs_0050={benchmark_wins}/{len(rows)}"
     )
 
 
@@ -346,52 +457,59 @@ def _build_summary(rows: list[dict]) -> dict:
     if not rows:
         return {"folds": 0}
     scores = [float(row["oos_score"]) for row in rows]
-    returns = [float(row["ret_pct"]) for row in rows]
-    mdds = [float(row["mdd_pct"]) for row in rows]
+    best_gaps = [float(row["oos_score"]) - float(row.get("best_finalist_oos_score", row["oos_score"])) for row in rows]
+    benchmark_gaps = [float(row["oos_score"]) - float(row.get("benchmark_oos_score", 0.0)) for row in rows]
     return {
         "folds": len(rows),
         "positive_years": sum(1 for score in scores if score > 0),
+        "win_vs_0050": sum(1 for gap in benchmark_gaps if gap > 0),
         "avg_oos_score": sum(scores) / len(scores),
         "median_oos_score": float(statistics.median(scores)),
         "worst_oos_score": min(scores),
-        "avg_return_pct": sum(returns) / len(returns),
-        "worst_return_pct": min(returns),
-        "avg_mdd_pct": sum(mdds) / len(mdds),
-        "worst_mdd_pct": min(mdds),
-        "avg_trades": sum(int(row["trades"]) for row in rows) / len(rows),
+        "avg_gap_to_best_finalist": sum(best_gaps) / len(best_gaps),
+        "median_gap_to_best_finalist": float(statistics.median(best_gaps)),
+        "avg_gap_to_0050": sum(benchmark_gaps) / len(benchmark_gaps),
+        "median_gap_to_0050": float(statistics.median(benchmark_gaps)),
     }
 
 
 def _format_final_report(rows: list[dict], summary: dict) -> str:
     lines = []
-    lines.append("=" * 112)
+    lines.append("=" * 132)
     lines.append("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
-    lines.append("=" * 112)
+    lines.append("=" * 132)
     lines.append("OVERALL SUMMARY")
-    lines.append("-" * 112)
+    lines.append("-" * 132)
     if rows:
-        lines.append(f"folds             : {summary['folds']}")
-        lines.append(f"positive_years    : {summary['positive_years']}/{summary['folds']}")
-        lines.append(f"avg_oos_score     : {summary['avg_oos_score']:.3f}")
-        lines.append(f"median_oos_score* : {summary['median_oos_score']:.3f}")
-        lines.append(f"worst_oos_score   : {summary['worst_oos_score']:.3f}")
-        lines.append(f"avg_return%       : {summary['avg_return_pct']:.1f}%")
-        lines.append(f"worst_return%     : {summary['worst_return_pct']:.1f}%")
-        lines.append(f"avg_mdd%          : {summary['avg_mdd_pct']:.1f}%")
-        lines.append(f"worst_mdd%        : {summary['worst_mdd_pct']:.1f}%")
-        lines.append(f"avg_trades        : {summary['avg_trades']:.1f}")
-    lines.append("-" * 112)
-    lines.append("YEARLY NEXT-1Y OOS")
-    lines.append("-" * 112)
-    lines.append(f"{'oos_year':<8} | {'selection':<11} | {'selected':<8} | {'base_score':>10} | {'base_rank':>9} | {'local_min':>10} | {'local_rank':>10} | {'oos_score':>9} | {'ret%':>8} | {'mdd%':>8} | {'trades':>6}")
-    lines.append("-" * 112)
-    for row in rows:
+        lines.append(f"folds                    : {summary['folds']}")
+        lines.append(f"positive_years           : {summary['positive_years']}/{summary['folds']}")
+        lines.append(f"win_vs_0050              : {summary['win_vs_0050']}/{summary['folds']}")
+        lines.append(f"avg_selected_oos         : {summary['avg_oos_score']:.3f}")
+        lines.append(f"median_selected_oos*     : {summary['median_oos_score']:.3f}")
+        lines.append(f"worst_selected_oos       : {summary['worst_oos_score']:.3f}")
+        lines.append(f"avg_gap_to_best_finalist : {summary['avg_gap_to_best_finalist']:.3f}")
+        lines.append(f"median_gap_to_0050       : {summary['median_gap_to_0050']:.3f}")
+    lines.append("-" * 132)
+    lines.append("ROLLING NEXT-1Y OOS RESULTS")
+    lines.append("-" * 132)
+    lines.append(
+        f"{'fold':<5} | {'oos_year':<8} | {'selection':<11} | {'selected':<8} | "
+        f"{'base_rank':<9} | {'local_rank':<10} | {'selected_oos':>12} | "
+        f"{'best_finalist_oos':>22} | {'0050_oos':>18} | {'elapsed':>8}"
+    )
+    lines.append("-" * 132)
+    total = len(rows)
+    for idx, row in enumerate(rows, start=1):
+        selected_oos = float(row["oos_score"])
+        best_text = _format_oos_delta(row.get("best_finalist_oos_score", selected_oos), selected_oos)
+        benchmark_text = _format_oos_delta(row.get("benchmark_oos_score", 0.0), selected_oos)
         lines.append(
-            f"{int(row['oos_year']):<8} | {row['selection_period']:<11} | #{int(row['selected_trial']):<7} | "
-            f"{float(row['base_score']):>10.3f} | #{int(row['base_rank']):>8} | {float(row['local_min']):>10.3f} | "
-            f"#{int(row['local_rank']):>9} | {float(row['oos_score']):>9.3f} | {float(row['ret_pct']):>7.1f}% | {float(row['mdd_pct']):>7.1f}% | {int(row['trades']):>6}"
+            f"{idx}/{total:<3} | {int(row['oos_year']):<8} | {row['selection_period']:<11} | #{int(row['selected_trial']):<7} | "
+            f"#{int(row['base_rank']):<8} | #{int(row['local_rank']):<9} | {selected_oos:>12.3f} | "
+            f"{best_text:>22} | {benchmark_text:>18} | {_fmt_duration(row.get('elapsed_sec', 0.0)):>8}"
         )
-    lines.append("-" * 112)
+    lines.append("-" * 132)
+    lines.append("best_finalist_oos / 0050_oos 括號內 = selected_oos - 對照分數；diagnostic only，不參與 selection。")
     lines.append("oos_feedback_used : False")
     return "\n".join(lines) + "\n"
 
@@ -440,9 +558,10 @@ def run_outer_rolling_oos(
     for fold_idx, oos_year in enumerate(years, start=1):
         fold_start = time.perf_counter()
         selection_end = int(oos_year) - 1
+        selection_start = _selection_start_for_oos(config, int(oos_year))
         fold_policy = dict(base_policy)
-        fold_policy["selection_start_year"] = int(config.training_start_year)
-        fold_policy["train_start_year"] = int(config.training_start_year)
+        fold_policy["selection_start_year"] = int(selection_start)
+        fold_policy["train_start_year"] = int(selection_start)
         fold_policy["search_train_end_year"] = int(selection_end)
         fold_policy["oos_start_year"] = int(oos_year)
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
@@ -467,7 +586,7 @@ def run_outer_rolling_oos(
                 fold_idx=fold_idx,
                 fold_count=len(years),
                 oos_year=oos_year,
-                selection_start=config.training_start_year,
+                selection_start=selection_start,
                 selection_end=selection_end,
                 total_trials=config.trials_per_fold,
                 completed_results=rows,
@@ -476,8 +595,16 @@ def run_outer_rolling_oos(
             study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[progress.callback(session)])
             progress.done(int(session.current_session_trial))
 
-            print(f"[{fold_idx}/{len(years)}] OOS {oos_year} | LOCAL_MIN_REVIEW running...", flush=True)
             local_started = time.perf_counter()
+            session.outer_rolling_local_progress_context = {
+                "fold_idx": int(fold_idx),
+                "fold_count": int(len(years)),
+                "oos_year": int(oos_year),
+                "selection_start": int(selection_start),
+                "selection_end": int(selection_end),
+                "completed_results": rows,
+                "overall_start": overall_start,
+            }
             finalists = list_local_min_score_finalists(
                 study,
                 session=session,
@@ -486,7 +613,14 @@ def run_outer_rolling_oos(
                 show_progress=True,
                 include_oos_diagnostics=False,
             )
+            if hasattr(session, "outer_rolling_local_progress_context"):
+                delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
+            print(
+                f"[{fold_idx}/{len(years)}] OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
+                f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
+                f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | elapsed={_fmt_duration(local_elapsed)}"
+            )
             winner = _select_winner(finalists, objective_mode=objective_mode)
             if winner is None:
                 print(f"{C_YELLOW}[{fold_idx}/{len(years)}] OOS {oos_year} | 無通過 gate 的候選，略過。{C_RESET}")
@@ -494,11 +628,18 @@ def run_outer_rolling_oos(
             local_rank_map = {int(item["trial"].number): rank for rank, item in enumerate(finalists, start=1)}
             trial = winner["trial"]
             report = _evaluate_next_1y_oos(session=session, trial=trial, oos_year=int(oos_year))
-            period = dict(report.get("period") or {})
+            diagnostics = _evaluate_finalist_oos_diagnostics(
+                session=session,
+                finalists=finalists,
+                selected_trial_number=int(trial.number),
+                selected_report=report,
+                oos_year=int(oos_year),
+            )
+            metrics = dict(diagnostics["selected_metrics"])
             fold_elapsed = time.perf_counter() - fold_start
             row = {
                 "oos_year": int(oos_year),
-                "selection_period": f"{config.training_start_year}~{selection_end}",
+                "selection_period": f"{selection_start}~{selection_end}",
                 "selected_trial": int(trial.number) + 1,
                 "base_score": float(winner.get("base_score", INVALID_TRIAL_VALUE)),
                 "base_rank": int(winner.get("base_rank", 0)),
@@ -506,30 +647,21 @@ def run_outer_rolling_oos(
                 "local_rank": int(local_rank_map.get(int(trial.number), 0)),
                 "retention": float(winner.get("local_retention", 0.0)),
                 "local_gate": bool(winner.get("gate_pass", False)),
-                "dep_gate": not _has_dependency_warning(winner),
-                "oos_score": float(period.get("test_score_romd", 0.0)),
-                "ret_pct": float(period.get("ret_pct", 0.0)),
-                "mdd_pct": float(period.get("mdd", 0.0)),
-                "trades": int(period.get("trade_count", 0) or 0),
-                "benchmark_oos_score": float(period.get("benchmark_score_romd", 0.0)),
+                "oos_score": float(metrics.get("oos_score", 0.0)),
+                "best_finalist_oos_score": float(diagnostics.get("best_finalist_oos_score", metrics.get("oos_score", 0.0))),
+                "best_finalist_trial": diagnostics.get("best_finalist_trial"),
+                "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", metrics.get("benchmark_oos_score", 0.0))),
+                "ret_pct": float(metrics.get("ret_pct", 0.0)),
+                "mdd_pct": float(metrics.get("mdd_pct", 0.0)),
+                "trades": int(metrics.get("trades", 0) or 0),
                 "elapsed_sec": float(fold_elapsed),
                 "optimizer_search_sec": float(max(0.0, fold_elapsed - local_elapsed)),
                 "local_min_review_sec": float(local_elapsed),
             }
+            if is_dominant_year_dependency_anti_overfit_enabled():
+                row["dep_gate"] = not _has_dependency_warning(winner)
             rows.append(row)
-            print(f"{C_GREEN}FOLD RESULT [{fold_idx}/{len(years)}] OOS {oos_year} | DONE{C_RESET}")
-            print("-" * 100)
-            print(f"selection period : {row['selection_period']}")
-            print(f"selected trial   : #{row['selected_trial']}")
-            print(f"base_score       : {row['base_score']:.3f} | base_rank=#{row['base_rank']}")
-            print(f"local_min        : {row['local_min']:.3f} | local_rank=#{row['local_rank']} | local_gate={'PASS' if row['local_gate'] else 'FAIL'}")
-            print(f"dep_gate         : {'PASS' if row['dep_gate'] else 'FAIL'}")
-            print(f"oos_score        : {row['oos_score']:.3f}")
-            print(f"ret%             : {row['ret_pct']:.1f}%")
-            print(f"mdd%             : {row['mdd_pct']:.1f}%")
-            print(f"trades           : {row['trades']}")
-            print(f"elapsed          : {_fmt_duration(fold_elapsed)}")
-            print("-" * 100)
+            print(f"{C_GREEN}[{fold_idx}/{len(years)}] OOS {oos_year} | DONE | selected=#{row['selected_trial']} | selected_oos={row['oos_score']:.3f} | best_finalist_oos={_format_oos_delta(row['best_finalist_oos_score'], row['oos_score'])} | 0050_oos={_format_oos_delta(row['benchmark_oos_score'], row['oos_score'])} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}")
             _print_completed_results(rows)
         finally:
             session.close_trial_prep_executor()

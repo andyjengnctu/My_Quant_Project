@@ -12,10 +12,10 @@ HELP_DESCRIPTION = "說明: 預設資料集為完整。可選 --model split|full
 
 def main(argv=None, environ=None):
     argv = sys.argv if argv is None else argv
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos"), flag_options=("--timing", "--outer-oos", "--yes"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-window-mode", "--outer-train-window-years"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "apps/ml_optimizer.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos]")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-years N]")
         print(HELP_DESCRIPTION)
         return 0
 
