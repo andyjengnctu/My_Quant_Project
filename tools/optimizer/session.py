@@ -107,6 +107,8 @@ class OptimizerSession:
         }
         self.local_min_order_score_cache = {}
         self.local_min_field_order_score_cache = {}
+        self.local_min_field_order_score_update_cache = {}
+        self._shared_local_min_field_order_score_cache = None
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
@@ -155,7 +157,30 @@ class OptimizerSession:
 
     def attach_shared_local_min_field_order_score_cache(self, cache):
         if isinstance(cache, dict):
-            self.local_min_field_order_score_cache = cache
+            # AI註: field-level order hints are deliberately fold-lagged.
+            # Reading a snapshot prevents noisy hints learned earlier in the
+            # same fold from reordering later candidates and hurting early-stop.
+            self._shared_local_min_field_order_score_cache = cache
+            self.local_min_field_order_score_cache = dict(cache)
+            self.local_min_field_order_score_update_cache = {}
+
+    def flush_shared_local_min_field_order_score_cache(self):
+        shared_cache = getattr(self, "_shared_local_min_field_order_score_cache", None)
+        update_cache = getattr(self, "local_min_field_order_score_update_cache", None)
+        if not isinstance(shared_cache, dict) or not isinstance(update_cache, dict):
+            return 0
+        merged = 0
+        for key, score in list(update_cache.items()):
+            prior_score = shared_cache.get(key)
+            try:
+                should_update = prior_score is None or float(score) < float(prior_score)
+            except (TypeError, ValueError):
+                should_update = True
+            if bool(should_update):
+                shared_cache[key] = float(score)
+                merged += 1
+        update_cache.clear()
+        return int(merged)
 
     def reset_prep_cache_stats(self):
         self.prep_cache_stats = {

@@ -173,6 +173,14 @@ def _get_local_min_field_order_score_cache(session):
     return session.local_min_field_order_score_cache
 
 
+def _get_local_min_field_order_score_update_cache(session):
+    cache = getattr(session, "local_min_field_order_score_update_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    session.local_min_field_order_score_update_cache = {}
+    return session.local_min_field_order_score_update_cache
+
+
 def _infer_neighbor_delta(center_payload: dict, payload: dict) -> tuple[str, int] | None:
     changed_fields = [
         field_name for field_name in sorted(set(center_payload) | set(payload))
@@ -883,7 +891,7 @@ def compute_local_min_score(
         _get_local_min_order_score_cache(session)[payload_cache_key] = float(score)
         delta_key = _infer_neighbor_delta(center_payload, payload)
         if delta_key is not None:
-            field_score_cache = _get_local_min_field_order_score_cache(session)
+            field_score_cache = _get_local_min_field_order_score_update_cache(session)
             prior_score = field_score_cache.get(delta_key)
             try:
                 should_update_field_score = prior_score is None or float(score) < float(prior_score)

@@ -2164,6 +2164,9 @@ def run_outer_rolling_oos(
             )
             _print_completed_results(rows)
         finally:
+            flush_field_order_cache = getattr(session, "flush_shared_local_min_field_order_score_cache", None)
+            if callable(flush_field_order_cache):
+                flush_field_order_cache()
             session.close_trial_prep_executor()
             if study is not None:
                 close_study_storage(study)
