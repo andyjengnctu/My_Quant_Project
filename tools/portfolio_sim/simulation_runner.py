@@ -517,6 +517,7 @@ def run_portfolio_simulation_with_param_schedule(
     benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     fixed_risk=None,
     verbose=True,
+    return_context=False,
 ):
     schedule_records = _build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     if not schedule_records:
@@ -589,6 +590,16 @@ def run_portfolio_simulation_with_param_schedule(
         "prep_wall_sec": prep_wall_sec,
         "prep_mode": "active_param_replay",
     })
+    if return_context:
+        # # (AI註: Workbench K 線頁只需要可繪圖的市場快取；正式 active-param replay 仍由每日 resolver 決定參數。)
+        pf_profile["_workbench_context"] = {
+            "all_dfs_fast": base_context.get("all_dfs_fast") or {},
+            "all_trade_logs": base_context.get("all_trade_logs") or {},
+            "all_pit_stats_index": base_context.get("all_pit_stats_index") or {},
+            "sorted_dates": list(resolved_sorted_dates),
+            "prep_wall_sec": prep_wall_sec,
+            "prep_mode": "active_param_replay",
+        }
     return (*result, pf_profile)
 
 def run_portfolio_simulation(data_dir, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True):

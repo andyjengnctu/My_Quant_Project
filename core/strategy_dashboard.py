@@ -60,6 +60,8 @@ def print_strategy_dashboard(
     bm_annual_return_pct=0.0,
     min_full_year_return_pct=0.0,
     bm_min_full_year_return_pct=0.0,
+    params_section_title="訓練參數",
+    params_note_lines=None,
 ):
     alpha = sys_ret - bm_ret
     annual_alpha = annual_return_pct - bm_annual_return_pct
@@ -152,7 +154,9 @@ def print_strategy_dashboard(
     print(_table_row("實戰期望值(EV)", f"{ev:.2f} R", "-", "-"))
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
-    print("【訓練參數】")
+    print(f"【{params_section_title}】")
+    for note_line in (params_note_lines or []):
+        print(f"{C_GRAY}{note_line}{C_RESET}")
     print(
         f"核心參數 : "
         f"突破 {get_p(params, 'high_len', 201):>3} 日新高 | "

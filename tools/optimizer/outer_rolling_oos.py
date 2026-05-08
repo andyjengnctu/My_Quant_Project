@@ -1275,44 +1275,47 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         "bench": 17,
         "elapsed": 8,
     }
+    base_group_width = widths["rank"] + widths["bench"] + 3
+    local_group_width = widths["rank"] + widths["best"] + widths["bench"] + 6
+    retention_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
     lines.append("ROLLING NEXT-1Y OOS RESULTS")
-    lines.append(_table_separator())
     header1 = (
         f"{_pad_ansi('fold', widths['fold'])} | {_pad_ansi('selection', widths['selection'])} | {_pad_ansi('oos_year', widths['oos_year'])} | "
-        f"{_pad_ansi('base', widths['rank'] + widths['best'] + widths['bench'] + 6)} | "
-        f"{_pad_ansi('local*', widths['rank'] + widths['best'] + widths['bench'] + 6)} | "
-        f"{_pad_ansi('retention', widths['rank'] + widths['best'] + widths['bench'] + 6)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
+        f"{_pad_ansi('base', base_group_width)} | "
+        f"{_pad_ansi('local*', local_group_width)} | "
+        f"{_pad_ansi('retention', retention_group_width)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
     )
     header2 = (
         f"{_pad_ansi('', widths['fold'])} | {_pad_ansi('', widths['selection'])} | {_pad_ansi('', widths['oos_year'])} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
         f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('best', widths['best'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('best', widths['best'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('best', widths['best'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | {_pad_ansi('', widths['elapsed'])}"
+        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | {_pad_ansi('', widths['elapsed'])}"
     )
+    separator = _table_separator(max(_visible_len(header1), _visible_len(header2), 120))
+    lines.append(separator)
     lines.append(header1)
     lines.append(header2)
-    lines.append(_table_separator())
+    lines.append(separator)
     total = len(rows or [])
     for idx, row in enumerate(display_rows, start=1):
         is_chain = str(row.get("fold", "")).upper() == "OOS_CHAIN"
         fold_text = "OOS_CHAIN" if is_chain else f"{idx}/{total}"
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
-        base_rank, base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+        base_rank, _base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         local_rank, local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
-        retention_rank, retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+        retention_rank, _retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         line = (
             f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(str(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(str(row.get('oos_year', '')), widths['oos_year'])} | "
-            f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_best, widths['best'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
+            f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_best, widths['best'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_best, widths['best'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
+            f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(_fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
         lines.append(line)
-    lines.append(_table_separator())
+    lines.append(separator)
     return "\n".join(lines)
-
 
 def _print_completed_results(rows: list[dict]):
     if not rows:

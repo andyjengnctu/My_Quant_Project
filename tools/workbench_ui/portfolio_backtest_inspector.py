@@ -26,7 +26,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
-from core.rolling_oos_params import format_rolling_oos_summary_lines, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_record_for_date, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -174,6 +174,35 @@ def _format_pct(value):
         return f"{float(value):.2f}%"
     except (TypeError, ValueError):
         return "-"
+
+
+def _format_rolling_schedule_console_lines(payload):
+    try:
+        schedule = build_active_param_schedule(payload)
+    except ValueError:
+        return []
+    lines = []
+    for record in schedule:
+        lines.append(f"{record['effective_date_text']} -> active param for OOS {record['year']}")
+    return lines
+
+
+def _build_rolling_dashboard_notes(*, payload, start_year, fixed_risk):
+    representative_date = f"{int(start_year)}-01-01"
+    try:
+        representative_record = get_active_param_record_for_date(payload, representative_date)
+        representative_effective = representative_record.get("effective_date_text", representative_date)
+    except (ValueError, KeyError, TypeError):
+        representative_effective = representative_date
+    notes = [
+        f"Rolling 模式：此區顯示代表參數，不代表整段回測只用這一套。",
+        f"代表參數：回測起始基準日 {representative_date} 已生效 active param（effective={representative_effective}）。",
+        f"實際投組回測：每個交易日依該日 effective date 自動切換 active param；fixed_risk 覆寫為 {float(fixed_risk):.4f}。",
+    ]
+    schedule_lines = _format_rolling_schedule_console_lines(payload)
+    if schedule_lines:
+        notes.append("Active param schedule：" + "；".join(schedule_lines))
+    return notes
 
 
 def _fast_data_to_price_df(fast_data):
@@ -831,7 +860,7 @@ def _apply_trade_sequence_to_marker_meta(marker_meta, trade_sequence):
     return enriched
 
 
-def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, ticker_dropdown_stats=None, active_level_rows=None, df_eq=None):
+def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df, params=None, params_resolver=None, ticker_dropdown_stats=None, active_level_rows=None, df_eq=None):
     price_df = _fast_data_to_price_df(fast_data)
     chart_context = create_debug_chart_context(price_df)
     dropdown_stats = dict(ticker_dropdown_stats or {})
@@ -872,9 +901,16 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
 
         qty = _coerce_int(row.get("股數"), default=0)
         note = str(row.get("Type", "") or "").strip()
+        row_params = params
+        if callable(params_resolver):
+            try:
+                row_params = params_resolver(trade_date)
+            except (ValueError, KeyError, TypeError, RuntimeError):
+                row_params = params
+
         if action in {"買進", "買進(延續候選)"}:
             next_trade_sequence += 1
-            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params, equity_snapshots=equity_snapshots)
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=row_params, equity_snapshots=equity_snapshots)
             marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="normal")
             marker_meta["result"] = "成交"
             marker_meta = _apply_trade_sequence_to_marker_meta(marker_meta, next_trade_sequence)
@@ -885,7 +921,7 @@ def _build_portfolio_ticker_chart_payload(*, ticker, fast_data, ticker_trades_df
                 "trade_sequence": next_trade_sequence,
             }
         elif str(action).startswith("錯失買進"):
-            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=params, equity_snapshots=equity_snapshots)
+            marker_meta = _build_portfolio_buy_marker_meta(row, fast_data=fast_data, params=row_params, equity_snapshots=equity_snapshots)
             marker_meta["entry_type"] = _normalize_entry_type_value(row.get("進場類型"), default="extended" if "延續" in str(action) else "normal")
             marker_meta["result"] = "未成交"
         elif action == "錯失賣出":
@@ -1346,6 +1382,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if not resolved_ticker:
             return ["-"]
         result_payload = self._result or {}
+        if result_payload.get("rolling_payload"):
+            lines = [
+                "Rolling active-param replay：投組績效以本次投組回測報表為準。",
+                "單股歷史摘要不套用單一固定參數，避免與每日切換 active param 的投組口徑混淆。",
+            ]
+            self._history_summary_cache[(resolved_ticker, "rolling_active_param_replay")] = list(lines)
+            return lines
         options = result_payload.get("options") or {}
         params = self._resolve_single_stock_history_params()
         fixed_risk = getattr(params, "fixed_risk", options.get("fixed_risk", None))
@@ -1682,10 +1725,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         ensure_runtime_dirs()
         start_time = time.time()
+        rolling_dashboard_notes = []
+        params_section_title = "訓練參數"
         if is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(options["params_path"])
             params = build_params_from_mapping(get_active_params_for_date(rolling_payload, f"{options['start_year']}-01-01"))
             params.fixed_risk = float(options["fixed_risk"])
+            params_section_title = "Rolling 代表參數"
+            rolling_dashboard_notes = _build_rolling_dashboard_notes(
+                payload=rolling_payload,
+                start_year=options["start_year"],
+                fixed_risk=options["fixed_risk"],
+            )
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
             for line in format_rolling_oos_summary_lines(rolling_payload):
@@ -1701,6 +1752,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 benchmark_ticker=options["benchmark_ticker"],
                 fixed_risk=float(options["fixed_risk"]),
                 verbose=True,
+                return_context=True,
             )
         else:
             params = load_strict_params(options["params_path"])
@@ -1731,6 +1783,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             normal_trade_count, extended_trade_count, annual_trades,
             reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile,
         ) = result
+
+        if is_rolling_paramset:
+            context = dict(pf_profile.pop("_workbench_context", {}) or {})
 
         mode_display = "開啟 (強勢輪動)" if options["enable_rotation"] else "關閉 (穩定鎖倉)"
         min_full_year_return_pct = pf_profile.get("min_full_year_return_pct", 0.0)
@@ -1773,6 +1828,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             bm_annual_return_pct=bm_annual_return_pct,
             min_full_year_return_pct=min_full_year_return_pct,
             bm_min_full_year_return_pct=bm_min_full_year_return_pct,
+            params_section_title=params_section_title,
+            params_note_lines=rolling_dashboard_notes,
         )
 
         df_yearly = print_yearly_return_report(
@@ -1794,6 +1851,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "df_tr": df_tr,
             "df_yearly": df_yearly,
             "params": params,
+            "rolling_payload": rolling_payload,
             "options": dict(options),
             "context": context,
             "profile_stats": dict(pf_profile),
@@ -1927,6 +1985,17 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         if self._ticker_display_var.get().strip():
             self._render_selected_ticker_chart(self._ticker_display_var.get())
 
+    def _resolve_active_params_for_trade_date(self, trade_date):
+        result_payload = self._result or {}
+        rolling_payload = result_payload.get("rolling_payload")
+        if not rolling_payload:
+            return result_payload.get("params")
+        params = build_params_from_mapping(get_active_params_for_date(rolling_payload, trade_date))
+        options = result_payload.get("options") or {}
+        if "fixed_risk" in options:
+            params.fixed_risk = float(options["fixed_risk"])
+        return params
+
     def _render_selected_ticker_chart(self, display_label):
         if self._result is None:
             return
@@ -1951,6 +2020,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             fast_data=fast_data,
             ticker_trades_df=ticker_trades,
             params=self._result.get("params"),
+            params_resolver=self._resolve_active_params_for_trade_date,
             ticker_dropdown_stats=self._ticker_dropdown_stats.get(display_key),
             active_level_rows=active_level_rows,
             df_eq=self._result.get("df_eq"),
