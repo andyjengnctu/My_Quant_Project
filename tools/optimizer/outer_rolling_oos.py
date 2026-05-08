@@ -320,6 +320,165 @@ def _confirm_plan(config: OuterRollingConfig) -> bool:
     return choice.upper() == "Y"
 
 
+def _profile_avg_float(profile_summary: dict, key: str) -> float:
+    avg = dict((profile_summary or {}).get("avg") or {})
+    try:
+        return float(avg.get(key, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_outer_timing_row(
+    *,
+    fold_idx: int,
+    fold_count: int,
+    oos_year: int,
+    selection_start: int,
+    selection_end: int,
+    status: str,
+    session,
+    db_file: str,
+    install_shared_cache_sec: float,
+    study_create_sec: float,
+    optimize_sec: float,
+    local_min_review_sec: float,
+    oos_diagnostics_sec: float,
+    fold_total_sec: float,
+    finalists_count: int = 0,
+) -> dict:
+    profile_summary = session.profile_recorder.build_summary_payload()
+    completed_trials = int(getattr(session, "current_session_trial", 0) or 0)
+    return {
+        "fold": f"{int(fold_idx)}/{int(fold_count)}",
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "oos_year": int(oos_year),
+        "selection_period": f"{int(selection_start)}~{int(selection_end)}",
+        "status": str(status),
+        "requested_trials": int(getattr(session, "n_trials", 0) or 0),
+        "completed_trials": completed_trials,
+        "finalists_count": int(finalists_count),
+        "db_file": str(db_file),
+        "profile_csv_path": str(session.profile_recorder.csv_path),
+        "profile_summary_path": str(session.profile_recorder.summary_path),
+        "install_shared_cache_sec": float(install_shared_cache_sec),
+        "study_create_sec": float(study_create_sec),
+        "optimize_sec": float(optimize_sec),
+        "local_min_review_sec": float(local_min_review_sec),
+        "oos_diagnostics_sec": float(oos_diagnostics_sec),
+        "fold_total_sec": float(fold_total_sec),
+        "avg_trial_total_wall_sec": _profile_avg_float(profile_summary, "trial_total_wall_sec"),
+        "avg_objective_wall_sec": _profile_avg_float(profile_summary, "objective_wall_sec"),
+        "avg_prep_wall_sec": _profile_avg_float(profile_summary, "prep_wall_sec"),
+        "avg_portfolio_wall_sec": _profile_avg_float(profile_summary, "portfolio_wall_sec"),
+        "avg_score_calc_sec": _profile_avg_float(profile_summary, "score_calc_sec"),
+        "avg_filter_rules_sec": _profile_avg_float(profile_summary, "filter_rules_sec"),
+        "first_trial_completed_wall_sec": profile_summary.get("first_trial_completed_wall_sec"),
+    }
+
+
+def _sum_timing_rows(rows: list[dict], key: str) -> float:
+    total = 0.0
+    for row in list(rows or []):
+        try:
+            total += float(row.get(key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _write_outer_timing_summary(
+    *,
+    output_dir: str,
+    session_ts: str,
+    dataset_label: str,
+    config: OuterRollingConfig,
+    timing_mode: bool,
+    optimizer_seed,
+    raw_data_load_sec: float,
+    active_replay_chain_sec: float,
+    report_write_sec: float,
+    overall_sec: float,
+    fold_timing_rows: list[dict],
+) -> dict:
+    report_dir = os.path.join(output_dir, "outer_rolling_oos")
+    os.makedirs(report_dir, exist_ok=True)
+    base = os.path.join(report_dir, f"outer_rolling_oos_timing_{session_ts}")
+    csv_path = base + ".csv"
+    json_path = base + ".json"
+
+    if fold_timing_rows:
+        fieldnames = list(fold_timing_rows[0].keys())
+        with open(csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(fold_timing_rows)
+
+    optimize_sec = _sum_timing_rows(fold_timing_rows, "optimize_sec")
+    local_min_review_sec = _sum_timing_rows(fold_timing_rows, "local_min_review_sec")
+    oos_diagnostics_sec = _sum_timing_rows(fold_timing_rows, "oos_diagnostics_sec")
+    install_shared_cache_sec = _sum_timing_rows(fold_timing_rows, "install_shared_cache_sec")
+    study_create_sec = _sum_timing_rows(fold_timing_rows, "study_create_sec")
+    fold_total_sec = _sum_timing_rows(fold_timing_rows, "fold_total_sec")
+    completed_trials = sum(int(row.get("completed_trials", 0) or 0) for row in list(fold_timing_rows or []))
+    payload = {
+        "type": "outer_rolling_oos_timing",
+        "version": 1,
+        "created_at": get_taipei_now().isoformat(),
+        "timing_mode": bool(timing_mode),
+        "dataset_label": str(dataset_label),
+        "optimizer_seed": optimizer_seed,
+        "sampler_kind": "random" if bool(timing_mode) else "tpe",
+        "meta": {
+            "window_mode": str(config.window_mode),
+            "train_window_years": int(config.train_window_years),
+            "training_start_year": int(config.training_start_year),
+            "first_oos_year": int(config.first_oos_year),
+            "last_oos_year": int(config.last_oos_year),
+            "trials_per_fold": int(config.trials_per_fold),
+            "fold_count": len(fold_timing_rows),
+            "completed_trials": int(completed_trials),
+        },
+        "summary": {
+            "overall_sec": float(overall_sec),
+            "raw_data_load_once_sec": float(raw_data_load_sec),
+            "install_shared_cache_sum_sec": float(install_shared_cache_sec),
+            "study_create_sum_sec": float(study_create_sec),
+            "optimize_sum_sec": float(optimize_sec),
+            "local_min_review_sum_sec": float(local_min_review_sec),
+            "oos_diagnostics_sum_sec": float(oos_diagnostics_sec),
+            "active_replay_chain_sec": float(active_replay_chain_sec),
+            "report_write_sec": float(report_write_sec),
+            "fold_total_sum_sec": float(fold_total_sec),
+            "avg_optimize_sec_per_completed_trial": (float(optimize_sec) / float(completed_trials)) if completed_trials > 0 else 0.0,
+            "avg_fold_total_sec": (float(fold_total_sec) / float(len(fold_timing_rows))) if fold_timing_rows else 0.0,
+        },
+        "folds": fold_timing_rows,
+        "csv_path": csv_path if fold_timing_rows else "",
+        "json_path": json_path,
+    }
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "payload": payload}
+
+
+def _print_outer_timing_summary(payload: dict):
+    summary = dict((payload or {}).get("summary") or {})
+    meta = dict((payload or {}).get("meta") or {})
+    completed_trials = int(meta.get("completed_trials", 0) or 0)
+    print(
+        "📏 Outer rolling 測時摘要｜"
+        f"{C_CYAN}總時間={float(summary.get('overall_sec', 0.0)):.3f}s{C_RESET}｜"
+        f"raw一次={float(summary.get('raw_data_load_once_sec', 0.0)):.3f}s｜"
+        f"optimizer={float(summary.get('optimize_sum_sec', 0.0)):.3f}s｜"
+        f"local_review={float(summary.get('local_min_review_sum_sec', 0.0)):.3f}s｜"
+        f"oos_diag={float(summary.get('oos_diagnostics_sum_sec', 0.0)):.3f}s｜"
+        f"chain={float(summary.get('active_replay_chain_sec', 0.0)):.3f}s｜"
+        f"平均={float(summary.get('avg_optimize_sec_per_completed_trial', 0.0)):.3f}s/completed trial"
+        f"（completed={completed_trials}）"
+    )
+
+
 class _SearchProgress:
     def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, total_trials: int, completed_results: list[dict], overall_start: float):
         self.fold_idx = int(fold_idx)
@@ -1647,6 +1806,7 @@ def run_outer_rolling_oos(
     configure_optuna_logging,
     optimizer_seed=None,
     default_trials: int = 500,
+    timing_mode: bool = False,
 ) -> int:
     from tools.optimizer.session import close_study_storage
 
@@ -1663,11 +1823,31 @@ def run_outer_rolling_oos(
 
     configure_optuna_logging()
     rows: list[dict] = []
+    fold_timing_rows: list[dict] = []
     chain_max_positions: int | None = None
     chain_enable_rotation: bool | None = None
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     overall_start = time.perf_counter()
+    sampler_kind = "random" if bool(timing_mode) else "tpe"
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
+    if bool(timing_mode):
+        print(f"{C_GRAY}📏 Timing mode：outer rolling 使用 RandomSampler 重播 trial 組合，並輸出 fold 分段耗時。{C_RESET}")
+
+    shared_load_start = time.perf_counter()
+    shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
+    shared_data_session = build_optimizer_session(walk_forward_policy=shared_data_policy)
+    try:
+        shared_data_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+        shared_raw_context = {
+            "raw_data_cache": dict(shared_data_session.raw_data_cache),
+            "static_fast_cache": dict(shared_data_session.static_fast_cache),
+            "master_dates": set(shared_data_session.master_dates),
+            "sorted_master_dates": list(shared_data_session.sorted_master_dates),
+        }
+    finally:
+        shared_data_session.close_trial_prep_executor()
+    raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
+    print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={len(years)}{C_RESET}")
 
     for fold_idx, oos_year in enumerate(years, start=1):
         fold_start = time.perf_counter()
@@ -1685,7 +1865,7 @@ def run_outer_rolling_oos(
         chain_enable_rotation = bool(session.train_enable_rotation)
         session.n_trials = int(config.trials_per_fold)
         session.disable_milestone_dashboard = True
-        session.timing_mode = False
+        session.timing_mode = bool(timing_mode)
         db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
         os.makedirs(db_dir, exist_ok=True)
         db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
@@ -1693,11 +1873,21 @@ def run_outer_rolling_oos(
         study = None
         try:
             print(f"\n{C_CYAN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year}{C_RESET}")
-            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            install_started = time.perf_counter()
+            session.install_raw_data_cache(
+                selected_data_dir,
+                shared_raw_context["raw_data_cache"],
+                static_fast_cache=shared_raw_context["static_fast_cache"],
+                master_dates=shared_raw_context["master_dates"],
+                sorted_master_dates=shared_raw_context["sorted_master_dates"],
+            )
+            install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
             session.profile_recorder.init_output_files()
             session.profile_recorder.mark_run_started()
-            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind="tpe")
+            study_started = time.perf_counter()
+            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
+            study_create_sec = max(0.0, time.perf_counter() - study_started)
             progress = _SearchProgress(
                 fold_idx=fold_idx,
                 fold_count=len(years),
@@ -1708,7 +1898,9 @@ def run_outer_rolling_oos(
                 completed_results=rows,
                 overall_start=overall_start,
             )
+            optimize_started = time.perf_counter()
             study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[progress.callback(session)])
+            optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             progress.done(int(session.current_session_trial))
 
             local_started = time.perf_counter()
@@ -1739,16 +1931,36 @@ def run_outer_rolling_oos(
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
             if not any(item is not None for item in policy_items.values()):
+                fold_elapsed = time.perf_counter() - fold_start
+                fold_timing_rows.append(_build_outer_timing_row(
+                    fold_idx=fold_idx,
+                    fold_count=len(years),
+                    oos_year=int(oos_year),
+                    selection_start=int(selection_start),
+                    selection_end=int(selection_end),
+                    status="skipped_no_finalist",
+                    session=session,
+                    db_file=db_file,
+                    install_shared_cache_sec=install_shared_cache_sec,
+                    study_create_sec=study_create_sec,
+                    optimize_sec=optimize_sec,
+                    local_min_review_sec=local_elapsed,
+                    oos_diagnostics_sec=0.0,
+                    fold_total_sec=fold_elapsed,
+                    finalists_count=len(finalists),
+                ))
                 print(f"{C_YELLOW}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | 無可用 finalist，略過。{C_RESET}")
                 continue
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
+            diagnostics_started = time.perf_counter()
             diagnostics = _evaluate_finalist_oos_diagnostics(
                 session=session,
                 finalists=finalists,
                 policy_items=policy_items,
                 oos_year=int(oos_year),
             )
+            oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
             fold_elapsed = time.perf_counter() - fold_start
             selection_period = f"{selection_start}~{selection_end}"
             policy_schedules = {
@@ -1785,10 +1997,30 @@ def run_outer_rolling_oos(
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
                 "policy_schedules": policy_schedules,
                 "elapsed_sec": float(fold_elapsed),
-                "optimizer_search_sec": float(max(0.0, fold_elapsed - local_elapsed)),
+                "optimizer_search_sec": float(optimize_sec),
                 "local_min_review_sec": float(local_elapsed),
+                "oos_diagnostics_sec": float(oos_diagnostics_sec),
+                "install_shared_cache_sec": float(install_shared_cache_sec),
+                "study_create_sec": float(study_create_sec),
             }
             rows.append(row)
+            fold_timing_rows.append(_build_outer_timing_row(
+                fold_idx=fold_idx,
+                fold_count=len(years),
+                oos_year=int(oos_year),
+                selection_start=int(selection_start),
+                selection_end=int(selection_end),
+                status="done",
+                session=session,
+                db_file=db_file,
+                install_shared_cache_sec=install_shared_cache_sec,
+                study_create_sec=study_create_sec,
+                optimize_sec=optimize_sec,
+                local_min_review_sec=local_elapsed,
+                oos_diagnostics_sec=oos_diagnostics_sec,
+                fold_total_sec=fold_elapsed,
+                finalists_count=len(finalists),
+            ))
             local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
             print(
                 f"{C_GREEN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | DONE | "
@@ -1803,6 +2035,7 @@ def run_outer_rolling_oos(
 
     resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else 10)
     resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)
+    active_replay_started = time.perf_counter()
     active_replay_chained = _build_active_replay_chained_oos_summary(
         rows=rows,
         config=config,
@@ -1810,7 +2043,23 @@ def run_outer_rolling_oos(
         max_positions=resolved_chain_max_positions,
         enable_rotation=resolved_chain_enable_rotation,
     ) if rows else {}
+    active_replay_chain_sec = max(0.0, time.perf_counter() - active_replay_started)
+    report_write_started = time.perf_counter()
     paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained)
+    report_write_sec = max(0.0, time.perf_counter() - report_write_started)
+    timing_paths = _write_outer_timing_summary(
+        output_dir=output_dir,
+        session_ts=session_ts,
+        dataset_label=dataset_label,
+        config=config,
+        timing_mode=bool(timing_mode),
+        optimizer_seed=optimizer_seed,
+        raw_data_load_sec=raw_data_load_sec,
+        active_replay_chain_sec=active_replay_chain_sec,
+        report_write_sec=report_write_sec,
+        overall_sec=max(0.0, time.perf_counter() - overall_start),
+        fold_timing_rows=fold_timing_rows,
+    )
     print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
@@ -1818,6 +2067,10 @@ def run_outer_rolling_oos(
     print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")
+    print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
+    if timing_paths.get("csv"):
+        print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
     for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
         print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
+    _print_outer_timing_summary(timing_paths.get("payload", {}))
     return 0

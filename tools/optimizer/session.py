@@ -118,22 +118,43 @@ class OptimizerSession:
                 df['Close'].to_numpy(dtype='float64', copy=False),
             )
 
-    def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
+    def install_raw_data_cache(
+        self,
+        data_dir,
+        raw_data_cache,
+        *,
+        static_fast_cache=None,
+        master_dates=None,
+        sorted_master_dates=None,
+    ):
         self.close_trial_prep_executor()
-        self.raw_data_cache = load_all_raw_data(
-            data_dir=data_dir,
-            required_min_rows=required_min_rows,
-            output_dir=self.output_dir,
-        )
+        self.raw_data_cache = dict(raw_data_cache or {})
         self._precompute_optimizer_true_range()
         self.raw_data_cache_data_dir = data_dir
         self._prepared_trial_input_cache.clear()
         self._full_evaluation_cache.clear()
-        self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
-        self.master_dates = set()
-        for fast_df in self.static_fast_cache.values():
-            self.master_dates.update(get_fast_dates(fast_df))
-        self.sorted_master_dates = sorted(self.master_dates)
+
+        if static_fast_cache is None:
+            self.static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in self.raw_data_cache.items()}
+        else:
+            self.static_fast_cache = dict(static_fast_cache)
+
+        if master_dates is None:
+            resolved_master_dates = set()
+            for fast_df in self.static_fast_cache.values():
+                resolved_master_dates.update(get_fast_dates(fast_df))
+        else:
+            resolved_master_dates = set(master_dates)
+        self.master_dates = resolved_master_dates
+        self.sorted_master_dates = list(sorted_master_dates) if sorted_master_dates is not None else sorted(resolved_master_dates)
+
+    def load_raw_data(self, data_dir, *, load_all_raw_data, required_min_rows):
+        raw_data_cache = load_all_raw_data(
+            data_dir=data_dir,
+            required_min_rows=required_min_rows,
+            output_dir=self.output_dir,
+        )
+        self.install_raw_data_cache(data_dir, raw_data_cache)
 
     def cache_trial_milestone_inputs(self, trial_number, *, sorted_master_dates=None, all_pit_stats_index=None, all_dfs_fast=None):
         if all_pit_stats_index is None and all_dfs_fast is None:

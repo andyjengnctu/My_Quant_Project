@@ -502,10 +502,10 @@ def _resolve_cli_run_request(argv):
     cli_trials_raw = _extract_cli_value(argv, '--trials')
     if outer_oos_mode:
         return {
-            'timing_mode': False,
-            'n_trials': int(cli_trials_raw) if str(cli_trials_raw or '').strip() else 0,
+            'timing_mode': timing_mode,
+            'n_trials': int(cli_trials_raw) if str(cli_trials_raw or '').strip() else (OPTIMIZER_TIMING_MODE_DEFAULT_TRIALS if timing_mode else 0),
             'action': 'outer_rolling_oos',
-            'source': 'CLI:--outer-oos',
+            'source': 'CLI:--outer-oos+--timing' if timing_mode else 'CLI:--outer-oos',
         }
     if cli_trials_raw:
         cli_trials = parse_int_strict(cli_trials_raw, 'CLI 參數 --trials', min_value=0)
@@ -571,7 +571,7 @@ def main(argv=None, environ=None):
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
         print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-years N]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling next-1Y OOS test。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling next-1Y OOS test；outer rolling 可搭配 --timing 輸出分段耗時。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs
@@ -661,6 +661,9 @@ def main(argv=None, environ=None):
         except ValueError as exc:
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
+        outer_timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
+        if outer_timing_mode and optimizer_seed is None:
+            optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
         return run_outer_rolling_oos(
             argv=argv,
             environ=environ,
@@ -677,6 +680,7 @@ def main(argv=None, environ=None):
             configure_optuna_logging=configure_optuna_logging,
             optimizer_seed=optimizer_seed,
             default_trials=int(getattr(session, "n_trials", 0) or 500),
+            timing_mode=outer_timing_mode,
         )
     if str(getattr(session, "run_action", "train")) == "promote_candidate":
         ensure_runtime_dirs()
