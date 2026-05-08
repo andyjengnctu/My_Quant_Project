@@ -93,6 +93,7 @@ class OptimizerSession:
             "hits": 0,
             "misses": 0,
             "stores": 0,
+            "evictions": 0,
         }
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
@@ -130,6 +131,7 @@ class OptimizerSession:
             self._prepared_trial_input_cache_max_items = max(0, min(4096, resolved_max_items))
         while len(self._prepared_trial_input_cache) > int(self._prepared_trial_input_cache_max_items):
             self._prepared_trial_input_cache.popitem(last=False)
+            self.prep_cache_stats["evictions"] = int(self.prep_cache_stats.get("evictions", 0)) + 1
 
     def attach_shared_trial_prep_executor_holder(self, holder):
         if isinstance(holder, dict):
@@ -140,6 +142,7 @@ class OptimizerSession:
             "hits": 0,
             "misses": 0,
             "stores": 0,
+            "evictions": 0,
         }
 
     def get_prep_cache_stats(self):
@@ -147,6 +150,7 @@ class OptimizerSession:
             "hits": int(self.prep_cache_stats.get("hits", 0)),
             "misses": int(self.prep_cache_stats.get("misses", 0)),
             "stores": int(self.prep_cache_stats.get("stores", 0)),
+            "evictions": int(self.prep_cache_stats.get("evictions", 0)),
             "items": int(len(self._prepared_trial_input_cache)),
             "max_items": int(self._prepared_trial_input_cache_max_items),
             "shared": bool(self._prepared_trial_input_cache_is_shared),
@@ -274,6 +278,7 @@ class OptimizerSession:
         self._prepared_trial_input_cache.move_to_end(cache_key)
         while len(self._prepared_trial_input_cache) > int(self._prepared_trial_input_cache_max_items):
             self._prepared_trial_input_cache.popitem(last=False)
+            self.prep_cache_stats["evictions"] = int(self.prep_cache_stats.get("evictions", 0)) + 1
 
     def get_full_evaluation_from_cache(self, cache_key):
         if cache_key is None:

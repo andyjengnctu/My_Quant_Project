@@ -57,11 +57,11 @@ OOS_SCORE_DECIMALS = 2
 def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS")
     if raw_value is None:
-        raw_value = os.environ.get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS", "64")
+        raw_value = os.environ.get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS", "256")
     try:
         resolved = int(raw_value)
     except (TypeError, ValueError):
-        resolved = 64
+        resolved = 256
     return max(0, min(4096, resolved))
 
 
@@ -401,6 +401,7 @@ def _build_outer_timing_row(
         "prep_cache_hits": int(prep_cache_stats.get("hits", 0) or 0),
         "prep_cache_misses": int(prep_cache_stats.get("misses", 0) or 0),
         "prep_cache_stores": int(prep_cache_stats.get("stores", 0) or 0),
+        "prep_cache_evictions": int(prep_cache_stats.get("evictions", 0) or 0),
         "prep_cache_items": int(prep_cache_stats.get("items", 0) or 0),
         "prep_cache_max_items": int(prep_cache_stats.get("max_items", 0) or 0),
         "prep_cache_shared": bool(prep_cache_stats.get("shared", False)),
@@ -457,6 +458,7 @@ def _write_outer_timing_summary(
     prep_cache_hits = sum(int(row.get("prep_cache_hits", 0) or 0) for row in list(fold_timing_rows or []))
     prep_cache_misses = sum(int(row.get("prep_cache_misses", 0) or 0) for row in list(fold_timing_rows or []))
     prep_cache_stores = sum(int(row.get("prep_cache_stores", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_cache_evictions = sum(int(row.get("prep_cache_evictions", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
@@ -493,6 +495,7 @@ def _write_outer_timing_summary(
             "prep_cache_hits": int(prep_cache_hits),
             "prep_cache_misses": int(prep_cache_misses),
             "prep_cache_stores": int(prep_cache_stores),
+            "prep_cache_evictions": int(prep_cache_evictions),
             "prep_cache_hit_rate": (float(prep_cache_hits) / float(prep_cache_hits + prep_cache_misses)) if (prep_cache_hits + prep_cache_misses) > 0 else 0.0,
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
@@ -1996,7 +1999,7 @@ def run_outer_rolling_oos(
                 f"[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
-                f"prep_cache_hit/miss={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))} | "
+                f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
                 f"elapsed={_fmt_duration(local_elapsed)}"
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
