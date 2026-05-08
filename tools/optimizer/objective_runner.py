@@ -170,7 +170,9 @@ def evaluate_prepared_train_score(session, *, ai_params, prep_result, search_sco
     all_trade_logs = prep_result["all_trade_logs"]
     all_pit_stats_index = prep_result.get("all_pit_stats_index")
     benchmark_data = all_dfs_fast.get("0050", None)
-    pf_profile = {} if profile_stats is None else profile_stats
+    # AI註: local_min review 只需要完整統計值，不需要每個 portfolio 子步驟的 timing。
+    # AI註: profile_stats=None 時仍保留 yearly/dependency 等統計輸出，但關閉細部計時以避免重複 perf_counter 成本。
+    pf_profile = {"_timing_enabled": False} if profile_stats is None else profile_stats
 
     (
         ret_pct,

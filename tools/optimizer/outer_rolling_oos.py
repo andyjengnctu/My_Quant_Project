@@ -678,6 +678,7 @@ def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve
         static_master_dates=session.master_dates,
         include_trade_logs=True,
         include_pit_stats_index=True,
+        profile_enabled=False,
     )
     all_dates = sorted(prep_result["master_dates"])
     test_dates = [dt for dt in all_dates if int(getattr(dt, "year", 0) or 0) == int(oos_year)]

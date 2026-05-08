@@ -729,6 +729,7 @@ def compute_local_min_score(
                     static_master_dates=session.master_dates,
                     include_trade_logs=False,
                     include_pit_stats_index=True,
+                    profile_enabled=False,
                 )
                 cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
                 if callable(cache_prep):
@@ -855,6 +856,7 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
         static_master_dates=session.master_dates,
         include_trade_logs=False,
         include_pit_stats_index=True,
+        profile_enabled=False,
     )
     search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=objective_mode)
     evaluation = evaluate_prepared_train_score(
@@ -862,7 +864,7 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
         ai_params=ai_params,
         prep_result=prep_result,
         search_scope=search_scope,
-        profile_stats={},
+        profile_stats={"_timing_enabled": False},
     )
     diagnostics = _normalize_current_dependency_diagnostics(evaluation.get("dominant_year_dependency_diagnostics", {}))
     if diagnostics is None:
@@ -924,6 +926,7 @@ def _resolve_trial_inner_validate_diagnostics(session, trial, objective_mode: st
         static_master_dates=session.master_dates,
         include_trade_logs=False,
         include_pit_stats_index=True,
+        profile_enabled=False,
     )
     validate_scope = resolve_inner_validate_scope(session, prep_result["master_dates"], objective_mode=objective_mode)
     diagnostics = evaluate_prepared_inner_validate_score(
@@ -931,7 +934,7 @@ def _resolve_trial_inner_validate_diagnostics(session, trial, objective_mode: st
         ai_params=ai_params,
         prep_result=prep_result,
         validate_scope=validate_scope,
-        profile_stats={},
+        profile_stats={"_timing_enabled": False},
     )
     diagnostics = _normalize_inner_validate_diagnostics(diagnostics) or {
         "enabled": True,
@@ -982,6 +985,7 @@ def _resolve_trial_oos_diagnostics(session, trial):
         static_master_dates=session.master_dates,
         include_trade_logs=True,
         include_pit_stats_index=True,
+        profile_enabled=False,
     )
     report = evaluate_walk_forward(
         all_dfs_fast=prep_result['all_dfs_fast'],
