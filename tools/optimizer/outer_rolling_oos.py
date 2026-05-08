@@ -6,6 +6,7 @@ import os
 import statistics
 import sys
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +52,27 @@ class OuterRollingConfig:
 
 
 OOS_SCORE_DECIMALS = 2
+
+
+def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
+    raw_value = (environ or {}).get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS")
+    if raw_value is None:
+        raw_value = os.environ.get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS", "64")
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        resolved = 64
+    return max(0, min(4096, resolved))
+
+
+def _shutdown_rolling_shared_prep_executor_holder(holder: dict) -> None:
+    bundle = holder.pop("bundle", None) if isinstance(holder, dict) else None
+    if bundle is None:
+        return
+    executor = bundle.get("executor")
+    shutdown = getattr(executor, "shutdown", None)
+    if callable(shutdown):
+        shutdown(wait=True, cancel_futures=False)
 
 
 def _fmt_duration(seconds: float | int | None) -> str:
@@ -348,6 +370,8 @@ def _build_outer_timing_row(
 ) -> dict:
     profile_summary = session.profile_recorder.build_summary_payload()
     completed_trials = int(getattr(session, "current_session_trial", 0) or 0)
+    get_prep_cache_stats = getattr(session, "get_prep_cache_stats", None)
+    prep_cache_stats = get_prep_cache_stats() if callable(get_prep_cache_stats) else {}
     return {
         "fold": f"{int(fold_idx)}/{int(fold_count)}",
         "fold_idx": int(fold_idx),
@@ -374,6 +398,15 @@ def _build_outer_timing_row(
         "avg_score_calc_sec": _profile_avg_float(profile_summary, "score_calc_sec"),
         "avg_filter_rules_sec": _profile_avg_float(profile_summary, "filter_rules_sec"),
         "first_trial_completed_wall_sec": profile_summary.get("first_trial_completed_wall_sec"),
+        "prep_cache_hits": int(prep_cache_stats.get("hits", 0) or 0),
+        "prep_cache_misses": int(prep_cache_stats.get("misses", 0) or 0),
+        "prep_cache_stores": int(prep_cache_stats.get("stores", 0) or 0),
+        "prep_cache_items": int(prep_cache_stats.get("items", 0) or 0),
+        "prep_cache_max_items": int(prep_cache_stats.get("max_items", 0) or 0),
+        "prep_cache_shared": bool(prep_cache_stats.get("shared", False)),
+        "prep_executor_created": int(prep_cache_stats.get("executor_created", 0) or 0),
+        "prep_executor_reused": int(prep_cache_stats.get("executor_reused", 0) or 0),
+        "prep_executor_shared": bool(prep_cache_stats.get("executor_shared", False)),
     }
 
 
@@ -421,6 +454,11 @@ def _write_outer_timing_summary(
     study_create_sec = _sum_timing_rows(fold_timing_rows, "study_create_sec")
     fold_total_sec = _sum_timing_rows(fold_timing_rows, "fold_total_sec")
     completed_trials = sum(int(row.get("completed_trials", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_cache_hits = sum(int(row.get("prep_cache_hits", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_cache_misses = sum(int(row.get("prep_cache_misses", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_cache_stores = sum(int(row.get("prep_cache_stores", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
         "type": "outer_rolling_oos_timing",
         "version": 1,
@@ -452,6 +490,12 @@ def _write_outer_timing_summary(
             "fold_total_sum_sec": float(fold_total_sec),
             "avg_optimize_sec_per_completed_trial": (float(optimize_sec) / float(completed_trials)) if completed_trials > 0 else 0.0,
             "avg_fold_total_sec": (float(fold_total_sec) / float(len(fold_timing_rows))) if fold_timing_rows else 0.0,
+            "prep_cache_hits": int(prep_cache_hits),
+            "prep_cache_misses": int(prep_cache_misses),
+            "prep_cache_stores": int(prep_cache_stores),
+            "prep_cache_hit_rate": (float(prep_cache_hits) / float(prep_cache_hits + prep_cache_misses)) if (prep_cache_hits + prep_cache_misses) > 0 else 0.0,
+            "prep_executor_created": int(prep_executor_created),
+            "prep_executor_reused": int(prep_executor_reused),
         },
         "folds": fold_timing_rows,
         "csv_path": csv_path if fold_timing_rows else "",
@@ -1829,12 +1873,20 @@ def run_outer_rolling_oos(
     fold_timing_rows: list[dict] = []
     chain_max_positions: int | None = None
     chain_enable_rotation: bool | None = None
+    rolling_shared_prep_cache = OrderedDict()
+    rolling_shared_prep_cache_max_items = _resolve_rolling_shared_prep_cache_max_items(environ)
+    rolling_shared_prep_executor_holder = {}
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     overall_start = time.perf_counter()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
     if bool(timing_mode):
         print(f"{C_GRAY}📏 Timing mode：outer rolling 使用 RandomSampler 重播 trial 組合，並輸出 fold 分段耗時。{C_RESET}")
+    if rolling_shared_prep_cache_max_items > 0:
+        print(f"{C_GRAY}🧠 Rolling shared prep cache：max_items={rolling_shared_prep_cache_max_items}，跨 fold 共用 signal/prep 結果。{C_RESET}")
+    else:
+        print(f"{C_GRAY}🧠 Rolling shared prep cache：disabled。{C_RESET}")
+    print(f"{C_GRAY}🧠 Rolling shared prep executor：enabled，跨 fold 保留 worker feature bank。{C_RESET}")
 
     shared_load_start = time.perf_counter()
     shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
@@ -1864,6 +1916,16 @@ def run_outer_rolling_oos(
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
+        attach_shared_executor = getattr(session, "attach_shared_trial_prep_executor_holder", None)
+        if callable(attach_shared_executor):
+            attach_shared_executor(rolling_shared_prep_executor_holder)
+        if rolling_shared_prep_cache_max_items > 0:
+            attach_shared_cache = getattr(session, "attach_shared_prepared_trial_input_cache", None)
+            if callable(attach_shared_cache):
+                attach_shared_cache(rolling_shared_prep_cache, max_items=rolling_shared_prep_cache_max_items)
+        reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
+        if callable(reset_prep_cache_stats):
+            reset_prep_cache_stats()
         chain_max_positions = int(session.train_max_positions)
         chain_enable_rotation = bool(session.train_enable_rotation)
         session.n_trials = int(config.trials_per_fold)
@@ -1929,10 +1991,13 @@ def run_outer_rolling_oos(
             if hasattr(session, "outer_rolling_local_progress_context"):
                 delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
+            prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
                 f"[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
-                f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | elapsed={_fmt_duration(local_elapsed)}"
+                f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
+                f"prep_cache_hit/miss={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))} | "
+                f"elapsed={_fmt_duration(local_elapsed)}"
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
             if not any(item is not None for item in policy_items.values()):
@@ -2037,6 +2102,8 @@ def run_outer_rolling_oos(
             session.close_trial_prep_executor()
             if study is not None:
                 close_study_storage(study)
+
+    _shutdown_rolling_shared_prep_executor_holder(rolling_shared_prep_executor_holder)
 
     resolved_chain_max_positions = int(chain_max_positions if chain_max_positions is not None else 10)
     resolved_chain_enable_rotation = bool(chain_enable_rotation if chain_enable_rotation is not None else False)

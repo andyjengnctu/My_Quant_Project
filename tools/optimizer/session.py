@@ -80,9 +80,20 @@ class OptimizerSession:
             print_every_n_trials=profile_print_every_n_trials,
         )
         self._trial_prep_executor_bundle = None
+        self._shared_trial_prep_executor_holder = None
+        self.prep_executor_stats = {
+            "created": 0,
+            "reused": 0,
+        }
         self._optimizer_trial_milestone_inputs = {}
         self._prepared_trial_input_cache = OrderedDict()
         self._prepared_trial_input_cache_max_items = self._resolve_prepared_trial_input_cache_max_items()
+        self._prepared_trial_input_cache_is_shared = False
+        self.prep_cache_stats = {
+            "hits": 0,
+            "misses": 0,
+            "stores": 0,
+        }
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
@@ -105,6 +116,44 @@ class OptimizerSession:
         except (TypeError, ValueError):
             value = 512
         return max(0, min(4096, value))
+
+    def attach_shared_prepared_trial_input_cache(self, cache, *, max_items=None):
+        if cache is None:
+            return
+        self._prepared_trial_input_cache = cache
+        self._prepared_trial_input_cache_is_shared = True
+        if max_items is not None:
+            try:
+                resolved_max_items = int(max_items)
+            except (TypeError, ValueError):
+                resolved_max_items = self._prepared_trial_input_cache_max_items
+            self._prepared_trial_input_cache_max_items = max(0, min(4096, resolved_max_items))
+        while len(self._prepared_trial_input_cache) > int(self._prepared_trial_input_cache_max_items):
+            self._prepared_trial_input_cache.popitem(last=False)
+
+    def attach_shared_trial_prep_executor_holder(self, holder):
+        if isinstance(holder, dict):
+            self._shared_trial_prep_executor_holder = holder
+
+    def reset_prep_cache_stats(self):
+        self.prep_cache_stats = {
+            "hits": 0,
+            "misses": 0,
+            "stores": 0,
+        }
+
+    def get_prep_cache_stats(self):
+        return {
+            "hits": int(self.prep_cache_stats.get("hits", 0)),
+            "misses": int(self.prep_cache_stats.get("misses", 0)),
+            "stores": int(self.prep_cache_stats.get("stores", 0)),
+            "items": int(len(self._prepared_trial_input_cache)),
+            "max_items": int(self._prepared_trial_input_cache_max_items),
+            "shared": bool(self._prepared_trial_input_cache_is_shared),
+            "executor_created": int(self.prep_executor_stats.get("created", 0)),
+            "executor_reused": int(self.prep_executor_stats.get("reused", 0)),
+            "executor_shared": self._shared_trial_prep_executor_holder is not None,
+        }
 
     def _precompute_optimizer_true_range(self):
         for df in self.raw_data_cache.values():
@@ -131,7 +180,8 @@ class OptimizerSession:
         self.raw_data_cache = dict(raw_data_cache or {})
         self._precompute_optimizer_true_range()
         self.raw_data_cache_data_dir = data_dir
-        self._prepared_trial_input_cache.clear()
+        if not bool(self._prepared_trial_input_cache_is_shared):
+            self._prepared_trial_input_cache.clear()
         self._full_evaluation_cache.clear()
 
         if static_fast_cache is None:
@@ -179,7 +229,9 @@ class OptimizerSession:
     def get_prepared_trial_inputs_from_cache(self, cache_key):
         cached = self._prepared_trial_input_cache.get(cache_key)
         if cached is None:
+            self.prep_cache_stats["misses"] = int(self.prep_cache_stats.get("misses", 0)) + 1
             return None
+        self.prep_cache_stats["hits"] = int(self.prep_cache_stats.get("hits", 0)) + 1
         self._prepared_trial_input_cache.move_to_end(cache_key)
         return {
             "all_dfs_fast": cached["all_dfs_fast"],
@@ -207,6 +259,9 @@ class OptimizerSession:
     def cache_prepared_trial_inputs(self, cache_key, prep_result):
         if cache_key is None:
             return
+        if int(self._prepared_trial_input_cache_max_items) <= 0:
+            return
+        self.prep_cache_stats["stores"] = int(self.prep_cache_stats.get("stores", 0)) + 1
         self._prepared_trial_input_cache[cache_key] = {
             "all_dfs_fast": prep_result["all_dfs_fast"],
             "all_trade_logs": prep_result["all_trade_logs"],
@@ -239,6 +294,15 @@ class OptimizerSession:
         while len(self._full_evaluation_cache) > int(self._full_evaluation_cache_max_items):
             self._full_evaluation_cache.popitem(last=False)
 
+    @staticmethod
+    def _shutdown_trial_prep_executor_bundle(bundle):
+        if bundle is None:
+            return
+        executor = bundle.get("executor")
+        shutdown = getattr(executor, "shutdown", None)
+        if callable(shutdown):
+            shutdown(wait=True, cancel_futures=False)
+
     def get_trial_prep_executor_bundle(self, max_workers):
         try:
             requested_workers = int(max_workers)
@@ -246,13 +310,18 @@ class OptimizerSession:
             requested_workers = int(self.default_max_workers)
         requested_workers = max(1, requested_workers)
 
-        existing = self._trial_prep_executor_bundle
+        shared_holder = self._shared_trial_prep_executor_holder
+        existing = shared_holder.get("bundle") if shared_holder is not None else self._trial_prep_executor_bundle
         if existing is not None:
             existing_data_dir = existing.get("data_dir")
             existing_workers = int(existing.get("max_workers", 0))
             if existing_data_dir == self.raw_data_cache_data_dir and existing_workers == requested_workers:
+                self.prep_executor_stats["reused"] = int(self.prep_executor_stats.get("reused", 0)) + 1
                 return existing
-            self.close_trial_prep_executor()
+            if shared_holder is not None:
+                self._shutdown_trial_prep_executor_bundle(shared_holder.pop("bundle", None))
+            else:
+                self.close_trial_prep_executor()
 
         if not self.raw_data_cache:
             return None
@@ -270,18 +339,23 @@ class OptimizerSession:
             "pool_start_method": pool_start_method,
             "executor_kind": executor_kind,
         }
-        self._trial_prep_executor_bundle = bundle
+        self.prep_executor_stats["created"] = int(self.prep_executor_stats.get("created", 0)) + 1
+        if shared_holder is not None:
+            shared_holder["bundle"] = bundle
+        else:
+            self._trial_prep_executor_bundle = bundle
         return bundle
 
-    def close_trial_prep_executor(self):
+    def close_trial_prep_executor(self, *, force_shared=False):
+        if self._shared_trial_prep_executor_holder is not None and not bool(force_shared):
+            return
+        if self._shared_trial_prep_executor_holder is not None:
+            bundle = self._shared_trial_prep_executor_holder.pop("bundle", None)
+            self._shutdown_trial_prep_executor_bundle(bundle)
+            return
         bundle = self._trial_prep_executor_bundle
         self._trial_prep_executor_bundle = None
-        if bundle is None:
-            return
-        executor = bundle.get("executor")
-        shutdown = getattr(executor, "shutdown", None)
-        if callable(shutdown):
-            shutdown(wait=True, cancel_futures=False)
+        self._shutdown_trial_prep_executor_bundle(bundle)
 
     def record_optimizer_prep_failures(self, insufficient_failures):
         insufficient_count = len(insufficient_failures)
