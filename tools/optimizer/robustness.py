@@ -157,6 +157,51 @@ def _build_payload_score_cache_key(payload: dict):
     return tuple(sorted(canonical_payload.items()))
 
 
+def _rank_local_min_neighbor_payloads(session, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
+    """Evaluate cheap / likely-pruning neighbors first without changing local-min semantics.
+
+    The local-min score is the minimum over the same neighbor set, so order does
+    not affect exact reviews.  In outer rolling selection-pruning mode, an early
+    low neighbor can safely stop the review because additional neighbors can only
+    keep or lower the minimum.
+    """
+
+    has_prep_cache = getattr(session, "has_prepared_trial_inputs_in_cache", None)
+    ranked_items = []
+    prep_cache_prioritized = 0
+    payload_score_candidates = 0
+    for original_idx, payload in enumerate(list(neighbor_payloads or [])):
+        payload_cache_key = _build_payload_score_cache_key(payload)
+        cached_payload_score = payload_score_cache.get(payload_cache_key)
+        if cached_payload_score is not None:
+            payload_score_candidates += 1
+            try:
+                cached_score_sort_value = float(cached_payload_score)
+            except (TypeError, ValueError):
+                cached_score_sort_value = float(INVALID_TRIAL_VALUE)
+            ranked_items.append((0, cached_score_sort_value, original_idx, payload))
+            continue
+
+        prep_cached = False
+        if callable(has_prep_cache):
+            try:
+                ai_params = build_params_from_mapping(payload)
+                prep_cached = bool(has_prep_cache(build_prep_cache_key(ai_params)))
+            except (TypeError, ValueError, KeyError, AttributeError):
+                prep_cached = False
+        if prep_cached:
+            prep_cache_prioritized += 1
+            ranked_items.append((1, 0.0, original_idx, payload))
+        else:
+            ranked_items.append((2, 0.0, original_idx, payload))
+
+    ranked_items.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in ranked_items], {
+        "payload_score_candidates": int(payload_score_candidates),
+        "prep_cache_prioritized": int(prep_cache_prioritized),
+    }
+
+
 def _get_seeded_payload_trial_numbers(session):
     if not hasattr(session, "local_min_seeded_payload_trial_numbers"):
         session.local_min_seeded_payload_trial_numbers = set()
@@ -696,6 +741,7 @@ def compute_local_min_score(
         return float(local_min_score)
 
     total_neighbors = len(neighbor_payloads)
+    neighbor_payloads, neighbor_rank_stats = _rank_local_min_neighbor_payloads(session, neighbor_payloads, payload_score_cache)
     if on_start is not None:
         on_start(total_neighbors)
     elif progress_label:
@@ -705,6 +751,7 @@ def compute_local_min_score(
     evaluated_neighbors = 0
     early_stopped = False
     selection_pruned = False
+    payload_score_cache_hit_count = 0
     try:
         selection_prune_floor = float(stop_below_local_min_score) if stop_below_local_min_score is not None else None
     except (TypeError, ValueError):
@@ -759,6 +806,7 @@ def compute_local_min_score(
             score = float(evaluation["score"])
             payload_score_cache[payload_cache_key] = score
         else:
+            payload_score_cache_hit_count += 1
             score = float(cached_payload_score)
 
         if score < local_min_score:
@@ -785,6 +833,16 @@ def compute_local_min_score(
             "evaluated_neighbors": evaluated_neighbors,
             "early_stopped": bool(early_stopped),
         }
+    record_local_min_stats = getattr(session, "record_local_min_review_stats", None)
+    if callable(record_local_min_stats):
+        record_local_min_stats(
+            total_neighbors=total_neighbors,
+            evaluated_neighbors=evaluated_neighbors,
+            payload_score_cache_hits=payload_score_cache_hit_count,
+            prep_cache_prioritized=int(neighbor_rank_stats.get("prep_cache_prioritized", 0) or 0),
+            early_stopped=bool(early_stopped),
+            selection_pruned=bool(selection_pruned),
+        )
     if on_finish is not None:
         on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))
     elif progress_label:

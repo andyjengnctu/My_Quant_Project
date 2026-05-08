@@ -372,6 +372,8 @@ def _build_outer_timing_row(
     completed_trials = int(getattr(session, "current_session_trial", 0) or 0)
     get_prep_cache_stats = getattr(session, "get_prep_cache_stats", None)
     prep_cache_stats = get_prep_cache_stats() if callable(get_prep_cache_stats) else {}
+    get_local_min_stats = getattr(session, "get_local_min_review_stats", None)
+    local_min_stats = get_local_min_stats() if callable(get_local_min_stats) else {}
     return {
         "fold": f"{int(fold_idx)}/{int(fold_count)}",
         "fold_idx": int(fold_idx),
@@ -408,6 +410,13 @@ def _build_outer_timing_row(
         "prep_executor_created": int(prep_cache_stats.get("executor_created", 0) or 0),
         "prep_executor_reused": int(prep_cache_stats.get("executor_reused", 0) or 0),
         "prep_executor_shared": bool(prep_cache_stats.get("executor_shared", False)),
+        "local_min_neighbors_total": int(local_min_stats.get("total_neighbors", 0) or 0),
+        "local_min_neighbors_evaluated": int(local_min_stats.get("evaluated_neighbors", 0) or 0),
+        "local_min_neighbors_skipped": int(local_min_stats.get("skipped_neighbors", 0) or 0),
+        "local_min_payload_score_cache_hits": int(local_min_stats.get("payload_score_cache_hits", 0) or 0),
+        "local_min_prep_cache_prioritized": int(local_min_stats.get("prep_cache_prioritized", 0) or 0),
+        "local_min_early_stops": int(local_min_stats.get("early_stops", 0) or 0),
+        "local_min_selection_prunes": int(local_min_stats.get("selection_prunes", 0) or 0),
     }
 
 
@@ -459,6 +468,12 @@ def _write_outer_timing_summary(
     prep_cache_misses = sum(int(row.get("prep_cache_misses", 0) or 0) for row in list(fold_timing_rows or []))
     prep_cache_stores = sum(int(row.get("prep_cache_stores", 0) or 0) for row in list(fold_timing_rows or []))
     prep_cache_evictions = sum(int(row.get("prep_cache_evictions", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_neighbors_total = sum(int(row.get("local_min_neighbors_total", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_neighbors_evaluated = sum(int(row.get("local_min_neighbors_evaluated", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_payload_score_cache_hits = sum(int(row.get("local_min_payload_score_cache_hits", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_prep_cache_prioritized = sum(int(row.get("local_min_prep_cache_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_early_stops = sum(int(row.get("local_min_early_stops", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_selection_prunes = sum(int(row.get("local_min_selection_prunes", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
@@ -497,6 +512,13 @@ def _write_outer_timing_summary(
             "prep_cache_stores": int(prep_cache_stores),
             "prep_cache_evictions": int(prep_cache_evictions),
             "prep_cache_hit_rate": (float(prep_cache_hits) / float(prep_cache_hits + prep_cache_misses)) if (prep_cache_hits + prep_cache_misses) > 0 else 0.0,
+            "local_min_neighbors_total": int(local_min_neighbors_total),
+            "local_min_neighbors_evaluated": int(local_min_neighbors_evaluated),
+            "local_min_neighbors_skipped": max(0, int(local_min_neighbors_total) - int(local_min_neighbors_evaluated)),
+            "local_min_payload_score_cache_hits": int(local_min_payload_score_cache_hits),
+            "local_min_prep_cache_prioritized": int(local_min_prep_cache_prioritized),
+            "local_min_early_stops": int(local_min_early_stops),
+            "local_min_selection_prunes": int(local_min_selection_prunes),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },
@@ -523,6 +545,18 @@ def _print_outer_timing_summary(payload: dict):
         f"chain={float(summary.get('active_replay_chain_sec', 0.0)):.3f}s｜"
         f"平均={float(summary.get('avg_optimize_sec_per_completed_trial', 0.0)):.3f}s/completed trial"
         f"（completed={completed_trials}）"
+    )
+    print(
+        "📏 Cache / local-min 摘要｜"
+        f"prep_hit/miss/evict={int(summary.get('prep_cache_hits', 0) or 0)}/"
+        f"{int(summary.get('prep_cache_misses', 0) or 0)}/"
+        f"{int(summary.get('prep_cache_evictions', 0) or 0)}｜"
+        f"hit_rate={float(summary.get('prep_cache_hit_rate', 0.0)):.1%}｜"
+        f"local_neighbors={int(summary.get('local_min_neighbors_evaluated', 0) or 0)}/"
+        f"{int(summary.get('local_min_neighbors_total', 0) or 0)}｜"
+        f"skip={int(summary.get('local_min_neighbors_skipped', 0) or 0)}｜"
+        f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
+        f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
 
 

@@ -95,6 +95,14 @@ class OptimizerSession:
             "stores": 0,
             "evictions": 0,
         }
+        self.local_min_review_stats = {
+            "total_neighbors": 0,
+            "evaluated_neighbors": 0,
+            "payload_score_cache_hits": 0,
+            "prep_cache_prioritized": 0,
+            "early_stops": 0,
+            "selection_prunes": 0,
+        }
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
@@ -143,6 +151,48 @@ class OptimizerSession:
             "misses": 0,
             "stores": 0,
             "evictions": 0,
+        }
+        self.local_min_review_stats = {
+            "total_neighbors": 0,
+            "evaluated_neighbors": 0,
+            "payload_score_cache_hits": 0,
+            "prep_cache_prioritized": 0,
+            "early_stops": 0,
+            "selection_prunes": 0,
+        }
+
+    def record_local_min_review_stats(
+        self,
+        *,
+        total_neighbors=0,
+        evaluated_neighbors=0,
+        payload_score_cache_hits=0,
+        prep_cache_prioritized=0,
+        early_stopped=False,
+        selection_pruned=False,
+    ):
+        stats = self.local_min_review_stats
+        stats["total_neighbors"] = int(stats.get("total_neighbors", 0)) + int(total_neighbors or 0)
+        stats["evaluated_neighbors"] = int(stats.get("evaluated_neighbors", 0)) + int(evaluated_neighbors or 0)
+        stats["payload_score_cache_hits"] = int(stats.get("payload_score_cache_hits", 0)) + int(payload_score_cache_hits or 0)
+        stats["prep_cache_prioritized"] = int(stats.get("prep_cache_prioritized", 0)) + int(prep_cache_prioritized or 0)
+        if bool(early_stopped):
+            stats["early_stops"] = int(stats.get("early_stops", 0)) + 1
+        if bool(selection_pruned):
+            stats["selection_prunes"] = int(stats.get("selection_prunes", 0)) + 1
+
+    def get_local_min_review_stats(self):
+        stats = getattr(self, "local_min_review_stats", {}) or {}
+        total_neighbors = int(stats.get("total_neighbors", 0) or 0)
+        evaluated_neighbors = int(stats.get("evaluated_neighbors", 0) or 0)
+        return {
+            "total_neighbors": total_neighbors,
+            "evaluated_neighbors": evaluated_neighbors,
+            "skipped_neighbors": max(0, total_neighbors - evaluated_neighbors),
+            "payload_score_cache_hits": int(stats.get("payload_score_cache_hits", 0) or 0),
+            "prep_cache_prioritized": int(stats.get("prep_cache_prioritized", 0) or 0),
+            "early_stops": int(stats.get("early_stops", 0) or 0),
+            "selection_prunes": int(stats.get("selection_prunes", 0) or 0),
         }
 
     def get_prep_cache_stats(self):
@@ -229,6 +279,11 @@ class OptimizerSession:
 
     def discard_trial_milestone_inputs(self, trial_number):
         self._optimizer_trial_milestone_inputs.pop(int(trial_number), None)
+
+    def has_prepared_trial_inputs_in_cache(self, cache_key):
+        if cache_key is None:
+            return False
+        return cache_key in self._prepared_trial_input_cache
 
     def get_prepared_trial_inputs_from_cache(self, cache_key):
         cached = self._prepared_trial_input_cache.get(cache_key)
