@@ -420,7 +420,7 @@ def load_portfolio_market_context(data_dir, params, *, verbose=True):
         return cached_context
 
     required_min_rows = get_required_min_rows(params)
-    raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR)
+    raw_data_cache = load_all_raw_data(data_dir, required_min_rows, OUTPUT_DIR, verbose=verbose)
     if not raw_data_cache:
         raise RuntimeError("未能成功載入任何股票資料！")
 

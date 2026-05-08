@@ -119,7 +119,9 @@ def _write_load_issues_if_needed(load_issues, *, output_dir):
     return write_issue_log("optimizer_load_issues", load_issues, log_dir=output_dir)
 
 
-def _print_load_summary(*, fresh_raw_data_cache, totals, load_issues, issue_path, cache_hit):
+def _print_load_summary(*, fresh_raw_data_cache, totals, load_issues, issue_path, cache_hit, verbose=True):
+    if not bool(verbose):
+        return
     source_text = "磁碟快取命中" if cache_hit else "記憶體快取建立完成"
     dropped_rows = int(totals.get('total_dropped_rows', 0))
     invalid_rows = int(totals.get('total_invalid_rows', 0))
@@ -148,7 +150,7 @@ def resolve_optimizer_max_workers(params, default_max_workers):
     return max(1, configured)
 
 
-def load_all_raw_data(data_dir, required_min_rows, output_dir):
+def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
     if not os.path.exists(data_dir):
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
         raise FileNotFoundError(build_missing_dataset_dir_message(profile_key, data_dir))
@@ -174,6 +176,7 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir):
             load_issues=load_issues,
             issue_path=issue_path,
             cache_hit=True,
+            verbose=verbose,
         )
         return fresh_raw_data_cache
 
@@ -215,7 +218,7 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir):
                 f"optimizer 原始資料快取失敗: ticker={ticker} | {format_exception_summary(exc)}"
             ) from exc
 
-        if count % 50 == 0 or count == total_files:
+        if bool(verbose) and (count % 50 == 0 or count == total_files):
             print(f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}", end="\r")
 
     if not fresh_raw_data_cache:
@@ -244,6 +247,7 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir):
         load_issues=load_issues,
         issue_path=issue_path,
         cache_hit=False,
+        verbose=verbose,
     )
 
     return fresh_raw_data_cache

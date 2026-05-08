@@ -50,6 +50,9 @@ class OuterRollingConfig:
     confirm: bool = True
 
 
+OOS_SCORE_DECIMALS = 2
+
+
 def _fmt_duration(seconds: float | int | None) -> str:
     if seconds is None:
         return "N/A"
@@ -104,20 +107,20 @@ def _color_numeric_text(text: str, value: float | int | None) -> str:
 
 def _format_score(value) -> str:
     v = _safe_float(value, 0.0)
-    return _color_numeric_text(f"{v:.3f}", v)
+    return _color_numeric_text(f"{v:.{OOS_SCORE_DECIMALS}f}", v)
 
 
 def _format_compare(reference_score, rank_1_score) -> str:
     ref = _safe_float(reference_score, 0.0)
     rank_1 = _safe_float(rank_1_score, 0.0)
     gap = rank_1 - ref
-    return f"{_color_numeric_text(f'{ref:.3f}', ref)} ({_color_numeric_text(f'{gap:+.3f}', gap)})"
+    return f"{_color_numeric_text(f'{ref:.{OOS_SCORE_DECIMALS}f}', ref)} ({_color_numeric_text(f'{gap:+.{OOS_SCORE_DECIMALS}f}', gap)})"
 
 
 def _format_compare_plain(reference_score, rank_1_score) -> str:
     ref = _safe_float(reference_score, 0.0)
     rank_1 = _safe_float(rank_1_score, 0.0)
-    return f"{ref:.3f} ({rank_1 - ref:+.3f})"
+    return f"{ref:.{OOS_SCORE_DECIMALS}f} ({rank_1 - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
 def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
@@ -562,7 +565,7 @@ def _extract_period_metrics(report: dict) -> dict:
 def _format_oos_delta(reference_score, selected_score) -> str:
     ref = _safe_float(reference_score, 0.0)
     selected = _safe_float(selected_score, 0.0)
-    return f"{ref:.3f} ({selected - ref:+.3f})"
+    return f"{ref:.{OOS_SCORE_DECIMALS}f} ({selected - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
 def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int) -> dict:
@@ -947,17 +950,35 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
 
     contexts_by_signature: dict[str, dict] = {}
     records: list[dict] = []
-    seen: set[str] = set()
-    for group_records in dict(schedule_groups or {}).values():
+    by_signature: dict[str, dict] = {}
+    for policy_name, group_records in dict(schedule_groups or {}).items():
         for record in list(group_records or []):
             signature = str(record.get("params_signature") or "")
-            if not signature or signature in seen:
+            if not signature:
                 continue
-            seen.add(signature)
-            records.append(record)
+            existing = by_signature.get(signature)
+            if existing is None:
+                existing = dict(record)
+                existing["_policies"] = []
+                by_signature[signature] = existing
+                records.append(existing)
+            policies = existing.setdefault("_policies", [])
+            if str(policy_name) not in policies:
+                policies.append(str(policy_name))
     total = len(records)
+    previous_width = 0
+    supports_inline = stdout_supports_inline_progress()
+    policy_names = "/".join(sorted({policy for record in records for policy in record.get("_policies", [])})) or "N/A"
     for idx, record in enumerate(records, start=1):
         signature = str(record["params_signature"])
+        policies_text = ",".join(record.get("_policies", [])) or "N/A"
+        message = (
+            f"{C_GRAY}OOS_CHAIN active replay context [{idx}/{total}] "
+            f"policies={policies_text} effective={record.get('effective_date_text')} "
+            f"signature={signature[:8]}{C_RESET}"
+        )
+        if supports_inline:
+            previous_width = write_inline_progress(message, previous_width=previous_width)
         context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
         context = dict(context)
         if not context.get("all_pit_stats_index"):
@@ -967,12 +988,14 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
             }
         context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
         contexts_by_signature[signature] = context
-        print(
-            f"{C_GRAY}OOS_CHAIN active replay context [{idx}/{total}] "
-            f"effective={record.get('effective_date_text')} signature={signature[:8]}{C_RESET}"
-        )
+    if total:
+        summary = f"{C_GRAY}OOS_CHAIN active replay context 完成｜contexts={total}｜policies={policy_names}{C_RESET}"
+        if supports_inline:
+            write_inline_progress(summary, previous_width=previous_width)
+            print()
+        else:
+            print(summary)
     return contexts_by_signature
-
 
 def _merge_active_replay_market_dates(contexts_by_signature: dict[str, dict]) -> list:
     market_dates = set()
@@ -1225,7 +1248,7 @@ def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: f
             _format_compare(benchmark_score, rank_1),
         )
     return (
-        f"{rank_1:.3f}",
+        f"{rank_1:.{OOS_SCORE_DECIMALS}f}",
         _format_compare_plain(best_score, rank_1),
         _format_compare_plain(benchmark_score, rank_1),
     )
@@ -1294,7 +1317,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return
-    print("\n" + _render_results_table(rows, color=True, include_chain=False))
+    print("\n" + _render_results_table(rows, color=True, include_chain=True))
 
 
 def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
@@ -1510,7 +1533,7 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
             writer.writeheader()
             writer.writerows(flat_rows)
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(_format_final_report(rows, summary))
+        f.write(_format_final_report(rows, summary, color=False))
     return {"json": json_path, "csv": csv_path, "txt": txt_path, "paramsets": paramset_paths}
 
 
@@ -1570,7 +1593,7 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         summary["train_window_years"] = int(config.train_window_years)
     return summary
 
-def _format_final_report(rows: list[dict], summary: dict) -> str:
+def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False) -> str:
     lines = []
     lines.append("=" * 218)
     lines.append("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
@@ -1585,19 +1608,19 @@ def _format_final_report(rows: list[dict], summary: dict) -> str:
         for policy_name in ("base", "local", "retention"):
             item = summary.get(policy_name) or {}
             lines.append(
-                f"{policy_name:<24}: chain_score={float(item.get('chained_oos_score', 0.0)):.3f} | "
+                f"{policy_name:<24}: chain_score={float(item.get('chained_oos_score', 0.0)):.{OOS_SCORE_DECIMALS}f} | "
                 f"chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
                 f"gap_vs_0050={float(item.get('chained_gap_vs_0050_pct', 0.0)):+.2f}% | "
                 f"positive_years={int(item.get('positive_years', 0))}/{int(item.get('total_years', 0))}"
             )
         bench = summary.get("benchmark_0050") or {}
         lines.append(
-            f"benchmark_0050           : chain_score={float(bench.get('chained_oos_score', 0.0)):.3f} | "
+            f"benchmark_0050           : chain_score={float(bench.get('chained_oos_score', 0.0)):.{OOS_SCORE_DECIMALS}f} | "
             f"chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
             f"positive_years={int(bench.get('positive_years', 0))}/{int(bench.get('total_years', 0))}"
         )
     lines.append("-" * 218)
-    rendered = _render_results_table(rows, color=False, include_chain=True, chained_override=summary.get("chained_oos"))
+    rendered = _render_results_table(rows, color=color, include_chain=True, chained_override=summary.get("chained_oos"))
     if rendered:
         lines.append(rendered)
     lines.append("oos_feedback_used : False")
@@ -1766,7 +1789,7 @@ def run_outer_rolling_oos(
             local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
             print(
                 f"{C_GREEN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | DONE | "
-                f"local_rank_1_oos={local_oos:.3f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
+                f"local_rank_1_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
                 f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
             )
             _print_completed_results(rows)
@@ -1788,7 +1811,7 @@ def run_outer_rolling_oos(
     print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained)))
+    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained), color=True))
     print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
     print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")

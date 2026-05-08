@@ -375,7 +375,7 @@ def _format_pct(value: float) -> str:
 
 def _format_gate_actual(name: str, actual) -> str:
     if 'score' in name:
-        return f"{float(actual):.3f}"
+        return f"{float(actual):.2f}"
     if 'trades' in name or 'available' in name or 'count' in name:
         return str(int(actual))
     if isinstance(actual, bool):
@@ -454,7 +454,7 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
         '| 指標 | 策略 | 0050 |',
         '|---|---:|---:|',
         f"| OOS 區間 | {test_total.get('oos_start', '')} ~ {test_total.get('oos_end', '')} | {benchmark_test_total.get('oos_start', '')} ~ {benchmark_test_total.get('oos_end', '')} |",
-        f"| OOS RoMD | {float(test_total.get('test_score_romd', 0.0)):.3f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.3f} |",
+        f"| OOS RoMD | {float(test_total.get('test_score_romd', 0.0)):.2f} | {float(benchmark_test_total.get('test_score_romd', 0.0)):.2f} |",
         f"| OOS 總報酬率 | {_format_pct(test_total.get('total_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('total_return_pct', 0.0))} |",
         f"| 年化報酬率 | {_format_pct(test_total.get('annualized_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('annualized_return_pct', 0.0))} |",
         f"| 完整年度最差報酬 | {_format_pct(test_total.get('min_full_year_return_pct', 0.0))} | {_format_pct(benchmark_test_total.get('min_full_year_return_pct', 0.0))} |",
@@ -482,7 +482,7 @@ def write_walk_forward_report(*, output_dir: str, params_payload: dict, dataset_
     ])
     if period:
         lines.append(
-            f"| {period.get('label', 'TEST')} | {period.get('train_start', '')} ~ {period.get('train_end', '')} | {period.get('oos_start', '')} ~ {period.get('oos_end', '')} | {float(period.get('test_score_romd', 0.0)):.3f} | {_format_pct(period.get('ret_pct', 0.0))} | {_format_pct(period.get('mdd', 0.0))} | {float(period.get('annual_trades', 0.0)):.2f} | {_format_pct(period.get('reserved_buy_fill_rate', 0.0))} | {_format_pct(period.get('benchmark_return_pct', 0.0))} |"
+            f"| {period.get('label', 'TEST')} | {period.get('train_start', '')} ~ {period.get('train_end', '')} | {period.get('oos_start', '')} ~ {period.get('oos_end', '')} | {float(period.get('test_score_romd', 0.0)):.2f} | {_format_pct(period.get('ret_pct', 0.0))} | {_format_pct(period.get('mdd', 0.0))} | {float(period.get('annual_trades', 0.0)):.2f} | {_format_pct(period.get('reserved_buy_fill_rate', 0.0))} | {_format_pct(period.get('benchmark_return_pct', 0.0))} |"
         )
     with open(md_path, 'w', encoding='utf-8') as handle:
         handle.write("\n".join(lines) + "\n")
