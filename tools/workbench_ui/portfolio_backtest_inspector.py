@@ -26,7 +26,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
-from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_record_for_date, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -176,33 +176,8 @@ def _format_pct(value):
         return "-"
 
 
-def _format_rolling_schedule_console_lines(payload):
-    try:
-        schedule = build_active_param_schedule(payload)
-    except ValueError:
-        return []
-    lines = []
-    for record in schedule:
-        lines.append(f"{record['effective_date_text']} -> active param for OOS {record['year']}")
-    return lines
-
-
-def _build_rolling_dashboard_notes(*, payload, start_year, fixed_risk):
-    representative_date = f"{int(start_year)}-01-01"
-    try:
-        representative_record = get_active_param_record_for_date(payload, representative_date)
-        representative_effective = representative_record.get("effective_date_text", representative_date)
-    except (ValueError, KeyError, TypeError):
-        representative_effective = representative_date
-    notes = [
-        f"Rolling 模式：此區顯示代表參數，不代表整段回測只用這一套。",
-        f"代表參數：回測起始基準日 {representative_date} 已生效 active param（effective={representative_effective}）。",
-        f"實際投組回測：每個交易日依該日 effective date 自動切換 active param；fixed_risk 覆寫為 {float(fixed_risk):.4f}。",
-    ]
-    schedule_lines = _format_rolling_schedule_console_lines(payload)
-    if schedule_lines:
-        notes.append("Active param schedule：" + "；".join(schedule_lines))
-    return notes
+def _build_rolling_params_schedule_rows(payload):
+    return list(build_active_param_schedule(payload))
 
 
 def _fast_data_to_price_df(fast_data):
@@ -1725,23 +1700,18 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
         ensure_runtime_dirs()
         start_time = time.time()
-        rolling_dashboard_notes = []
+        rolling_params_schedule_rows = []
         params_section_title = "訓練參數"
         if is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(options["params_path"])
             params = build_params_from_mapping(get_active_params_for_date(rolling_payload, f"{options['start_year']}-01-01"))
             params.fixed_risk = float(options["fixed_risk"])
-            params_section_title = "Rolling 代表參數"
-            rolling_dashboard_notes = _build_rolling_dashboard_notes(
-                payload=rolling_payload,
-                start_year=options["start_year"],
-                fixed_risk=options["fixed_risk"],
-            )
+            params_section_title = "Rolling OOS 訓練參數"
+            rolling_params_schedule_rows = _build_rolling_params_schedule_rows(rolling_payload)
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
             for line in format_rolling_oos_summary_lines(rolling_payload):
                 print(f"{C_GRAY}{line}{C_RESET}")
-            print(f"{C_GRAY}ℹ️ 單筆固定風險覆寫到每個 active param: {params.fixed_risk:.4f}{C_RESET}")
             result = run_portfolio_simulation_with_param_schedule(
                 data_dir,
                 rolling_payload,
@@ -1829,7 +1799,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             min_full_year_return_pct=min_full_year_return_pct,
             bm_min_full_year_return_pct=bm_min_full_year_return_pct,
             params_section_title=params_section_title,
-            params_note_lines=rolling_dashboard_notes,
+            params_schedule_rows=rolling_params_schedule_rows,
         )
 
         df_yearly = print_yearly_return_report(

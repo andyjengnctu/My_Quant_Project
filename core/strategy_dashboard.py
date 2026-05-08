@@ -29,6 +29,75 @@ from core.display_common import (
 from core.portfolio_stats import calc_portfolio_score
 
 
+def _format_filter_param_text(params):
+    bb_str = f"啟用 (長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x)" if get_p(params, 'use_bb', False) else "關閉"
+    kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
+    vol_str = f"啟用 (短{get_p(params, 'vol_short_len', 5)}>長{get_p(params, 'vol_long_len', 19)})" if get_p(params, 'use_vol', False) else "關閉"
+    return bb_str, kc_str, vol_str
+
+
+def _format_training_param_lines(params):
+    bb_str, kc_str, vol_str = _format_filter_param_text(params)
+    return [
+        (
+            f"核心參數 : "
+            f"突破 {get_p(params, 'high_len', 201):>3} 日新高 | "
+            f"ATR {get_p(params, 'atr_len', 14):>2} 日 | "
+            f"半倉停利 {get_p(params, 'tp_percent', 0.5) * 100:>5.1f}%"
+        ),
+        (
+            f"風控參數 : "
+            f"掛單 +{get_p(params, 'atr_buy_tol', 1.5):>4.1f} ATR | "
+            f"停損 -{get_p(params, 'atr_times_init', 2.0):>4.1f} ATR | "
+            f"追蹤 -{get_p(params, 'atr_times_trail', 3.5):>4.1f} ATR"
+        ),
+        (
+            f"濾網參數 : "
+            f"布林(BB) {bb_str} | "
+            f"阿肯那(KC) {kc_str} | "
+            f"均量 {vol_str}"
+        ),
+        (
+            f"歷史門檻 : "
+            f"交易 >= {get_p(params, 'min_history_trades', 0):>3} 次 | "
+            f"勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:>5.1f}% | "
+            f"EV >= {get_p(params, 'min_history_ev', 0.0):>5.2f} R"
+        ),
+    ]
+
+
+def _format_schedule_row_label(record):
+    if isinstance(record, dict):
+        year = record.get("year") or record.get("oos_year")
+        effective_date = record.get("effective_date_text") or record.get("effective_date") or "-"
+    else:
+        year = getattr(record, "year", None) or getattr(record, "oos_year", None)
+        effective_date = getattr(record, "effective_date_text", None) or getattr(record, "effective_date", "-")
+    year_text = str(year).strip() if year is not None else "-"
+    return f"OOS {year_text}（effective={effective_date}）"
+
+
+def _resolve_schedule_row_params(record):
+    if isinstance(record, dict):
+        return record.get("params_obj") or record.get("params") or record
+    return getattr(record, "params_obj", None) or getattr(record, "params", None) or record
+
+
+def _print_training_params_section(params, params_schedule_rows=None):
+    schedule_rows = list(params_schedule_rows or [])
+    if schedule_rows:
+        for record in schedule_rows:
+            row_params = _resolve_schedule_row_params(record)
+            print(f"{C_CYAN}{_format_schedule_row_label(record)}{C_RESET}")
+            for line in _format_training_param_lines(row_params):
+                print(f"  {line}")
+        return
+
+    for line in _format_training_param_lines(params):
+        print(line)
+
+
+
 def print_strategy_dashboard(
     params,
     title,
@@ -62,6 +131,7 @@ def print_strategy_dashboard(
     bm_min_full_year_return_pct=0.0,
     params_section_title="訓練參數",
     params_note_lines=None,
+    params_schedule_rows=None,
 ):
     alpha = sys_ret - bm_ret
     annual_alpha = annual_return_pct - bm_annual_return_pct
@@ -116,10 +186,6 @@ def print_strategy_dashboard(
     sys_worst_year_color = C_GREEN if min_full_year_return_pct > 0 else C_RED
     worst_year_alpha_color = C_GREEN if worst_year_alpha > 0 else C_RED
 
-    bb_str = f"啟用 (長{get_p(params, 'bb_len', 20)}, 寬{get_p(params, 'bb_mult', 2.0):.1f}x)" if get_p(params, 'use_bb', False) else "關閉"
-    kc_str = f"啟用 (長{get_p(params, 'kc_len', 20)}, 寬{get_p(params, 'kc_mult', 2.0):.1f}x)" if get_p(params, 'use_kc', False) else "關閉"
-    vol_str = f"啟用 (短{get_p(params, 'vol_short_len', 5)}>長{get_p(params, 'vol_long_len', 19)})" if get_p(params, 'use_vol', False) else "關閉"
-
     exp_str = f" (最高 {max_exp:.2f} %)" if max_exp is not None else ""
     normal_trades = trades if normal_trades is None else normal_trades
     extended_trades = 0 if extended_trades is None else extended_trades
@@ -157,30 +223,7 @@ def print_strategy_dashboard(
     print(f"【{params_section_title}】")
     for note_line in (params_note_lines or []):
         print(f"{C_GRAY}{note_line}{C_RESET}")
-    print(
-        f"核心參數 : "
-        f"突破 {get_p(params, 'high_len', 201):>3} 日新高 | "
-        f"ATR {get_p(params, 'atr_len', 14):>2} 日 | "
-        f"半倉停利 {get_p(params, 'tp_percent', 0.5) * 100:>5.1f}%"
-    )
-    print(
-        f"風控參數 : "
-        f"掛單 +{get_p(params, 'atr_buy_tol', 1.5):>4.1f} ATR | "
-        f"停損 -{get_p(params, 'atr_times_init', 2.0):>4.1f} ATR | "
-        f"追蹤 -{get_p(params, 'atr_times_trail', 3.5):>4.1f} ATR"
-    )
-    print(
-        f"濾網參數 : "
-        f"布林(BB) {bb_str} | "
-        f"阿肯那(KC) {kc_str} | "
-        f"均量 {vol_str}"
-    )
-    print(
-        f"歷史門檻 : "
-        f"交易 >= {get_p(params, 'min_history_trades', 0):>3} 次 | "
-        f"勝率 >= {get_p(params, 'min_history_win_rate', 0.3) * 100:>5.1f}% | "
-        f"EV >= {get_p(params, 'min_history_ev', 0.0):>5.2f} R"
-    )
+    _print_training_params_section(params, params_schedule_rows=params_schedule_rows)
 
     print(f"{C_GRAY}--------------------------------------------------------------------------------{C_RESET}")
     print("【共用硬門檻】")

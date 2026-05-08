@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_run_best_params_path
-from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_record_for_date, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 
@@ -184,8 +184,6 @@ def main(argv=None, env=None):
         print(f"\n{C_GREEN}✅ 成功載入 AI 訓練大腦！{C_RESET}")
         print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
         print(f"{C_GRAY}ℹ️ 單筆固定風險: {params.fixed_risk:.4f}{C_RESET}")
-    else:
-        print(f"{C_GRAY}ℹ️ 單筆固定風險覆寫到每個 active param: {user_fixed_risk:.4f}{C_RESET}")
 
     ensure_runtime_dirs()
     try:
@@ -233,29 +231,14 @@ def main(argv=None, env=None):
 
     dashboard_params = params
     dashboard_params_section_title = "訓練參數"
-    dashboard_params_note_lines = []
+    dashboard_params_schedule_rows = []
     if dashboard_params is None and rolling_payload is not None:
         from core.params_io import build_params_from_mapping
         representative_date = f"{user_start_year}-01-01"
         dashboard_params = build_params_from_mapping(get_active_params_for_date(rolling_payload, representative_date))
         dashboard_params.fixed_risk = user_fixed_risk
-        dashboard_params_section_title = "Rolling 代表參數"
-        try:
-            representative_record = get_active_param_record_for_date(rolling_payload, representative_date)
-            representative_effective = representative_record.get("effective_date_text", representative_date)
-        except (ValueError, KeyError, TypeError):
-            representative_effective = representative_date
-        dashboard_params_note_lines = [
-            "Rolling 模式：此區顯示代表參數，不代表整段回測只用這一套。",
-            f"代表參數：回測起始基準日 {representative_date} 已生效 active param（effective={representative_effective}）。",
-            f"實際投組回測：每個交易日依該日 effective date 自動切換 active param；fixed_risk 覆寫為 {float(user_fixed_risk):.4f}。",
-        ]
-        try:
-            schedule_lines = [f"{record['effective_date_text']} -> active param for OOS {record['year']}" for record in build_active_param_schedule(rolling_payload)]
-        except ValueError:
-            schedule_lines = []
-        if schedule_lines:
-            dashboard_params_note_lines.append("Active param schedule：" + "；".join(schedule_lines))
+        dashboard_params_section_title = "Rolling OOS 訓練參數"
+        dashboard_params_schedule_rows = list(build_active_param_schedule(rolling_payload))
 
     print_strategy_dashboard(
         params=dashboard_params, title="績效與風險對比表", mode_display=mode_display, max_pos=user_max_pos,
@@ -269,7 +252,7 @@ def main(argv=None, env=None):
         annual_return_pct=annual_return_pct, bm_annual_return_pct=bm_annual_return_pct,
         min_full_year_return_pct=min_full_year_return_pct, bm_min_full_year_return_pct=bm_min_full_year_return_pct,
         params_section_title=dashboard_params_section_title,
-        params_note_lines=dashboard_params_note_lines
+        params_schedule_rows=dashboard_params_schedule_rows
     )
 
     df_yearly = print_yearly_return_report(
