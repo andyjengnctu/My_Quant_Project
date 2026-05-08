@@ -656,6 +656,8 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
         "base_rank": int(item.get("base_rank", 0) or 0),
         "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
+        "local_min_exact": bool(item.get("local_min_exact", True)),
+        "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
         "local_rank": int(local_rank_map.get(trial_number, 0)),
         "retention": float(item.get("local_retention", 0.0)),
         "retention_rank": int(retention_rank_map.get(trial_number, 0)),
@@ -1920,6 +1922,8 @@ def run_outer_rolling_oos(
                 include_trial=None,
                 show_progress=True,
                 include_oos_diagnostics=False,
+                single_finalist_fast_path=True,
+                selection_pruning=True,
             )
             if hasattr(session, "outer_rolling_local_progress_context"):
                 delattr(session, "outer_rolling_local_progress_context")
@@ -2045,7 +2049,9 @@ def run_outer_rolling_oos(
     ) if rows else {}
     active_replay_chain_sec = max(0.0, time.perf_counter() - active_replay_started)
     report_write_started = time.perf_counter()
-    paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained)
+    paths = {}
+    if not bool(timing_mode):
+        paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained)
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     timing_paths = _write_outer_timing_summary(
         output_dir=output_dir,
@@ -2064,13 +2070,18 @@ def run_outer_rolling_oos(
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained), color=True))
-    print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
-    print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
-    print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")
-    print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
-    if timing_paths.get("csv"):
-        print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
-    for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
-        print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
+    if bool(timing_mode):
+        print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
+        if timing_paths.get("csv"):
+            print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
+    else:
+        print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
+        print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
+        print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")
+        print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
+        if timing_paths.get("csv"):
+            print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
+        for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
+            print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
     _print_outer_timing_summary(timing_paths.get("payload", {}))
     return 0

@@ -24,6 +24,7 @@ from tools.optimizer.objective_runner import (
     resolve_inner_validate_scope,
     resolve_search_train_scope,
 )
+from tools.optimizer.param_cache import build_full_evaluation_cache_key, build_prep_cache_key
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.walk_forward import evaluate_walk_forward
 from tools.optimizer.study_utils import (
@@ -665,6 +666,7 @@ def compute_local_min_score(
     on_start=None,
     on_neighbor=None,
     on_finish=None,
+    stop_below_local_min_score: float | None = None,
 ):
     cache = _get_local_min_score_cache(session)
     payload_score_cache = _get_local_min_payload_score_cache(session)
@@ -702,31 +704,57 @@ def compute_local_min_score(
     local_min_score = float("inf")
     evaluated_neighbors = 0
     early_stopped = False
+    selection_pruned = False
+    try:
+        selection_prune_floor = float(stop_below_local_min_score) if stop_below_local_min_score is not None else None
+    except (TypeError, ValueError):
+        selection_prune_floor = None
     for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
         evaluated_neighbors = neighbor_idx
         payload_cache_key = _build_payload_score_cache_key(payload)
         cached_payload_score = payload_score_cache.get(payload_cache_key)
         if cached_payload_score is None:
             ai_params = build_params_from_mapping(payload)
-            prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-            prep_result = prepare_trial_inputs(
-                raw_data_cache=session.raw_data_cache,
-                params=ai_params,
-                default_max_workers=session.default_max_workers,
-                executor_bundle=prep_executor_bundle,
-                static_fast_cache=session.static_fast_cache,
-                static_master_dates=session.master_dates,
-                include_trade_logs=False,
-                include_pit_stats_index=True,
-            )
+            prep_cache_key = build_prep_cache_key(ai_params)
+            get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
+            prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+            if prep_result is None:
+                prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+                prep_result = prepare_trial_inputs(
+                    raw_data_cache=session.raw_data_cache,
+                    params=ai_params,
+                    default_max_workers=session.default_max_workers,
+                    executor_bundle=prep_executor_bundle,
+                    static_fast_cache=session.static_fast_cache,
+                    static_master_dates=session.master_dates,
+                    include_trade_logs=False,
+                    include_pit_stats_index=True,
+                )
+                cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+                if callable(cache_prep):
+                    cache_prep(prep_cache_key, prep_result)
             search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=session.objective_mode)
-            evaluation = evaluate_prepared_train_score(
-                session,
-                ai_params=ai_params,
-                prep_result=prep_result,
-                search_scope=search_scope,
-                profile_stats=None,
+            full_evaluation_cache_key = build_full_evaluation_cache_key(
+                ai_params,
+                objective_mode=search_scope.get("mode", session.objective_mode),
+                train_start_year=session.train_start_year,
+                search_train_end_year=int(search_scope.get("effective_search_train_end_year", session.search_train_end_year)),
+                max_positions=session.train_max_positions,
+                enable_rotation=session.train_enable_rotation,
             )
+            get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
+            evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
+            if evaluation is None:
+                evaluation = evaluate_prepared_train_score(
+                    session,
+                    ai_params=ai_params,
+                    prep_result=prep_result,
+                    search_scope=search_scope,
+                    profile_stats=None,
+                )
+                cache_evaluation = getattr(session, "cache_full_evaluation", None)
+                if callable(cache_evaluation):
+                    cache_evaluation(full_evaluation_cache_key, evaluation)
             score = float(evaluation["score"])
             payload_score_cache[payload_cache_key] = score
         else:
@@ -740,15 +768,22 @@ def compute_local_min_score(
         if local_min_score <= 0.0:
             early_stopped = neighbor_idx < total_neighbors
             break
+        if selection_prune_floor is not None and local_min_score < float(selection_prune_floor):
+            # AI註: 只在 outer rolling 已有更佳 local/retention 候選時啟用。
+            # local_min 只會隨更多鄰點持平或下降；低於雙重勝出門檻後已不可能成為 local 或 retention rank_1。
+            selection_pruned = neighbor_idx < total_neighbors
+            early_stopped = bool(selection_pruned)
+            break
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
-    cache[cache_key] = {
-        "score": float(local_min_score),
-        "total_neighbors": total_neighbors,
-        "evaluated_neighbors": evaluated_neighbors,
-        "early_stopped": bool(early_stopped),
-    }
+    if not selection_pruned:
+        cache[cache_key] = {
+            "score": float(local_min_score),
+            "total_neighbors": total_neighbors,
+            "evaluated_neighbors": evaluated_neighbors,
+            "early_stopped": bool(early_stopped),
+        }
     if on_finish is not None:
         on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))
     elif progress_label:
@@ -1015,6 +1050,8 @@ def list_local_min_score_finalists(
     include_trial=None,
     show_progress: bool = False,
     include_oos_diagnostics: bool = True,
+    single_finalist_fast_path: bool = False,
+    selection_pruning: bool = False,
 ):
     resolved_top_k = _resolve_local_min_score_finalist_top_k(session, top_k)
     sorted_trials = _list_qualified_trials_for_objective(study, objective_mode)
@@ -1023,14 +1060,42 @@ def list_local_min_score_finalists(
 
     _seed_payload_score_cache_from_study(session, study, objective_mode)
     finalists = _build_display_finalists(sorted_trials, top_k=resolved_top_k, include_trial=include_trial)
+    gates_require_exact_review = bool(is_inner_validate_anti_overfit_enabled(objective_mode) or is_dominant_year_dependency_anti_overfit_enabled())
+    if (
+        bool(single_finalist_fast_path)
+        and include_trial is None
+        and not bool(include_oos_diagnostics)
+        and not gates_require_exact_review
+        and len(finalists) == 1
+    ):
+        item = finalists[0]
+        base_score = float(item["base_score"])
+        return [{
+            "trial": item["trial"],
+            "base_rank": int(item.get("base_rank", 0)),
+            "base_score": base_score,
+            "local_min_score": base_score,
+            "local_retention": _compute_local_retention(base_score, base_score),
+            "gate_pass": bool(base_score > 0.0),
+            "local_min_review_mode": "single_finalist_selection_equivalent_fast_path",
+            "local_min_exact": False,
+        }]
     progress_board = None
     if show_progress:
         progress_board = _FinalistProgressBoard(session, finalists)
         progress_board.initialize()
 
     enriched_finalists = []
+    best_selection_local_min = float("-inf")
+    best_selection_retention = float("-inf")
+    allow_selection_pruning = bool(selection_pruning) and not gates_require_exact_review
     for finalist_idx, item in enumerate(finalists):
         trial = item["trial"]
+        base_score = float(item["base_score"])
+        selection_prune_floor = None
+        if allow_selection_pruning and best_selection_local_min != float("-inf") and best_selection_retention != float("-inf") and base_score > 0.0:
+            retention_floor = float(best_selection_retention) * float(base_score)
+            selection_prune_floor = min(float(best_selection_local_min), float(retention_floor))
         if progress_board is not None:
             local_min_score = compute_local_min_score(
                 session,
@@ -1050,10 +1115,14 @@ def list_local_min_score_finalists(
                     local_min_score=score,
                     early_stopped=early_stopped,
                 ),
+                stop_below_local_min_score=selection_prune_floor,
             )
         else:
-            local_min_score = compute_local_min_score(session, trial)
-        base_score = float(item["base_score"])
+            local_min_score = compute_local_min_score(
+                session,
+                trial,
+                stop_below_local_min_score=selection_prune_floor,
+            )
         enriched_item = {
             "trial": trial,
             "base_rank": int(item.get("base_rank", 0)),
@@ -1077,6 +1146,9 @@ def list_local_min_score_finalists(
         if bool(include_oos_diagnostics):
             enriched_item["oos_diagnostics"] = _resolve_trial_oos_diagnostics(session, trial)
         enriched_finalists.append(enriched_item)
+        if bool(enriched_item.get("gate_pass", False)):
+            best_selection_local_min = max(best_selection_local_min, float(enriched_item["local_min_score"]))
+            best_selection_retention = max(best_selection_retention, float(enriched_item["local_retention"]))
     if is_inner_validate_anti_overfit_enabled(objective_mode):
         _annotate_inner_validate_ranks(enriched_finalists)
     enriched_finalists.sort(
