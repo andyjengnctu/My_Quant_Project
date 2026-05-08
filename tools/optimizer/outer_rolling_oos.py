@@ -24,6 +24,7 @@ from core.runtime_utils import choose_inline_progress_message, get_taipei_now, i
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
+from tools.optimizer.param_cache import build_prep_cache_key
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.robustness import (
     _has_dependency_warning,
@@ -754,9 +755,23 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
     }
 
 
-def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False):
-    payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
-    params = build_params_from_mapping(payload)
+def _prep_result_has_pit_index(prep_result) -> bool:
+    if not isinstance(prep_result, dict):
+        return False
+    pit_stats_index = prep_result.get("all_pit_stats_index")
+    return isinstance(pit_stats_index, dict) and bool(pit_stats_index)
+
+
+def _get_or_prepare_oos_inputs(*, session, params):
+    # AI註: OOS diagnostics only needs dynamic data + PIT stats index for
+    # portfolio replay.  Standalone trade logs are unnecessary when the PIT
+    # index is already available, so reuse the normal optimizer prep cache.
+    prep_cache_key = build_prep_cache_key(params)
+    get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
+    prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+    if _prep_result_has_pit_index(prep_result):
+        return prep_result
+
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
     prep_result = prepare_trial_inputs(
         raw_data_cache=session.raw_data_cache,
@@ -765,10 +780,20 @@ def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve
         executor_bundle=prep_executor_bundle,
         static_fast_cache=session.static_fast_cache,
         static_master_dates=session.master_dates,
-        include_trade_logs=True,
+        include_trade_logs=False,
         include_pit_stats_index=True,
         profile_enabled=False,
     )
+    cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+    if callable(cache_prep):
+        cache_prep(prep_cache_key, prep_result)
+    return prep_result
+
+
+def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False):
+    payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+    params = build_params_from_mapping(payload)
+    prep_result = _get_or_prepare_oos_inputs(session=session, params=params)
     all_dates = sorted(prep_result["master_dates"])
     test_dates = [dt for dt in all_dates if int(getattr(dt, "year", 0) or 0) == int(oos_year)]
     if not test_dates:
