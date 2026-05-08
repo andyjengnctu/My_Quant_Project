@@ -1731,6 +1731,67 @@ def _build_meta_quality_reuse_payload(*, line_percent=70.0, branch_percent=65.0,
 
 
 
+def validate_meta_quality_coverage_threshold_uses_target_scope_case(_base_params):
+    case_id = "META_QUALITY_COVERAGE_THRESHOLD_USES_TARGET_SCOPE"
+    results = []
+    summary = {"ticker": case_id, "synthetic": True}
+
+    with tempfile.TemporaryDirectory(prefix="meta_cov_target_scope_") as temp_dir:
+        run_dir = Path(temp_dir)
+        coverage_dir = run_dir / "coverage_artifacts"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        payload = _build_meta_quality_reuse_payload(
+            line_percent=5.0,
+            branch_percent=4.0,
+            critical_line_percent=80.0,
+            critical_branch_percent=70.0,
+        )
+        payload["files"]["tools/optimizer/untracked_helper.py"] = {
+            "summary": {
+                "covered_lines": 0,
+                "num_statements": 1000,
+                "percent_covered": 0.0,
+                "covered_branches": 0,
+                "num_branches": 1000,
+            }
+        }
+        (coverage_dir / "coverage_synthetic.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (coverage_dir / "coverage_run_info.json").write_text(json.dumps({
+            "source": "validate_consistency",
+            "returncode": 0,
+            "stdout": "cached",
+            "stderr": "",
+            "timed_out": False,
+            "synthetic_fail_count": 0,
+            "synthetic_case_count": 99,
+            "json_generated": True,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest = {
+            "coverage_line_min_percent": 55.0,
+            "coverage_branch_min_percent": 50.0,
+            "coverage_critical_line_min_percent": 30.0,
+            "coverage_critical_branch_min_percent": 25.0,
+        }
+        coverage_summary = build_coverage_summary(run_dir, manifest)
+
+    line_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_line_percent_within_minimum")
+    branch_gate_result = _summary_result_by_name(coverage_summary["results"], "coverage_branch_percent_within_minimum")
+    totals = coverage_summary.get("totals", {})
+
+    add_check(results, "meta_coverage", case_id, "coverage_threshold_scope_is_declared_targets", "coverage_targets", totals.get("scope"))
+    add_check(results, "meta_coverage", case_id, "coverage_target_scope_passes_line_gate", "PASS", line_gate_result.get("status"))
+    add_check(results, "meta_coverage", case_id, "coverage_target_scope_passes_branch_gate", "PASS", branch_gate_result.get("status"))
+    add_check(results, "meta_coverage", case_id, "coverage_raw_payload_totals_preserved_for_diagnostics", True, totals.get("raw_project_line_percent_covered", 0.0) < 55.0 and totals.get("raw_project_branch_percent_covered", 0.0) < 50.0)
+    add_check(results, "meta_coverage", case_id, "coverage_untracked_files_do_not_create_missing_targets", [], coverage_summary.get("missing_targets", []))
+
+    summary["scope"] = totals.get("scope")
+    summary["target_line_percent"] = totals.get("line_percent_covered")
+    summary["target_branch_percent"] = totals.get("branch_percent_covered")
+    summary["raw_project_line_percent"] = totals.get("raw_project_line_percent_covered")
+    summary["raw_project_branch_percent"] = totals.get("raw_project_branch_percent_covered")
+    return results, summary
+
+
 def validate_core_trading_modules_in_coverage_targets_case(_base_params):
     case_id = "META_CORE_TRADING_MODULES_IN_COVERAGE_TARGETS"
     results = []

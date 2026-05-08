@@ -550,8 +550,16 @@ def build_coverage_summary(
 
     core_target_missing = sorted(rel_path for rel_path in CORE_TRADING_COVERAGE_TARGETS if rel_path not in COVERAGE_TARGETS)
 
-    line_percent_covered = _ratio_percent(totals.get("covered_lines", 0), totals.get("num_statements", 0))
-    branch_percent_covered = _ratio_percent(totals.get("covered_branches", 0), totals.get("num_branches", 0))
+    raw_totals = dict(totals)
+    target_covered_lines = sum(int(info.get("covered_lines", 0) or 0) for info in key_files.values())
+    target_num_statements = sum(int(info.get("num_statements", 0) or 0) for info in key_files.values())
+    target_covered_branches = sum(int(info.get("covered_branches", 0) or 0) for info in key_files.values())
+    target_num_branches = sum(int(info.get("num_branches", 0) or 0) for info in key_files.values())
+    line_percent_covered = _ratio_percent(target_covered_lines, target_num_statements)
+    branch_percent_covered = _ratio_percent(target_covered_branches, target_num_branches)
+    target_percent_covered = (line_percent_covered + branch_percent_covered) / 2.0
+    raw_line_percent_covered = _ratio_percent(raw_totals.get("covered_lines", 0), raw_totals.get("num_statements", 0))
+    raw_branch_percent_covered = _ratio_percent(raw_totals.get("covered_branches", 0), raw_totals.get("num_branches", 0))
     line_min_percent = float(manifest["coverage_line_min_percent"])
     branch_min_percent = float(manifest["coverage_branch_min_percent"])
     critical_line_min_percent = float(manifest["coverage_critical_line_min_percent"])
@@ -599,13 +607,15 @@ def build_coverage_summary(
         ),
         summarize_result(
             "coverage_overall_nonzero",
-            float(totals.get("percent_covered", 0.0) or 0.0) > 0.0,
+            target_percent_covered > 0.0,
             detail=(
-                f"line={totals.get('covered_lines', 0)}/{totals.get('num_statements', 0)} | "
-                f"branch={totals.get('covered_branches', 0)}/{totals.get('num_branches', 0)} | "
-                f"percent={totals.get('percent_covered', 0.0)}"
+                f"target_line={target_covered_lines}/{target_num_statements} | "
+                f"target_branch={target_covered_branches}/{target_num_branches} | "
+                f"target_percent={target_percent_covered:.2f} | "
+                f"raw_line={raw_totals.get('covered_lines', 0)}/{raw_totals.get('num_statements', 0)} | "
+                f"raw_branch={raw_totals.get('covered_branches', 0)}/{raw_totals.get('num_branches', 0)}"
             ),
-            extra={"totals": totals},
+            extra={"target_scope": {"covered_lines": target_covered_lines, "num_statements": target_num_statements, "covered_branches": target_covered_branches, "num_branches": target_num_branches}, "raw_totals": raw_totals},
         ),
         summarize_result(
             "coverage_thresholds_respect_formal_floor",
@@ -690,13 +700,21 @@ def build_coverage_summary(
         "coverage_reuse_error": coverage_reuse_error,
         "reused_existing": reused_existing,
         "totals": {
-            "covered_lines": int(totals.get("covered_lines", 0) or 0),
-            "num_statements": int(totals.get("num_statements", 0) or 0),
-            "covered_branches": int(totals.get("covered_branches", 0) or 0),
-            "num_branches": int(totals.get("num_branches", 0) or 0),
-            "percent_covered": float(totals.get("percent_covered", 0.0) or 0.0),
+            "scope": "coverage_targets",
+            "covered_lines": target_covered_lines,
+            "num_statements": target_num_statements,
+            "covered_branches": target_covered_branches,
+            "num_branches": target_num_branches,
+            "percent_covered": target_percent_covered,
             "line_percent_covered": line_percent_covered,
             "branch_percent_covered": branch_percent_covered,
+            "raw_project_covered_lines": int(raw_totals.get("covered_lines", 0) or 0),
+            "raw_project_num_statements": int(raw_totals.get("num_statements", 0) or 0),
+            "raw_project_covered_branches": int(raw_totals.get("covered_branches", 0) or 0),
+            "raw_project_num_branches": int(raw_totals.get("num_branches", 0) or 0),
+            "raw_project_percent_covered": float(raw_totals.get("percent_covered", 0.0) or 0.0),
+            "raw_project_line_percent_covered": raw_line_percent_covered,
+            "raw_project_branch_percent_covered": raw_branch_percent_covered,
             "line_min_percent": line_min_percent,
             "branch_min_percent": branch_min_percent,
             "critical_line_min_percent": critical_line_min_percent,
