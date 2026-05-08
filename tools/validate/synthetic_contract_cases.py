@@ -3099,22 +3099,26 @@ def validate_meta_quality_reuses_existing_coverage_artifacts_case(base_params):
         run_dir = Path(temp_dir)
         coverage_dir = run_dir / "coverage_artifacts"
         coverage_dir.mkdir(parents=True, exist_ok=True)
+        reused_line_percent = min(100.0, max(overall_line_floor, critical_line_floor) + 5.0)
+        reused_branch_percent = min(100.0, max(overall_branch_floor, critical_branch_floor) + 5.0)
+        reused_line_covered = int(round(reused_line_percent))
+        reused_branch_covered = int(round(reused_branch_percent))
         coverage_payload = {
             "totals": {
-                "covered_lines": int(max(overall_line_floor, 60.0) * 2),
-                "num_statements": 200,
-                "covered_branches": int(max(overall_branch_floor, 60.0) * 2),
-                "num_branches": 200,
-                "percent_covered": float((max(overall_line_floor, 60.0) + max(overall_branch_floor, 60.0)) / 2.0),
+                "covered_lines": reused_line_covered * len(COVERAGE_TARGETS),
+                "num_statements": 100 * len(COVERAGE_TARGETS),
+                "covered_branches": reused_branch_covered * len(COVERAGE_TARGETS),
+                "num_branches": 100 * len(COVERAGE_TARGETS),
+                "percent_covered": float((reused_line_percent + reused_branch_percent) / 2.0),
             },
             "files": {
                 rel_path: {
                     "summary": {
-                        "covered_lines": int(critical_line_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
-                        "num_statements": 100 if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
-                        "percent_covered": float(critical_line_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 100.0,
-                        "covered_branches": int(critical_branch_floor) if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
-                        "num_branches": 100 if rel_path in CRITICAL_COVERAGE_TARGETS else 1,
+                        "covered_lines": reused_line_covered,
+                        "num_statements": 100,
+                        "percent_covered": reused_line_percent,
+                        "covered_branches": reused_branch_covered,
+                        "num_branches": 100,
                     }
                 }
                 for rel_path in COVERAGE_TARGETS
