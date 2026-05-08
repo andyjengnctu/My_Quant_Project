@@ -415,6 +415,8 @@ def _build_outer_timing_row(
         "local_min_neighbors_skipped": int(local_min_stats.get("skipped_neighbors", 0) or 0),
         "local_min_payload_score_cache_hits": int(local_min_stats.get("payload_score_cache_hits", 0) or 0),
         "local_min_prep_cache_prioritized": int(local_min_stats.get("prep_cache_prioritized", 0) or 0),
+        "local_min_order_score_prioritized": int(local_min_stats.get("order_score_prioritized", 0) or 0),
+        "local_min_field_order_score_prioritized": int(local_min_stats.get("field_order_score_prioritized", 0) or 0),
         "local_min_early_stops": int(local_min_stats.get("early_stops", 0) or 0),
         "local_min_selection_prunes": int(local_min_stats.get("selection_prunes", 0) or 0),
     }
@@ -472,6 +474,8 @@ def _write_outer_timing_summary(
     local_min_neighbors_evaluated = sum(int(row.get("local_min_neighbors_evaluated", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_payload_score_cache_hits = sum(int(row.get("local_min_payload_score_cache_hits", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_prep_cache_prioritized = sum(int(row.get("local_min_prep_cache_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_order_score_prioritized = sum(int(row.get("local_min_order_score_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_field_order_score_prioritized = sum(int(row.get("local_min_field_order_score_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_early_stops = sum(int(row.get("local_min_early_stops", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_selection_prunes = sum(int(row.get("local_min_selection_prunes", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
@@ -517,6 +521,8 @@ def _write_outer_timing_summary(
             "local_min_neighbors_skipped": max(0, int(local_min_neighbors_total) - int(local_min_neighbors_evaluated)),
             "local_min_payload_score_cache_hits": int(local_min_payload_score_cache_hits),
             "local_min_prep_cache_prioritized": int(local_min_prep_cache_prioritized),
+            "local_min_order_score_prioritized": int(local_min_order_score_prioritized),
+            "local_min_field_order_score_prioritized": int(local_min_field_order_score_prioritized),
             "local_min_early_stops": int(local_min_early_stops),
             "local_min_selection_prunes": int(local_min_selection_prunes),
             "prep_executor_created": int(prep_executor_created),
@@ -555,6 +561,8 @@ def _print_outer_timing_summary(payload: dict):
         f"local_neighbors={int(summary.get('local_min_neighbors_evaluated', 0) or 0)}/"
         f"{int(summary.get('local_min_neighbors_total', 0) or 0)}｜"
         f"skip={int(summary.get('local_min_neighbors_skipped', 0) or 0)}｜"
+        f"order_hint={int(summary.get('local_min_order_score_prioritized', 0) or 0)}｜"
+        f"field_hint={int(summary.get('local_min_field_order_score_prioritized', 0) or 0)}｜"
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
@@ -816,16 +824,25 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     best_trial_number = None
     best_trial = None
     best_metrics: dict = {}
-    report_cache: dict[tuple[int, bool], dict] = {}
+    report_cache: dict[int, dict] = {}
     metrics_by_trial: dict[int, dict] = {}
     benchmark_score = 0.0
     benchmark_return_pct = 0.0
     benchmark_mdd_pct = 0.0
+    curve_trial_numbers = {
+        int(item["trial"].number)
+        for item in dict(policy_items or {}).values()
+        if item is not None and item.get("trial") is not None
+    }
 
     def _load_trial_metrics(trial, *, include_equity_curve: bool) -> dict:
         trial_number = int(trial.number)
-        key = (trial_number, bool(include_equity_curve))
-        report = report_cache.get(key)
+        cached_entry = report_cache.get(trial_number)
+        report = None
+        if cached_entry is not None:
+            cached_has_curve = bool(cached_entry.get("include_equity_curve", False))
+            if cached_has_curve or not bool(include_equity_curve):
+                report = cached_entry.get("report")
         if report is None:
             report = _evaluate_next_1y_oos(
                 session=session,
@@ -833,7 +850,10 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
                 oos_year=int(oos_year),
                 include_equity_curve=bool(include_equity_curve),
             )
-            report_cache[key] = report
+            report_cache[trial_number] = {
+                "include_equity_curve": bool(include_equity_curve),
+                "report": report,
+            }
         metrics = _extract_period_metrics(report)
         if bool(include_equity_curve) or trial_number not in metrics_by_trial:
             metrics_by_trial[trial_number] = dict(metrics)
@@ -844,7 +864,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         if trial is None:
             continue
         trial_number = int(trial.number)
-        metrics = _load_trial_metrics(trial, include_equity_curve=False)
+        metrics = _load_trial_metrics(trial, include_equity_curve=trial_number in curve_trial_numbers)
         benchmark_score = float(metrics.get("benchmark_oos_score", benchmark_score))
         benchmark_return_pct = float(metrics.get("benchmark_return_pct", benchmark_return_pct))
         benchmark_mdd_pct = float(metrics.get("benchmark_mdd_pct", benchmark_mdd_pct))
@@ -1912,6 +1932,8 @@ def run_outer_rolling_oos(
     chain_enable_rotation: bool | None = None
     rolling_shared_prep_cache = OrderedDict()
     rolling_shared_prep_cache_max_items = _resolve_rolling_shared_prep_cache_max_items(environ)
+    rolling_shared_local_min_order_score_cache = {}
+    rolling_shared_local_min_field_order_score_cache = {}
     rolling_shared_prep_executor_holder = {}
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     overall_start = time.perf_counter()
@@ -1960,6 +1982,12 @@ def run_outer_rolling_oos(
             attach_shared_cache = getattr(session, "attach_shared_prepared_trial_input_cache", None)
             if callable(attach_shared_cache):
                 attach_shared_cache(rolling_shared_prep_cache, max_items=rolling_shared_prep_cache_max_items)
+        attach_order_score_cache = getattr(session, "attach_shared_local_min_order_score_cache", None)
+        if callable(attach_order_score_cache):
+            attach_order_score_cache(rolling_shared_local_min_order_score_cache)
+        attach_field_order_score_cache = getattr(session, "attach_shared_local_min_field_order_score_cache", None)
+        if callable(attach_field_order_score_cache):
+            attach_field_order_score_cache(rolling_shared_local_min_field_order_score_cache)
         reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
         if callable(reset_prep_cache_stats):
             reset_prep_cache_stats()

@@ -57,6 +57,14 @@ def _get_local_min_payload_score_cache(session):
     return session.local_min_payload_score_cache
 
 
+def _get_local_min_order_score_cache(session):
+    cache = getattr(session, "local_min_order_score_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    session.local_min_order_score_cache = {}
+    return session.local_min_order_score_cache
+
+
 def _get_dominant_year_dependency_cache(session):
     if not hasattr(session, "dominant_year_dependency_cache"):
         session.dominant_year_dependency_cache = {}
@@ -157,19 +165,49 @@ def _build_payload_score_cache_key(payload: dict):
     return tuple(sorted(canonical_payload.items()))
 
 
-def _rank_local_min_neighbor_payloads(session, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
+def _get_local_min_field_order_score_cache(session):
+    cache = getattr(session, "local_min_field_order_score_cache", None)
+    if isinstance(cache, dict):
+        return cache
+    session.local_min_field_order_score_cache = {}
+    return session.local_min_field_order_score_cache
+
+
+def _infer_neighbor_delta(center_payload: dict, payload: dict) -> tuple[str, int] | None:
+    changed_fields = [
+        field_name for field_name in sorted(set(center_payload) | set(payload))
+        if center_payload.get(field_name) != payload.get(field_name)
+    ]
+    if len(changed_fields) != 1:
+        return None
+    field_name = changed_fields[0]
+    old_value = center_payload.get(field_name)
+    new_value = payload.get(field_name)
+    try:
+        direction = 1 if float(new_value) > float(old_value) else -1
+    except (TypeError, ValueError):
+        direction = 1 if str(new_value) > str(old_value) else -1
+    return str(field_name), int(direction)
+
+
+def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
     """Evaluate cheap / likely-pruning neighbors first without changing local-min semantics.
 
     The local-min score is the minimum over the same neighbor set, so order does
     not affect exact reviews.  In outer rolling selection-pruning mode, an early
     low neighbor can safely stop the review because additional neighbors can only
-    keep or lower the minimum.
+    keep or lower the minimum.  Cross-fold order scores are used only as ordering
+    hints; they are never reused as current-fold scores.
     """
 
     has_prep_cache = getattr(session, "has_prepared_trial_inputs_in_cache", None)
+    order_score_cache = _get_local_min_order_score_cache(session)
+    field_order_score_cache = _get_local_min_field_order_score_cache(session)
     ranked_items = []
     prep_cache_prioritized = 0
     payload_score_candidates = 0
+    order_score_prioritized = 0
+    field_order_score_prioritized = 0
     for original_idx, payload in enumerate(list(neighbor_payloads or [])):
         payload_cache_key = _build_payload_score_cache_key(payload)
         cached_payload_score = payload_score_cache.get(payload_cache_key)
@@ -182,6 +220,23 @@ def _rank_local_min_neighbor_payloads(session, neighbor_payloads: list[dict], pa
             ranked_items.append((0, cached_score_sort_value, original_idx, payload))
             continue
 
+        order_score = order_score_cache.get(payload_cache_key)
+        has_order_score = order_score is not None
+        try:
+            order_score_sort_value = float(order_score) if has_order_score else 0.0
+        except (TypeError, ValueError):
+            has_order_score = False
+            order_score_sort_value = 0.0
+
+        delta_key = _infer_neighbor_delta(center_payload, payload)
+        field_order_score = field_order_score_cache.get(delta_key) if delta_key is not None else None
+        has_field_order_score = field_order_score is not None
+        try:
+            field_order_score_sort_value = float(field_order_score) if has_field_order_score else 0.0
+        except (TypeError, ValueError):
+            has_field_order_score = False
+            field_order_score_sort_value = 0.0
+
         prep_cached = False
         if callable(has_prep_cache):
             try:
@@ -189,16 +244,32 @@ def _rank_local_min_neighbor_payloads(session, neighbor_payloads: list[dict], pa
                 prep_cached = bool(has_prep_cache(build_prep_cache_key(ai_params)))
             except (TypeError, ValueError, KeyError, AttributeError):
                 prep_cached = False
+
         if prep_cached:
             prep_cache_prioritized += 1
-            ranked_items.append((1, 0.0, original_idx, payload))
+            if has_order_score:
+                order_score_prioritized += 1
+                ranked_items.append((1, order_score_sort_value, original_idx, payload))
+            elif has_field_order_score:
+                field_order_score_prioritized += 1
+                ranked_items.append((2, field_order_score_sort_value, original_idx, payload))
+            else:
+                ranked_items.append((3, 0.0, original_idx, payload))
+        elif has_order_score:
+            order_score_prioritized += 1
+            ranked_items.append((4, order_score_sort_value, original_idx, payload))
+        elif has_field_order_score:
+            field_order_score_prioritized += 1
+            ranked_items.append((5, field_order_score_sort_value, original_idx, payload))
         else:
-            ranked_items.append((2, 0.0, original_idx, payload))
+            ranked_items.append((6, 0.0, original_idx, payload))
 
     ranked_items.sort(key=lambda item: (item[0], item[1], item[2]))
     return [item[3] for item in ranked_items], {
         "payload_score_candidates": int(payload_score_candidates),
         "prep_cache_prioritized": int(prep_cache_prioritized),
+        "order_score_prioritized": int(order_score_prioritized),
+        "field_order_score_prioritized": int(field_order_score_prioritized),
     }
 
 
@@ -741,7 +812,8 @@ def compute_local_min_score(
         return float(local_min_score)
 
     total_neighbors = len(neighbor_payloads)
-    neighbor_payloads, neighbor_rank_stats = _rank_local_min_neighbor_payloads(session, neighbor_payloads, payload_score_cache)
+    center_payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=session.optimizer_fixed_tp_percent)
+    neighbor_payloads, neighbor_rank_stats = _rank_local_min_neighbor_payloads(session, center_payload, neighbor_payloads, payload_score_cache)
     if on_start is not None:
         on_start(total_neighbors)
     elif progress_label:
@@ -808,6 +880,17 @@ def compute_local_min_score(
         else:
             payload_score_cache_hit_count += 1
             score = float(cached_payload_score)
+        _get_local_min_order_score_cache(session)[payload_cache_key] = float(score)
+        delta_key = _infer_neighbor_delta(center_payload, payload)
+        if delta_key is not None:
+            field_score_cache = _get_local_min_field_order_score_cache(session)
+            prior_score = field_score_cache.get(delta_key)
+            try:
+                should_update_field_score = prior_score is None or float(score) < float(prior_score)
+            except (TypeError, ValueError):
+                should_update_field_score = True
+            if bool(should_update_field_score):
+                field_score_cache[delta_key] = float(score)
 
         if score < local_min_score:
             local_min_score = score
@@ -840,6 +923,8 @@ def compute_local_min_score(
             evaluated_neighbors=evaluated_neighbors,
             payload_score_cache_hits=payload_score_cache_hit_count,
             prep_cache_prioritized=int(neighbor_rank_stats.get("prep_cache_prioritized", 0) or 0),
+            order_score_prioritized=int(neighbor_rank_stats.get("order_score_prioritized", 0) or 0),
+            field_order_score_prioritized=int(neighbor_rank_stats.get("field_order_score_prioritized", 0) or 0),
             early_stopped=bool(early_stopped),
             selection_pruned=bool(selection_pruned),
         )

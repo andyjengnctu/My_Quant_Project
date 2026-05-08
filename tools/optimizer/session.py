@@ -100,9 +100,13 @@ class OptimizerSession:
             "evaluated_neighbors": 0,
             "payload_score_cache_hits": 0,
             "prep_cache_prioritized": 0,
+            "order_score_prioritized": 0,
+            "field_order_score_prioritized": 0,
             "early_stops": 0,
             "selection_prunes": 0,
         }
+        self.local_min_order_score_cache = {}
+        self.local_min_field_order_score_cache = {}
         self._full_evaluation_cache = OrderedDict()
         self._full_evaluation_cache_max_items = self._resolve_full_evaluation_cache_max_items()
         self.static_fast_cache = {}
@@ -145,6 +149,14 @@ class OptimizerSession:
         if isinstance(holder, dict):
             self._shared_trial_prep_executor_holder = holder
 
+    def attach_shared_local_min_order_score_cache(self, cache):
+        if isinstance(cache, dict):
+            self.local_min_order_score_cache = cache
+
+    def attach_shared_local_min_field_order_score_cache(self, cache):
+        if isinstance(cache, dict):
+            self.local_min_field_order_score_cache = cache
+
     def reset_prep_cache_stats(self):
         self.prep_cache_stats = {
             "hits": 0,
@@ -157,6 +169,8 @@ class OptimizerSession:
             "evaluated_neighbors": 0,
             "payload_score_cache_hits": 0,
             "prep_cache_prioritized": 0,
+            "order_score_prioritized": 0,
+            "field_order_score_prioritized": 0,
             "early_stops": 0,
             "selection_prunes": 0,
         }
@@ -168,6 +182,8 @@ class OptimizerSession:
         evaluated_neighbors=0,
         payload_score_cache_hits=0,
         prep_cache_prioritized=0,
+        order_score_prioritized=0,
+        field_order_score_prioritized=0,
         early_stopped=False,
         selection_pruned=False,
     ):
@@ -176,6 +192,8 @@ class OptimizerSession:
         stats["evaluated_neighbors"] = int(stats.get("evaluated_neighbors", 0)) + int(evaluated_neighbors or 0)
         stats["payload_score_cache_hits"] = int(stats.get("payload_score_cache_hits", 0)) + int(payload_score_cache_hits or 0)
         stats["prep_cache_prioritized"] = int(stats.get("prep_cache_prioritized", 0)) + int(prep_cache_prioritized or 0)
+        stats["order_score_prioritized"] = int(stats.get("order_score_prioritized", 0)) + int(order_score_prioritized or 0)
+        stats["field_order_score_prioritized"] = int(stats.get("field_order_score_prioritized", 0)) + int(field_order_score_prioritized or 0)
         if bool(early_stopped):
             stats["early_stops"] = int(stats.get("early_stops", 0)) + 1
         if bool(selection_pruned):
@@ -191,6 +209,8 @@ class OptimizerSession:
             "skipped_neighbors": max(0, total_neighbors - evaluated_neighbors),
             "payload_score_cache_hits": int(stats.get("payload_score_cache_hits", 0) or 0),
             "prep_cache_prioritized": int(stats.get("prep_cache_prioritized", 0) or 0),
+            "order_score_prioritized": int(stats.get("order_score_prioritized", 0) or 0),
+            "field_order_score_prioritized": int(stats.get("field_order_score_prioritized", 0) or 0),
             "early_stops": int(stats.get("early_stops", 0) or 0),
             "selection_prunes": int(stats.get("selection_prunes", 0) or 0),
         }
