@@ -7,6 +7,7 @@ import statistics
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from threading import Event, Thread
 from contextlib import redirect_stderr, redirect_stdout
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -131,6 +132,7 @@ def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fo
         _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+        _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "32")
 
 
 def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
@@ -174,6 +176,234 @@ def _fmt_duration_compact(seconds: float | int | None) -> str:
     if text.startswith("00:"):
         return text[3:]
     return text
+
+
+def _resolve_resource_sample_interval_sec(environ) -> float:
+    raw_value = _env_value_for_display(environ, "OPTIMIZER_RESOURCE_SAMPLE_INTERVAL_SEC", "2.0")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = 2.0
+    return max(0.5, min(60.0, value))
+
+
+def _resolve_parallel_worker_prep_cache_max_items(environ) -> int:
+    raw_value = _env_value_for_display(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "32")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 32
+    return max(0, min(256, value))
+
+
+class _ResourceUsageSampler:
+    """Low-overhead system resource sampler for rolling timing diagnostics."""
+
+    def __init__(self, *, interval_sec: float = 2.0):
+        self.interval_sec = max(0.5, float(interval_sec or 2.0))
+        self.samples: list[dict] = []
+        self.available = False
+        self.error = ""
+        self._psutil = None
+        self._process = None
+        self._stop_event = Event()
+        self._thread = None
+        self._started_at = 0.0
+        self._last_disk = None
+        self._last_sample_time = None
+        try:
+            import psutil  # type: ignore
+            self._psutil = psutil
+            self._process = psutil.Process(os.getpid())
+            self.available = True
+            # Prime CPU counters so first non-zero interval sample is meaningful.
+            psutil.cpu_percent(interval=None)
+        except Exception as exc:  # optional diagnostics only; keep optimizer runnable without psutil.
+            self.available = False
+            self.error = f"{type(exc).__name__}: {exc}"
+
+    def start(self) -> None:
+        self._started_at = time.perf_counter()
+        if not self.available:
+            return
+        self._sample_once()
+        self._thread = Thread(target=self._run, name="optimizer-resource-sampler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if not self.available:
+            return
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=max(1.0, self.interval_sec + 0.5))
+        self._sample_once()
+
+    def _iter_process_tree(self):
+        psutil = self._psutil
+        process = self._process
+        if psutil is None or process is None:
+            return []
+        processes = []
+        try:
+            processes.append(process)
+            processes.extend(process.children(recursive=True))
+        except Exception:
+            pass
+        return processes
+
+    def _process_tree_stats(self) -> dict:
+        rss_bytes = 0
+        process_count = 0
+        for proc in self._iter_process_tree():
+            try:
+                rss_bytes += int(proc.memory_info().rss)
+                process_count += 1
+            except Exception:
+                continue
+        return {
+            "process_tree_rss_gb": rss_bytes / (1024 ** 3),
+            "process_tree_count": int(process_count),
+        }
+
+    def _sample_once(self) -> None:
+        psutil = self._psutil
+        if psutil is None:
+            return
+        now = time.perf_counter()
+        elapsed = max(0.0, now - float(self._started_at or now))
+        try:
+            cpu_percent = float(psutil.cpu_percent(interval=None))
+        except Exception:
+            cpu_percent = 0.0
+        try:
+            mem = psutil.virtual_memory()
+            memory_percent = float(getattr(mem, "percent", 0.0) or 0.0)
+            memory_available_gb = float(getattr(mem, "available", 0) or 0) / (1024 ** 3)
+            memory_used_gb = float(getattr(mem, "used", 0) or 0) / (1024 ** 3)
+        except Exception:
+            memory_percent = 0.0
+            memory_available_gb = 0.0
+            memory_used_gb = 0.0
+        try:
+            swap = psutil.swap_memory()
+            swap_percent = float(getattr(swap, "percent", 0.0) or 0.0)
+            swap_used_gb = float(getattr(swap, "used", 0) or 0) / (1024 ** 3)
+        except Exception:
+            swap_percent = 0.0
+            swap_used_gb = 0.0
+
+        read_mb_s = 0.0
+        write_mb_s = 0.0
+        busy_percent = 0.0
+        read_total_mb = 0.0
+        write_total_mb = 0.0
+        try:
+            disk = psutil.disk_io_counters()
+            if disk is not None:
+                read_total_mb = float(getattr(disk, "read_bytes", 0) or 0) / (1024 ** 2)
+                write_total_mb = float(getattr(disk, "write_bytes", 0) or 0) / (1024 ** 2)
+                last_disk = self._last_disk
+                last_time = self._last_sample_time
+                if last_disk is not None and last_time is not None:
+                    dt = max(0.001, now - float(last_time))
+                    read_delta = max(0, int(getattr(disk, "read_bytes", 0) or 0) - int(getattr(last_disk, "read_bytes", 0) or 0))
+                    write_delta = max(0, int(getattr(disk, "write_bytes", 0) or 0) - int(getattr(last_disk, "write_bytes", 0) or 0))
+                    read_mb_s = float(read_delta) / (1024 ** 2) / dt
+                    write_mb_s = float(write_delta) / (1024 ** 2) / dt
+                    busy_now = getattr(disk, "busy_time", None)
+                    busy_last = getattr(last_disk, "busy_time", None)
+                    if busy_now is not None and busy_last is not None:
+                        busy_delta_ms = max(0.0, float(busy_now) - float(busy_last))
+                        busy_percent = max(0.0, min(100.0, busy_delta_ms / (dt * 10.0)))
+                self._last_disk = disk
+                self._last_sample_time = now
+        except Exception:
+            pass
+
+        tree = self._process_tree_stats()
+        self.samples.append({
+            "elapsed_sec": float(elapsed),
+            "cpu_percent": float(cpu_percent),
+            "memory_percent": float(memory_percent),
+            "memory_available_gb": float(memory_available_gb),
+            "memory_used_gb": float(memory_used_gb),
+            "swap_percent": float(swap_percent),
+            "swap_used_gb": float(swap_used_gb),
+            "disk_read_mb_per_sec": float(read_mb_s),
+            "disk_write_mb_per_sec": float(write_mb_s),
+            "disk_total_mb_per_sec": float(read_mb_s + write_mb_s),
+            "disk_busy_percent": float(busy_percent),
+            "disk_read_total_mb": float(read_total_mb),
+            "disk_write_total_mb": float(write_total_mb),
+            "process_tree_rss_gb": float(tree.get("process_tree_rss_gb", 0.0) or 0.0),
+            "process_tree_count": int(tree.get("process_tree_count", 0) or 0),
+        })
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self.interval_sec):
+            self._sample_once()
+
+    def summary(self) -> dict:
+        samples = list(self.samples or [])
+        if not self.available:
+            return {"resource_sampling_available": False, "resource_sampling_error": self.error}
+        if not samples:
+            return {"resource_sampling_available": True, "resource_sample_count": 0}
+
+        def values(key: str) -> list[float]:
+            out = []
+            for sample in samples:
+                try:
+                    out.append(float(sample.get(key, 0.0) or 0.0))
+                except (TypeError, ValueError):
+                    continue
+            return out
+
+        def avg(key: str) -> float:
+            vals = values(key)
+            return sum(vals) / float(len(vals)) if vals else 0.0
+
+        def mx(key: str) -> float:
+            vals = values(key)
+            return max(vals) if vals else 0.0
+
+        def mn(key: str) -> float:
+            vals = values(key)
+            return min(vals) if vals else 0.0
+
+        first = samples[0]
+        last = samples[-1]
+        disk_read_delta = max(0.0, float(last.get("disk_read_total_mb", 0.0) or 0.0) - float(first.get("disk_read_total_mb", 0.0) or 0.0))
+        disk_write_delta = max(0.0, float(last.get("disk_write_total_mb", 0.0) or 0.0) - float(first.get("disk_write_total_mb", 0.0) or 0.0))
+        return {
+            "resource_sampling_available": True,
+            "resource_sample_count": int(len(samples)),
+            "resource_sample_interval_sec": float(self.interval_sec),
+            "cpu_avg_percent": avg("cpu_percent"),
+            "cpu_max_percent": mx("cpu_percent"),
+            "memory_avg_percent": avg("memory_percent"),
+            "memory_max_percent": mx("memory_percent"),
+            "memory_min_available_gb": mn("memory_available_gb"),
+            "memory_max_used_gb": mx("memory_used_gb"),
+            "swap_avg_percent": avg("swap_percent"),
+            "swap_max_percent": mx("swap_percent"),
+            "swap_max_used_gb": mx("swap_used_gb"),
+            "disk_read_mb": disk_read_delta,
+            "disk_write_mb": disk_write_delta,
+            "disk_total_mb": disk_read_delta + disk_write_delta,
+            "disk_read_mb_per_sec_avg": avg("disk_read_mb_per_sec"),
+            "disk_read_mb_per_sec_max": mx("disk_read_mb_per_sec"),
+            "disk_write_mb_per_sec_avg": avg("disk_write_mb_per_sec"),
+            "disk_write_mb_per_sec_max": mx("disk_write_mb_per_sec"),
+            "disk_total_mb_per_sec_avg": avg("disk_total_mb_per_sec"),
+            "disk_total_mb_per_sec_max": mx("disk_total_mb_per_sec"),
+            "disk_busy_avg_percent": avg("disk_busy_percent"),
+            "disk_busy_max_percent": mx("disk_busy_percent"),
+            "process_tree_rss_avg_gb": avg("process_tree_rss_gb"),
+            "process_tree_rss_max_gb": mx("process_tree_rss_gb"),
+            "process_tree_count_max": int(mx("process_tree_count")),
+        }
 
 
 def _safe_float(value, default: float = 0.0) -> float:
@@ -554,12 +784,15 @@ def _write_outer_timing_summary(
     report_write_sec: float,
     overall_sec: float,
     fold_timing_rows: list[dict],
+    resource_summary: dict | None = None,
+    resource_samples: list[dict] | None = None,
 ) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
     os.makedirs(report_dir, exist_ok=True)
     base = os.path.join(report_dir, f"outer_rolling_oos_timing_{session_ts}")
     csv_path = base + ".csv"
     json_path = base + ".json"
+    resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv")
 
     if fold_timing_rows:
         fieldnames = list(fold_timing_rows[0].keys())
@@ -567,6 +800,16 @@ def _write_outer_timing_summary(
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(fold_timing_rows)
+
+    samples_for_csv = list(resource_samples or [])
+    if samples_for_csv:
+        sample_fieldnames = list(samples_for_csv[0].keys())
+        with open(resource_csv_path, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=sample_fieldnames)
+            writer.writeheader()
+            writer.writerows(samples_for_csv)
+    else:
+        resource_csv_path = ""
 
     optimize_sec = _sum_timing_rows(fold_timing_rows, "optimize_sec")
     local_min_review_sec = _sum_timing_rows(fold_timing_rows, "local_min_review_sec")
@@ -655,16 +898,19 @@ def _write_outer_timing_summary(
             "profile_write_files": str(os.environ.get("OPTIMIZER_PROFILE_WRITE_FILES", "1")).strip().lower() not in {"0", "false", "no", "off"},
             "study_storage": "sqlite" if _is_outer_rolling_sqlite_storage_enabled(os.environ) else "memory",
             "parallel_fold_log_mode": "progress_only" if bool(rolling_fold_parallel) else "normal",
+            "parallel_worker_prep_cache_max_items": _resolve_parallel_worker_prep_cache_max_items(os.environ),
+            **dict(resource_summary or {}),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },
         "folds": fold_timing_rows,
         "csv_path": csv_path if fold_timing_rows else "",
+        "resource_csv_path": resource_csv_path,
         "json_path": json_path,
     }
     with open(json_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
-    return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "payload": payload}
+    return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "resource_csv": resource_csv_path, "payload": payload}
 
 
 def _print_outer_timing_summary(payload: dict):
@@ -688,6 +934,7 @@ def _print_outer_timing_summary(payload: dict):
         f"{int(summary.get('prep_cache_misses', 0) or 0)}/"
         f"{int(summary.get('prep_cache_evictions', 0) or 0)}｜"
         f"hit_rate={float(summary.get('prep_cache_hit_rate', 0.0)):.1%}｜"
+        f"parallel_cache_max={int(summary.get('parallel_worker_prep_cache_max_items', 0) or 0)}｜"
         f"local_neighbors={int(summary.get('local_min_neighbors_evaluated', 0) or 0)}/"
         f"{int(summary.get('local_min_neighbors_total', 0) or 0)}｜"
         f"skip={int(summary.get('local_min_neighbors_skipped', 0) or 0)}｜"
@@ -696,6 +943,21 @@ def _print_outer_timing_summary(payload: dict):
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
+    if bool(summary.get("resource_sampling_available", False)):
+        print(
+            "📏 Resource 摘要｜"
+            f"cpu_avg/max={float(summary.get('cpu_avg_percent', 0.0)):.1f}%/"
+            f"{float(summary.get('cpu_max_percent', 0.0)):.1f}%｜"
+            f"mem_avg/max={float(summary.get('memory_avg_percent', 0.0)):.1f}%/"
+            f"{float(summary.get('memory_max_percent', 0.0)):.1f}%｜"
+            f"mem_avail_min={float(summary.get('memory_min_available_gb', 0.0)):.2f}GB｜"
+            f"proc_rss_peak={float(summary.get('process_tree_rss_max_gb', 0.0)):.2f}GB｜"
+            f"disk_rw={float(summary.get('disk_total_mb', 0.0)):.1f}MB｜"
+            f"disk_rate_avg/max={float(summary.get('disk_total_mb_per_sec_avg', 0.0)):.1f}/"
+            f"{float(summary.get('disk_total_mb_per_sec_max', 0.0)):.1f}MB/s｜"
+            f"disk_busy_avg/max={float(summary.get('disk_busy_avg_percent', 0.0)):.1f}%/"
+            f"{float(summary.get('disk_busy_max_percent', 0.0)):.1f}%"
+        )
 
 
 class _SearchProgress:
@@ -2503,6 +2765,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
         fold_workers = int(task.get("fold_workers", 1) or 1)
         timing_mode = bool(task.get("timing_mode", False))
+        if not str(os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "")).strip():
+            os.environ["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = str(_resolve_parallel_worker_prep_cache_max_items(os.environ))
 
         fold_start = time.perf_counter()
         selection_end = int(oos_year) - 1
@@ -2849,6 +3113,8 @@ def run_outer_rolling_oos(
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     overall_start = time.perf_counter()
+    resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
+    resource_sampler.start()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
     if fold_parallel_enabled:
@@ -3158,6 +3424,7 @@ def run_outer_rolling_oos(
     if not bool(timing_mode):
         paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained_for_report)
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
+    resource_sampler.stop()
     timing_paths = _write_outer_timing_summary(
         output_dir=output_dir,
         session_ts=session_ts,
@@ -3170,6 +3437,8 @@ def run_outer_rolling_oos(
         report_write_sec=report_write_sec,
         overall_sec=max(0.0, time.perf_counter() - overall_start),
         fold_timing_rows=fold_timing_rows,
+        resource_summary=resource_sampler.summary(),
+        resource_samples=resource_sampler.samples,
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
@@ -3177,6 +3446,8 @@ def run_outer_rolling_oos(
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
             print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
+        if timing_paths.get("resource_csv"):
+            print(f"{C_GREEN}已輸出：{timing_paths['resource_csv']}{C_RESET}")
     else:
         print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
         print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
@@ -3184,6 +3455,8 @@ def run_outer_rolling_oos(
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
             print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
+        if timing_paths.get("resource_csv"):
+            print(f"{C_GREEN}已輸出：{timing_paths['resource_csv']}{C_RESET}")
         for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
             print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
     _print_outer_timing_summary(timing_paths.get("payload", {}))

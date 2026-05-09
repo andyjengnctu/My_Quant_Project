@@ -127,12 +127,14 @@ class OptimizerSession:
 
     
     def _resolve_prepared_trial_input_cache_max_items(self):
-        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "16")
+        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS")
+        if raw_value is None or str(raw_value).strip() == "":
+            raw_value = os.environ.get("OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "16")
         try:
             value = int(raw_value)
         except (TypeError, ValueError):
             value = 16
-        return max(0, min(64, value))
+        return max(0, min(256, value))
 
     def _resolve_full_evaluation_cache_max_items(self):
         raw_value = os.environ.get("OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS", "512")
