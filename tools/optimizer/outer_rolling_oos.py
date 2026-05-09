@@ -139,6 +139,7 @@ def _env_flag(environ, name: str, default: bool) -> bool:
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
     _set_env_default(environ, "OPTIMIZER_PROFILE_WRITE_FILES", "0")
     _set_env_default(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory")
+    _set_env_default(environ, "OPTIMIZER_RESOURCE_WRITE_CSV", "0")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", "0")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", "1")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", "0")
@@ -1209,7 +1210,8 @@ def _write_outer_timing_summary(
     base = os.path.join(report_dir, f"outer_rolling_oos_timing_{session_ts}")
     csv_path = base + ".csv"
     json_path = base + ".json"
-    resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv")
+    resource_write_csv = _env_flag(os.environ, "OPTIMIZER_RESOURCE_WRITE_CSV", False)
+    resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv") if resource_write_csv else ""
 
     if fold_timing_rows:
         fieldnames = list(fold_timing_rows[0].keys())
@@ -1219,7 +1221,7 @@ def _write_outer_timing_summary(
             writer.writerows(fold_timing_rows)
 
     samples_for_csv = list(resource_samples or [])
-    if samples_for_csv:
+    if resource_write_csv and samples_for_csv:
         sample_fieldnames = list(samples_for_csv[0].keys())
         with open(resource_csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=sample_fieldnames)
@@ -1318,6 +1320,8 @@ def _write_outer_timing_summary(
             "study_storage": "sqlite" if _is_outer_rolling_sqlite_storage_enabled(os.environ) else "memory",
             "parallel_fold_log_mode": "progress_only" if bool(rolling_fold_parallel) else "normal",
             "parallel_worker_prep_cache_max_items": _resolve_parallel_worker_prep_cache_max_items(os.environ),
+            "resource_write_csv": bool(resource_write_csv),
+            "resource_csv_rows": int(len(samples_for_csv)) if resource_write_csv and samples_for_csv else 0,
             "active_replay_include_trade_logs": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", False),
             "active_replay_include_pit_stats_index": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", True),
             "active_replay_use_prepared_cache": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", False),
