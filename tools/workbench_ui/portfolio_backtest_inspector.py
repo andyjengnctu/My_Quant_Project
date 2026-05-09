@@ -26,7 +26,7 @@ from core.walk_forward_policy import load_walk_forward_policy
 from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly_return_report
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
-from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -1704,7 +1704,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         params_section_title = "訓練參數"
         if is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(options["params_path"])
-            params = build_params_from_mapping(get_active_params_for_date(rolling_payload, f"{options['start_year']}-01-01"))
+            rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
+            representative_date = max(pd.Timestamp(f"{options['start_year']}-01-01").normalize(), pd.Timestamp(rolling_first_date).normalize()).strftime("%Y-%m-%d")
+            params = build_params_from_mapping(get_active_params_for_date(rolling_payload, representative_date))
             params.fixed_risk = float(options["fixed_risk"])
             params_section_title = "Rolling OOS 訓練參數"
             rolling_params_schedule_rows = _build_rolling_params_schedule_rows(rolling_payload)
@@ -1719,6 +1721,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
+                start_date=representative_date,
+                end_date=rolling_last_date,
                 benchmark_ticker=options["benchmark_ticker"],
                 fixed_risk=float(options["fixed_risk"]),
                 verbose=True,
@@ -1740,6 +1744,8 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
+                start_date=representative_date,
+                end_date=rolling_last_date,
                 benchmark_ticker=options["benchmark_ticker"],
                 verbose=True,
                 pit_stats_index=context.get("all_pit_stats_index"),

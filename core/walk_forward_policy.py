@@ -12,12 +12,35 @@ WALK_FORWARD_TRAIN_START_YEAR_ENV_VAR = "V16_WF_TRAIN_START_YEAR"
 WALK_FORWARD_MIN_TRAIN_YEARS_ENV_VAR = "V16_WF_MIN_TRAIN_YEARS"
 WALK_FORWARD_SEARCH_TRAIN_END_YEAR_ENV_VAR = "V16_WF_SEARCH_TRAIN_END_YEAR"
 WALK_FORWARD_OOS_START_YEAR_ENV_VAR = "V16_WF_OOS_START_YEAR"
+WALK_FORWARD_SELECTION_START_DATE_ENV_VAR = "V16_WF_SELECTION_START_DATE"
+WALK_FORWARD_TRAIN_START_DATE_ENV_VAR = "V16_WF_TRAIN_START_DATE"
+WALK_FORWARD_SEARCH_TRAIN_END_DATE_ENV_VAR = "V16_WF_SEARCH_TRAIN_END_DATE"
+WALK_FORWARD_OOS_START_DATE_ENV_VAR = "V16_WF_OOS_START_DATE"
+WALK_FORWARD_OOS_END_DATE_ENV_VAR = "V16_WF_OOS_END_DATE"
 
 def _normalize_objective_mode(objective_mode: str, default_objective_mode: str) -> str:
     mode = str(objective_mode or "").strip()
     if mode == "":
         return str(default_objective_mode)
     return mode
+
+
+def _normalize_date_text(value) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError as exc:
+        raise ValueError(f"training split policy: 日期必須是 YYYY-MM-DD，收到: {value!r}") from exc
+
+
+def _year_from_date_text(value) -> int:
+    parsed = _normalize_date_text(value)
+    if not parsed:
+        return 0
+    return int(parsed[:4])
 
 
 def _build_default_training_split_policy(project_root: str) -> dict:
@@ -47,10 +70,18 @@ def _extract_inline_policy_overrides(environ: Optional[Mapping[str, str]] = None
         "min_train_years": str(env.get(WALK_FORWARD_MIN_TRAIN_YEARS_ENV_VAR, "")).strip(),
         "search_train_end_year": str(env.get(WALK_FORWARD_SEARCH_TRAIN_END_YEAR_ENV_VAR, "")).strip(),
         "oos_start_year": str(env.get(WALK_FORWARD_OOS_START_YEAR_ENV_VAR, "")).strip(),
+        "selection_start_date": str(env.get(WALK_FORWARD_SELECTION_START_DATE_ENV_VAR, "")).strip(),
+        "train_start_date": str(env.get(WALK_FORWARD_TRAIN_START_DATE_ENV_VAR, "")).strip(),
+        "search_train_end_date": str(env.get(WALK_FORWARD_SEARCH_TRAIN_END_DATE_ENV_VAR, "")).strip(),
+        "oos_start_date": str(env.get(WALK_FORWARD_OOS_START_DATE_ENV_VAR, "")).strip(),
+        "oos_end_date": str(env.get(WALK_FORWARD_OOS_END_DATE_ENV_VAR, "")).strip(),
     }
     overrides = {}
     for key, raw_value in raw_mapping.items():
         if raw_value == "":
+            continue
+        if key.endswith("_date"):
+            overrides[key] = _normalize_date_text(raw_value)
             continue
         try:
             overrides[key] = int(raw_value)
@@ -70,6 +101,11 @@ def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -
         "min_train_years": int(policy["min_train_years"]),
         "search_train_end_year": int(policy["search_train_end_year"]),
         "oos_start_year": None if policy.get("oos_start_year") is None else int(policy["oos_start_year"]),
+        "selection_start_date": policy.get("selection_start_date"),
+        "train_start_date": policy.get("train_start_date"),
+        "search_train_end_date": policy.get("search_train_end_date"),
+        "oos_start_date": policy.get("oos_start_date"),
+        "oos_end_date": policy.get("oos_end_date"),
         "objective_mode": str(policy.get("objective_mode", "split_train_romd")),
         "model_mode": str(policy.get("model_mode", "split")),
     }
@@ -162,15 +198,29 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     merged.update(inline_overrides)
     default_policy_path = os.path.abspath(os.path.join(project_root, "config", "training_policy.py"))
     is_external_override = os.path.abspath(path) != default_policy_path
-    has_explicit_oos_or_end = any(key in payload or key in inline_overrides for key in ("oos_start_year", "search_train_end_year"))
+    has_explicit_oos_or_end = any(
+        key in payload or key in inline_overrides
+        for key in ("oos_start_year", "search_train_end_year", "oos_start_date", "search_train_end_date")
+    )
     if is_external_override and not has_explicit_oos_or_end:
         merged["oos_start_year"] = None
+    for date_key in ("selection_start_date", "train_start_date", "search_train_end_date", "oos_start_date", "oos_end_date"):
+        if date_key in merged:
+            merged[date_key] = _normalize_date_text(merged.get(date_key))
+    if merged.get("train_start_date") and "train_start_year" not in inline_overrides:
+        merged["train_start_year"] = _year_from_date_text(merged["train_start_date"])
+    if merged.get("selection_start_date") and "selection_start_year" not in inline_overrides:
+        merged["selection_start_year"] = _year_from_date_text(merged["selection_start_date"])
+    if merged.get("search_train_end_date") and "search_train_end_year" not in inline_overrides:
+        merged["search_train_end_year"] = _year_from_date_text(merged["search_train_end_date"])
+    if merged.get("oos_start_date") and "oos_start_year" not in inline_overrides:
+        merged["oos_start_year"] = _year_from_date_text(merged["oos_start_date"])
     merged['selection_start_year'] = _coerce_int(merged, 'selection_start_year', 1900, default_policy)
     merged['train_start_year'] = _coerce_int(merged, 'train_start_year', 1900, default_policy)
     merged['min_train_years'] = _coerce_int(merged, 'min_train_years', 1, default_policy)
     merged['search_train_end_year'] = _coerce_optional_int(merged, 'search_train_end_year', 1900, default_policy)
     merged['oos_start_year'] = _coerce_optional_int(merged, 'oos_start_year', 1900, default_policy)
-    if merged['oos_start_year'] is not None:
+    if merged['oos_start_year'] is not None and not merged.get("search_train_end_date"):
         merged['search_train_end_year'] = int(merged['oos_start_year']) - 1
     if merged['search_train_end_year'] is None:
         merged['search_train_end_year'] = int(merged['train_start_year']) + int(merged['min_train_years']) - 1
@@ -184,11 +234,25 @@ def load_walk_forward_policy(project_root: str, environ: Optional[Mapping[str, s
     return merged
 
 
-def filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int):
+def filter_search_train_dates(*, sorted_dates, train_start_year: int, search_train_end_year: int, train_start_date: str | None = None, search_train_end_date: str | None = None):
     filtered = []
+    start_date_text = _normalize_date_text(train_start_date)
+    end_date_text = _normalize_date_text(search_train_end_date)
+    if start_date_text or end_date_text:
+        import pandas as pd
+        start_date = pd.Timestamp(start_date_text or f"{int(train_start_year)}-01-01").normalize()
+        end_date = pd.Timestamp(end_date_text or f"{int(search_train_end_year)}-12-31").normalize()
+        for raw_date in list([] if sorted_dates is None else sorted_dates):
+            try:
+                ts = pd.Timestamp(raw_date).normalize()
+            except (TypeError, ValueError):
+                continue
+            if start_date <= ts <= end_date:
+                filtered.append(raw_date)
+        return filtered
     start_year = int(train_start_year)
     end_year = int(search_train_end_year)
-    for raw_date in list(sorted_dates or []):
+    for raw_date in list([] if sorted_dates is None else sorted_dates):
         year = int(getattr(raw_date, 'year', 0) or 0)
         if year == 0:
             raw_text = str(raw_date or '').strip()
@@ -209,7 +273,7 @@ def build_optimizer_runtime_policy(base_policy: dict, model_mode: str) -> dict:
     runtime_policy['model_mode'] = normalized
     if normalized == 'split':
         runtime_policy['objective_mode'] = 'split_train_romd'
-        if runtime_policy.get('oos_start_year') is not None:
+        if runtime_policy.get('oos_start_year') is not None and not runtime_policy.get('search_train_end_date'):
             runtime_policy['search_train_end_year'] = int(runtime_policy['oos_start_year']) - 1
     else:
         runtime_policy['objective_mode'] = 'legacy_base_score'

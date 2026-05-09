@@ -374,6 +374,9 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
         train_start_year=int(walk_forward_policy["train_start_year"]),
         min_train_years=int(walk_forward_policy["min_train_years"]),
         oos_start_year=walk_forward_policy.get("oos_start_year"),
+        train_start_date=walk_forward_policy.get("train_start_date"),
+        oos_start_date=walk_forward_policy.get("oos_start_date"),
+        oos_end_date=walk_forward_policy.get("oos_end_date"),
         pit_stats_index=prep_result.get("all_pit_stats_index"),
     )
     report_paths = write_walk_forward_report(
@@ -567,11 +570,11 @@ def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
-    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-window-mode", "--outer-train-window-years"), flag_options=("--timing", "--outer-oos", "--yes"))
+    validate_cli_args(argv, value_options=("--dataset", "--model", "--trials", "--outer-train-start", "--outer-first-oos", "--outer-last-oos", "--outer-first-oos-date", "--outer-last-oos-date", "--outer-window-mode", "--outer-train-window-years", "--outer-train-window-months", "--outer-oos-months"), flag_options=("--timing", "--outer-oos", "--yes"))
     if has_help_flag(argv):
         program_name = resolve_cli_program_name(argv, "tools/optimizer/main.py")
-        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-years N]")
-        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling next-1Y OOS test；outer rolling 可搭配 --timing 輸出分段耗時。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
+        print(f"用法: python {program_name} [--dataset reduced|full] [--model split|full] [--trials N] [--timing] [--outer-oos] [--outer-window-mode fixed|expanding] [--outer-train-window-months N] [--outer-oos-months N]")
+        print("說明: split=固定 pre-deploy train 選參 + OOS 獨立驗證；full=全資料選參。可用 --trials N 直接指定訓練次數；可用 --timing 啟用 CLI 測時模式，預設跑 3 個 trials，亦可搭配 --trials N。未使用 --trials 時，仍維持既有互動選單 / ENV 行為。輸入 0 匯出 candidate_best，並同步輸出 retention 最大的 candidate_retention_best 與 val_score 最大的 candidate_val_score_best 作比較；輸入 P promote candidate；輸入 R 或 --outer-oos 執行 outer rolling monthly OOS test；outer rolling 可搭配 --timing 輸出分段耗時。正常完成訓練後會自動寫入 candidate_best、candidate_retention_best 與 candidate_val_score_best，並由 candidate_best 自動挑戰進版 run_best；若使用者中斷則不做。")
         return 0
 
     from core.data_utils import discover_unique_csv_inputs

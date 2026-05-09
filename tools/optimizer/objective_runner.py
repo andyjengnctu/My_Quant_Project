@@ -38,16 +38,48 @@ def is_inner_validate_anti_overfit_enabled_for_mode(objective_mode: str | None) 
     return bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED) and mode == OBJECTIVE_MODE_SPLIT_TRAIN_ROMD
 
 
+def _policy_date(policy: dict, key: str) -> str:
+    text = str((policy or {}).get(key) or "").strip()
+    if not text:
+        return ""
+    return pd.Timestamp(text).normalize().strftime("%Y-%m-%d")
+
+
 def resolve_inner_validate_policy(session, *, objective_mode: str | None = None) -> dict[str, Any]:
     mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
     if not is_inner_validate_anti_overfit_enabled_for_mode(mode):
         return {"enabled": False, "mode": str(mode)}
 
-    full_selection_end_year = int(
-        getattr(session, "walk_forward_policy", {})
-        .get("search_train_end_year", getattr(session, "search_train_end_year", 0))
-    )
+    runtime_policy = dict(getattr(session, "walk_forward_policy", {}) or {})
     holdout_years = max(1, int(OPTIMIZER_INNER_VALIDATE_HOLDOUT_YEARS))
+    train_start_date = _policy_date(runtime_policy, "train_start_date")
+    full_selection_end_date = _policy_date(runtime_policy, "search_train_end_date")
+    if full_selection_end_date:
+        full_end_ts = pd.Timestamp(full_selection_end_date).normalize()
+        validate_start_ts = (full_end_ts - pd.DateOffset(years=int(holdout_years)) + pd.Timedelta(days=1)).normalize()
+        inner_train_end_ts = validate_start_ts - pd.Timedelta(days=1)
+        train_start_ts = pd.Timestamp(train_start_date or f"{int(getattr(session, 'train_start_year', 0))}-01-01").normalize()
+        return {
+            "enabled": True,
+            "mode": str(mode),
+            "date_based": True,
+            "train_start_year": int(train_start_ts.year),
+            "train_start_date": train_start_ts.strftime("%Y-%m-%d"),
+            "inner_train_end_year": int(inner_train_end_ts.year),
+            "inner_train_end_date": inner_train_end_ts.strftime("%Y-%m-%d"),
+            "validate_start_year": int(validate_start_ts.year),
+            "validate_start_date": validate_start_ts.strftime("%Y-%m-%d"),
+            "validate_end_year": int(full_end_ts.year),
+            "validate_end_date": full_end_ts.strftime("%Y-%m-%d"),
+            "validate_year": int(full_end_ts.year),
+            "holdout_years": int(holdout_years),
+            "full_selection_end_year": int(full_end_ts.year),
+            "full_selection_end_date": full_end_ts.strftime("%Y-%m-%d"),
+        }
+
+    full_selection_end_year = int(
+        runtime_policy.get("search_train_end_year", getattr(session, "search_train_end_year", 0))
+    )
     validate_start_year = int(full_selection_end_year) - int(holdout_years) + 1
     validate_end_year = int(full_selection_end_year)
     inner_train_end_year = int(validate_start_year) - 1
@@ -55,6 +87,7 @@ def resolve_inner_validate_policy(session, *, objective_mode: str | None = None)
     return {
         "enabled": True,
         "mode": str(mode),
+        "date_based": False,
         "train_start_year": int(train_start_year),
         "inner_train_end_year": int(inner_train_end_year),
         "validate_start_year": int(validate_start_year),
@@ -69,7 +102,7 @@ def _filter_year_window_dates(sorted_dates, *, start_year: int, end_year: int):
     filtered = []
     start_year = int(start_year)
     end_year = int(end_year)
-    for raw_date in list(sorted_dates or []):
+    for raw_date in list([] if sorted_dates is None else sorted_dates):
         year = int(getattr(raw_date, "year", 0) or 0)
         if year == 0:
             raw_text = str(raw_date or "").strip()
@@ -82,16 +115,37 @@ def _filter_year_window_dates(sorted_dates, *, start_year: int, end_year: int):
     return filtered
 
 
+def _filter_date_window_dates(sorted_dates, *, start_date: str, end_date: str):
+    start_ts = pd.Timestamp(start_date).normalize()
+    end_ts = pd.Timestamp(end_date).normalize()
+    filtered = []
+    for raw_date in list([] if sorted_dates is None else sorted_dates):
+        try:
+            ts = pd.Timestamp(raw_date).normalize()
+        except (TypeError, ValueError):
+            continue
+        if start_ts <= ts <= end_ts:
+            filtered.append(raw_date)
+    return filtered
+
+
 def resolve_inner_validate_scope(session, master_dates, *, objective_mode: str | None = None):
     policy = resolve_inner_validate_policy(session, objective_mode=objective_mode)
     if not bool(policy.get("enabled", False)):
         return {"enabled": False, "policy": policy, "validate_dates": [], "fail_reason": None}
-    sorted_dates = sorted(master_dates or [])
-    validate_dates = _filter_year_window_dates(
-        sorted_dates,
-        start_year=int(policy["validate_start_year"]),
-        end_year=int(policy["validate_end_year"]),
-    )
+    sorted_dates = sorted([] if master_dates is None else master_dates)
+    if bool(policy.get("date_based", False)):
+        validate_dates = _filter_date_window_dates(
+            sorted_dates,
+            start_date=str(policy["validate_start_date"]),
+            end_date=str(policy["validate_end_date"]),
+        )
+    else:
+        validate_dates = _filter_year_window_dates(
+            sorted_dates,
+            start_year=int(policy["validate_start_year"]),
+            end_year=int(policy["validate_end_year"]),
+        )
     fail_reason = None if validate_dates else "inner validation 區間無有效資料"
     return {
         "enabled": True,
@@ -103,29 +157,54 @@ def resolve_inner_validate_scope(session, master_dates, *, objective_mode: str |
 
 def resolve_search_train_scope(session, master_dates, *, objective_mode: str | None = None):
     mode = normalize_objective_mode(session.objective_mode if objective_mode is None else objective_mode)
-    if not master_dates:
+    base_policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    master_dates_list = list([] if master_dates is None else master_dates)
+    if not master_dates_list:
+        empty_policy = resolve_inner_validate_policy(session, objective_mode=mode)
         return {
             "mode": str(mode),
             "sorted_dates": [],
             "search_train_dates": [],
-            "effective_search_train_end_year": int(session.search_train_end_year),
+            "effective_search_train_end_year": int(getattr(session, "search_train_end_year", 0)),
+            "effective_search_train_end_date": base_policy.get("search_train_end_date"),
             "sort_dates_sec": 0.0,
             "fail_reason": "無有效資料",
-            "inner_validate_policy": resolve_inner_validate_policy(session, objective_mode=mode),
+            "inner_validate_policy": empty_policy,
         }
 
     sort_start = time.perf_counter()
-    sorted_dates = sorted(master_dates)
+    sorted_dates = sorted(master_dates_list)
     sort_dates_sec = time.perf_counter() - sort_start
     use_full_history_search = mode == OBJECTIVE_MODE_LEGACY_BASE_SCORE
     if use_full_history_search:
         search_train_dates = list(sorted_dates)
         effective_search_train_end_year = int(pd.Timestamp(sorted_dates[-1]).year)
+        effective_search_train_end_date = pd.Timestamp(sorted_dates[-1]).normalize().strftime("%Y-%m-%d")
         fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        inner_policy = resolve_inner_validate_policy(session, objective_mode=mode)
     else:
         inner_policy = resolve_inner_validate_policy(session, objective_mode=mode)
-        if bool(inner_policy.get("enabled", False)):
+        train_start_date = _policy_date(base_policy, "train_start_date")
+        policy_search_end_date = _policy_date(base_policy, "search_train_end_date")
+        if bool(inner_policy.get("enabled", False)) and bool(inner_policy.get("date_based", False)):
+            effective_search_train_end_date = str(inner_policy["inner_train_end_date"])
+            effective_search_train_end_year = int(pd.Timestamp(effective_search_train_end_date).year)
+            start_ts = pd.Timestamp(train_start_date or f"{int(session.train_start_year)}-01-01").normalize()
+            if pd.Timestamp(effective_search_train_end_date).normalize() < start_ts:
+                search_train_dates = []
+                fail_reason = "inner validation 切分後 training dates 不足"
+            else:
+                search_train_dates = filter_search_train_dates(
+                    sorted_dates=sorted_dates,
+                    train_start_year=int(session.train_start_year),
+                    search_train_end_year=int(effective_search_train_end_year),
+                    train_start_date=train_start_date,
+                    search_train_end_date=effective_search_train_end_date,
+                )
+                fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
+        elif bool(inner_policy.get("enabled", False)):
             effective_search_train_end_year = int(inner_policy["inner_train_end_year"])
+            effective_search_train_end_date = None
             if effective_search_train_end_year < int(session.train_start_year):
                 search_train_dates = []
                 fail_reason = "inner validation 切分後 training years 不足"
@@ -134,14 +213,18 @@ def resolve_search_train_scope(session, master_dates, *, objective_mode: str | N
                     sorted_dates=sorted_dates,
                     train_start_year=int(session.train_start_year),
                     search_train_end_year=int(effective_search_train_end_year),
+                    train_start_date=train_start_date,
                 )
                 fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
         else:
             effective_search_train_end_year = int(session.search_train_end_year)
+            effective_search_train_end_date = policy_search_end_date or None
             search_train_dates = filter_search_train_dates(
                 sorted_dates=sorted_dates,
                 train_start_year=int(session.train_start_year),
                 search_train_end_year=int(effective_search_train_end_year),
+                train_start_date=train_start_date,
+                search_train_end_date=effective_search_train_end_date,
             )
             fail_reason = None if search_train_dates else "主搜尋 train 區間無有效資料"
 
@@ -150,9 +233,10 @@ def resolve_search_train_scope(session, master_dates, *, objective_mode: str | N
         "sorted_dates": sorted_dates,
         "search_train_dates": search_train_dates,
         "effective_search_train_end_year": int(effective_search_train_end_year),
+        "effective_search_train_end_date": effective_search_train_end_date,
         "sort_dates_sec": float(sort_dates_sec),
         "fail_reason": fail_reason,
-        "inner_validate_policy": resolve_inner_validate_policy(session, objective_mode=mode),
+        "inner_validate_policy": inner_policy,
     }
 
 
@@ -460,6 +544,8 @@ def run_optimizer_objective(session, trial):
         objective_mode=mode,
         train_start_year=session.train_start_year,
         search_train_end_year=int(search_scope["effective_search_train_end_year"]),
+        train_start_date=(getattr(session, "walk_forward_policy", {}) or {}).get("train_start_date"),
+        search_train_end_date=search_scope.get("effective_search_train_end_date"),
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
     )

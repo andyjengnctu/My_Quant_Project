@@ -9,7 +9,7 @@ if PROJECT_ROOT not in sys.path:
 
 from core.dataset_profiles import DEFAULT_DATASET_PROFILE, get_dataset_dir, get_dataset_profile_label, resolve_dataset_profile_from_cli_env, build_missing_dataset_dir_message, build_empty_dataset_dir_message
 from core.model_paths import discover_model_param_sources, resolve_candidate_best_params_path, resolve_run_best_params_path
-from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_param_year_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
 from core.display import C_CYAN, C_GREEN, C_GRAY, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, has_help_flag, resolve_cli_program_name, safe_prompt, safe_prompt_choice, safe_prompt_int, parse_int_strict, parse_float_strict, validate_cli_args
 
@@ -96,7 +96,7 @@ def main(argv=None, env=None):
             params_path = resolve_candidate_best_params_path(PROJECT_ROOT)
         elif param_source_choice == "O":
             if not rolling_records:
-                raise ValueError("找不到 rolling OOS 年度參數組 JSON；請先執行 outer rolling OOS。")
+                raise ValueError("找不到 rolling OOS active-param replay 參數組 JSON；請先執行 outer rolling OOS。")
             if len(rolling_records) == 1:
                 selected_record = rolling_records[0]
             else:
@@ -118,9 +118,12 @@ def main(argv=None, env=None):
         rolling_payload = None
         rolling_first_year = None
         rolling_last_year = None
+        rolling_first_date = None
+        rolling_last_date = None
         if is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(params_path)
             rolling_first_year, rolling_last_year = get_active_param_year_range(rolling_payload)
+            rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
             default_start_year_hint = int(rolling_first_year)
             print(f"\n{C_GREEN}✅ 成功載入 Rolling OOS active-param replay 參數組！{C_RESET}")
             print(f"{C_GRAY}📦 參數檔: {params_path}{C_RESET}")
@@ -195,6 +198,8 @@ def main(argv=None, env=None):
                 max_positions=user_max_pos,
                 enable_rotation=user_rotation,
                 start_year=user_start_year,
+                start_date=rolling_first_date if raw_start_year == "" else None,
+                end_date=rolling_last_date,
                 benchmark_ticker=user_benchmark,
                 fixed_risk=user_fixed_risk,
             )

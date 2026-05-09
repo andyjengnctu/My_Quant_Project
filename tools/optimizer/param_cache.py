@@ -87,12 +87,24 @@ def build_prep_cache_key(params):
     return ("prep", canonical_param_items(payload, omit_fields=omitted_fields))
 
 
-def build_full_evaluation_cache_key(params, *, objective_mode, train_start_year, search_train_end_year, max_positions, enable_rotation):
+def build_full_evaluation_cache_key(
+    params,
+    *,
+    objective_mode,
+    train_start_year,
+    search_train_end_year,
+    max_positions,
+    enable_rotation,
+    train_start_date=None,
+    search_train_end_date=None,
+):
     return (
         "evaluation",
         str(objective_mode),
         int(train_start_year),
         int(search_train_end_year),
+        "" if train_start_date is None else str(train_start_date),
+        "" if search_train_end_date is None else str(search_train_end_date),
         int(max_positions),
         bool(enable_rotation),
         canonical_param_items(params),

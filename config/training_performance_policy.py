@@ -10,7 +10,7 @@ import os
 # - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
 # - 正整數 = 固定 rolling fold process 數。
 # - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"
+OPTIMIZER_ROLLING_FOLD_WORKERS = 3
 
 # OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
 # - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。

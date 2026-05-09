@@ -474,6 +474,8 @@ def _evaluate_local_min_neighbor_payload(session, payload: dict, payload_score_c
         objective_mode=search_scope.get("mode", session.objective_mode),
         train_start_year=session.train_start_year,
         search_train_end_year=int(search_scope.get("effective_search_train_end_year", session.search_train_end_year)),
+        train_start_date=(getattr(session, "walk_forward_policy", {}) or {}).get("train_start_date"),
+        search_train_end_date=search_scope.get("effective_search_train_end_date"),
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
     )
@@ -1554,6 +1556,9 @@ def _resolve_trial_oos_diagnostics(session, trial):
         min_train_years=int(getattr(session, 'walk_forward_policy', {}).get('min_train_years', 1) or 1),
         train_start_year=getattr(session, 'train_start_year', None),
         oos_start_year=int(oos_start_year),
+        train_start_date=(getattr(session, 'walk_forward_policy', {}) or {}).get('train_start_date'),
+        oos_start_date=(getattr(session, 'walk_forward_policy', {}) or {}).get('oos_start_date'),
+        oos_end_date=(getattr(session, 'walk_forward_policy', {}) or {}).get('oos_end_date'),
         pit_stats_index=prep_result.get('all_pit_stats_index'),
     )
     summary = dict(report.get('summary') or {})

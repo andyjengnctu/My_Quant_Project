@@ -64,15 +64,25 @@ def build_test_holdout_period(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
     oos_start_year: int | None = None,
+    train_start_date: str | None = None,
+    oos_start_date: str | None = None,
+    oos_end_date: str | None = None,
 ) -> dict | None:
     if sorted_dates is None or len(sorted_dates) == 0:
         return None
 
     sorted_timestamps = [pd.Timestamp(dt).normalize() for dt in sorted_dates]
     first_market_date = sorted_timestamps[0]
-    last_date = sorted_timestamps[-1]
-    requested_start = first_market_date if train_start_year is None else max(first_market_date, pd.Timestamp(year=int(train_start_year), month=1, day=1))
-    if oos_start_year is not None:
+    data_last_date = sorted_timestamps[-1]
+    if train_start_date:
+        requested_start = max(first_market_date, pd.Timestamp(train_start_date).normalize())
+    elif train_start_year is None:
+        requested_start = first_market_date
+    else:
+        requested_start = max(first_market_date, pd.Timestamp(year=int(train_start_year), month=1, day=1))
+    if oos_start_date:
+        first_test_start = pd.Timestamp(oos_start_date).normalize()
+    elif oos_start_year is not None:
         first_test_start = pd.Timestamp(year=int(oos_start_year), month=1, day=1)
     else:
         first_test_start = resolve_first_walk_forward_test_boundary(
@@ -83,6 +93,7 @@ def build_test_holdout_period(
     if first_test_start is None:
         return None
 
+    last_date = min(data_last_date, pd.Timestamp(oos_end_date).normalize()) if oos_end_date else data_last_date
     train_end = first_test_start - pd.Timedelta(days=1)
     if train_end < requested_start:
         return None
@@ -231,6 +242,9 @@ def evaluate_walk_forward(
     min_train_years: int = WF_MIN_TRAIN_YEARS,
     train_start_year: int | None = None,
     oos_start_year: int | None = None,
+    train_start_date: str | None = None,
+    oos_start_date: str | None = None,
+    oos_end_date: str | None = None,
     pit_stats_index=None,
     holdout_period: dict | None = None,
     include_equity_curve: bool = False,
@@ -241,6 +255,9 @@ def evaluate_walk_forward(
             min_train_years=min_train_years,
             train_start_year=train_start_year,
             oos_start_year=oos_start_year,
+            train_start_date=train_start_date,
+            oos_start_date=oos_start_date,
+            oos_end_date=oos_end_date,
         )
     period_metrics = None
     if holdout_period is not None:
@@ -263,6 +280,9 @@ def evaluate_walk_forward(
         'oos_start': '' if period_metrics is None else str(period_metrics.get('oos_start') or ''),
         'oos_end': '' if period_metrics is None else str(period_metrics.get('oos_end') or ''),
         'oos_start_year': None if oos_start_year is None else int(oos_start_year),
+        'train_start_date': '' if train_start_date is None else str(train_start_date),
+        'oos_start_date': '' if oos_start_date is None else str(oos_start_date),
+        'oos_end_date': '' if oos_end_date is None else str(oos_end_date),
         'test_score_romd': 0.0 if period_metrics is None else float(period_metrics.get('test_score_romd', 0.0)),
         'test_return_pct': 0.0 if period_metrics is None else float(period_metrics.get('ret_pct', 0.0)),
         'test_mdd': 0.0 if period_metrics is None else float(period_metrics.get('mdd', 0.0)),

@@ -128,19 +128,39 @@ def resolve_default_portfolio_start_year(data_dir: str | None = None) -> int:
     return fallback_year
 
 
+def _filter_market_dates_by_date_range(sorted_dates, *, start_date=None, end_date=None):
+    resolved_dates = [] if sorted_dates is None else list(sorted_dates)
+    start_ts = pd.Timestamp(start_date).normalize() if start_date is not None else None
+    end_ts = pd.Timestamp(end_date).normalize() if end_date is not None else None
+    if start_ts is not None and end_ts is not None and end_ts < start_ts:
+        raise ValueError("結束回測日期不可早於開始回測日期")
+    filtered_dates = []
+    for raw_date in resolved_dates:
+        ts = pd.Timestamp(raw_date).normalize()
+        if start_ts is not None and ts < start_ts:
+            continue
+        if end_ts is not None and ts > end_ts:
+            continue
+        filtered_dates.append(raw_date)
+    if resolved_dates and (start_ts is not None or end_ts is not None) and not filtered_dates:
+        raise ValueError("指定回測日期區間沒有可回測日期")
+    return filtered_dates
+
+
 def _filter_market_dates_by_end_year(sorted_dates, *, start_year=None, end_year=None):
     resolved_dates = [] if sorted_dates is None else list(sorted_dates)
-    if end_year is None:
+    start_date = f"{int(start_year)}-01-01" if start_year is not None else None
+    end_date = None
+    if end_year is not None:
+        resolved_end_year = int(end_year)
+        if resolved_end_year < 1900:
+            raise ValueError("結束回測年份不可小於 1900")
+        if start_year is not None and resolved_end_year < int(start_year):
+            raise ValueError("結束回測年份不可早於開始回測年份")
+        end_date = f"{resolved_end_year}-12-31"
+    if start_date is None and end_date is None:
         return resolved_dates
-    resolved_end_year = int(end_year)
-    if resolved_end_year < 1900:
-        raise ValueError("結束回測年份不可小於 1900")
-    if start_year is not None and resolved_end_year < int(start_year):
-        raise ValueError("結束回測年份不可早於開始回測年份")
-    filtered_dates = [dt for dt in resolved_dates if pd.Timestamp(dt).year <= resolved_end_year]
-    if not filtered_dates:
-        raise ValueError("結束回測年份早於資料起始年，沒有可回測日期")
-    return filtered_dates
+    return _filter_market_dates_by_date_range(resolved_dates, start_date=start_date, end_date=end_date)
 
 
 
@@ -518,25 +538,42 @@ def run_portfolio_simulation_with_param_schedule(
     fixed_risk=None,
     verbose=True,
     return_context=False,
+    start_date=None,
+    end_date=None,
 ):
     schedule_records = _build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     if not schedule_records:
         raise ValueError("rolling OOS active-param schedule 為空")
 
+    schedule_start_date = pd.Timestamp(schedule_records[0]["effective_date_text"]).normalize()
+    schedule_end_text = str(schedule_records[-1].get("effective_end_date_text") or schedule_records[-1]["effective_date_text"])
+    schedule_end_date = pd.Timestamp(schedule_end_text).normalize()
     resolved_start_year = int(schedule_records[0]["year"] if start_year is None else start_year)
+    requested_start_date = pd.Timestamp(start_date).normalize() if start_date is not None else pd.Timestamp(year=resolved_start_year, month=1, day=1)
+    resolved_start_date = max(requested_start_date, schedule_start_date)
+    if end_date is not None:
+        requested_end_date = pd.Timestamp(end_date).normalize()
+    elif end_year is not None:
+        requested_end_date = pd.Timestamp(year=int(end_year), month=12, day=31)
+    else:
+        requested_end_date = schedule_end_date
+    resolved_end_date = min(requested_end_date, schedule_end_date)
+    if resolved_end_date < resolved_start_date:
+        raise ValueError("active-param replay 日期區間無效：結束日早於開始日")
+
     contexts_by_effective_date = _load_contexts_for_active_schedule(data_dir, schedule_records, verbose=verbose)
     merged_dates = _merge_context_market_dates(contexts_by_effective_date)
-    resolved_sorted_dates = _filter_market_dates_by_end_year(
+    resolved_sorted_dates = _filter_market_dates_by_date_range(
         merged_dates,
-        start_year=resolved_start_year,
-        end_year=end_year,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
     )
     if not resolved_sorted_dates:
         raise ValueError("active-param replay 沒有可回測日期")
 
     first_sim_idx = find_sim_start_idx(resolved_sorted_dates, resolved_start_year)
     if first_sim_idx >= len(resolved_sorted_dates):
-        raise ValueError("active-param replay 起始年份沒有可回測日期")
+        raise ValueError("active-param replay 起始日期沒有可回測日期")
     first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
     base_context = contexts_by_effective_date[first_record["effective_date_text"]]
     base_params = first_record["params_obj"]
@@ -554,6 +591,7 @@ def run_portfolio_simulation_with_param_schedule(
         "active_param_schedule": [
             {
                 "effective_date": str(record["effective_date_text"]),
+                "effective_end_date": str(record.get("effective_end_date_text") or ""),
                 "year": int(record["year"]),
                 "params_signature": str(record["params_signature"]),
             }
@@ -589,6 +627,8 @@ def run_portfolio_simulation_with_param_schedule(
         "param_policy": "active_param_replay",
         "prep_wall_sec": prep_wall_sec,
         "prep_mode": "active_param_replay",
+        "active_replay_start_date": resolved_start_date.strftime("%Y-%m-%d"),
+        "active_replay_end_date": resolved_end_date.strftime("%Y-%m-%d"),
     })
     if return_context:
         # # (AI註: Workbench K 線頁只需要可繪圖的市場快取；正式 active-param replay 仍由每日 resolver 決定參數。)

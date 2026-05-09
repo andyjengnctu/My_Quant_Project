@@ -65,6 +65,15 @@ def _resolve_model_mode(objective_mode: str) -> str:
     return "legacy"
 
 
+
+
+def _policy_date(session, key: str) -> str | None:
+    policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    text = str(policy.get(key) or "").strip()
+    if not text:
+        return None
+    return pd.Timestamp(text).normalize().strftime("%Y-%m-%d")
+
 def _range_text_from_dates(dates) -> str:
     if not dates:
         return "-"
@@ -138,6 +147,8 @@ def _build_search_train_dates_for_session(session):
         sorted_dates=sorted_dates,
         train_start_year=int(session.train_start_year),
         search_train_end_year=int(session.search_train_end_year),
+        train_start_date=_policy_date(session, "train_start_date"),
+        search_train_end_date=_policy_date(session, "search_train_end_date"),
     )
 
 
@@ -510,6 +521,9 @@ def _compute_reference_console_cache(session):
                 train_start_year=int(session.walk_forward_policy["train_start_year"]),
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                train_start_date=_policy_date(session, "train_start_date"),
+                oos_start_date=_policy_date(session, "oos_start_date"),
+                oos_end_date=_policy_date(session, "oos_end_date"),
                 pit_stats_index=prep_result.get("all_pit_stats_index"),
             )
         return cache
@@ -538,6 +552,9 @@ def _get_cached_walk_forward_holdout_period(session, sorted_dates):
         int(session.walk_forward_policy["train_start_year"]),
         int(session.walk_forward_policy["min_train_years"]),
         session.walk_forward_policy.get("oos_start_year"),
+        _policy_date(session, "train_start_date"),
+        _policy_date(session, "oos_start_date"),
+        _policy_date(session, "oos_end_date"),
     )
     cache = getattr(session, "_optimizer_wf_holdout_period_cache", None)
     if not isinstance(cache, dict):
@@ -549,6 +566,9 @@ def _get_cached_walk_forward_holdout_period(session, sorted_dates):
             train_start_year=key[3],
             min_train_years=key[4],
             oos_start_year=key[5],
+            train_start_date=key[6],
+            oos_start_date=key[7],
+            oos_end_date=key[8],
         )
     return cache.get(key)
 
@@ -627,6 +647,9 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 train_start_year=int(session.walk_forward_policy["train_start_year"]),
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                train_start_date=_policy_date(session, "train_start_date"),
+                oos_start_date=_policy_date(session, "oos_start_date"),
+                oos_end_date=_policy_date(session, "oos_end_date"),
                 pit_stats_index=cached_trial_inputs.get("all_pit_stats_index"),
             )
         else:
@@ -652,6 +675,9 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 train_start_year=int(session.walk_forward_policy["train_start_year"]),
                 min_train_years=int(session.walk_forward_policy["min_train_years"]),
                 oos_start_year=session.walk_forward_policy.get("oos_start_year"),
+                train_start_date=_policy_date(session, "train_start_date"),
+                oos_start_date=_policy_date(session, "oos_start_date"),
+                oos_end_date=_policy_date(session, "oos_end_date"),
                 pit_stats_index=prep_result.get("all_pit_stats_index"),
             )
         candidate_wf_elapsed = max(0.0, time.perf_counter() - candidate_wf_started_at)

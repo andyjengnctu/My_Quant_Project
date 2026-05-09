@@ -23,6 +23,8 @@ from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from config.training_performance_policy import (
     resolve_optimizer_feature_bank_max_items_default,
@@ -62,6 +64,10 @@ class OuterRollingConfig:
     window_mode: str = "fixed"
     train_window_years: int = 5
     confirm: bool = True
+    first_oos_date: str = ""
+    last_oos_date: str = ""
+    train_window_months: int = OUTER_ROLLING_TRAIN_WINDOW_MONTHS
+    oos_horizon_months: int = OUTER_ROLLING_OOS_HORIZON_MONTHS
 
 
 OOS_SCORE_DECIMALS = 2
@@ -211,7 +217,7 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
             "normal_mode": rolling_workers_text,
             "timing_mode": rolling_workers_text,
             "consistent": True,
-            "result_scope": "不改單一 fold 計算；只改不同年度 fold 的執行順序",
+            "result_scope": "不改單一 fold 計算；只改不同 OOS period 的執行順序",
             "display": "console plan / timing JSON summary / timing CSV fold rows",
         },
         {
@@ -219,7 +225,7 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
             "normal_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
             "timing_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
             "consistent": True,
-            "result_scope": "年度 fold 彼此獨立；正式 OOS_CHAIN 仍在所有 fold 完成後重算",
+            "result_scope": "OOS period fold 彼此獨立；正式 OOS_CHAIN 仍在所有 fold 完成後重算",
             "display": "console plan / timing JSON summary: rolling_fold_parallel",
         },
         {
@@ -1079,6 +1085,82 @@ def _has_cli_flag(argv, option_name: str) -> bool:
     return any(str(arg).strip() == option_name for arg in list(argv or [])[1:])
 
 
+def _month_start(value) -> pd.Timestamp:
+    ts = pd.Timestamp(value).normalize()
+    return pd.Timestamp(year=int(ts.year), month=int(ts.month), day=1)
+
+
+def _month_end(value) -> pd.Timestamp:
+    start = _month_start(value)
+    return start + pd.DateOffset(months=1) - pd.Timedelta(days=1)
+
+
+def _parse_oos_boundary(value, *, default: pd.Timestamp, year_boundary: str = "start") -> pd.Timestamp:
+    text = str(value or "").strip()
+    if not text:
+        return _month_start(default)
+    if len(text) == 4 and text.isdigit():
+        month = 12 if str(year_boundary).lower() == "end" else 1
+        return pd.Timestamp(year=int(text), month=month, day=1)
+    if len(text) == 6 and text.isdigit():
+        return pd.Timestamp(year=int(text[:4]), month=int(text[4:]), day=1)
+    return _month_start(pd.Timestamp(text))
+
+
+def _period_key(value) -> int:
+    ts = pd.Timestamp(value)
+    return int(ts.year) * 100 + int(ts.month)
+
+
+def _period_label(start, end) -> str:
+    return f"{pd.Timestamp(start).strftime('%Y-%m-%d')}~{pd.Timestamp(end).strftime('%Y-%m-%d')}"
+
+
+def _fold_label(fold: dict) -> str:
+    return str(fold.get("oos_period") or _period_label(fold.get("oos_start_date"), fold.get("oos_end_date")))
+
+
+def _fold_selection_label(fold: dict) -> str:
+    return str(fold.get("selection_period") or _period_label(fold.get("selection_start_date"), fold.get("selection_end_date")))
+
+
+def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
+    first_oos = _parse_oos_boundary(config.first_oos_date, default=pd.Timestamp(year=int(config.first_oos_year), month=1, day=1))
+    last_oos = _parse_oos_boundary(config.last_oos_date, default=pd.Timestamp(year=int(config.last_oos_year), month=12, day=1), year_boundary="end")
+    horizon_months = max(1, int(config.oos_horizon_months or OUTER_ROLLING_OOS_HORIZON_MONTHS))
+    train_months = max(1, int(config.train_window_months or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
+    training_start = pd.Timestamp(year=int(config.training_start_year), month=1, day=1)
+    if first_oos > last_oos:
+        raise ValueError("first OOS date 不可晚於 last OOS date")
+    folds: list[dict] = []
+    current = first_oos
+    while current <= last_oos:
+        oos_start = _month_start(current)
+        oos_end = oos_start + pd.DateOffset(months=horizon_months) - pd.Timedelta(days=1)
+        selection_end = oos_start - pd.Timedelta(days=1)
+        if str(config.window_mode).lower() == "fixed":
+            selection_start = oos_start - pd.DateOffset(months=train_months)
+        else:
+            selection_start = training_start
+        if selection_start < training_start:
+            raise ValueError("fixed window 下 first OOS date - train window months 不可早於 training start date")
+        key = _period_key(oos_start)
+        folds.append({
+            "fold_key": int(key),
+            "oos_year": int(key),
+            "oos_start_date": oos_start.strftime("%Y-%m-%d"),
+            "oos_end_date": oos_end.strftime("%Y-%m-%d"),
+            "oos_period": _period_label(oos_start, oos_end),
+            "selection_start_date": selection_start.strftime("%Y-%m-%d"),
+            "selection_end_date": selection_end.strftime("%Y-%m-%d"),
+            "selection_period": _period_label(selection_start, selection_end),
+            "selection_start_year": int(selection_start.year),
+            "selection_end_year": int(selection_end.year),
+        })
+        current = oos_start + pd.DateOffset(months=horizon_months)
+    return folds
+
+
 def _resolve_latest_year_from_dates(dates) -> int | None:
     years = []
     for raw_date in list(dates or []):
@@ -1088,7 +1170,7 @@ def _resolve_latest_year_from_dates(dates) -> int | None:
     return max(years) if years else None
 
 
-def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
+def _resolve_latest_date_from_csv_data_dir(data_dir: str) -> pd.Timestamp | None:
     # AI註: outer rolling OOS 的互動設定只需要 last OOS 預設值；
     # 不應為此先觸發 optimizer 完整資料清洗、快取摘要與 issue log。
     if not os.path.isdir(str(data_dir)):
@@ -1099,7 +1181,7 @@ def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
     except (OSError, ValueError, TypeError):
         return None
 
-    latest_year = None
+    latest_date = None
     date_column_names = {"date", "datetime", "time", "timestamp", "日期"}
     for _ticker, file_path in list(csv_inputs or []):
         try:
@@ -1110,34 +1192,49 @@ def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
             date_values = pd.read_csv(file_path, usecols=[date_col])[date_col]
             if date_values.empty:
                 continue
-            parsed_dates = pd.to_datetime(date_values, errors="coerce")
-            if parsed_dates.isna().all():
+            parsed_dates = pd.to_datetime(date_values, errors="coerce").dropna()
+            if parsed_dates.empty:
                 continue
-            file_year = int(parsed_dates.dt.year.max())
+            file_date = pd.Timestamp(parsed_dates.max()).normalize()
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError):
             continue
-        if latest_year is None or file_year > latest_year:
-            latest_year = file_year
-    return latest_year
+        if latest_date is None or file_date > latest_date:
+            latest_date = file_date
+    return latest_date
 
 
-def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
+def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
+    latest_date = _resolve_latest_date_from_csv_data_dir(data_dir)
+    return None if latest_date is None else int(latest_date.year)
+
+
+def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, latest_date=None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
     env = os.environ if environ is None else environ
     train_start_default = int(base_policy.get("train_start_year", 2016) or 2016)
-    first_oos_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", train_start_default + 4) + 1)
-    last_oos_default = int(latest_year or first_oos_default)
+    first_oos_year_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", train_start_default + 4) + 1)
+    first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
+    latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
+    last_oos_date_default = _month_start(latest_ts)
     trials_default = int(default_trials if int(default_trials or 0) > 0 else int(env.get("V16_OUTER_ROLLING_OOS_TRIALS", "500") or 500))
     window_mode_default = str(env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
     if window_mode_default not in ("fixed", "expanding"):
         window_mode_default = "fixed"
-    train_window_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "5") or 5))
+    train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", str(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)) or OUTER_ROLLING_TRAIN_WINDOW_MONTHS))
+    oos_horizon_month_default = max(1, int(env.get("V16_OUTER_ROLLING_OOS_MONTHS", str(OUTER_ROLLING_OOS_HORIZON_MONTHS)) or OUTER_ROLLING_OOS_HORIZON_MONTHS))
+    # 既有 years env/CLI 保留相容：未提供 months 時，years * 12。
+    if not str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_MONTHS", "")).strip() and str(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS", "")).strip():
+        train_window_month_default = max(1, int(env.get("V16_OUTER_ROLLING_TRAIN_WINDOW_YEARS")) * 12)
 
     cli_train_start = _extract_cli_value(argv, "--outer-train-start")
+    cli_first_date = _extract_cli_value(argv, "--outer-first-oos-date")
+    cli_last_date = _extract_cli_value(argv, "--outer-last-oos-date")
     cli_first = _extract_cli_value(argv, "--outer-first-oos")
     cli_last = _extract_cli_value(argv, "--outer-last-oos")
     cli_trials = _extract_cli_value(argv, "--trials")
     cli_window_mode = _extract_cli_value(argv, "--outer-window-mode")
+    cli_train_window_months = _extract_cli_value(argv, "--outer-train-window-months")
     cli_train_window_years = _extract_cli_value(argv, "--outer-train-window-years")
+    cli_oos_months = _extract_cli_value(argv, "--outer-oos-months")
 
     if cli_window_mode:
         window_mode = str(cli_window_mode).strip().lower()
@@ -1148,12 +1245,21 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     else:
         window_mode = _prompt_str("window mode", window_mode_default, allowed=("fixed", "expanding"))
 
-    if cli_train_window_years:
-        train_window_years = int(cli_train_window_years)
+    if cli_train_window_months:
+        train_window_months = int(cli_train_window_months)
+    elif cli_train_window_years:
+        train_window_months = int(cli_train_window_years) * 12
     elif bool(timing_mode):
-        train_window_years = train_window_default
+        train_window_months = train_window_month_default
     else:
-        train_window_years = _prompt_int("train window years", train_window_default, minimum=1)
+        train_window_months = _prompt_int("train window months", train_window_month_default, minimum=1)
+
+    if cli_oos_months:
+        oos_horizon_months = int(cli_oos_months)
+    elif bool(timing_mode):
+        oos_horizon_months = oos_horizon_month_default
+    else:
+        oos_horizon_months = _prompt_int("OOS horizon months", oos_horizon_month_default, minimum=1)
 
     if cli_train_start:
         train_start = int(cli_train_start)
@@ -1164,23 +1270,21 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     else:
         train_start = _prompt_int("training start year", train_start_default, minimum=1900)
 
-    if cli_first:
-        first_oos = int(cli_first)
-    elif str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip():
-        first_oos = int(str(env["V16_OUTER_ROLLING_FIRST_OOS"]).strip())
+    first_source = cli_first_date or cli_first or str(env.get("V16_OUTER_ROLLING_FIRST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip()
+    last_source = cli_last_date or cli_last or str(env.get("V16_OUTER_ROLLING_LAST_OOS_DATE", "")).strip() or str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip()
+    if first_source:
+        first_oos_date = _parse_oos_boundary(first_source, default=first_oos_date_default)
     elif bool(timing_mode):
-        first_oos = first_oos_default
+        first_oos_date = first_oos_date_default
     else:
-        first_oos = _prompt_int("first OOS year", first_oos_default, minimum=train_start + 1)
+        first_oos_date = _parse_oos_boundary(input(f"{'first OOS date':<28} [{first_oos_date_default.strftime('%Y-%m-%d')}] : ").strip(), default=first_oos_date_default) if is_interactive_console() else first_oos_date_default
 
-    if cli_last:
-        last_oos = int(cli_last)
-    elif str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip():
-        last_oos = int(str(env["V16_OUTER_ROLLING_LAST_OOS"]).strip())
+    if last_source:
+        last_oos_date = _parse_oos_boundary(last_source, default=last_oos_date_default, year_boundary="end")
     elif bool(timing_mode):
-        last_oos = last_oos_default
+        last_oos_date = last_oos_date_default
     else:
-        last_oos = _prompt_int("last OOS year", last_oos_default, minimum=first_oos)
+        last_oos_date = _parse_oos_boundary(input(f"{'last OOS date':<28} [{last_oos_date_default.strftime('%Y-%m-%d')}] : ").strip(), default=last_oos_date_default, year_boundary="end") if is_interactive_console() else last_oos_date_default
 
     if cli_trials:
         trials = int(cli_trials)
@@ -1189,46 +1293,55 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     else:
         trials = _prompt_int("optimizer trials per fold", trials_default, minimum=1)
 
-    if first_oos > last_oos:
-        raise ValueError("first OOS year 不可大於 last OOS year")
-    if train_start >= first_oos:
-        raise ValueError("training start year 必須小於 first OOS year")
-    if train_window_years <= 0:
-        raise ValueError("train window years 必須大於 0")
-    if window_mode == "fixed" and first_oos - train_window_years < train_start:
-        raise ValueError("fixed window 下 first OOS year - train_window_years 不可早於 training start year")
+    if train_window_months <= 0:
+        raise ValueError("train window months 必須大於 0")
+    if oos_horizon_months <= 0:
+        raise ValueError("OOS horizon months 必須大於 0")
+    if first_oos_date > last_oos_date:
+        raise ValueError("first OOS date 不可晚於 last OOS date")
+    train_start_date = pd.Timestamp(year=int(train_start), month=1, day=1)
+    if train_start_date >= first_oos_date:
+        raise ValueError("training start date 必須早於 first OOS date")
+    if str(window_mode).lower() == "fixed" and first_oos_date - pd.DateOffset(months=int(train_window_months)) < train_start_date:
+        raise ValueError("fixed window 下 first OOS date - train window months 不可早於 training start date")
     if trials <= 0:
         raise ValueError("optimizer trials per fold 必須大於 0")
     return OuterRollingConfig(
-        train_start,
-        first_oos,
-        last_oos,
-        trials,
+        int(train_start),
+        int(first_oos_date.year),
+        int(last_oos_date.year),
+        int(trials),
         window_mode=window_mode,
-        train_window_years=train_window_years,
+        train_window_years=max(1, int(train_window_months) // 12),
         confirm=not _has_cli_flag(argv, "--yes"),
+        first_oos_date=first_oos_date.strftime("%Y-%m-%d"),
+        last_oos_date=last_oos_date.strftime("%Y-%m-%d"),
+        train_window_months=int(train_window_months),
+        oos_horizon_months=int(oos_horizon_months),
     )
 
 
 def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
+    # Backward-compatible helper for legacy year-mode callers.  New rolling code
+    # uses _build_rolling_folds(), which is date/month based.
     if str(config.window_mode).lower() == "fixed":
         return int(oos_year) - int(config.train_window_years)
     return int(config.training_start_year)
 
 
 def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None, performance_alignment_rows: list[dict] | None = None):
-    years = list(range(config.first_oos_year, config.last_oos_year + 1))
+    folds = _build_rolling_folds(config)
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
+    print(f"OUTER ROLLING OOS TEST | NEXT {int(config.oos_horizon_months)} MONTHS")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print(f"window mode      : {config.window_mode}")
     if str(config.window_mode).lower() == "fixed":
-        print(f"train window     : {config.train_window_years} years")
+        print(f"train window     : {int(config.train_window_months)} months")
     else:
-        print(f"training start   : {config.training_start_year}")
+        print(f"training start   : {config.training_start_year}-01-01")
     print("oos feedback     : False")
     print("promotion        : disabled")
-    print("oos horizon      : next 1 year only")
+    print(f"oos horizon      : next {int(config.oos_horizon_months)} months")
     print(f"optimizer trials : {config.trials_per_fold} per fold")
     if parallel_settings_line:
         print(str(parallel_settings_line))
@@ -1236,11 +1349,10 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
     if alignment_table:
         print(alignment_table)
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"{'fold':<6} | {'selection period':<18} | {'OOS test period':<15}")
+    print(f"{'fold':<6} | {'selection period':<23} | {'OOS test period':<23}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    for idx, oos_year in enumerate(years, start=1):
-        selection_start = _selection_start_for_oos(config, oos_year)
-        print(f"{idx}/{len(years):<4} | {selection_start}~{oos_year - 1:<13} | {oos_year}")
+    for idx, fold in enumerate(folds, start=1):
+        print(f"{idx}/{len(folds):<4} | {_fold_selection_label(fold):<23} | {_fold_label(fold):<23}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"LOCAL_MIN_SCORE              : True")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
@@ -1292,7 +1404,7 @@ def _build_outer_timing_row(
         "fold_idx": int(fold_idx),
         "fold_count": int(fold_count),
         "oos_year": int(oos_year),
-        "selection_period": f"{int(selection_start)}~{int(selection_end)}",
+        "selection_period": f"{selection_start}~{selection_end}",
         "status": str(status),
         "requested_trials": int(getattr(session, "n_trials", 0) or 0),
         "completed_trials": completed_trials,
@@ -1548,6 +1660,10 @@ def _write_outer_timing_summary(
         "meta": {
             "window_mode": str(config.window_mode),
             "train_window_years": int(config.train_window_years),
+            "first_oos_date": str(config.first_oos_date),
+            "last_oos_date": str(config.last_oos_date),
+            "train_window_months": int(config.train_window_months),
+            "oos_horizon_months": int(config.oos_horizon_months),
             "training_start_year": int(config.training_start_year),
             "first_oos_year": int(config.first_oos_year),
             "last_oos_year": int(config.last_oos_year),
@@ -1755,12 +1871,12 @@ def _print_outer_timing_summary(payload: dict):
 
 
 class _SearchProgress:
-    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, total_trials: int, completed_results: list[dict], overall_start: float):
+    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int, completed_results: list[dict], overall_start: float):
         self.fold_idx = int(fold_idx)
         self.fold_count = int(fold_count)
         self.oos_year = int(oos_year)
-        self.selection_start = int(selection_start)
-        self.selection_end = int(selection_end)
+        self.selection_start = str(selection_start)
+        self.selection_end = str(selection_end)
         self.total_trials = int(total_trials)
         self.completed_results = completed_results
         self.overall_start = float(overall_start)
@@ -1804,12 +1920,12 @@ class _SearchProgress:
                 f"best_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
-                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start % 100:02d}~{self.selection_end % 100:02d} | OOS={self.oos_year % 100:02d} | "
+                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
                 f"search | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
                 f"best={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
-                f"[{self.fold_idx}/{self.fold_count}] {self.selection_start % 100:02d}~{self.selection_end % 100:02d}>OOS{self.oos_year % 100:02d} | "
+                f"[{self.fold_idx}/{self.fold_count}] {self.selection_start}~{self.selection_end}>OOS{self.oos_year} | "
                 f"search {completed}/{self.total_trials} | best={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
             ),
         ))
@@ -1918,14 +2034,17 @@ def _policy_description(policy_name: str) -> str:
     return f"Use {policy_name} params for each OOS year."
 
 
-def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int]) -> dict:
+def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int], oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
     trial = item["trial"]
     trial_number = int(trial.number)
+    effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
+    effective_end = str(oos_end_date or f"{str(oos_year)[:4]}-12-31")
     return {
-        "effective_start": f"{int(oos_year)}-01-01",
-        "effective_end": f"{int(oos_year)}-12-31",
+        "effective_start": effective_start,
+        "effective_end": effective_end,
         "selection": str(selection_period),
         "oos_year": int(oos_year),
+        "oos_period": f"{effective_start}~{effective_end}",
         "policy": str(policy_name),
         "selected_trial": trial_number + 1,
         "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
@@ -1975,18 +2094,25 @@ def _get_or_prepare_oos_inputs(*, session, params):
     return prep_result
 
 
-def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False):
+def _evaluate_period_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False, oos_start_date: str | None = None, oos_end_date: str | None = None):
     payload = build_best_params_payload_from_trial(trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
     params = build_params_from_mapping(payload)
     prep_result = _get_or_prepare_oos_inputs(session=session, params=params)
     all_dates = sorted(prep_result["master_dates"])
-    test_dates = [dt for dt in all_dates if int(getattr(dt, "year", 0) or 0) == int(oos_year)]
+    policy = dict(getattr(session, "walk_forward_policy", {}) or {})
+    start_text = str(oos_start_date or policy.get("oos_start_date") or f"{int(str(oos_year)[:4])}-01-01")
+    end_text = str(oos_end_date or policy.get("oos_end_date") or f"{int(str(oos_year)[:4])}-12-31")
+    oos_start = pd.Timestamp(start_text).normalize()
+    oos_end = pd.Timestamp(end_text).normalize()
+    test_dates = [dt for dt in all_dates if oos_start <= pd.Timestamp(dt).normalize() <= oos_end]
     if not test_dates:
-        raise RuntimeError(f"OOS {oos_year} 無有效交易日期")
+        raise RuntimeError(f"OOS {start_text}~{end_text} 無有效交易日期")
+    train_start_text = str(policy.get("train_start_date") or f"{int(session.train_start_year)}-01-01")
+    train_end_text = str(policy.get("search_train_end_date") or (oos_start - pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
     holdout_period = {
-        "label": f"OOS-{int(oos_year)}",
-        "train_start": f"{int(session.train_start_year)}-01-01",
-        "train_end": f"{int(oos_year) - 1}-12-31",
+        "label": f"OOS-{start_text}~{end_text}",
+        "train_start": train_start_text,
+        "train_end": train_end_text,
         "oos_start": pd.Timestamp(test_dates[0]).strftime("%Y-%m-%d"),
         "oos_end": pd.Timestamp(test_dates[-1]).strftime("%Y-%m-%d"),
         "test_dates": test_dates,
@@ -1999,9 +2125,9 @@ def _evaluate_next_1y_oos(*, session, trial, oos_year: int, include_equity_curve
         max_positions=session.train_max_positions,
         enable_rotation=session.train_enable_rotation,
         benchmark_ticker="0050",
-        train_start_year=int(session.train_start_year),
+        train_start_year=int(pd.Timestamp(train_start_text).year),
         min_train_years=int(getattr(session, "walk_forward_policy", {}).get("min_train_years", 1) or 1),
-        oos_start_year=int(oos_year),
+        oos_start_year=int(oos_start.year),
         pit_stats_index=prep_result.get("all_pit_stats_index"),
         holdout_period=holdout_period,
         include_equity_curve=bool(include_equity_curve),
@@ -2029,7 +2155,7 @@ def _format_oos_delta(reference_score, selected_score) -> str:
     return f"{ref:.{OOS_SCORE_DECIMALS}f} ({selected - ref:+.{OOS_SCORE_DECIMALS}f})"
 
 
-def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int) -> dict:
+def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy_items: dict[str, dict | None], oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
     best_score = float("-inf")
     best_trial_number = None
     best_trial = None
@@ -2054,11 +2180,13 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
             if cached_has_curve or not bool(include_equity_curve):
                 report = cached_entry.get("report")
         if report is None:
-            report = _evaluate_next_1y_oos(
+            report = _evaluate_period_oos(
                 session=session,
                 trial=trial,
                 oos_year=int(oos_year),
                 include_equity_curve=bool(include_equity_curve),
+                oos_start_date=oos_start_date,
+                oos_end_date=oos_end_date,
             )
             report_cache[trial_number] = {
                 "include_equity_curve": bool(include_equity_curve),
@@ -2332,19 +2460,19 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
     params_by_effective_date: dict[str, dict] = {}
     for row in sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0)):
         try:
-            oos_year = int(row.get("oos_year"))
+            oos_key = int(row.get("oos_year"))
         except (TypeError, ValueError):
             continue
         if best_finalist:
             params_payload = dict(row.get("best_finalist_params") or {})
-            effective_start = f"{oos_year}-01-01"
+            effective_start = str(row.get("oos_start_date") or f"{str(oos_key)[:4]}-01-01")
         else:
             schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
             params_payload = dict(schedule.get("params") or {})
-            effective_start = str(schedule.get("effective_start") or f"{oos_year}-01-01")
+            effective_start = str(schedule.get("effective_start") or row.get("oos_start_date") or f"{str(oos_key)[:4]}-01-01")
         if not params_payload:
             continue
-        params_by_oos_year[str(oos_year)] = params_payload
+        params_by_oos_year[str(oos_key)] = params_payload
         params_by_effective_date[effective_start] = params_payload
     return {
         "schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
@@ -2585,23 +2713,61 @@ def _merge_active_replay_market_dates(contexts_by_signature: dict[str, dict]) ->
     return sorted(market_dates)
 
 
-def _run_active_replay_metrics_from_schedule_records(*, schedule_records: list[dict], contexts_by_signature: dict[str, dict], start_year: int, end_year: int, max_positions: int, enable_rotation: bool, benchmark_ticker: str = "0050") -> dict:
+def _filter_market_dates_by_date_range(market_dates, *, start_date: str | None, end_date: str | None):
+    start_ts = pd.Timestamp(start_date).normalize() if start_date else None
+    end_ts = pd.Timestamp(end_date).normalize() if end_date else None
+    resolved = []
+    for raw_date in list(market_dates or []):
+        try:
+            ts = pd.Timestamp(raw_date).normalize()
+        except (TypeError, ValueError):
+            continue
+        if start_ts is not None and ts < start_ts:
+            continue
+        if end_ts is not None and ts > end_ts:
+            continue
+        resolved.append(raw_date)
+    return sorted(resolved)
+
+
+def _run_active_replay_metrics_from_schedule_records(
+    *,
+    schedule_records: list[dict],
+    contexts_by_signature: dict[str, dict],
+    start_year: int,
+    end_year: int,
+    max_positions: int,
+    enable_rotation: bool,
+    benchmark_ticker: str = "0050",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
     if not schedule_records:
         return {}
     from core.portfolio_engine import run_portfolio_timeline
     from core.portfolio_stats import find_sim_start_idx
     from tools.portfolio_sim.simulation_runner import _filter_market_dates_by_end_year, _resolve_active_schedule_record
 
-    resolved_sorted_dates = _filter_market_dates_by_end_year(
-        _merge_active_replay_market_dates(contexts_by_signature),
-        start_year=int(start_year),
-        end_year=int(end_year),
-    )
+    all_market_dates = _merge_active_replay_market_dates(contexts_by_signature)
+    if start_date or end_date:
+        resolved_sorted_dates = _filter_market_dates_by_date_range(
+            all_market_dates,
+            start_date=start_date or f"{int(start_year)}-01-01",
+            end_date=end_date or f"{int(end_year)}-12-31",
+        )
+        resolved_start_year = int(pd.Timestamp(resolved_sorted_dates[0]).year) if resolved_sorted_dates else int(start_year)
+    else:
+        resolved_sorted_dates = _filter_market_dates_by_end_year(
+            all_market_dates,
+            start_year=int(start_year),
+            end_year=int(end_year),
+        )
+        resolved_start_year = int(start_year)
     if not resolved_sorted_dates:
         raise ValueError("active-param replay 沒有可回測日期")
-    first_sim_idx = find_sim_start_idx(resolved_sorted_dates, int(start_year))
+    first_sim_idx = find_sim_start_idx(resolved_sorted_dates, int(resolved_start_year))
     if first_sim_idx >= len(resolved_sorted_dates):
-        raise ValueError("active-param replay 起始年份沒有可回測日期")
+        raise ValueError("active-param replay 起始日期沒有可回測日期")
     first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
     base_context = contexts_by_signature[str(first_record["params_signature"])]
     benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
@@ -2629,7 +2795,7 @@ def _run_active_replay_metrics_from_schedule_records(*, schedule_records: list[d
         base_context.get("all_dfs_fast") or {},
         base_context.get("all_trade_logs") or {},
         resolved_sorted_dates,
-        int(start_year),
+        int(resolved_start_year),
         first_record["params_obj"],
         int(max_positions),
         bool(enable_rotation),
@@ -2657,10 +2823,14 @@ def _build_active_replay_chained_oos_summary(
 ) -> dict:
     if not rows:
         return {}
-    first_year = min(int(row["oos_year"]) for row in rows)
-    last_year = max(int(row["oos_year"]) for row in rows)
-    selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in rows)
-    selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in rows)
+    first_oos_start = min(pd.Timestamp(row.get("oos_start_date") or f"{str(row.get('oos_year'))[:4]}-01-01").normalize() for row in rows)
+    last_oos_end = max(pd.Timestamp(row.get("oos_end_date") or f"{str(row.get('oos_year'))[:4]}-12-31").normalize() for row in rows)
+    first_year = int(first_oos_start.year)
+    last_year = int(last_oos_end.year)
+    selection_start_ts = min(pd.Timestamp(row.get("selection_start_date") or f"{int(row.get('selection_start_year', first_year))}-01-01").normalize() for row in rows)
+    selection_end_ts = max(pd.Timestamp(row.get("selection_end_date") or f"{int(row.get('selection_end_year', last_year))}-12-31").normalize() for row in rows)
+    selection_period_label = _period_label(selection_start_ts, selection_end_ts)
+    oos_period_label = _period_label(first_oos_start, last_oos_end)
 
     payloads = {
         "best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True),
@@ -2685,6 +2855,8 @@ def _build_active_replay_chained_oos_summary(
             contexts_by_signature=contexts_by_signature,
             start_year=first_year,
             end_year=last_year,
+            start_date=first_oos_start.strftime("%Y-%m-%d"),
+            end_date=last_oos_end.strftime("%Y-%m-%d"),
             max_positions=max_positions,
             enable_rotation=enable_rotation,
         )
@@ -2704,9 +2876,9 @@ def _build_active_replay_chained_oos_summary(
         "method": "continuous_active_param_replay",
         "score_aggregation_method": "continuous_active_param_replay_recomputed_score",
         "return_aggregation_method": "continuous_active_param_replay_total_return",
-        "note": "OOS_CHAIN 由 portfolio_sim active-param replay 連續重跑後重算 score；持股、現金與 benchmark 跨年延續，不使用年度 closeout stitch 或年度 score mean。",
-        "selection_period": f"{selection_start}~{selection_end}",
-        "oos_period": f"{first_year}~{last_year}",
+        "note": "OOS_CHAIN 由 portfolio_sim active-param replay 連續重跑後重算 score；持股、現金與 benchmark 跨 fold 延續，不使用獨立 OOS closeout stitch 或區間 score mean。",
+        "selection_period": selection_period_label,
+        "oos_period": oos_period_label,
         "max_positions": int(max_positions),
         "enable_rotation": bool(enable_rotation),
         "best_finalist_oos_score": float(best_score),
@@ -2748,10 +2920,14 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
         return dict(chained_override)
     if not rows:
         return {}
-    first_year = min(int(row["oos_year"]) for row in rows)
-    last_year = max(int(row["oos_year"]) for row in rows)
-    selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in rows)
-    selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in rows)
+    first_oos_start = min(pd.Timestamp(row.get("oos_start_date") or f"{str(row.get('oos_year'))[:4]}-01-01").normalize() for row in rows)
+    last_oos_end = max(pd.Timestamp(row.get("oos_end_date") or f"{str(row.get('oos_year'))[:4]}-12-31").normalize() for row in rows)
+    first_year = int(first_oos_start.year)
+    last_year = int(last_oos_end.year)
+    selection_start_ts = min(pd.Timestamp(row.get("selection_start_date") or f"{int(row.get('selection_start_year', first_year))}-01-01").normalize() for row in rows)
+    selection_end_ts = max(pd.Timestamp(row.get("selection_end_date") or f"{int(row.get('selection_end_year', last_year))}-12-31").normalize() for row in rows)
+    selection_period_label = _period_label(selection_start_ts, selection_end_ts)
+    oos_period_label = _period_label(first_oos_start, last_oos_end)
 
     best_stitched = _stitch_strategy_equity_curves(rows, best_finalist=True)
     benchmark_stitched = _stitch_benchmark_equity_curve(rows)
@@ -2763,12 +2939,12 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
     benchmark_return = float(benchmark_metrics.get("return_pct", 0.0))
 
     summary = {
-        "method": "fallback_yearly_closeout_stitched_daily_equity",
-        "score_aggregation_method": "fallback_yearly_closeout_stitched_daily_equity",
-        "return_aggregation_method": "fallback_yearly_closeout_stitched_daily_equity_total_return",
-        "note": "fallback：由各年度 next-1Y OOS daily equity 串接後重新計算 score；正式輸出應優先使用 continuous_active_param_replay。",
-        "selection_period": f"{selection_start}~{selection_end}",
-        "oos_period": f"{first_year}~{last_year}",
+        "method": "fallback_period_closeout_stitched_daily_equity",
+        "score_aggregation_method": "fallback_period_closeout_stitched_daily_equity",
+        "return_aggregation_method": "fallback_period_closeout_stitched_daily_equity_total_return",
+        "note": "fallback：由各 OOS period daily equity 串接後重新計算 score；正式輸出應優先使用 continuous_active_param_replay。",
+        "selection_period": selection_period_label,
+        "oos_period": oos_period_label,
         "best_finalist_oos_score": float(best_score),
         "benchmark_oos_score": float(benchmark_score),
         "best_finalist_return_pct": float(best_return),
@@ -2871,6 +3047,22 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
 
 
 
+def _rows_period_bounds(rows: list[dict]) -> dict:
+    source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
+    if not source_rows:
+        return {}
+    first_oos_start = min(pd.Timestamp(row.get("oos_start_date") or f"{str(row.get('oos_year'))[:4]}-01-01").normalize() for row in source_rows)
+    last_oos_end = max(pd.Timestamp(row.get("oos_end_date") or f"{str(row.get('oos_year'))[:4]}-12-31").normalize() for row in source_rows)
+    selection_start = min(pd.Timestamp(row.get("selection_start_date") or f"{int(row.get('selection_start_year', first_oos_start.year))}-01-01").normalize() for row in source_rows)
+    selection_end = max(pd.Timestamp(row.get("selection_end_date") or f"{int(row.get('selection_end_year', last_oos_end.year))}-12-31").normalize() for row in source_rows)
+    return {
+        "selection_period": _period_label(selection_start, selection_end),
+        "oos_period": _period_label(first_oos_start, last_oos_end),
+        "first_oos_key": min(int(row.get("oos_year", 0) or 0) for row in source_rows),
+        "last_oos_key": max(int(row.get("oos_year", 0) or 0) for row in source_rows),
+    }
+
+
 def _avg_float_from_rows(rows: list[dict], getter, default: float = 0.0) -> float:
     values: list[float] = []
     for row in list(rows or []):
@@ -2886,14 +3078,12 @@ def _build_oos_avg_row(rows: list[dict]) -> dict | None:
     source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
     if not source_rows:
         return None
-    selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in source_rows)
-    selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in source_rows)
-    first_oos = min(int(row.get("oos_year", 0) or 0) for row in source_rows)
-    last_oos = max(int(row.get("oos_year", 0) or 0) for row in source_rows)
+    bounds = _rows_period_bounds(source_rows)
     row = {
         "fold": "OOS_AVG",
-        "selection_period": f"{selection_start}~{selection_end}",
-        "oos_year": f"{first_oos}~{last_oos}" if first_oos != last_oos else str(first_oos),
+        "selection_period": str(bounds.get("selection_period", "")),
+        "oos_year": str(bounds.get("oos_period", "")),
+        "oos_period": str(bounds.get("oos_period", "")),
         "best_finalist_oos_score": _avg_float_from_rows(source_rows, lambda item: item.get("best_finalist_oos_score", 0.0)),
         "benchmark_oos_score": _avg_float_from_rows(source_rows, lambda item: item.get("benchmark_oos_score", 0.0)),
         "best_finalist_return_pct": _avg_float_from_rows(source_rows, lambda item: item.get("best_finalist_return_pct", 0.0)),
@@ -2946,8 +3136,8 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         return ""
     widths = {
         "fold": 9,
-        "selection": 11,
-        "oos_year": 9,
+        "selection": 23,
+        "oos_year": 23,
         "rank": 8,
         "best": 17,
         "bench": 17,
@@ -2957,9 +3147,9 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     local_group_width = widths["rank"] + widths["best"] + widths["bench"] + 6
     retention_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
-    lines.append("ROLLING NEXT-1Y OOS RESULTS")
+    lines.append("ROLLING MONTHLY OOS RESULTS")
     header1 = (
-        f"{_pad_ansi('fold', widths['fold'])} | {_pad_ansi('selection', widths['selection'])} | {_pad_ansi('oos_year', widths['oos_year'])} | "
+        f"{_pad_ansi('fold', widths['fold'])} | {_pad_ansi('selection', widths['selection'])} | {_pad_ansi('oos_period', widths['oos_year'])} | "
         f"{_pad_ansi('base', base_group_width)} | "
         f"{_pad_ansi('local*', local_group_width)} | "
         f"{_pad_ansi('retention', retention_group_width)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
@@ -2987,7 +3177,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         local_rank, local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         retention_rank, _retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         line = (
-            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(str(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(str(row.get('oos_year', '')), widths['oos_year'])} | "
+            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(str(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(str(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
             f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_best, widths['best'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
@@ -3026,6 +3216,11 @@ def _flatten_row_for_csv(row: dict) -> dict:
         "fold": row.get("fold"),
         "selection": row.get("selection_period"),
         "oos_year": row.get("oos_year"),
+        "oos_period": row.get("oos_period"),
+        "selection_start_date": row.get("selection_start_date"),
+        "selection_end_date": row.get("selection_end_date"),
+        "oos_start_date": row.get("oos_start_date"),
+        "oos_end_date": row.get("oos_end_date"),
         "best_finalist_return_pct": float(row.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(row.get("benchmark_return_pct", 0.0)),
     }
@@ -3056,12 +3251,17 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
         oos_year = str(int(schedule.get("oos_year") or row.get("oos_year")))
         params_payload = dict(schedule.get("params") or {})
         params_by_oos_year[oos_year] = params_payload
-        params_by_effective_date[str(schedule.get("effective_start") or f"{oos_year}-01-01")] = params_payload
+        params_by_effective_date[str(schedule.get("effective_start") or row.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")] = params_payload
         policy_metrics = dict(row.get(policy_name) or {})
         fold_entries.append({
             "fold": row.get("fold"),
             "selection_period": row.get("selection_period"),
             "oos_year": int(row.get("oos_year")),
+            "oos_period": row.get("oos_period"),
+            "selection_start_date": row.get("selection_start_date"),
+            "selection_end_date": row.get("selection_end_date"),
+            "oos_start_date": row.get("oos_start_date"),
+            "oos_end_date": row.get("oos_end_date"),
             "effective_start": schedule.get("effective_start"),
             "effective_end": schedule.get("effective_end"),
             "selected_trial": schedule.get("selected_trial"),
@@ -3111,10 +3311,14 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
         "meta": {
             "window_mode": str(config.window_mode),
             "train_window_years": int(config.train_window_years),
+            "first_oos_date": str(config.first_oos_date),
+            "last_oos_date": str(config.last_oos_date),
+            "train_window_months": int(config.train_window_months),
+            "oos_horizon_months": int(config.oos_horizon_months),
             "training_start_year": int(config.training_start_year),
             "first_oos_year": int(config.first_oos_year),
             "last_oos_year": int(config.last_oos_year),
-            "oos_horizon": "next_1y",
+            "oos_horizon": f"next_{int(config.oos_horizon_months)}m",
             "oos_feedback_used": False,
             "promotion_enabled": False,
             "trials_per_fold": int(config.trials_per_fold),
@@ -3132,7 +3336,8 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "chained_oos_score": float(policy_summary.get("chained_oos_score", 0.0)),
             "chained_return_pct": float(policy_summary.get("chained_return_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(policy_summary.get("chained_gap_vs_0050_pct", 0.0)),
-            "yearly_avg_oos_score": float(policy_summary.get("yearly_avg_oos_score", policy_summary.get("avg_oos_score", 0.0))),
+            "period_avg_oos_score": float(policy_summary.get("period_avg_oos_score", policy_summary.get("avg_oos_score", 0.0))),
+            "yearly_avg_oos_score": float(policy_summary.get("period_avg_oos_score", policy_summary.get("yearly_avg_oos_score", policy_summary.get("avg_oos_score", 0.0)))),
             "avg_oos_score": float(policy_summary.get("avg_oos_score", 0.0)),
             "median_oos_score": float(policy_summary.get("median_oos_score", 0.0)),
             "worst_oos_score": float(policy_summary.get("worst_oos_score", 0.0)),
@@ -3140,7 +3345,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "total_years": int(policy_summary.get("total_years", 0)),
         },
         "active_param_policy": "daily_active_param",
-        "active_param_policy_note": "每日決策使用該日 active param；rolling 只是用歷史 effective date replay，不代表實盤使用年度參數組。",
+        "active_param_policy_note": "每日決策使用該日 active param；rolling 只是用歷史 effective date replay，不代表實盤使用固定單期參數組。",
         "chained_oos": chained_oos,
         "params_by_effective_date": params_by_effective_date,
         "params_by_oos_year": params_by_oos_year,
@@ -3164,7 +3369,7 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
     os.makedirs(report_dir, exist_ok=True)
     models_dir = os.path.join(project_root, "models")
-    base = os.path.join(report_dir, f"outer_rolling_oos_next1y_{session_ts}")
+    base = os.path.join(report_dir, f"outer_rolling_oos_next{int(config.oos_horizon_months)}m_{session_ts}")
     json_path = base + ".json"
     csv_path = base + ".csv"
     txt_path = base + ".txt"
@@ -3183,16 +3388,20 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
                 light_row[policy_name] = policy_copy
         yearly_results.append(light_row)
     payload = {
-        "type": "outer_rolling_oos_next1y",
+        "type": "outer_rolling_oos_monthly",
         "version": 1,
         "created_at": get_taipei_now().isoformat(),
         "meta": {
             "window_mode": str(config.window_mode),
             "train_window_years": int(config.train_window_years),
+            "first_oos_date": str(config.first_oos_date),
+            "last_oos_date": str(config.last_oos_date),
+            "train_window_months": int(config.train_window_months),
+            "oos_horizon_months": int(config.oos_horizon_months),
             "training_start_year": int(config.training_start_year),
             "first_oos_year": int(config.first_oos_year),
             "last_oos_year": int(config.last_oos_year),
-            "oos_horizon": "next_1y",
+            "oos_horizon": f"next_{int(config.oos_horizon_months)}m",
             "oos_feedback_used": False,
             "promotion_enabled": False,
             "trials_per_fold": int(config.trials_per_fold),
@@ -3203,6 +3412,7 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
             "DOMINANT_YEAR_DEPENDENCY": bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
         },
         "summary": summary,
+        "period_results": yearly_results,
         "yearly_results": yearly_results,
         "policies": _build_policies_schedule(rows),
         "rolling_paramsets": paramset_paths,
@@ -3223,15 +3433,12 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
 def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:
     if not rows:
         return {"folds": 0}
-    selection_start = min(int(row.get("selection_start_year", 0) or 0) for row in rows)
-    selection_end = max(int(row.get("selection_end_year", 0) or 0) for row in rows)
-    first_oos = min(int(row["oos_year"]) for row in rows)
-    last_oos = max(int(row["oos_year"]) for row in rows)
+    bounds = _rows_period_bounds(rows)
     chained = _build_chained_oos_summary(rows, chained_override=chained_override)
     summary = {
         "folds": len(rows),
-        "selection_period": f"{selection_start}~{selection_end}",
-        "oos_period": f"{first_oos}~{last_oos}",
+        "selection_period": str(bounds.get("selection_period", "")),
+        "oos_period": str(bounds.get("oos_period", "")),
         "aggregation_method": chained.get("score_aggregation_method") or chained.get("method"),
         "return_aggregation_method": chained.get("return_aggregation_method"),
         "note": chained.get("note"),
@@ -3242,38 +3449,50 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
         benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in rows]
         chain_policy = dict(chained.get(policy_name) or {})
-        yearly_avg_score = sum(scores) / float(len(scores))
+        period_avg_score = sum(scores) / float(len(scores))
         summary[policy_name] = {
             "chained_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
             "chained_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
             "chained_gap_vs_best_pct": float(chain_policy.get("best_gap_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
-            "yearly_avg_oos_score": float(yearly_avg_score),
-            "avg_oos_score": float(yearly_avg_score),
+            "period_avg_oos_score": float(period_avg_score),
+            "yearly_avg_oos_score": float(period_avg_score),
+            "avg_oos_score": float(period_avg_score),
             "median_oos_score": float(statistics.median(scores)),
             "worst_oos_score": min(scores),
+            "positive_periods": sum(1 for value in returns if value > 0.0),
             "positive_years": sum(1 for value in returns if value > 0.0),
             "win_vs_0050_score": sum(1 for gap in benchmark_gaps if gap > 0.0),
+            "total_periods": len(scores),
             "total_years": len(scores),
+            "period_return_pct": returns,
+            "period_oos_score": scores,
             "yearly_return_pct": returns,
             "yearly_oos_score": scores,
         }
     benchmark_returns = [float(row.get("benchmark_return_pct", 0.0)) for row in rows]
     benchmark_scores = [float(row.get("benchmark_oos_score", 0.0)) for row in rows]
-    benchmark_yearly_avg_score = sum(benchmark_scores) / float(len(benchmark_scores))
+    benchmark_period_avg_score = sum(benchmark_scores) / float(len(benchmark_scores))
     summary["benchmark_0050"] = {
         "chained_oos_score": float(chained.get("benchmark_oos_score", 0.0)),
         "chained_return_pct": float(chained.get("benchmark_return_pct", 0.0)),
-        "yearly_avg_oos_score": float(benchmark_yearly_avg_score),
-        "avg_oos_score": float(benchmark_yearly_avg_score),
+        "period_avg_oos_score": float(benchmark_period_avg_score),
+        "yearly_avg_oos_score": float(benchmark_period_avg_score),
+        "avg_oos_score": float(benchmark_period_avg_score),
+        "positive_periods": sum(1 for value in benchmark_returns if value > 0.0),
         "positive_years": sum(1 for value in benchmark_returns if value > 0.0),
+        "total_periods": len(benchmark_returns),
         "total_years": len(benchmark_returns),
+        "period_return_pct": benchmark_returns,
+        "period_oos_score": benchmark_scores,
         "yearly_return_pct": benchmark_returns,
         "yearly_oos_score": benchmark_scores,
     }
     if config is not None:
         summary["window_mode"] = str(config.window_mode)
         summary["train_window_years"] = int(config.train_window_years)
+        summary["train_window_months"] = int(config.train_window_months)
+        summary["oos_horizon_months"] = int(config.oos_horizon_months)
     return summary
 
 def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False) -> str:
@@ -3361,14 +3580,14 @@ def _read_latest_parallel_fold_progress(path: str) -> dict:
     return {}
 
 
-def _write_parallel_fold_progress_event(*, stage: str, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, **payload) -> None:
+def _write_parallel_fold_progress_event(*, stage: str, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, **payload) -> None:
     event = {
         "stage": str(stage),
         "fold_idx": int(fold_idx),
         "fold_count": int(fold_count),
         "oos_year": int(oos_year),
-        "selection_start": int(selection_start),
-        "selection_end": int(selection_end),
+        "selection_start": str(selection_start),
+        "selection_end": str(selection_end),
         "ts": time.time(),
     }
     event.update(payload)
@@ -3389,13 +3608,15 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
     oos_year = int(task.get("oos_year", progress.get("oos_year", 0)) or 0)
-    selection_start = int(progress.get("selection_start", 0) or 0)
-    selection_end = int(progress.get("selection_end", 0) or 0)
-    if selection_start <= 0 or selection_end <= 0:
-        # AI註: task 只含 OOS year；平行狀態列沒有 config 物件時保留 OOS 即可。
-        selection_text = "selection=?"
-    else:
+    oos_label = str(task.get("oos_period") or oos_year)
+    selection_start = str(progress.get("selection_start") or task.get("selection_period") or "").strip()
+    selection_end = str(progress.get("selection_end") or "").strip()
+    if selection_start and selection_end:
         selection_text = f"selection={selection_start}~{selection_end}"
+    elif selection_start:
+        selection_text = f"selection={selection_start}"
+    else:
+        selection_text = "selection=?"
     stage = str(progress.get("stage") or "QUEUED").upper()
     elapsed_text = ""
     if progress.get("elapsed_sec") is not None:
@@ -3406,7 +3627,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best = progress.get("best_score")
         best_text = "N/A" if best is None else f"{float(best):.3f}"
         return (
-            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
+            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
             f"trial {completed}/{total} | best={best_text}{elapsed_text}"
         )
     if stage == "LOCAL_MIN_REVIEW":
@@ -3420,21 +3641,21 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best_text = "N/A" if best is None else f"{float(best):.3f}"
         status = str(progress.get("status") or "RUN")
         return (
-            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
+            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
             f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
             f"current={current_text} | best={best_text} | {status}{elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | diagnostics {status}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status}{elapsed_text}"
     if stage == "DONE":
         status = str(progress.get("status") or "done")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | DONE {status}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | DONE {status}{elapsed_text}"
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | {status}{elapsed_text}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {status}{elapsed_text}"
     fallback = str(log_status or "queued").strip()
-    return f"[{fold_idx}/{fold_count}] OOS {oos_year} | {fallback}"
+    return f"[{fold_idx}/{fold_count}] OOS {oos_label} | {fallback}"
 
 
 class _ParallelFoldProgressBoard:
@@ -3495,7 +3716,7 @@ class _ParallelCompletedResultsBoard:
         if not table:
             return
         table_lines = table.splitlines()
-        if table_lines and table_lines[0].strip().upper() == "ROLLING NEXT-1Y OOS RESULTS":
+        if table_lines and table_lines[0].strip().upper() == "ROLLING MONTHLY OOS RESULTS":
             table_lines = table_lines[1:]
         lines = table_lines
         if self.inline:
@@ -3613,7 +3834,7 @@ class _ParallelFoldLiveBoard:
 def _print_parallel_fold_result(row: dict) -> None:
     if not row:
         return
-    print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={row.get('selection_period')} | OOS={row.get('oos_year')}{C_RESET}", flush=True)
+    print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={row.get('selection_period')} | OOS={row.get('oos_period') or row.get('oos_year')}{C_RESET}", flush=True)
     rendered = _render_results_table([row], color=True, include_chain=False)
     if rendered:
         print(rendered, flush=True)
@@ -3664,12 +3885,12 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
     return chain_state
 
 class _FoldLogSearchProgress:
-    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, total_trials: int):
+    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start, selection_end, total_trials: int):
         self.fold_idx = int(fold_idx)
         self.fold_count = int(fold_count)
         self.oos_year = int(oos_year)
-        self.selection_start = int(selection_start)
-        self.selection_end = int(selection_end)
+        self.selection_start = str(selection_start)
+        self.selection_end = str(selection_end)
         self.total_trials = int(total_trials)
         self.stage_start = time.perf_counter()
         self.best_score = float("-inf")
@@ -3727,6 +3948,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             window_mode=str(config_payload.get("window_mode", "fixed")),
             train_window_years=int(config_payload.get("train_window_years", 5)),
             confirm=False,
+            first_oos_date=str(config_payload.get("first_oos_date", "")),
+            last_oos_date=str(config_payload.get("last_oos_date", "")),
+            train_window_months=int(config_payload.get("train_window_months", OUTER_ROLLING_TRAIN_WINDOW_MONTHS)),
+            oos_horizon_months=int(config_payload.get("oos_horizon_months", OUTER_ROLLING_OOS_HORIZON_MONTHS)),
         )
         output_dir = str(task["output_dir"])
         selected_data_dir = str(task["selected_data_dir"])
@@ -3743,9 +3968,13 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             os.environ["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = str(_resolve_parallel_worker_prep_cache_max_items(os.environ))
 
         fold_start = time.perf_counter()
-        selection_end = int(oos_year) - 1
-        selection_start = _selection_start_for_oos(config, int(oos_year))
-        print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | parallel fold START | selection={selection_start}~{selection_end}", flush=True)
+        selection_start = str(task.get("selection_start_date") or "")
+        selection_end = str(task.get("selection_end_date") or "")
+        selection_period = str(task.get("selection_period") or f"{selection_start}~{selection_end}")
+        oos_period = str(task.get("oos_period") or str(oos_year))
+        oos_start_date = str(task.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")
+        oos_end_date = str(task.get("oos_end_date") or f"{str(oos_year)[:4]}-12-31")
+        print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | parallel fold START | selection={selection_period}", flush=True)
         _write_parallel_fold_progress_event(
             stage="START",
             fold_idx=fold_idx,
@@ -3757,10 +3986,15 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             elapsed_sec=0.0,
         )
         fold_policy = dict(base_policy)
-        fold_policy["selection_start_year"] = int(selection_start)
-        fold_policy["train_start_year"] = int(selection_start)
-        fold_policy["search_train_end_year"] = int(selection_end)
-        fold_policy["oos_start_year"] = int(oos_year)
+        fold_policy["selection_start_year"] = int(pd.Timestamp(selection_start).year)
+        fold_policy["train_start_year"] = int(pd.Timestamp(selection_start).year)
+        fold_policy["search_train_end_year"] = int(pd.Timestamp(selection_end).year)
+        fold_policy["oos_start_year"] = int(pd.Timestamp(oos_start_date).year)
+        fold_policy["selection_start_date"] = selection_start
+        fold_policy["train_start_date"] = selection_start
+        fold_policy["search_train_end_date"] = selection_end
+        fold_policy["oos_start_date"] = oos_start_date
+        fold_policy["oos_end_date"] = oos_end_date
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
@@ -3787,7 +4021,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             install_started = time.perf_counter()
             session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="RAW_DATA",
                 fold_idx=fold_idx,
@@ -3819,7 +4053,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or config.trials_per_fold)
             progress.done(int(session.current_session_trial))
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
 
@@ -3848,8 +4082,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "fold_idx": int(fold_idx),
                 "fold_count": int(fold_count),
                 "oos_year": int(oos_year),
-                "selection_start": int(selection_start),
-                "selection_end": int(selection_end),
+                "selection_start": str(selection_start),
+                "selection_end": str(selection_end),
                 "completed_results": [],
                 "overall_start": fold_start,
             }
@@ -3868,7 +4102,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             if hasattr(session, "outer_rolling_local_progress_context"):
                 delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | local-min review DONE | finalists={len(finalists)} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | local-min review DONE | finalists={len(finalists)} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
                 fold_idx=fold_idx,
@@ -3892,8 +4126,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     fold_idx=fold_idx,
                     fold_count=fold_count,
                     oos_year=int(oos_year),
-                    selection_start=int(selection_start),
-                    selection_end=int(selection_end),
+                    selection_start=selection_start,
+                    selection_end=selection_end,
                     status="skipped_no_finalist",
                     session=session,
                     db_file=db_file,
@@ -3933,9 +4167,11 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 finalists=finalists,
                 policy_items=policy_items,
                 oos_year=int(oos_year),
+                oos_start_date=oos_start_date,
+                oos_end_date=oos_end_date,
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="OOS_DIAGNOSTICS",
                 fold_idx=fold_idx,
@@ -3947,7 +4183,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 elapsed_sec=oos_diagnostics_sec,
             )
             fold_elapsed = time.perf_counter() - fold_start
-            selection_period = f"{selection_start}~{selection_end}"
+            selection_period = str(selection_period)
             policy_schedules = {
                 name: _build_policy_schedule_entry(
                     item=item,
@@ -3956,6 +4192,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     selection_period=selection_period,
                     local_rank_map=local_rank_map,
                     retention_rank_map=retention_rank_map,
+                    oos_start_date=oos_start_date,
+                    oos_end_date=oos_end_date,
                 )
                 for name, item in policy_items.items()
                 if item is not None
@@ -3964,8 +4202,13 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "fold": f"{fold_idx}/{fold_count}",
                 "oos_year": int(oos_year),
                 "selection_period": selection_period,
-                "selection_start_year": int(selection_start),
-                "selection_end_year": int(selection_end),
+                "selection_start_year": int(pd.Timestamp(selection_start).year),
+                "selection_end_year": int(pd.Timestamp(selection_end).year),
+                "selection_start_date": str(selection_start),
+                "selection_end_date": str(selection_end),
+                "oos_start_date": str(oos_start_date),
+                "oos_end_date": str(oos_end_date),
+                "oos_period": str(oos_period),
                 "best_finalist_oos_score": float(diagnostics.get("best_finalist_oos_score", 0.0)),
                 "best_finalist_trial": diagnostics.get("best_finalist_trial"),
                 "best_finalist_return_pct": float(diagnostics.get("best_finalist_return_pct", 0.0)),
@@ -3992,8 +4235,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 fold_idx=fold_idx,
                 fold_count=fold_count,
                 oos_year=int(oos_year),
-                selection_start=int(selection_start),
-                selection_end=int(selection_end),
+                selection_start=selection_start,
+                selection_end=selection_end,
                 status="done",
                 session=session,
                 db_file=db_file,
@@ -4064,11 +4307,12 @@ def run_outer_rolling_oos(
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(os.path.join(output_dir, "outer_rolling_oos"), exist_ok=True)
 
-    latest_year = _resolve_latest_year_from_csv_data_dir(selected_data_dir)
+    latest_date = _resolve_latest_date_from_csv_data_dir(selected_data_dir)
+    latest_year = None if latest_date is None else int(latest_date.year)
 
-    config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials, timing_mode=bool(timing_mode))
-    years = list(range(config.first_oos_year, config.last_oos_year + 1))
-    fold_count = int(len(years))
+    config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, latest_date=latest_date, default_trials=default_trials, timing_mode=bool(timing_mode))
+    folds = _build_rolling_folds(config)
+    fold_count = int(len(folds))
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
@@ -4137,11 +4381,16 @@ def run_outer_rolling_oos(
             "trials_per_fold": int(config.trials_per_fold),
             "window_mode": str(config.window_mode),
             "train_window_years": int(config.train_window_years),
+            "first_oos_date": str(config.first_oos_date),
+            "last_oos_date": str(config.last_oos_date),
+            "train_window_months": int(config.train_window_months),
+            "oos_horizon_months": int(config.oos_horizon_months),
         }
         tasks = []
-        for fold_idx, oos_year in enumerate(years, start=1):
-            selection_end = int(oos_year) - 1
-            selection_start = _selection_start_for_oos(config, int(oos_year))
+        for fold_idx, fold in enumerate(folds, start=1):
+            oos_year = int(fold["oos_year"])
+            selection_start = str(fold["selection_start_date"])
+            selection_end = str(fold["selection_end_date"])
             tasks.append({
                 "project_root": str(project_root),
                 "output_dir": str(output_dir),
@@ -4153,6 +4402,12 @@ def run_outer_rolling_oos(
                 "fold_idx": int(fold_idx),
                 "fold_count": fold_count,
                 "oos_year": int(oos_year),
+                "oos_start_date": str(fold["oos_start_date"]),
+                "oos_end_date": str(fold["oos_end_date"]),
+                "oos_period": str(fold["oos_period"]),
+                "selection_start_date": str(fold["selection_start_date"]),
+                "selection_end_date": str(fold["selection_end_date"]),
+                "selection_period": str(fold["selection_period"]),
                 "optimizer_seed": optimizer_seed,
                 "sampler_kind": str(sampler_kind),
                 "timing_mode": bool(timing_mode),
@@ -4178,18 +4433,28 @@ def run_outer_rolling_oos(
         for idx, row in enumerate(rows, start=1):
             row["fold"] = f"{idx}/{fold_count}"
 
-    years_to_run = [] if fold_parallel_enabled else years
+    folds_to_run = [] if fold_parallel_enabled else folds
 
-    for fold_idx, oos_year in enumerate(years_to_run, start=1):
+    for fold_idx, fold in enumerate(folds_to_run, start=1):
         fold_start = time.perf_counter()
-        selection_end = int(oos_year) - 1
-        selection_start = _selection_start_for_oos(config, int(oos_year))
-        print(f"[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | fold START", flush=True)
+        oos_year = int(fold["oos_year"])
+        oos_period = str(fold["oos_period"])
+        selection_period = str(fold["selection_period"])
+        selection_start = str(fold["selection_start_date"])
+        selection_end = str(fold["selection_end_date"])
+        oos_start_date = str(fold["oos_start_date"])
+        oos_end_date = str(fold["oos_end_date"])
+        print(f"[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | fold START", flush=True)
         fold_policy = dict(base_policy)
-        fold_policy["selection_start_year"] = int(selection_start)
-        fold_policy["train_start_year"] = int(selection_start)
-        fold_policy["search_train_end_year"] = int(selection_end)
-        fold_policy["oos_start_year"] = int(oos_year)
+        fold_policy["selection_start_year"] = int(fold["selection_start_year"])
+        fold_policy["train_start_year"] = int(fold["selection_start_year"])
+        fold_policy["search_train_end_year"] = int(fold["selection_end_year"])
+        fold_policy["oos_start_year"] = int(pd.Timestamp(fold["oos_start_date"]).year)
+        fold_policy["selection_start_date"] = str(fold["selection_start_date"])
+        fold_policy["train_start_date"] = str(fold["selection_start_date"])
+        fold_policy["search_train_end_date"] = str(fold["selection_end_date"])
+        fold_policy["oos_start_date"] = str(fold["oos_start_date"])
+        fold_policy["oos_end_date"] = str(fold["oos_end_date"])
         fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
         objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
         session = build_optimizer_session(walk_forward_policy=fold_policy)
@@ -4224,7 +4489,7 @@ def run_outer_rolling_oos(
             db_name = f"sqlite:///{db_file}"
         study = None
         try:
-            print(f"\n{C_CYAN}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year}{C_RESET}")
+            print(f"\n{C_CYAN}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period}{C_RESET}")
             install_started = time.perf_counter()
             session.install_raw_data_cache(
                 selected_data_dir,
@@ -4260,8 +4525,8 @@ def run_outer_rolling_oos(
                 "fold_idx": int(fold_idx),
                 "fold_count": fold_count,
                 "oos_year": int(oos_year),
-                "selection_start": int(selection_start),
-                "selection_end": int(selection_end),
+                "selection_start": str(selection_start),
+                "selection_end": str(selection_end),
                 "completed_results": rows,
                 "overall_start": overall_start,
             }
@@ -4280,7 +4545,7 @@ def run_outer_rolling_oos(
             local_elapsed = time.perf_counter() - local_started
             prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
-                f"[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
+                f"[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | LOCAL_MIN_REVIEW DONE | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
@@ -4293,8 +4558,8 @@ def run_outer_rolling_oos(
                     fold_idx=fold_idx,
                     fold_count=fold_count,
                     oos_year=int(oos_year),
-                    selection_start=int(selection_start),
-                    selection_end=int(selection_end),
+                    selection_start=selection_start,
+                    selection_end=selection_end,
                     status="skipped_no_finalist",
                     session=session,
                     db_file=db_file,
@@ -4306,7 +4571,7 @@ def run_outer_rolling_oos(
                     fold_total_sec=fold_elapsed,
                     finalists_count=len(finalists),
                 ))
-                print(f"{C_YELLOW}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | 無可用 finalist，略過。{C_RESET}")
+                print(f"{C_YELLOW}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | 無可用 finalist，略過。{C_RESET}")
                 continue
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
@@ -4316,11 +4581,13 @@ def run_outer_rolling_oos(
                 finalists=finalists,
                 policy_items=policy_items,
                 oos_year=int(oos_year),
+                oos_start_date=oos_start_date,
+                oos_end_date=oos_end_date,
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             fold_elapsed = time.perf_counter() - fold_start
-            selection_period = f"{selection_start}~{selection_end}"
+            selection_period = str(selection_period)
             policy_schedules = {
                 name: _build_policy_schedule_entry(
                     item=item,
@@ -4329,6 +4596,8 @@ def run_outer_rolling_oos(
                     selection_period=selection_period,
                     local_rank_map=local_rank_map,
                     retention_rank_map=retention_rank_map,
+                    oos_start_date=oos_start_date,
+                    oos_end_date=oos_end_date,
                 )
                 for name, item in policy_items.items()
                 if item is not None
@@ -4337,8 +4606,13 @@ def run_outer_rolling_oos(
                 "fold": f"{fold_idx}/{fold_count}",
                 "oos_year": int(oos_year),
                 "selection_period": selection_period,
-                "selection_start_year": int(selection_start),
-                "selection_end_year": int(selection_end),
+                "selection_start_year": int(pd.Timestamp(selection_start).year),
+                "selection_end_year": int(pd.Timestamp(selection_end).year),
+                "selection_start_date": str(selection_start),
+                "selection_end_date": str(selection_end),
+                "oos_start_date": str(oos_start_date),
+                "oos_end_date": str(oos_end_date),
+                "oos_period": str(oos_period),
                 "best_finalist_oos_score": float(diagnostics.get("best_finalist_oos_score", 0.0)),
                 "best_finalist_trial": diagnostics.get("best_finalist_trial"),
                 "best_finalist_return_pct": float(diagnostics.get("best_finalist_return_pct", 0.0)),
@@ -4366,8 +4640,8 @@ def run_outer_rolling_oos(
                 fold_idx=fold_idx,
                 fold_count=fold_count,
                 oos_year=int(oos_year),
-                selection_start=int(selection_start),
-                selection_end=int(selection_end),
+                selection_start=selection_start,
+                selection_end=selection_end,
                 status="done",
                 session=session,
                 db_file=db_file,
@@ -4381,7 +4655,7 @@ def run_outer_rolling_oos(
             ))
             local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
             print(
-                f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | DONE | "
+                f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | DONE | "
                 f"local_rank_1_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
                 f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
             )
@@ -4455,7 +4729,7 @@ def run_outer_rolling_oos(
         if timing_paths.get("resource_csv"):
             print(f"{C_GREEN}已輸出：{timing_paths['resource_csv']}{C_RESET}")
         for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
-            print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
+            print(f"{C_GREEN}已輸出 rolling {policy_name} active-param 參數組：{paramset_path}{C_RESET}")
     _print_outer_timing_summary(timing_paths.get("payload", {}))
     print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     return 0
