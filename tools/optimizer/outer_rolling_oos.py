@@ -1366,18 +1366,12 @@ def _format_timing_phase_line(payload: dict) -> str:
 
 def _print_outer_timing_summary(payload: dict):
     summary = dict((payload or {}).get("summary") or {})
-    meta = dict((payload or {}).get("meta") or {})
-    completed_trials = int(meta.get("completed_trials", 0) or 0)
     print(
-        "📏 Outer rolling 測時摘要｜"
+        "📏 Outer rolling 測時摘要: "
         f"{C_CYAN}總時間={float(summary.get('overall_sec', 0.0)):.3f}s{C_RESET}｜"
-        f"raw一次={float(summary.get('raw_data_load_once_sec', 0.0)):.3f}s｜"
         f"optimizer={float(summary.get('optimize_sum_sec', 0.0)):.3f}s｜"
         f"local_review={float(summary.get('local_min_review_sum_sec', 0.0)):.3f}s｜"
-        f"oos_diag={float(summary.get('oos_diagnostics_sum_sec', 0.0)):.3f}s｜"
-        f"chain={float(summary.get('active_replay_chain_sec', 0.0)):.3f}s｜"
         f"平均={float(summary.get('avg_optimize_sec_per_completed_trial', 0.0)):.3f}s/completed trial"
-        f"（completed={completed_trials}）"
     )
     print(
         "📏 Cache / local-min 摘要｜"
@@ -1394,7 +1388,7 @@ def _print_outer_timing_summary(payload: dict):
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
-    print(_format_resource_usage_line(summary, prefix="📏 CPU/MEM/HD 摘要"))
+
 
 
 
@@ -3082,10 +3076,12 @@ class _ParallelCompletedResultsBoard:
 class _ParallelFoldLiveBoard:
     """Render parallel-fold progress and completed results as one refresh block."""
 
-    def __init__(self, tasks: list[dict]):
+    def __init__(self, tasks: list[dict], *, overall_start: float | None = None, raw_data_load_sec: float = 0.0):
         self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
         self.inline = stdout_supports_inline_progress()
         self.started_at = time.perf_counter()
+        self.overall_start = float(overall_start) if overall_start is not None else self.started_at
+        self.raw_data_load_sec = max(0.0, float(raw_data_load_sec or 0.0))
         self.rendered_lines = 0
         self.last_lines: list[str] = []
         self.last_render_key: list[str] = []
@@ -3097,7 +3093,17 @@ class _ParallelFoldLiveBoard:
             f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
             f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
         )
-        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
+        total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
+        fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
+        other_elapsed = max(0.0, total_elapsed - fold_wall_elapsed - self.raw_data_load_sec)
+        timing_line = (
+            f"⏱️ 耗時摘要｜total={_fmt_duration(total_elapsed)}｜"
+            f"folds wall={_fmt_duration(fold_wall_elapsed)}｜"
+            f"OOS_CHAIN={_fmt_duration(0.0)}｜"
+            f"raw={_fmt_duration(self.raw_data_load_sec)}｜"
+            f"other={_fmt_duration(other_elapsed)}"
+        )
+        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}", f"{C_CYAN}{timing_line}{C_RESET}"]
         for task in self.tasks:
             log_path = str(task.get("log_path") or "")
             progress = _read_latest_parallel_fold_progress(log_path)
@@ -3124,7 +3130,9 @@ class _ParallelFoldLiveBoard:
         key: list[str] = []
         for line in list(lines or []):
             text = str(line)
-            if " | elapsed=" in text:
+            if "⏱️ 耗時摘要" in text:
+                text = "⏱️ 耗時摘要"
+            elif " | elapsed=" in text:
                 text = text.split(" | elapsed=", 1)[0]
             key.append(text)
         return key
@@ -3190,11 +3198,11 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
         chain_state["chain_enable_rotation"] = bool(result.get("chain_enable_rotation"))
 
 
-def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict]) -> dict:
+def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], overall_start: float | None = None, raw_data_load_sec: float = 0.0) -> dict:
     future_map = {executor.submit(_run_outer_rolling_oos_fold_task, task): task for task in tasks}
     pending = set(future_map)
     chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
-    live_board = _ParallelFoldLiveBoard(tasks)
+    live_board = _ParallelFoldLiveBoard(tasks, overall_start=overall_start, raw_data_load_sec=raw_data_load_sec)
     live_board.render(pending=pending, future_map=future_map, completed_rows=rows, force=True)
     try:
         while pending:
@@ -3699,6 +3707,8 @@ def run_outer_rolling_oos(
                 tasks=tasks,
                 rows=rows,
                 fold_timing_rows=fold_timing_rows,
+                overall_start=overall_start,
+                raw_data_load_sec=raw_data_load_sec,
             )
             if chain_state.get("chain_max_positions") is not None:
                 chain_max_positions = int(chain_state.get("chain_max_positions"))
@@ -3966,7 +3976,6 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
-    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
@@ -3985,4 +3994,5 @@ def run_outer_rolling_oos(
         for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
             print(f"{C_GREEN}已輸出 rolling {policy_name} 年度參數組：{paramset_path}{C_RESET}")
     _print_outer_timing_summary(timing_paths.get("payload", {}))
+    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     return 0
