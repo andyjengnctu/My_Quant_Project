@@ -12,8 +12,9 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC = 15.0
+PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC = 2.0
 PARALLEL_FOLD_LOG_STATUS_MAX_CHARS = 140
+PARALLEL_FOLD_PROGRESS_PREFIX = "FOLD_PROGRESS\t"
 
 import pandas as pd
 
@@ -2032,6 +2033,186 @@ def _latest_parallel_fold_log_status(path: str, *, max_chars: int = PARALLEL_FOL
     return ""
 
 
+def _safe_progress_json_loads(raw_text: str) -> dict:
+    try:
+        payload = json.loads(str(raw_text))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_latest_parallel_fold_progress(path: str) -> dict:
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return {}
+    for line in reversed(lines[-240:]):
+        raw = str(line).strip()
+        if not raw.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+            continue
+        payload = _safe_progress_json_loads(raw.split("\t", 1)[1])
+        if payload:
+            return payload
+    return {}
+
+
+def _write_parallel_fold_progress_event(*, stage: str, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, **payload) -> None:
+    event = {
+        "stage": str(stage),
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "oos_year": int(oos_year),
+        "selection_start": int(selection_start),
+        "selection_end": int(selection_end),
+        "ts": time.time(),
+    }
+    event.update(payload)
+    print(PARALLEL_FOLD_PROGRESS_PREFIX + json.dumps(event, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def _parallel_progress_pct(done, total) -> float:
+    try:
+        total_float = float(total)
+        if total_float <= 0.0:
+            return 0.0
+        return 100.0 * float(done) / total_float
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_status: str = "") -> str:
+    fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
+    fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
+    oos_year = int(task.get("oos_year", progress.get("oos_year", 0)) or 0)
+    selection_start = int(progress.get("selection_start", 0) or 0)
+    selection_end = int(progress.get("selection_end", 0) or 0)
+    if selection_start <= 0 or selection_end <= 0:
+        # AI註: task 只含 OOS year；平行狀態列沒有 config 物件時保留 OOS 即可。
+        selection_text = "selection=?"
+    else:
+        selection_text = f"selection={selection_start}~{selection_end}"
+    stage = str(progress.get("stage") or "QUEUED").upper()
+    elapsed_text = ""
+    if progress.get("elapsed_sec") is not None:
+        elapsed_text = f" | elapsed={_fmt_duration_compact(progress.get('elapsed_sec'))}"
+    if stage == "OPTIMIZER_SEARCH":
+        completed = int(progress.get("completed", 0) or 0)
+        total = int(progress.get("total", 0) or 0)
+        pct = _parallel_progress_pct(completed, total)
+        best = progress.get("best_score")
+        best_text = "N/A" if best is None else f"{float(best):.3f}"
+        return (
+            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
+            f"trial {completed}/{total} ({pct:5.1f}%) | best={best_text}{elapsed_text}"
+        )
+    if stage == "LOCAL_MIN_REVIEW":
+        finalist_idx = int(progress.get("finalist_idx", 0) or 0)
+        finalist_total = int(progress.get("finalist_total", 0) or 0)
+        neighbor_done = int(progress.get("neighbor_done", 0) or 0)
+        neighbor_total = int(progress.get("neighbor_total", 0) or 0)
+        pct = _parallel_progress_pct(neighbor_done, neighbor_total)
+        current = progress.get("current")
+        current_text = "N/A" if current is None else f"{float(current):.3f}"
+        best = progress.get("best")
+        best_text = "N/A" if best is None else f"{float(best):.3f}"
+        status = str(progress.get("status") or "RUN")
+        return (
+            f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
+            f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} ({pct:5.1f}%) | "
+            f"current={current_text} | best={best_text} | {status}{elapsed_text}"
+        )
+    if stage == "OOS_DIAGNOSTICS":
+        status = str(progress.get("status") or "RUN")
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | diagnostics {status}{elapsed_text}"
+    if stage == "DONE":
+        status = str(progress.get("status") or "done")
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | DONE {status}{elapsed_text}"
+    if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
+        status = str(progress.get("status") or stage).replace("_", " ")
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | {status}{elapsed_text}"
+    fallback = str(log_status or "queued").strip()
+    return f"[{fold_idx}/{fold_count}] OOS {oos_year} | {fallback}"
+
+
+class _ParallelFoldProgressBoard:
+    def __init__(self, tasks: list[dict]):
+        self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
+        self.lines: dict[int, str] = {}
+        self.rendered_lines = 0
+        self.inline = stdout_supports_inline_progress()
+        self.started_at = time.perf_counter()
+
+    def update(self, *, pending: set, future_map: dict, completed_rows: list[dict], force: bool = False) -> None:
+        pending_tasks = {id(future_map[future]): future_map[future] for future in pending if future in future_map}
+        completed_oos = {int(row.get("oos_year", 0) or 0) for row in list(completed_rows or [])}
+        new_lines: dict[int, str] = {}
+        for task in self.tasks:
+            fold_idx = int(task.get("fold_idx", 0) or 0)
+            log_path = str(task.get("log_path") or "")
+            progress = _read_latest_parallel_fold_progress(log_path)
+            log_status = _latest_parallel_fold_log_status(log_path)
+            if int(task.get("oos_year", 0) or 0) in completed_oos and not progress:
+                progress = {"stage": "DONE", "status": "done"}
+            new_lines[fold_idx] = _format_parallel_fold_progress_line(task, progress, log_status=log_status)
+        if not force and new_lines == self.lines:
+            return
+        self.lines = new_lines
+        header = (
+            f"⏱️ Rolling fold parallel | completed={len(completed_rows)}/{len(self.tasks)} | "
+            f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
+        )
+        output_lines = [f"{C_GRAY}{header}{C_RESET}"] + [f"{C_GRAY}  {line}{C_RESET}" for _, line in sorted(new_lines.items())]
+        if self.inline:
+            if self.rendered_lines > 0:
+                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
+            for line in output_lines:
+                sys.stdout.write("\r" + line + "\x1b[K\n")
+            sys.stdout.flush()
+            self.rendered_lines = len(output_lines)
+        else:
+            print("\n".join(output_lines), flush=True)
+
+    def close(self) -> None:
+        if self.inline and self.rendered_lines > 0:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self.rendered_lines = 0
+
+
+class _ParallelCompletedResultsBoard:
+    def __init__(self):
+        self.rendered_lines = 0
+        self.inline = stdout_supports_inline_progress()
+
+    def render(self, rows: list[dict]) -> None:
+        completed = sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
+        if not completed:
+            return
+        table = _render_results_table(completed, color=True, include_chain=False)
+        if not table:
+            return
+        title = f"{C_CYAN}📌 Completed fold results ({len(completed)}) | OOS_CHAIN 於全部 fold 完成後才計算{C_RESET}"
+        lines = [title] + table.splitlines()
+        if self.inline:
+            if self.rendered_lines > 0:
+                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
+            for line in lines:
+                sys.stdout.write("\r" + line + "\x1b[K\n")
+            sys.stdout.flush()
+            self.rendered_lines = len(lines)
+        else:
+            print("\n".join(lines), flush=True)
+
+    def close(self) -> None:
+        if self.inline and self.rendered_lines > 0:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self.rendered_lines = 0
+
+
 def _print_parallel_fold_result(row: dict) -> None:
     if not row:
         return
@@ -2069,19 +2250,20 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
         f"completed={len(rows)}/{fold_count} | log={result.get('log_path', '')}{C_RESET}",
         flush=True,
     )
-    if row is not None:
-        _print_parallel_fold_result(dict(row))
 
 
 def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict]) -> dict:
     future_map = {executor.submit(_run_outer_rolling_oos_fold_task, task): task for task in tasks}
     pending = set(future_map)
     chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
-    started_at = time.perf_counter()
-    last_heartbeat = started_at
+    progress_board = _ParallelFoldProgressBoard(tasks)
+    results_board = _ParallelCompletedResultsBoard()
+    progress_board.update(pending=pending, future_map=future_map, completed_rows=rows, force=True)
     while pending:
-        done, pending = wait(pending, timeout=10.0, return_when=FIRST_COMPLETED)
-        for future in done:
+        done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+        if done:
+            progress_board.close()
+        for future in sorted(done, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
             _consume_parallel_fold_future(
                 future=future,
                 task=future_map[future],
@@ -2089,32 +2271,53 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                 fold_timing_rows=fold_timing_rows,
                 chain_state=chain_state,
             )
-        now = time.perf_counter()
-        if pending and (now - last_heartbeat) >= PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC:
-            active = []
-            for future in sorted(pending, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
-                task = future_map[future]
-                log_path = str(task.get("log_path") or "")
-                log_state = "no-log"
-                latest_status = ""
-                try:
-                    if os.path.exists(log_path):
-                        age = max(0.0, time.time() - os.path.getmtime(log_path))
-                        size = os.path.getsize(log_path)
-                        log_state = f"log={size}B age={age:.0f}s"
-                        latest_status = _latest_parallel_fold_log_status(log_path)
-                except OSError:
-                    log_state = "log=?"
-                status_text = f" | {latest_status}" if latest_status else ""
-                active.append(f"[{int(task['fold_idx'])}/{int(task.get('fold_count', 0) or 0)}] OOS {int(task['oos_year'])} {log_state}{status_text}")
-            print(
-                f"{C_GRAY}⏱️ Rolling fold parallel running | pending={len(pending)} | completed={len(tasks) - len(pending)}/{len(tasks)} | elapsed={_fmt_duration(now - started_at)}{C_RESET}",
-                flush=True,
-            )
-            for item in active:
-                print(f"{C_GRAY}  - {item}{C_RESET}", flush=True)
-            last_heartbeat = now
+            results_board.render(rows)
+        progress_board.update(pending=pending, future_map=future_map, completed_rows=rows, force=bool(done))
+    progress_board.close()
+    results_board.close()
     return chain_state
+
+class _FoldLogSearchProgress:
+    def __init__(self, *, fold_idx: int, fold_count: int, oos_year: int, selection_start: int, selection_end: int, total_trials: int):
+        self.fold_idx = int(fold_idx)
+        self.fold_count = int(fold_count)
+        self.oos_year = int(oos_year)
+        self.selection_start = int(selection_start)
+        self.selection_end = int(selection_end)
+        self.total_trials = int(total_trials)
+        self.stage_start = time.perf_counter()
+        self.best_score = float("-inf")
+        self.last_completed = -1
+
+    def emit(self, completed: int, *, force: bool = False) -> None:
+        completed = int(completed)
+        if not force and completed == self.last_completed:
+            return
+        self.last_completed = completed
+        best_score = None if self.best_score == float("-inf") else float(self.best_score)
+        _write_parallel_fold_progress_event(
+            stage="OPTIMIZER_SEARCH",
+            fold_idx=self.fold_idx,
+            fold_count=self.fold_count,
+            oos_year=self.oos_year,
+            selection_start=self.selection_start,
+            selection_end=self.selection_end,
+            completed=completed,
+            total=self.total_trials,
+            best_score=best_score,
+            elapsed_sec=max(0.0, time.perf_counter() - self.stage_start),
+        )
+
+    def callback(self, session):
+        def _callback(study, trial):
+            session.current_session_trial += 1
+            if trial.value is not None and is_qualified_trial_value(trial.value):
+                self.best_score = max(self.best_score, float(trial.value))
+            self.emit(int(session.current_session_trial))
+        return _callback
+
+    def done(self, completed: int) -> None:
+        self.emit(int(completed), force=True)
 
 
 def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
@@ -2155,6 +2358,16 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         selection_end = int(oos_year) - 1
         selection_start = _selection_start_for_oos(config, int(oos_year))
         print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | parallel fold START | selection={selection_start}~{selection_end}", flush=True)
+        _write_parallel_fold_progress_event(
+            stage="START",
+            fold_idx=fold_idx,
+            fold_count=fold_count,
+            oos_year=oos_year,
+            selection_start=selection_start,
+            selection_end=selection_end,
+            status="START",
+            elapsed_sec=0.0,
+        )
         fold_policy = dict(base_policy)
         fold_policy["selection_start_year"] = int(selection_start)
         fold_policy["train_start_year"] = int(selection_start)
@@ -2183,32 +2396,103 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
+            _write_parallel_fold_progress_event(
+                stage="RAW_DATA",
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                status="raw data loaded",
+                elapsed_sec=max(0.0, time.perf_counter() - fold_start),
+            )
             session.profile_recorder.init_output_files()
             session.profile_recorder.mark_run_started()
             study_started = time.perf_counter()
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
             study_create_sec = max(0.0, time.perf_counter() - study_started)
+            progress = _FoldLogSearchProgress(
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                total_trials=int(config.trials_per_fold),
+            )
+            progress.emit(0, force=True)
             optimize_started = time.perf_counter()
-            study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[])
+            study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[progress.callback(session)])
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or config.trials_per_fold)
+            progress.done(int(session.current_session_trial))
             print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
+
+            def _parallel_local_min_progress_sink(event: dict) -> None:
+                data = dict(event or {})
+                _write_parallel_fold_progress_event(
+                    stage="LOCAL_MIN_REVIEW",
+                    fold_idx=fold_idx,
+                    fold_count=fold_count,
+                    oos_year=oos_year,
+                    selection_start=selection_start,
+                    selection_end=selection_end,
+                    finalist_idx=int(data.get("finalist_idx", 0) or 0),
+                    finalist_total=int(data.get("finalist_total", 0) or 0),
+                    trial_number=data.get("trial_number"),
+                    neighbor_done=int(data.get("neighbor_done", 0) or 0),
+                    neighbor_total=int(data.get("neighbor_total", 0) or 0),
+                    current=data.get("current"),
+                    best=data.get("best"),
+                    status=str(data.get("status") or "RUN"),
+                    elapsed_sec=max(0.0, time.perf_counter() - local_started),
+                )
+
+            session.outer_rolling_parallel_progress_sink = _parallel_local_min_progress_sink
+            session.outer_rolling_local_progress_context = {
+                "fold_idx": int(fold_idx),
+                "fold_count": int(fold_count),
+                "oos_year": int(oos_year),
+                "selection_start": int(selection_start),
+                "selection_end": int(selection_end),
+                "completed_results": [],
+                "overall_start": fold_start,
+            }
             finalists = list_local_min_score_finalists(
                 study,
                 session=session,
                 objective_mode=objective_mode,
                 include_trial=None,
-                show_progress=False,
+                show_progress=True,
                 include_oos_diagnostics=False,
                 single_finalist_fast_path=True,
                 selection_pruning=True,
             )
+            if hasattr(session, "outer_rolling_parallel_progress_sink"):
+                delattr(session, "outer_rolling_parallel_progress_sink")
+            if hasattr(session, "outer_rolling_local_progress_context"):
+                delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
             print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | local-min review DONE | finalists={len(finalists)} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            _write_parallel_fold_progress_event(
+                stage="LOCAL_MIN_REVIEW",
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                finalist_idx=len(finalists),
+                finalist_total=len(finalists),
+                neighbor_done=1,
+                neighbor_total=1,
+                current=float(finalists[0].get("local_min_score", 0.0)) if finalists else None,
+                best=float(finalists[0].get("local_min_score", 0.0)) if finalists else None,
+                status="DONE",
+                elapsed_sec=local_elapsed,
+            )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
             if not any(item is not None for item in policy_items.values()):
                 fold_elapsed = time.perf_counter() - fold_start
@@ -2242,6 +2526,16 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
             diagnostics_started = time.perf_counter()
+            _write_parallel_fold_progress_event(
+                stage="OOS_DIAGNOSTICS",
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                status="RUN",
+                elapsed_sec=0.0,
+            )
             diagnostics = _evaluate_finalist_oos_diagnostics(
                 session=session,
                 finalists=finalists,
@@ -2250,6 +2544,16 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            _write_parallel_fold_progress_event(
+                stage="OOS_DIAGNOSTICS",
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                status="DONE",
+                elapsed_sec=oos_diagnostics_sec,
+            )
             fold_elapsed = time.perf_counter() - fold_start
             selection_period = f"{selection_start}~{selection_end}"
             policy_schedules = {
@@ -2308,6 +2612,16 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 oos_diagnostics_sec=oos_diagnostics_sec,
                 fold_total_sec=fold_elapsed,
                 finalists_count=len(finalists),
+            )
+            _write_parallel_fold_progress_event(
+                stage="DONE",
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=oos_year,
+                selection_start=selection_start,
+                selection_end=selection_end,
+                status="done",
+                elapsed_sec=fold_elapsed,
             )
             return {
                 "status": "done",

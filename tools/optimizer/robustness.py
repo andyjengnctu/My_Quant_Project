@@ -591,6 +591,18 @@ def _print_progress_line(session, message: str):
     print(message, flush=True)
 
 
+def _emit_local_min_progress_event(session, event: dict) -> None:
+    sink = getattr(session, "outer_rolling_parallel_progress_sink", None)
+    if not callable(sink):
+        return
+    try:
+        sink(dict(event or {}))
+    except (TypeError, ValueError, RuntimeError, OSError) as exc:
+        # AI註: progress sink 僅用於 timing 顯示；失敗不可中斷 optimizer 主流程，但需可追蹤。
+        if not hasattr(session, "outer_rolling_parallel_progress_sink_error"):
+            session.outer_rolling_parallel_progress_sink_error = repr(exc)
+
+
 class _FinalistProgressBoard:
     def __init__(self, session, finalists: list[dict]):
         self.session = session
@@ -622,6 +634,26 @@ class _FinalistProgressBoard:
             return text[3:]
         return text
 
+    def _emit_progress_event(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min, status_text: str):
+        if not self.finalists:
+            return
+        safe_idx = min(max(0, int(idx)), len(self.finalists) - 1)
+        trial = self.finalists[safe_idx]["trial"]
+        best_score = None if self.best_local_score == float("-inf") else float(self.best_local_score)
+        _emit_local_min_progress_event(
+            self.session,
+            {
+                "finalist_idx": int(safe_idx) + 1,
+                "finalist_total": len(self.finalists),
+                "trial_number": int(trial.number) + 1,
+                "neighbor_done": int(current_neighbor or 0),
+                "neighbor_total": int(total_neighbors or 0),
+                "current": None if current_local_min is None else float(current_local_min),
+                "best": best_score,
+                "status": str(status_text or "RUN"),
+            },
+        )
+
     def _format_line(self, idx: int, *, prefix: str, progress_text: str, local_text: str, status_text: str):
         finalist = self.finalists[idx]
         trial = finalist["trial"]
@@ -632,6 +664,7 @@ class _FinalistProgressBoard:
         )
 
     def initialize(self):
+        self._emit_progress_event(0, current_neighbor=0, total_neighbors=0, current_local_min=None, status_text="WAIT")
         if self.single_line_context:
             self._render_single_line(0, current_neighbor=0, total_neighbors=0, local_min_score=None, status_text="WAIT")
             return
@@ -642,6 +675,7 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_pending(self, idx: int, *, total_neighbors: int):
+        self._emit_progress_event(idx, current_neighbor=0, total_neighbors=total_neighbors, current_local_min=None, status_text="RUN")
         if self.single_line_context:
             self._render_single_line(idx, current_neighbor=0, total_neighbors=total_neighbors, local_min_score=None, status_text="RUN")
             return
@@ -672,6 +706,7 @@ class _FinalistProgressBoard:
     def update_neighbor(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min):
         if not self._should_render_progress_update(current_neighbor=current_neighbor, total_neighbors=total_neighbors):
             return
+        self._emit_progress_event(idx, current_neighbor=current_neighbor, total_neighbors=total_neighbors, current_local_min=current_local_min, status_text="RUN")
         if self.single_line_context:
             self._render_single_line(
                 idx,
@@ -692,6 +727,7 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_cache(self, idx: int, *, total_neighbors: int, local_min_score: float):
+        self._emit_progress_event(idx, current_neighbor=total_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="cache")
         if self.single_line_context:
             gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
             self._record_done(idx, local_min_score=float(local_min_score), early_stopped=False)
@@ -716,6 +752,7 @@ class _FinalistProgressBoard:
         self._render()
 
     def update_done(self, idx: int, *, evaluated_neighbors: int, total_neighbors: int, local_min_score: float, early_stopped: bool = False):
+        self._emit_progress_event(idx, current_neighbor=evaluated_neighbors, total_neighbors=total_neighbors, current_local_min=local_min_score, status_text="early_stop" if bool(early_stopped) else "DONE")
         if self.single_line_context:
             gate_status = "PASS" if float(local_min_score) > 0.0 else "FAIL"
             stop_text = " early_stop" if bool(early_stopped) else ""
