@@ -1,5 +1,6 @@
 import pandas as pd
 import time
+import threading
 from collections import OrderedDict
 from core.exact_accounting import milli_to_money, money_to_milli
 from core.capital_policy import resolve_portfolio_sizing_equity
@@ -36,6 +37,7 @@ from core.portfolio_exits import append_portfolio_position_active_level_row
 
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
 _BENCHMARK_PERIOD_STATS_CACHE = OrderedDict()
+_BENCHMARK_PERIOD_STATS_CACHE_LOCK = threading.RLock()
 def _make_benchmark_period_cache_key(*, benchmark_data, sorted_dates, start_idx):
     if benchmark_data is None or not sorted_dates or start_idx >= len(sorted_dates):
         return None
@@ -137,19 +139,25 @@ def _get_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
     )
     if cache_key is None:
         return None
-    cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
-    if cached is not None:
-        _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
-        return cached
+    with _BENCHMARK_PERIOD_STATS_CACHE_LOCK:
+        cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
+        if cached is not None:
+            _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
+            return cached
     stats = _build_benchmark_period_stats(
         benchmark_data=benchmark_data,
         sorted_dates=sorted_dates,
         start_idx=start_idx,
     )
-    _BENCHMARK_PERIOD_STATS_CACHE[cache_key] = stats
-    _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
-    while len(_BENCHMARK_PERIOD_STATS_CACHE) > BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS:
-        _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)
+    with _BENCHMARK_PERIOD_STATS_CACHE_LOCK:
+        cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
+        if cached is not None:
+            _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
+            return cached
+        _BENCHMARK_PERIOD_STATS_CACHE[cache_key] = stats
+        _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
+        while len(_BENCHMARK_PERIOD_STATS_CACHE) > BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS:
+            _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)
     return stats
 
 def _append_portfolio_active_level_rows(active_level_rows, portfolio, today):

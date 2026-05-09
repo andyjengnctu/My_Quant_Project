@@ -420,6 +420,10 @@ def _build_outer_timing_row(
         "local_min_field_order_score_prioritized": int(local_min_stats.get("field_order_score_prioritized", 0) or 0),
         "local_min_early_stops": int(local_min_stats.get("early_stops", 0) or 0),
         "local_min_selection_prunes": int(local_min_stats.get("selection_prunes", 0) or 0),
+        "local_min_parallel_workers_max": int(local_min_stats.get("parallel_workers_max", 0) or 0),
+        "local_min_parallel_submitted": int(local_min_stats.get("parallel_submitted", 0) or 0),
+        "local_min_parallel_completed": int(local_min_stats.get("parallel_completed", 0) or 0),
+        "local_min_parallel_cancelled": int(local_min_stats.get("parallel_cancelled", 0) or 0),
     }
 
 
@@ -479,6 +483,10 @@ def _write_outer_timing_summary(
     local_min_field_order_score_prioritized = sum(int(row.get("local_min_field_order_score_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_early_stops = sum(int(row.get("local_min_early_stops", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_selection_prunes = sum(int(row.get("local_min_selection_prunes", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_parallel_workers_max = max((int(row.get("local_min_parallel_workers_max", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
+    local_min_parallel_submitted = sum(int(row.get("local_min_parallel_submitted", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_parallel_completed = sum(int(row.get("local_min_parallel_completed", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_parallel_cancelled = sum(int(row.get("local_min_parallel_cancelled", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
@@ -526,6 +534,10 @@ def _write_outer_timing_summary(
             "local_min_field_order_score_prioritized": int(local_min_field_order_score_prioritized),
             "local_min_early_stops": int(local_min_early_stops),
             "local_min_selection_prunes": int(local_min_selection_prunes),
+            "local_min_parallel_workers_max": int(local_min_parallel_workers_max),
+            "local_min_parallel_submitted": int(local_min_parallel_submitted),
+            "local_min_parallel_completed": int(local_min_parallel_completed),
+            "local_min_parallel_cancelled": int(local_min_parallel_cancelled),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },

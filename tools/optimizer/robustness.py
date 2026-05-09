@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 
@@ -288,6 +289,237 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
         "prep_cache_prioritized": int(prep_cache_prioritized),
         "order_score_prioritized": int(order_score_prioritized),
         "field_order_score_prioritized": int(field_order_score_prioritized),
+    }
+
+
+def _resolve_local_min_parallel_workers(session) -> int:
+    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = 2
+    # AI註: local-min 平行化採小型 ordered prefetch window，避免重演 batch 過度超前計算。
+    return max(1, min(4, int(value)))
+
+
+def _get_local_min_thread_lock(session):
+    lock = getattr(session, "local_min_thread_lock", None)
+    if lock is None:
+        import threading
+        lock = threading.RLock()
+        session.local_min_thread_lock = lock
+    return lock
+
+
+def _read_payload_score_cache(payload_score_cache: dict, payload_cache_key):
+    try:
+        cached_score = payload_score_cache.get(payload_cache_key)
+    except AttributeError:
+        return None
+    return cached_score
+
+
+def _evaluate_local_min_neighbor_payload(session, payload: dict, payload_score_cache: dict) -> dict:
+    payload_cache_key = _build_payload_score_cache_key(payload)
+    lock = _get_local_min_thread_lock(session)
+    with lock:
+        cached_payload_score = _read_payload_score_cache(payload_score_cache, payload_cache_key)
+    if cached_payload_score is not None:
+        return {
+            "payload": payload,
+            "payload_cache_key": payload_cache_key,
+            "score": float(cached_payload_score),
+            "payload_score_cache_hit": True,
+        }
+
+    ai_params = build_params_from_mapping(payload)
+    prep_cache_key = build_prep_cache_key(ai_params)
+    get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
+    prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
+    if prep_result is None:
+        prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+            profile_enabled=False,
+        )
+        cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
+        if callable(cache_prep):
+            cache_prep(prep_cache_key, prep_result)
+    search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=session.objective_mode)
+    full_evaluation_cache_key = build_full_evaluation_cache_key(
+        ai_params,
+        objective_mode=search_scope.get("mode", session.objective_mode),
+        train_start_year=session.train_start_year,
+        search_train_end_year=int(search_scope.get("effective_search_train_end_year", session.search_train_end_year)),
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+    )
+    get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
+    evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
+    if evaluation is None:
+        evaluation = evaluate_prepared_train_score(
+            session,
+            ai_params=ai_params,
+            prep_result=prep_result,
+            search_scope=search_scope,
+            profile_stats=None,
+        )
+        cache_evaluation = getattr(session, "cache_full_evaluation", None)
+        if callable(cache_evaluation):
+            cache_evaluation(full_evaluation_cache_key, evaluation)
+    score = float(evaluation["score"])
+    with lock:
+        payload_score_cache[payload_cache_key] = float(score)
+    return {
+        "payload": payload,
+        "payload_cache_key": payload_cache_key,
+        "score": float(score),
+        "payload_score_cache_hit": False,
+    }
+
+
+def _update_local_min_order_hints(session, center_payload: dict, payload: dict, payload_cache_key, score: float):
+    lock = _get_local_min_thread_lock(session)
+    with lock:
+        _get_local_min_order_score_cache(session)[payload_cache_key] = float(score)
+        delta_key = _infer_neighbor_delta(center_payload, payload)
+        if delta_key is not None:
+            field_score_cache = _get_local_min_field_order_score_update_cache(session)
+            prior_score = field_score_cache.get(delta_key)
+            try:
+                should_update_field_score = prior_score is None or float(score) < float(prior_score)
+            except (TypeError, ValueError):
+                should_update_field_score = True
+            if bool(should_update_field_score):
+                field_score_cache[delta_key] = float(score)
+
+
+def _should_stop_local_min(local_min_score: float, selection_prune_floor) -> tuple[bool, bool]:
+    if float(local_min_score) <= 0.0:
+        return True, False
+    if selection_prune_floor is not None and float(local_min_score) < float(selection_prune_floor):
+        return True, True
+    return False, False
+
+
+def _evaluate_local_min_neighbors_ordered(
+    session,
+    *,
+    center_payload: dict,
+    neighbor_payloads: list[dict],
+    payload_score_cache: dict,
+    total_neighbors: int,
+    selection_prune_floor,
+    on_neighbor=None,
+) -> dict:
+    workers = _resolve_local_min_parallel_workers(session)
+    if workers <= 1 or int(total_neighbors) <= 1:
+        local_min_score = float("inf")
+        evaluated_neighbors = 0
+        payload_score_cache_hit_count = 0
+        early_stopped = False
+        selection_pruned = False
+        for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
+            evaluated_neighbors = neighbor_idx
+            result = _evaluate_local_min_neighbor_payload(session, payload, payload_score_cache)
+            score = float(result["score"])
+            if bool(result.get("payload_score_cache_hit", False)):
+                payload_score_cache_hit_count += 1
+            _update_local_min_order_hints(session, center_payload, payload, result["payload_cache_key"], score)
+            if score < local_min_score:
+                local_min_score = score
+            if on_neighbor is not None:
+                current_local_min = None if local_min_score == float("inf") else float(local_min_score)
+                on_neighbor(neighbor_idx, total_neighbors, current_local_min)
+            should_stop, stopped_by_prune = _should_stop_local_min(local_min_score, selection_prune_floor)
+            if bool(should_stop):
+                early_stopped = neighbor_idx < total_neighbors
+                selection_pruned = bool(stopped_by_prune) and neighbor_idx < total_neighbors
+                break
+        return {
+            "local_min_score": local_min_score,
+            "evaluated_neighbors": int(evaluated_neighbors),
+            "payload_score_cache_hits": int(payload_score_cache_hit_count),
+            "early_stopped": bool(early_stopped),
+            "selection_pruned": bool(selection_pruned),
+            "parallel_workers": 1,
+            "parallel_submitted": int(evaluated_neighbors),
+            "parallel_completed": int(evaluated_neighbors),
+            "parallel_cancelled": 0,
+        }
+
+    local_min_score = float("inf")
+    evaluated_neighbors = 0
+    payload_score_cache_hit_count = 0
+    early_stopped = False
+    selection_pruned = False
+    submitted = 0
+    completed = 0
+    cancelled = 0
+    pending = {}
+    next_submit_idx = 1
+
+    executor = ThreadPoolExecutor(max_workers=int(workers), thread_name_prefix="local-min")
+    try:
+        while next_submit_idx <= total_neighbors and len(pending) < int(workers):
+            payload = neighbor_payloads[next_submit_idx - 1]
+            pending[next_submit_idx] = executor.submit(_evaluate_local_min_neighbor_payload, session, payload, payload_score_cache)
+            submitted += 1
+            next_submit_idx += 1
+
+        neighbor_idx = 1
+        while neighbor_idx <= total_neighbors:
+            future = pending.pop(neighbor_idx, None)
+            if future is None:
+                break
+            result = future.result()
+            completed += 1
+            evaluated_neighbors = neighbor_idx
+            payload = neighbor_payloads[neighbor_idx - 1]
+            score = float(result["score"])
+            if bool(result.get("payload_score_cache_hit", False)):
+                payload_score_cache_hit_count += 1
+            _update_local_min_order_hints(session, center_payload, payload, result["payload_cache_key"], score)
+            if score < local_min_score:
+                local_min_score = score
+            if on_neighbor is not None:
+                current_local_min = None if local_min_score == float("inf") else float(local_min_score)
+                on_neighbor(neighbor_idx, total_neighbors, current_local_min)
+            should_stop, stopped_by_prune = _should_stop_local_min(local_min_score, selection_prune_floor)
+            if bool(should_stop):
+                early_stopped = neighbor_idx < total_neighbors
+                selection_pruned = bool(stopped_by_prune) and neighbor_idx < total_neighbors
+                for pending_future in list(pending.values()):
+                    if pending_future.cancel():
+                        cancelled += 1
+                break
+
+            while next_submit_idx <= total_neighbors and len(pending) < int(workers):
+                payload = neighbor_payloads[next_submit_idx - 1]
+                pending[next_submit_idx] = executor.submit(_evaluate_local_min_neighbor_payload, session, payload, payload_score_cache)
+                submitted += 1
+                next_submit_idx += 1
+            neighbor_idx += 1
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    return {
+        "local_min_score": local_min_score,
+        "evaluated_neighbors": int(evaluated_neighbors),
+        "payload_score_cache_hits": int(payload_score_cache_hit_count),
+        "early_stopped": bool(early_stopped),
+        "selection_pruned": bool(selection_pruned),
+        "parallel_workers": int(workers),
+        "parallel_submitted": int(submitted),
+        "parallel_completed": int(completed),
+        "parallel_cancelled": int(cancelled),
     }
 
 
@@ -856,93 +1088,25 @@ def compute_local_min_score(
     elif progress_label:
         _print_progress_line(session, f"⏳ {progress_label}: 開始 local_min_score 分析，共 {total_neighbors} 個鄰點")
 
-    local_min_score = float("inf")
-    evaluated_neighbors = 0
-    early_stopped = False
-    selection_pruned = False
-    payload_score_cache_hit_count = 0
     try:
         selection_prune_floor = float(stop_below_local_min_score) if stop_below_local_min_score is not None else None
     except (TypeError, ValueError):
         selection_prune_floor = None
-    for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
-        evaluated_neighbors = neighbor_idx
-        payload_cache_key = _build_payload_score_cache_key(payload)
-        cached_payload_score = payload_score_cache.get(payload_cache_key)
-        if cached_payload_score is None:
-            ai_params = build_params_from_mapping(payload)
-            prep_cache_key = build_prep_cache_key(ai_params)
-            get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
-            prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
-            if prep_result is None:
-                prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-                prep_result = prepare_trial_inputs(
-                    raw_data_cache=session.raw_data_cache,
-                    params=ai_params,
-                    default_max_workers=session.default_max_workers,
-                    executor_bundle=prep_executor_bundle,
-                    static_fast_cache=session.static_fast_cache,
-                    static_master_dates=session.master_dates,
-                    include_trade_logs=False,
-                    include_pit_stats_index=True,
-                    profile_enabled=False,
-                )
-                cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
-                if callable(cache_prep):
-                    cache_prep(prep_cache_key, prep_result)
-            search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=session.objective_mode)
-            full_evaluation_cache_key = build_full_evaluation_cache_key(
-                ai_params,
-                objective_mode=search_scope.get("mode", session.objective_mode),
-                train_start_year=session.train_start_year,
-                search_train_end_year=int(search_scope.get("effective_search_train_end_year", session.search_train_end_year)),
-                max_positions=session.train_max_positions,
-                enable_rotation=session.train_enable_rotation,
-            )
-            get_cached_evaluation = getattr(session, "get_full_evaluation_from_cache", None)
-            evaluation = get_cached_evaluation(full_evaluation_cache_key) if callable(get_cached_evaluation) else None
-            if evaluation is None:
-                evaluation = evaluate_prepared_train_score(
-                    session,
-                    ai_params=ai_params,
-                    prep_result=prep_result,
-                    search_scope=search_scope,
-                    profile_stats=None,
-                )
-                cache_evaluation = getattr(session, "cache_full_evaluation", None)
-                if callable(cache_evaluation):
-                    cache_evaluation(full_evaluation_cache_key, evaluation)
-            score = float(evaluation["score"])
-            payload_score_cache[payload_cache_key] = score
-        else:
-            payload_score_cache_hit_count += 1
-            score = float(cached_payload_score)
-        _get_local_min_order_score_cache(session)[payload_cache_key] = float(score)
-        delta_key = _infer_neighbor_delta(center_payload, payload)
-        if delta_key is not None:
-            field_score_cache = _get_local_min_field_order_score_update_cache(session)
-            prior_score = field_score_cache.get(delta_key)
-            try:
-                should_update_field_score = prior_score is None or float(score) < float(prior_score)
-            except (TypeError, ValueError):
-                should_update_field_score = True
-            if bool(should_update_field_score):
-                field_score_cache[delta_key] = float(score)
 
-        if score < local_min_score:
-            local_min_score = score
-        if on_neighbor is not None:
-            current_local_min = None if local_min_score == float("inf") else float(local_min_score)
-            on_neighbor(neighbor_idx, total_neighbors, current_local_min)
-        if local_min_score <= 0.0:
-            early_stopped = neighbor_idx < total_neighbors
-            break
-        if selection_prune_floor is not None and local_min_score < float(selection_prune_floor):
-            # AI註: 只在 outer rolling 已有更佳 local/retention 候選時啟用。
-            # local_min 只會隨更多鄰點持平或下降；低於雙重勝出門檻後已不可能成為 local 或 retention rank_1。
-            selection_pruned = neighbor_idx < total_neighbors
-            early_stopped = bool(selection_pruned)
-            break
+    evaluation_result = _evaluate_local_min_neighbors_ordered(
+        session,
+        center_payload=center_payload,
+        neighbor_payloads=neighbor_payloads,
+        payload_score_cache=payload_score_cache,
+        total_neighbors=total_neighbors,
+        selection_prune_floor=selection_prune_floor,
+        on_neighbor=on_neighbor,
+    )
+    local_min_score = float(evaluation_result.get("local_min_score", float("inf")))
+    evaluated_neighbors = int(evaluation_result.get("evaluated_neighbors", 0) or 0)
+    payload_score_cache_hit_count = int(evaluation_result.get("payload_score_cache_hits", 0) or 0)
+    early_stopped = bool(evaluation_result.get("early_stopped", False))
+    selection_pruned = bool(evaluation_result.get("selection_pruned", False))
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
@@ -964,6 +1128,10 @@ def compute_local_min_score(
             field_order_score_prioritized=int(neighbor_rank_stats.get("field_order_score_prioritized", 0) or 0),
             early_stopped=bool(early_stopped),
             selection_pruned=bool(selection_pruned),
+            parallel_workers=int(evaluation_result.get("parallel_workers", 1) or 1),
+            parallel_submitted=int(evaluation_result.get("parallel_submitted", evaluated_neighbors) or 0),
+            parallel_completed=int(evaluation_result.get("parallel_completed", evaluated_neighbors) or 0),
+            parallel_cancelled=int(evaluation_result.get("parallel_cancelled", 0) or 0),
         )
     if on_finish is not None:
         on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))
