@@ -23,6 +23,9 @@ from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+)
+from config.training_performance_policy import (
+    resolve_optimizer_feature_bank_max_items_default,
     resolve_optimizer_rolling_fold_workers_default,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
 )
@@ -148,6 +151,7 @@ def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fo
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
         _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()))
+        _set_env_default(environ, "OPTIMIZER_FEATURE_BANK_MAX_ITEMS", str(resolve_optimizer_feature_bank_max_items_default()))
 
 
 def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
@@ -164,12 +168,18 @@ def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
         str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()),
     )
+    feature_bank_max_items = _env_value_for_display(
+        environ,
+        "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+        str(resolve_optimizer_feature_bank_max_items_default()),
+    )
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers} | "
-        f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items}"
+        f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items} | "
+        f"OPTIMIZER_FEATURE_BANK_MAX_ITEMS={feature_bank_max_items}"
     )
 
 

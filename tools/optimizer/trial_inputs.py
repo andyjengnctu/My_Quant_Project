@@ -9,7 +9,8 @@ from multiprocessing import get_context
 import pandas as pd
 
 from core.data_utils import get_required_min_rows
-from core.feature_bank import DEFAULT_FEATURE_BANK_MAX_ITEMS, FeatureBank
+from config.training_performance_policy import resolve_optimizer_feature_bank_max_items_default
+from core.feature_bank import FeatureBank
 from core.log_utils import format_exception_summary
 from core.portfolio_fast_data import merge_static_market_with_dynamic, prep_optimizer_stock_data_bundle, pack_static_market_data
 from core.runtime_utils import get_process_pool_executor_kwargs
@@ -20,12 +21,13 @@ _WORKER_FEATURE_BANK = None
 
 
 def _resolve_optimizer_feature_bank_max_items():
-    raw_value = os.environ.get("OPTIMIZER_FEATURE_BANK_MAX_ITEMS", "8192")
+    policy_default = resolve_optimizer_feature_bank_max_items_default()
+    raw_value = os.environ.get("OPTIMIZER_FEATURE_BANK_MAX_ITEMS", str(policy_default))
     try:
         resolved = int(raw_value)
     except (TypeError, ValueError):
-        resolved = 8192
-    return max(0, resolved)
+        resolved = int(policy_default)
+    return max(0, min(65536, resolved))
 
 
 def _build_optimizer_feature_bank():

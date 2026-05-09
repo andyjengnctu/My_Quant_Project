@@ -4,6 +4,7 @@ import threading
 from collections import OrderedDict
 from tools.optimizer.callbacks import run_optimizer_monitoring_callback
 from tools.optimizer.objective import run_optimizer_objective
+from config.training_performance_policy import resolve_optimizer_rolling_parallel_prep_cache_max_items_default
 from tools.optimizer.trial_inputs import _build_process_pool_executor
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
@@ -128,13 +129,14 @@ class OptimizerSession:
 
     
     def _resolve_prepared_trial_input_cache_max_items(self):
+        policy_default = resolve_optimizer_rolling_parallel_prep_cache_max_items_default()
         raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS")
         if raw_value is None or str(raw_value).strip() == "":
-            raw_value = os.environ.get("OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "16")
+            raw_value = os.environ.get("OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(policy_default))
         try:
             value = int(raw_value)
         except (TypeError, ValueError):
-            value = 16
+            value = int(policy_default)
         return max(0, min(256, value))
 
     def _resolve_full_evaluation_cache_max_items(self):

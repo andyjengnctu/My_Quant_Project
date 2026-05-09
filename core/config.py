@@ -46,9 +46,15 @@ from config.training_policy import (  # noqa: F401
     PREDEPLOY_SELECTION_START_YEAR,
     OOS_EVALUATION_START_YEAR,
     build_selection_policy_snapshot,
-    build_training_performance_policy_snapshot,
     build_training_score_policy_snapshot,
     build_training_threshold_snapshot,
+)
+from config.training_performance_policy import (  # noqa: F401
+    OPTIMIZER_FEATURE_BANK_MAX_ITEMS,
+    OPTIMIZER_ROLLING_FOLD_WORKERS,
+    OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS,
+    build_training_performance_policy_snapshot,
+    resolve_optimizer_feature_bank_max_items_default,
     resolve_optimizer_rolling_fold_workers_default,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
 )
