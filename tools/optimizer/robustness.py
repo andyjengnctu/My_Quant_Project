@@ -12,6 +12,7 @@ from typing import Callable
 from config.training_performance_policy import (
     is_optimizer_local_min_dependency_stats_enabled,
     resolve_optimizer_local_min_portfolio_dependency_order,
+    resolve_optimizer_local_min_signal_dependency_field_order,
 )
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -300,6 +301,20 @@ def _get_local_min_dependency_sort_bucket(center_payload: dict, payload: dict) -
     return 1 if str(layer) == "portfolio" else 0
 
 
+def _get_local_min_signal_dependency_field_priority(center_payload: dict, payload: dict) -> tuple[int, bool]:
+    layer, field_name = _classify_local_min_neighbor_dependency(center_payload, payload)
+    if str(layer) != "signal":
+        return 0, False
+    ordered_fields = tuple(resolve_optimizer_local_min_signal_dependency_field_order() or ())
+    if not ordered_fields:
+        return 0, False
+    priority_map = {str(name): idx for idx, name in enumerate(ordered_fields)}
+    field = str(field_name or "")
+    if field in priority_map:
+        return int(priority_map[field]), True
+    return len(priority_map), False
+
+
 def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
     """Evaluate cheap / likely-pruning neighbors first without changing local-min semantics.
 
@@ -319,10 +334,14 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
     order_score_prioritized = 0
     field_order_score_prioritized = 0
     portfolio_dependency_deprioritized = 0
+    signal_dependency_field_prioritized = 0
     for original_idx, payload in enumerate(list(neighbor_payloads or [])):
         dependency_sort_bucket = _get_local_min_dependency_sort_bucket(center_payload, payload)
         if dependency_sort_bucket > 0:
             portfolio_dependency_deprioritized += 1
+        signal_dependency_field_priority, has_signal_dependency_field_priority = _get_local_min_signal_dependency_field_priority(center_payload, payload)
+        if has_signal_dependency_field_priority:
+            signal_dependency_field_prioritized += 1
         payload_cache_key = _build_payload_score_cache_key(payload)
         cached_payload_score = payload_score_cache.get(payload_cache_key)
         if cached_payload_score is not None:
@@ -331,7 +350,7 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
                 cached_score_sort_value = float(cached_payload_score)
             except (TypeError, ValueError):
                 cached_score_sort_value = float(INVALID_TRIAL_VALUE)
-            ranked_items.append((0, cached_score_sort_value, 0, original_idx, payload))
+            ranked_items.append((0, cached_score_sort_value, 0, signal_dependency_field_priority, original_idx, payload))
             continue
 
         order_score = order_score_cache.get(payload_cache_key)
@@ -363,28 +382,29 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
             prep_cache_prioritized += 1
             if has_order_score:
                 order_score_prioritized += 1
-                ranked_items.append((1, order_score_sort_value, dependency_sort_bucket, original_idx, payload))
+                ranked_items.append((1, order_score_sort_value, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
             elif has_field_order_score:
                 field_order_score_prioritized += 1
-                ranked_items.append((2, field_order_score_sort_value, dependency_sort_bucket, original_idx, payload))
+                ranked_items.append((2, field_order_score_sort_value, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
             else:
-                ranked_items.append((3, 0.0, dependency_sort_bucket, original_idx, payload))
+                ranked_items.append((3, 0.0, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
         elif has_order_score:
             order_score_prioritized += 1
-            ranked_items.append((4, order_score_sort_value, dependency_sort_bucket, original_idx, payload))
+            ranked_items.append((4, order_score_sort_value, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
         elif has_field_order_score:
             field_order_score_prioritized += 1
-            ranked_items.append((5, field_order_score_sort_value, dependency_sort_bucket, original_idx, payload))
+            ranked_items.append((5, field_order_score_sort_value, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
         else:
-            ranked_items.append((6, 0.0, dependency_sort_bucket, original_idx, payload))
+            ranked_items.append((6, 0.0, dependency_sort_bucket, signal_dependency_field_priority, original_idx, payload))
 
-    ranked_items.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
-    return [item[4] for item in ranked_items], {
+    ranked_items.sort(key=lambda item: (item[0], item[1], item[2], item[3], item[4]))
+    return [item[5] for item in ranked_items], {
         "payload_score_candidates": int(payload_score_candidates),
         "prep_cache_prioritized": int(prep_cache_prioritized),
         "order_score_prioritized": int(order_score_prioritized),
         "field_order_score_prioritized": int(field_order_score_prioritized),
         "portfolio_dependency_deprioritized": int(portfolio_dependency_deprioritized),
+        "signal_dependency_field_prioritized": int(signal_dependency_field_prioritized),
     }
 
 
@@ -1297,6 +1317,7 @@ def compute_local_min_score(
             order_score_prioritized=int(neighbor_rank_stats.get("order_score_prioritized", 0) or 0),
             field_order_score_prioritized=int(neighbor_rank_stats.get("field_order_score_prioritized", 0) or 0),
             portfolio_dependency_deprioritized=int(neighbor_rank_stats.get("portfolio_dependency_deprioritized", 0) or 0),
+            signal_dependency_field_prioritized=int(neighbor_rank_stats.get("signal_dependency_field_prioritized", 0) or 0),
             early_stopped=bool(early_stopped),
             selection_pruned=bool(selection_pruned),
             parallel_workers=int(evaluation_result.get("parallel_workers", 1) or 1),

@@ -22,7 +22,7 @@ OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
 # - 正整數 = 每個 prep worker 的 feature bank 上限。
 # - timing 顯示 hit rate 長期偏低時，應降低此值以減少多 process 記憶體疊加。
 # - 環境變數 OPTIMIZER_FEATURE_BANK_MAX_ITEMS 仍可覆寫此預設。
-OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 2048
+OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
 
 
 def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | None = None) -> int:
@@ -78,6 +78,27 @@ OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED = True
 # - 環境變數 OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER 仍可覆寫此預設。
 OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER = "last"
 
+# OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER:
+# - "hard_fail_first" = local_min 鄰點排序時，signal-only 鄰點依較可能觸發 early stop/prune 的欄位順序排序。
+#                       不改鄰點集合與 local_min 定義；只改完整 local_min 評估前的安全排序。
+# - "original" = 保留原本鄰點產生順序。
+# - 也可用逗號分隔欄位名稱覆寫，例如：
+#   OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER=high_len,atr_times_trail,atr_buy_tol
+OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER = "hard_fail_first"
+
+_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER_HARD_FAIL_FIRST = (
+    "high_len",
+    "atr_times_trail",
+    "atr_buy_tol",
+    "bb_len",
+    "atr_len",
+    "bb_mult",
+    "kc_len",
+    "kc_mult",
+    "vol_long_len",
+    "vol_short_len",
+)
+
 
 def resolve_optimizer_local_min_portfolio_dependency_order():
     raw_value = os.environ.get(
@@ -90,6 +111,28 @@ def resolve_optimizer_local_min_portfolio_dependency_order():
     if text in {"original", "off", "0", "false", "no"}:
         return "original"
     return "last"
+
+
+def resolve_optimizer_local_min_signal_dependency_field_order() -> tuple[str, ...]:
+    raw_value = os.environ.get(
+        "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER",
+        OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER,
+    )
+    text = str(raw_value or "").strip()
+    normalized = text.lower()
+    if normalized in {"", "hard_fail_first", "default", "on", "1", "true", "yes"}:
+        return tuple(_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER_HARD_FAIL_FIRST)
+    if normalized in {"original", "off", "0", "false", "no"}:
+        return tuple()
+    fields = []
+    seen = set()
+    for part in text.split(","):
+        field = str(part or "").strip()
+        if not field or field in seen:
+            continue
+        fields.append(field)
+        seen.add(field)
+    return tuple(fields)
 
 
 def _coerce_bool(value, *, default: bool) -> bool:
@@ -124,4 +167,5 @@ def build_training_performance_policy_snapshot(fold_count=None):
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
         "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
+        "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER": ",".join(resolve_optimizer_local_min_signal_dependency_field_order()),
     }
