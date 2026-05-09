@@ -125,9 +125,24 @@ def _set_env_default(environ, name: str, value: str) -> None:
         environ[name] = str(value)
 
 
+def _env_flag(environ, name: str, default: bool) -> bool:
+    value = None
+    if isinstance(environ, dict):
+        value = environ.get(name)
+    if value is None:
+        value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return bool(default)
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
+
+
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
     _set_env_default(environ, "OPTIMIZER_PROFILE_WRITE_FILES", "0")
     _set_env_default(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory")
+    _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", "0")
+    _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", "1")
+    _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", "0")
+    _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", "0")
     if bool(timing_mode):
         _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
@@ -1303,6 +1318,10 @@ def _write_outer_timing_summary(
             "study_storage": "sqlite" if _is_outer_rolling_sqlite_storage_enabled(os.environ) else "memory",
             "parallel_fold_log_mode": "progress_only" if bool(rolling_fold_parallel) else "normal",
             "parallel_worker_prep_cache_max_items": _resolve_parallel_worker_prep_cache_max_items(os.environ),
+            "active_replay_include_trade_logs": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", False),
+            "active_replay_include_pit_stats_index": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", True),
+            "active_replay_use_prepared_cache": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", False),
+            "active_replay_write_prepared_cache": _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", False),
             **dict(resource_summary or {}),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
@@ -2058,11 +2077,14 @@ def _load_active_replay_contexts_by_signature(
     *,
     data_dir: str,
     schedule_groups: dict[str, list[dict]],
+    output_dir: str,
     first_year: int | None = None,
     last_year: int | None = None,
     overall_start: float | None = None,
 ) -> dict[str, dict]:
-    from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index
+    from core.data_utils import get_required_min_rows
+    from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, pack_static_market_data
+    from tools.optimizer.raw_cache import load_all_raw_data
     from tools.portfolio_sim.simulation_runner import load_portfolio_market_context
 
     contexts_by_signature: dict[str, dict] = {}
@@ -2082,6 +2104,7 @@ def _load_active_replay_contexts_by_signature(
             policies = existing.setdefault("_policies", [])
             if str(policy_name) not in policies:
                 policies.append(str(policy_name))
+
     def _record_year(item: dict) -> int:
         try:
             return int(item.get("year", 0) or 0)
@@ -2101,6 +2124,31 @@ def _load_active_replay_contexts_by_signature(
     years_label = ""
     if first_year and last_year:
         years_label = f" | years={int(first_year)}~{int(last_year)}"
+
+    include_trade_logs = _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", False)
+    include_pit_stats_index = _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", True)
+    use_prepared_cache = _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", False)
+    write_prepared_cache = _env_flag(os.environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", False)
+
+    raw_data_cache = None
+    static_fast_cache = None
+    static_master_dates = None
+    active_prep_workers = None
+    if total and not (use_prepared_cache or write_prepared_cache):
+        required_min_rows = max(get_required_min_rows(record["params_obj"]) for record in records)
+        raw_data_cache = load_all_raw_data(data_dir, required_min_rows, output_dir, verbose=False)
+        static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
+        static_master_dates = set()
+        for df in raw_data_cache.values():
+            static_master_dates.update(df.index)
+        raw_workers = str(os.environ.get("OPTIMIZER_ACTIVE_REPLAY_PREP_WORKERS", "")).strip()
+        if raw_workers:
+            try:
+                active_prep_workers = max(1, min(int(raw_workers), max(1, len(raw_data_cache))))
+            except ValueError as exc:
+                raise ValueError(f"OPTIMIZER_ACTIVE_REPLAY_PREP_WORKERS 必須是整數，收到: {raw_workers}") from exc
+        else:
+            active_prep_workers = max(1, min(os.cpu_count() or 1, 8, len(raw_data_cache)))
 
     def _covers_text(index: int, item: dict) -> str:
         year = _record_year(item)
@@ -2135,15 +2183,40 @@ def _load_active_replay_contexts_by_signature(
             previous_width = write_inline_progress(message, previous_width=previous_width)
         else:
             print(message)
-        context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
-        context = dict(context)
+
+        if raw_data_cache is not None:
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=raw_data_cache,
+                params=record["params_obj"],
+                default_max_workers=int(active_prep_workers or 1),
+                static_fast_cache=static_fast_cache,
+                static_master_dates=static_master_dates,
+                include_trade_logs=bool(include_trade_logs),
+                include_pit_stats_index=bool(include_pit_stats_index),
+                profile_enabled=False,
+            )
+            context = {
+                "all_dfs_fast": prep_result.get("all_dfs_fast") or {},
+                "all_trade_logs": prep_result.get("all_trade_logs") or {},
+                "all_pit_stats_index": prep_result.get("all_pit_stats_index") or {},
+                "sorted_dates": sorted(prep_result.get("master_dates") or []),
+                "prep_wall_sec": float(prep_result.get("prep_wall_sec", 0.0) or 0.0),
+                "prep_mode": f"active_replay_shared_raw_{prep_result.get('prep_mode')}",
+            }
+        else:
+            context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
+            context = dict(context)
+
         if not context.get("all_pit_stats_index"):
+            if not context.get("all_trade_logs"):
+                raise RuntimeError("active replay context 缺少 PIT stats index；請保留 OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX=1")
             context["all_pit_stats_index"] = {
                 ticker: build_trade_stats_index(logs)
                 for ticker, logs in (context.get("all_trade_logs") or {}).items()
             }
         context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
         contexts_by_signature[signature] = context
+
     if total:
         chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
         total_elapsed_text = ""
@@ -2233,6 +2306,7 @@ def _build_active_replay_chained_oos_summary(
     rows: list[dict],
     config: OuterRollingConfig,
     selected_data_dir: str,
+    output_dir: str,
     max_positions: int,
     enable_rotation: bool,
     overall_start: float | None = None,
@@ -2254,6 +2328,7 @@ def _build_active_replay_chained_oos_summary(
     contexts_by_signature = _load_active_replay_contexts_by_signature(
         data_dir=selected_data_dir,
         schedule_groups=schedule_groups,
+        output_dir=output_dir,
         first_year=first_year,
         last_year=last_year,
         overall_start=overall_start,
@@ -3968,6 +4043,7 @@ def run_outer_rolling_oos(
         rows=rows,
         config=config,
         selected_data_dir=selected_data_dir,
+        output_dir=output_dir,
         max_positions=resolved_chain_max_positions,
         enable_rotation=resolved_chain_enable_rotation,
         overall_start=overall_start,
