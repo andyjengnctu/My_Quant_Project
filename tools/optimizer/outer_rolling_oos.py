@@ -3914,9 +3914,10 @@ def run_outer_rolling_oos(
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials, timing_mode=bool(timing_mode))
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
-    _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
-    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
-    fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    fold_count = int(len(years))
+    _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
+    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
+    fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     _print_plan(config, parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None)
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
@@ -3939,7 +3940,7 @@ def run_outer_rolling_oos(
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
-        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 自行載入 raw cache | folds={len(years)}{C_RESET}")
+        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 自行載入 raw cache | folds={fold_count}{C_RESET}")
     else:
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
@@ -3955,7 +3956,7 @@ def run_outer_rolling_oos(
         finally:
             shared_data_session.close_trial_prep_executor()
         raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
-        print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={len(years)}{C_RESET}")
+        print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={fold_count}{C_RESET}")
 
     if fold_parallel_enabled:
         log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
@@ -3981,7 +3982,7 @@ def run_outer_rolling_oos(
                 "session_ts": str(session_ts),
                 "config": dict(config_payload),
                 "fold_idx": int(fold_idx),
-                "fold_count": int(len(years)),
+                "fold_count": fold_count,
                 "oos_year": int(oos_year),
                 "optimizer_seed": optimizer_seed,
                 "sampler_kind": str(sampler_kind),
@@ -4006,7 +4007,7 @@ def run_outer_rolling_oos(
         rows.sort(key=lambda item: int(item.get("oos_year", 0) or 0))
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
-            row["fold"] = f"{idx}/{len(years)}"
+            row["fold"] = f"{idx}/{fold_count}"
 
     years_to_run = [] if fold_parallel_enabled else years
 
@@ -4014,7 +4015,7 @@ def run_outer_rolling_oos(
         fold_start = time.perf_counter()
         selection_end = int(oos_year) - 1
         selection_start = _selection_start_for_oos(config, int(oos_year))
-        print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | parallel fold START | selection={selection_start}~{selection_end}", flush=True)
+        print(f"[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | fold START", flush=True)
         fold_policy = dict(base_policy)
         fold_policy["selection_start_year"] = int(selection_start)
         fold_policy["train_start_year"] = int(selection_start)
@@ -4054,7 +4055,7 @@ def run_outer_rolling_oos(
             db_name = f"sqlite:///{db_file}"
         study = None
         try:
-            print(f"\n{C_CYAN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year}{C_RESET}")
+            print(f"\n{C_CYAN}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year}{C_RESET}")
             install_started = time.perf_counter()
             session.install_raw_data_cache(
                 selected_data_dir,
@@ -4072,7 +4073,7 @@ def run_outer_rolling_oos(
             study_create_sec = max(0.0, time.perf_counter() - study_started)
             progress = _SearchProgress(
                 fold_idx=fold_idx,
-                fold_count=len(years),
+                fold_count=fold_count,
                 oos_year=oos_year,
                 selection_start=selection_start,
                 selection_end=selection_end,
@@ -4088,7 +4089,7 @@ def run_outer_rolling_oos(
             local_started = time.perf_counter()
             session.outer_rolling_local_progress_context = {
                 "fold_idx": int(fold_idx),
-                "fold_count": int(len(years)),
+                "fold_count": fold_count,
                 "oos_year": int(oos_year),
                 "selection_start": int(selection_start),
                 "selection_end": int(selection_end),
@@ -4110,7 +4111,7 @@ def run_outer_rolling_oos(
             local_elapsed = time.perf_counter() - local_started
             prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
-                f"[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
+                f"[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | LOCAL_MIN_REVIEW DONE | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
@@ -4121,7 +4122,7 @@ def run_outer_rolling_oos(
                 fold_elapsed = time.perf_counter() - fold_start
                 fold_timing_rows.append(_build_outer_timing_row(
                     fold_idx=fold_idx,
-                    fold_count=len(years),
+                    fold_count=fold_count,
                     oos_year=int(oos_year),
                     selection_start=int(selection_start),
                     selection_end=int(selection_end),
@@ -4136,7 +4137,7 @@ def run_outer_rolling_oos(
                     fold_total_sec=fold_elapsed,
                     finalists_count=len(finalists),
                 ))
-                print(f"{C_YELLOW}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | 無可用 finalist，略過。{C_RESET}")
+                print(f"{C_YELLOW}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | 無可用 finalist，略過。{C_RESET}")
                 continue
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
@@ -4164,7 +4165,7 @@ def run_outer_rolling_oos(
                 if item is not None
             }
             row = {
-                "fold": f"{fold_idx}/{len(years)}",
+                "fold": f"{fold_idx}/{fold_count}",
                 "oos_year": int(oos_year),
                 "selection_period": selection_period,
                 "selection_start_year": int(selection_start),
@@ -4194,7 +4195,7 @@ def run_outer_rolling_oos(
             rows.append(row)
             fold_timing_rows.append(_build_outer_timing_row(
                 fold_idx=fold_idx,
-                fold_count=len(years),
+                fold_count=fold_count,
                 oos_year=int(oos_year),
                 selection_start=int(selection_start),
                 selection_end=int(selection_end),
@@ -4211,7 +4212,7 @@ def run_outer_rolling_oos(
             ))
             local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
             print(
-                f"{C_GREEN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | DONE | "
+                f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_start}~{selection_end} | OOS {oos_year} | DONE | "
                 f"local_rank_1_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
                 f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
             )
