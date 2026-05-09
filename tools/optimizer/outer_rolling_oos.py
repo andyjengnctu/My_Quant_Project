@@ -142,7 +142,7 @@ def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
 
 def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
     rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
-    local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
+    local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
     process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
     return (
         "平行化設定："
@@ -197,13 +197,19 @@ def _resolve_parallel_worker_prep_cache_max_items(environ) -> int:
 
 
 class _ResourceUsageSampler:
-    """Low-overhead system resource sampler for rolling timing diagnostics."""
+    """Low-overhead system resource sampler for rolling timing diagnostics.
+
+    psutil is optional.  On Windows/Linux this class falls back to native OS
+    counters so timing mode can still report CPU / memory / disk pressure on
+    machines where psutil is not installed.
+    """
 
     def __init__(self, *, interval_sec: float = 2.0):
         self.interval_sec = max(0.5, float(interval_sec or 2.0))
         self.samples: list[dict] = []
         self.available = False
         self.error = ""
+        self.mode = "unavailable"
         self._psutil = None
         self._process = None
         self._stop_event = Event()
@@ -211,16 +217,45 @@ class _ResourceUsageSampler:
         self._started_at = 0.0
         self._last_disk = None
         self._last_sample_time = None
+        self._last_cpu_times = None
+        self._last_tree_io = None
+        self._disk_mbps_cap = self._resolve_disk_mbps_cap()
         try:
             import psutil  # type: ignore
             self._psutil = psutil
             self._process = psutil.Process(os.getpid())
             self.available = True
+            self.mode = "psutil"
             # Prime CPU counters so first non-zero interval sample is meaningful.
             psutil.cpu_percent(interval=None)
         except Exception as exc:  # optional diagnostics only; keep optimizer runnable without psutil.
-            self.available = False
+            self._psutil = None
+            self._process = None
             self.error = f"{type(exc).__name__}: {exc}"
+            if os.name == "nt":
+                self.available = True
+                self.mode = "native_windows"
+            elif os.path.exists("/proc/stat") and os.path.exists("/proc/meminfo"):
+                self.available = True
+                self.mode = "native_linux"
+            else:
+                self.available = False
+                self.mode = "unavailable"
+
+    @staticmethod
+    def _resolve_disk_mbps_cap() -> float:
+        raw_value = os.environ.get("OPTIMIZER_RESOURCE_DISK_MBPS_CAP", "500")
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            value = 500.0
+        return max(1.0, min(10000.0, value))
+
+    def _disk_load_percent(self, *, busy_percent: float, total_mb_s: float) -> float:
+        busy = max(0.0, float(busy_percent or 0.0))
+        if busy > 0.0:
+            return max(0.0, min(100.0, busy))
+        return max(0.0, min(100.0, (max(0.0, float(total_mb_s or 0.0)) / self._disk_mbps_cap) * 100.0))
 
     def start(self) -> None:
         self._started_at = time.perf_counter()
@@ -252,21 +287,326 @@ class _ResourceUsageSampler:
             pass
         return processes
 
-    def _process_tree_stats(self) -> dict:
+    def _process_tree_stats_psutil(self) -> dict:
         rss_bytes = 0
         process_count = 0
+        read_bytes = 0
+        write_bytes = 0
         for proc in self._iter_process_tree():
             try:
                 rss_bytes += int(proc.memory_info().rss)
                 process_count += 1
             except Exception:
                 continue
+            try:
+                io = proc.io_counters()
+                read_bytes += int(getattr(io, "read_bytes", 0) or 0)
+                write_bytes += int(getattr(io, "write_bytes", 0) or 0)
+            except Exception:
+                pass
         return {
             "process_tree_rss_gb": rss_bytes / (1024 ** 3),
             "process_tree_count": int(process_count),
+            "process_tree_read_total_mb": read_bytes / (1024 ** 2),
+            "process_tree_write_total_mb": write_bytes / (1024 ** 2),
         }
 
+    @staticmethod
+    def _read_linux_cpu_times() -> tuple[int, int] | None:
+        try:
+            with open("/proc/stat", "r", encoding="utf-8") as handle:
+                parts = handle.readline().strip().split()
+            if not parts or parts[0] != "cpu":
+                return None
+            values = [int(float(x)) for x in parts[1:]]
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            total = sum(values)
+            return int(idle), int(total)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_linux_memory() -> dict:
+        values = {}
+        try:
+            with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, raw = line.split(":", 1)
+                    amount = raw.strip().split()[0]
+                    values[key] = float(amount) * 1024.0
+        except Exception:
+            pass
+        total = float(values.get("MemTotal", 0.0) or 0.0)
+        available = float(values.get("MemAvailable", 0.0) or 0.0)
+        used = max(0.0, total - available)
+        swap_total = float(values.get("SwapTotal", 0.0) or 0.0)
+        swap_free = float(values.get("SwapFree", 0.0) or 0.0)
+        swap_used = max(0.0, swap_total - swap_free)
+        return {
+            "memory_percent": (used / total * 100.0) if total > 0 else 0.0,
+            "memory_available_gb": available / (1024 ** 3),
+            "memory_used_gb": used / (1024 ** 3),
+            "swap_percent": (swap_used / swap_total * 100.0) if swap_total > 0 else 0.0,
+            "swap_used_gb": swap_used / (1024 ** 3),
+        }
+
+    @staticmethod
+    def _linux_descendant_pids(root_pid: int) -> list[int]:
+        ppid_by_pid: dict[int, int] = {}
+        for name in os.listdir("/proc") if os.path.exists("/proc") else []:
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            try:
+                with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as handle:
+                    stat = handle.read()
+                # comm may contain spaces and is wrapped in parentheses; ppid is field 4.
+                after = stat.rsplit(")", 1)[1].strip().split()
+                if len(after) >= 2:
+                    ppid_by_pid[pid] = int(after[1])
+            except Exception:
+                continue
+        children: dict[int, list[int]] = {}
+        for pid, ppid in ppid_by_pid.items():
+            children.setdefault(ppid, []).append(pid)
+        out = [int(root_pid)]
+        stack = list(children.get(int(root_pid), []))
+        while stack:
+            pid = stack.pop()
+            out.append(pid)
+            stack.extend(children.get(pid, []))
+        return out
+
+    @staticmethod
+    def _read_linux_process_tree_stats() -> dict:
+        rss_bytes = 0
+        read_bytes = 0
+        write_bytes = 0
+        count = 0
+        for pid in _ResourceUsageSampler._linux_descendant_pids(os.getpid()):
+            try:
+                with open(f"/proc/{pid}/status", "r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        if line.startswith("VmRSS:"):
+                            rss_bytes += int(line.split()[1]) * 1024
+                            break
+                count += 1
+            except Exception:
+                continue
+            try:
+                with open(f"/proc/{pid}/io", "r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        if line.startswith("read_bytes:"):
+                            read_bytes += int(line.split()[1])
+                        elif line.startswith("write_bytes:"):
+                            write_bytes += int(line.split()[1])
+            except Exception:
+                pass
+        return {
+            "process_tree_rss_gb": rss_bytes / (1024 ** 3),
+            "process_tree_count": int(count),
+            "process_tree_read_total_mb": read_bytes / (1024 ** 2),
+            "process_tree_write_total_mb": write_bytes / (1024 ** 2),
+        }
+
+    @staticmethod
+    def _read_windows_cpu_times() -> tuple[int, int] | None:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class FILETIME(ctypes.Structure):
+                _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+            idle = FILETIME()
+            kernel = FILETIME()
+            user = FILETIME()
+            if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+                return None
+
+            def as_int(ft) -> int:
+                return (int(ft.dwHighDateTime) << 32) + int(ft.dwLowDateTime)
+
+            idle_i = as_int(idle)
+            kernel_i = as_int(kernel)
+            user_i = as_int(user)
+            return int(idle_i), int(kernel_i + user_i)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_windows_memory() -> dict:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", wintypes.DWORD),
+                    ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            mem = MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                raise OSError("GlobalMemoryStatusEx failed")
+            total = float(mem.ullTotalPhys or 0)
+            avail = float(mem.ullAvailPhys or 0)
+            used = max(0.0, total - avail)
+            page_total = float(mem.ullTotalPageFile or 0)
+            page_avail = float(mem.ullAvailPageFile or 0)
+            page_used = max(0.0, page_total - page_avail)
+            return {
+                "memory_percent": float(mem.dwMemoryLoad or ((used / total * 100.0) if total else 0.0)),
+                "memory_available_gb": avail / (1024 ** 3),
+                "memory_used_gb": used / (1024 ** 3),
+                "swap_percent": (page_used / page_total * 100.0) if page_total > 0 else 0.0,
+                "swap_used_gb": page_used / (1024 ** 3),
+            }
+        except Exception:
+            return {
+                "memory_percent": 0.0,
+                "memory_available_gb": 0.0,
+                "memory_used_gb": 0.0,
+                "swap_percent": 0.0,
+                "swap_used_gb": 0.0,
+            }
+
+    @staticmethod
+    def _windows_descendant_pids(root_pid: int) -> list[int]:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            TH32CS_SNAPPROCESS = 0x00000002
+            INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+            class PROCESSENTRY32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            if snapshot == INVALID_HANDLE_VALUE:
+                return [int(root_pid)]
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            ppid_by_pid: dict[int, int] = {}
+            try:
+                ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+                while ok:
+                    ppid_by_pid[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                    ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+            finally:
+                kernel32.CloseHandle(snapshot)
+            children: dict[int, list[int]] = {}
+            for pid, ppid in ppid_by_pid.items():
+                children.setdefault(ppid, []).append(pid)
+            out = [int(root_pid)]
+            stack = list(children.get(int(root_pid), []))
+            while stack:
+                pid = stack.pop()
+                out.append(pid)
+                stack.extend(children.get(pid, []))
+            return out
+        except Exception:
+            return [int(root_pid)]
+
+    @staticmethod
+    def _read_windows_process_tree_stats() -> dict:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            PROCESS_VM_READ = 0x0010
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("ReadOperationCount", ctypes.c_ulonglong),
+                    ("WriteOperationCount", ctypes.c_ulonglong),
+                    ("OtherOperationCount", ctypes.c_ulonglong),
+                    ("ReadTransferCount", ctypes.c_ulonglong),
+                    ("WriteTransferCount", ctypes.c_ulonglong),
+                    ("OtherTransferCount", ctypes.c_ulonglong),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            psapi = ctypes.windll.psapi
+            rss_bytes = 0
+            read_bytes = 0
+            write_bytes = 0
+            count = 0
+            for pid in _ResourceUsageSampler._windows_descendant_pids(os.getpid()):
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, int(pid))
+                if not handle:
+                    continue
+                try:
+                    pmc = PROCESS_MEMORY_COUNTERS()
+                    pmc.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+                    if psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
+                        rss_bytes += int(pmc.WorkingSetSize or 0)
+                    ioc = IO_COUNTERS()
+                    if kernel32.GetProcessIoCounters(handle, ctypes.byref(ioc)):
+                        read_bytes += int(ioc.ReadTransferCount or 0)
+                        write_bytes += int(ioc.WriteTransferCount or 0)
+                    count += 1
+                finally:
+                    kernel32.CloseHandle(handle)
+            return {
+                "process_tree_rss_gb": rss_bytes / (1024 ** 3),
+                "process_tree_count": int(count),
+                "process_tree_read_total_mb": read_bytes / (1024 ** 2),
+                "process_tree_write_total_mb": write_bytes / (1024 ** 2),
+            }
+        except Exception:
+            return {
+                "process_tree_rss_gb": 0.0,
+                "process_tree_count": 0,
+                "process_tree_read_total_mb": 0.0,
+                "process_tree_write_total_mb": 0.0,
+            }
+
     def _sample_once(self) -> None:
+        if self.mode == "psutil":
+            self._sample_once_psutil()
+        elif self.mode == "native_windows":
+            self._sample_once_native(cpu_reader=self._read_windows_cpu_times, memory_reader=self._read_windows_memory, tree_reader=self._read_windows_process_tree_stats)
+        elif self.mode == "native_linux":
+            self._sample_once_native(cpu_reader=self._read_linux_cpu_times, memory_reader=self._read_linux_memory, tree_reader=self._read_linux_process_tree_stats)
+
+    def _sample_once_psutil(self) -> None:
         psutil = self._psutil
         if psutil is None:
             return
@@ -321,9 +661,10 @@ class _ResourceUsageSampler:
         except Exception:
             pass
 
-        tree = self._process_tree_stats()
+        tree = self._process_tree_stats_psutil()
         self.samples.append({
             "elapsed_sec": float(elapsed),
+            "resource_mode": str(self.mode),
             "cpu_percent": float(cpu_percent),
             "memory_percent": float(memory_percent),
             "memory_available_gb": float(memory_available_gb),
@@ -333,11 +674,61 @@ class _ResourceUsageSampler:
             "disk_read_mb_per_sec": float(read_mb_s),
             "disk_write_mb_per_sec": float(write_mb_s),
             "disk_total_mb_per_sec": float(read_mb_s + write_mb_s),
+            "disk_load_percent": float(self._disk_load_percent(busy_percent=busy_percent, total_mb_s=read_mb_s + write_mb_s)),
             "disk_busy_percent": float(busy_percent),
             "disk_read_total_mb": float(read_total_mb),
             "disk_write_total_mb": float(write_total_mb),
             "process_tree_rss_gb": float(tree.get("process_tree_rss_gb", 0.0) or 0.0),
             "process_tree_count": int(tree.get("process_tree_count", 0) or 0),
+            "process_tree_read_total_mb": float(tree.get("process_tree_read_total_mb", 0.0) or 0.0),
+            "process_tree_write_total_mb": float(tree.get("process_tree_write_total_mb", 0.0) or 0.0),
+        })
+
+    def _sample_once_native(self, *, cpu_reader, memory_reader, tree_reader) -> None:
+        now = time.perf_counter()
+        elapsed = max(0.0, now - float(self._started_at or now))
+        cpu_percent = 0.0
+        cpu_times = cpu_reader()
+        if cpu_times is not None:
+            last = self._last_cpu_times
+            if last is not None:
+                idle_delta = max(0, int(cpu_times[0]) - int(last[0]))
+                total_delta = max(0, int(cpu_times[1]) - int(last[1]))
+                if total_delta > 0:
+                    cpu_percent = max(0.0, min(100.0, (1.0 - float(idle_delta) / float(total_delta)) * 100.0))
+            self._last_cpu_times = cpu_times
+        mem = memory_reader()
+        tree = tree_reader()
+        read_total_mb = float(tree.get("process_tree_read_total_mb", 0.0) or 0.0)
+        write_total_mb = float(tree.get("process_tree_write_total_mb", 0.0) or 0.0)
+        read_mb_s = 0.0
+        write_mb_s = 0.0
+        if self._last_tree_io is not None and self._last_sample_time is not None:
+            dt = max(0.001, now - float(self._last_sample_time))
+            read_mb_s = max(0.0, read_total_mb - float(self._last_tree_io[0])) / dt
+            write_mb_s = max(0.0, write_total_mb - float(self._last_tree_io[1])) / dt
+        self._last_tree_io = (read_total_mb, write_total_mb)
+        self._last_sample_time = now
+        self.samples.append({
+            "elapsed_sec": float(elapsed),
+            "resource_mode": str(self.mode),
+            "cpu_percent": float(cpu_percent),
+            "memory_percent": float(mem.get("memory_percent", 0.0) or 0.0),
+            "memory_available_gb": float(mem.get("memory_available_gb", 0.0) or 0.0),
+            "memory_used_gb": float(mem.get("memory_used_gb", 0.0) or 0.0),
+            "swap_percent": float(mem.get("swap_percent", 0.0) or 0.0),
+            "swap_used_gb": float(mem.get("swap_used_gb", 0.0) or 0.0),
+            "disk_read_mb_per_sec": float(read_mb_s),
+            "disk_write_mb_per_sec": float(write_mb_s),
+            "disk_total_mb_per_sec": float(read_mb_s + write_mb_s),
+            "disk_load_percent": float(self._disk_load_percent(busy_percent=0.0, total_mb_s=read_mb_s + write_mb_s)),
+            "disk_busy_percent": 0.0,
+            "disk_read_total_mb": float(read_total_mb),
+            "disk_write_total_mb": float(write_total_mb),
+            "process_tree_rss_gb": float(tree.get("process_tree_rss_gb", 0.0) or 0.0),
+            "process_tree_count": int(tree.get("process_tree_count", 0) or 0),
+            "process_tree_read_total_mb": float(read_total_mb),
+            "process_tree_write_total_mb": float(write_total_mb),
         })
 
     def _run(self) -> None:
@@ -349,7 +740,7 @@ class _ResourceUsageSampler:
         if not self.available:
             return {"resource_sampling_available": False, "resource_sampling_error": self.error}
         if not samples:
-            return {"resource_sampling_available": True, "resource_sample_count": 0}
+            return {"resource_sampling_available": True, "resource_sampling_mode": self.mode, "resource_sample_count": 0}
 
         def values(key: str) -> list[float]:
             out = []
@@ -376,8 +767,12 @@ class _ResourceUsageSampler:
         last = samples[-1]
         disk_read_delta = max(0.0, float(last.get("disk_read_total_mb", 0.0) or 0.0) - float(first.get("disk_read_total_mb", 0.0) or 0.0))
         disk_write_delta = max(0.0, float(last.get("disk_write_total_mb", 0.0) or 0.0) - float(first.get("disk_write_total_mb", 0.0) or 0.0))
+        proc_read_delta = max(0.0, float(last.get("process_tree_read_total_mb", 0.0) or 0.0) - float(first.get("process_tree_read_total_mb", 0.0) or 0.0))
+        proc_write_delta = max(0.0, float(last.get("process_tree_write_total_mb", 0.0) or 0.0) - float(first.get("process_tree_write_total_mb", 0.0) or 0.0))
         return {
             "resource_sampling_available": True,
+            "resource_sampling_mode": str(self.mode),
+            "resource_sampling_error": "" if self.mode == "psutil" else str(self.error or ""),
             "resource_sample_count": int(len(samples)),
             "resource_sample_interval_sec": float(self.interval_sec),
             "cpu_avg_percent": avg("cpu_percent"),
@@ -400,11 +795,16 @@ class _ResourceUsageSampler:
             "disk_total_mb_per_sec_max": mx("disk_total_mb_per_sec"),
             "disk_busy_avg_percent": avg("disk_busy_percent"),
             "disk_busy_max_percent": mx("disk_busy_percent"),
+            "disk_load_avg_percent": avg("disk_load_percent"),
+            "disk_load_max_percent": mx("disk_load_percent"),
+            "resource_disk_mbps_cap": float(self._disk_mbps_cap),
             "process_tree_rss_avg_gb": avg("process_tree_rss_gb"),
             "process_tree_rss_max_gb": mx("process_tree_rss_gb"),
             "process_tree_count_max": int(mx("process_tree_count")),
+            "process_tree_read_mb": proc_read_delta,
+            "process_tree_write_mb": proc_write_delta,
+            "process_tree_total_io_mb": proc_read_delta + proc_write_delta,
         }
-
 
 def _safe_float(value, default: float = 0.0) -> float:
     try:
@@ -913,6 +1313,38 @@ def _write_outer_timing_summary(
     return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "resource_csv": resource_csv_path, "payload": payload}
 
 
+def _format_resource_usage_line(summary: dict, *, prefix: str = "⏱️ CPU/MEM/HD") -> str:
+    summary = dict(summary or {})
+    if not bool(summary.get("resource_sampling_available", False)):
+        err = str(summary.get("resource_sampling_error", "") or "unavailable")
+        return f"{C_CYAN}{prefix}｜resource unavailable｜{err}{C_RESET}"
+    cpu_avg = float(summary.get("cpu_avg_percent", 0.0) or 0.0)
+    cpu_max = float(summary.get("cpu_max_percent", 0.0) or 0.0)
+    mem_avg = float(summary.get("memory_avg_percent", 0.0) or 0.0)
+    mem_max = float(summary.get("memory_max_percent", 0.0) or 0.0)
+    mem_avail_min = float(summary.get("memory_min_available_gb", 0.0) or 0.0)
+    rss_peak = float(summary.get("process_tree_rss_max_gb", 0.0) or 0.0)
+    swap_avg = float(summary.get("swap_avg_percent", 0.0) or 0.0)
+    swap_max = float(summary.get("swap_max_percent", 0.0) or 0.0)
+    hd_avg = float(summary.get("disk_load_avg_percent", summary.get("disk_busy_avg_percent", 0.0)) or 0.0)
+    hd_max = float(summary.get("disk_load_max_percent", summary.get("disk_busy_max_percent", 0.0)) or 0.0)
+    hd_rate_avg = float(summary.get("disk_total_mb_per_sec_avg", 0.0) or 0.0)
+    hd_rate_max = float(summary.get("disk_total_mb_per_sec_max", 0.0) or 0.0)
+    hd_total = float(summary.get("disk_total_mb", summary.get("process_tree_total_io_mb", 0.0)) or 0.0)
+    mode = str(summary.get("resource_sampling_mode", "") or "unknown")
+    return (
+        f"{C_CYAN}{prefix}｜"
+        f"CPU avg/max={cpu_avg:.1f}/{cpu_max:.1f}%｜"
+        f"MEM avg/max={mem_avg:.1f}/{mem_max:.1f}%｜"
+        f"MEM可用min={mem_avail_min:.2f}GB｜"
+        f"Pagefile avg/max={swap_avg:.1f}/{swap_max:.1f}%｜"
+        f"RSS peak={rss_peak:.2f}GB｜"
+        f"HD avg/max={hd_avg:.1f}/{hd_max:.1f}%｜"
+        f"HD速率avg/max={hd_rate_avg:.1f}/{hd_rate_max:.1f}MB/s｜"
+        f"HD總量={hd_total:.1f}MB｜"
+        f"mode={mode}{C_RESET}"
+    )
+
 def _print_outer_timing_summary(payload: dict):
     summary = dict((payload or {}).get("summary") or {})
     meta = dict((payload or {}).get("meta") or {})
@@ -943,21 +1375,8 @@ def _print_outer_timing_summary(payload: dict):
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
-    if bool(summary.get("resource_sampling_available", False)):
-        print(
-            "📏 Resource 摘要｜"
-            f"cpu_avg/max={float(summary.get('cpu_avg_percent', 0.0)):.1f}%/"
-            f"{float(summary.get('cpu_max_percent', 0.0)):.1f}%｜"
-            f"mem_avg/max={float(summary.get('memory_avg_percent', 0.0)):.1f}%/"
-            f"{float(summary.get('memory_max_percent', 0.0)):.1f}%｜"
-            f"mem_avail_min={float(summary.get('memory_min_available_gb', 0.0)):.2f}GB｜"
-            f"proc_rss_peak={float(summary.get('process_tree_rss_max_gb', 0.0)):.2f}GB｜"
-            f"disk_rw={float(summary.get('disk_total_mb', 0.0)):.1f}MB｜"
-            f"disk_rate_avg/max={float(summary.get('disk_total_mb_per_sec_avg', 0.0)):.1f}/"
-            f"{float(summary.get('disk_total_mb_per_sec_max', 0.0)):.1f}MB/s｜"
-            f"disk_busy_avg/max={float(summary.get('disk_busy_avg_percent', 0.0)):.1f}%/"
-            f"{float(summary.get('disk_busy_max_percent', 0.0)):.1f}%"
-        )
+    print(_format_resource_usage_line(summary, prefix="📏 CPU/MEM/HD 摘要"))
+
 
 
 class _SearchProgress:
@@ -3120,21 +3539,26 @@ def run_outer_rolling_oos(
     if fold_parallel_enabled:
         print(f"{C_CYAN}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
 
-    shared_load_start = time.perf_counter()
-    shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
-    shared_data_session = build_optimizer_session(walk_forward_policy=shared_data_policy)
-    try:
-        shared_data_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
-        shared_raw_context = {
-            "raw_data_cache": dict(shared_data_session.raw_data_cache),
-            "static_fast_cache": dict(shared_data_session.static_fast_cache),
-            "master_dates": set(shared_data_session.master_dates),
-            "sorted_master_dates": list(shared_data_session.sorted_master_dates),
-        }
-    finally:
-        shared_data_session.close_trial_prep_executor()
-    raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
-    print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={len(years)}{C_RESET}")
+    shared_raw_context = None
+    if fold_parallel_enabled:
+        raw_data_load_sec = 0.0
+        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 自行載入 raw cache | folds={len(years)}{C_RESET}")
+    else:
+        shared_load_start = time.perf_counter()
+        shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
+        shared_data_session = build_optimizer_session(walk_forward_policy=shared_data_policy)
+        try:
+            shared_data_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            shared_raw_context = {
+                "raw_data_cache": dict(shared_data_session.raw_data_cache),
+                "static_fast_cache": dict(shared_data_session.static_fast_cache),
+                "master_dates": set(shared_data_session.master_dates),
+                "sorted_master_dates": list(shared_data_session.sorted_master_dates),
+            }
+        finally:
+            shared_data_session.close_trial_prep_executor()
+        raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
+        print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={len(years)}{C_RESET}")
 
     if fold_parallel_enabled:
         log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
@@ -3442,6 +3866,7 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
+    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
