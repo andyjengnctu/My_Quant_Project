@@ -6,6 +6,8 @@ import os
 import statistics
 import sys
 import time
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from contextlib import redirect_stderr, redirect_stdout
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
@@ -64,6 +66,24 @@ def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     except (TypeError, ValueError):
         resolved = 256
     return max(0, min(4096, resolved))
+
+
+def _resolve_rolling_fold_workers(environ, *, timing_mode: bool) -> int:
+    raw_value = (environ or {}).get("OPTIMIZER_ROLLING_FOLD_WORKERS")
+    if raw_value is None:
+        raw_value = os.environ.get("OPTIMIZER_ROLLING_FOLD_WORKERS", "1")
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        resolved = 1
+    resolved = max(1, min(8, resolved))
+    if not bool(timing_mode):
+        return 1
+    return resolved
+
+
+def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:
+    return bool(timing_mode) and int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode) > 1
 
 
 def _shutdown_rolling_shared_prep_executor_holder(holder: dict) -> None:
@@ -427,6 +447,8 @@ def _build_outer_timing_row(
         "local_min_hard_fail_stops": int(local_min_stats.get("hard_fail_stops", 0) or 0),
         "local_min_hard_fail_neighbors_skipped": int(local_min_stats.get("hard_fail_neighbors_skipped", 0) or 0),
         "local_min_hard_fail_cancelled": int(local_min_stats.get("hard_fail_cancelled", 0) or 0),
+        "rolling_fold_workers_max": int(getattr(session, "rolling_fold_workers_max", 1) or 1),
+        "rolling_fold_parallel": bool(getattr(session, "rolling_fold_parallel", False)),
     }
 
 
@@ -493,6 +515,8 @@ def _write_outer_timing_summary(
     local_min_hard_fail_stops = sum(int(row.get("local_min_hard_fail_stops", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_hard_fail_neighbors_skipped = sum(int(row.get("local_min_hard_fail_neighbors_skipped", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_hard_fail_cancelled = sum(int(row.get("local_min_hard_fail_cancelled", 0) or 0) for row in list(fold_timing_rows or []))
+    rolling_fold_workers_max = max((int(row.get("rolling_fold_workers_max", 1) or 1) for row in list(fold_timing_rows or [])), default=1)
+    rolling_fold_parallel = any(bool(row.get("rolling_fold_parallel", False)) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
@@ -547,6 +571,8 @@ def _write_outer_timing_summary(
             "local_min_hard_fail_stops": int(local_min_hard_fail_stops),
             "local_min_hard_fail_neighbors_skipped": int(local_min_hard_fail_neighbors_skipped),
             "local_min_hard_fail_cancelled": int(local_min_hard_fail_cancelled),
+            "rolling_fold_workers_max": int(rolling_fold_workers_max),
+            "rolling_fold_parallel": bool(rolling_fold_parallel),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },
@@ -1939,6 +1965,302 @@ def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False
     return "\n".join(lines) + "\n"
 
 
+
+def _tail_text_file(path: str, *, max_lines: int = 8) -> str:
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return "".join(lines[-int(max_lines):]).strip()
+    except OSError:
+        return ""
+
+
+def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_timing_rows: list[dict], chain_state: dict) -> None:
+    fold_idx = int(task["fold_idx"])
+    fold_count = int(task.get("fold_count", 0) or 0)
+    oos_year = int(task["oos_year"])
+    try:
+        result = future.result()
+    except Exception as exc:
+        log_path = str(task.get("log_path") or "")
+        tail = _tail_text_file(log_path, max_lines=12)
+        detail = f"\n最後 fold log：\n{tail}" if tail else ""
+        raise RuntimeError(f"parallel fold failed: fold={fold_idx}/{fold_count} OOS={oos_year} log={log_path}{detail}") from exc
+    if result.get("row") is not None:
+        rows.append(result["row"])
+    if result.get("timing_row") is not None:
+        fold_timing_rows.append(result["timing_row"])
+    if result.get("chain_max_positions") is not None:
+        chain_state["chain_max_positions"] = int(result.get("chain_max_positions"))
+    if result.get("chain_enable_rotation") is not None:
+        chain_state["chain_enable_rotation"] = bool(result.get("chain_enable_rotation"))
+    status = str(result.get("status", "done"))
+    timing_row = dict(result.get("timing_row") or {})
+    print(
+        f"{C_GREEN if status == 'done' else C_YELLOW}[{fold_idx}/{fold_count}] OOS {oos_year} | PARALLEL FOLD {status} | "
+        f"elapsed={_fmt_duration(float(timing_row.get('fold_total_sec', 0.0) or 0.0))} | "
+        f"log={result.get('log_path', '')}{C_RESET}",
+        flush=True,
+    )
+
+
+def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict]) -> dict:
+    future_map = {executor.submit(_run_outer_rolling_oos_fold_task, task): task for task in tasks}
+    pending = set(future_map)
+    chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
+    started_at = time.perf_counter()
+    last_heartbeat = started_at
+    while pending:
+        done, pending = wait(pending, timeout=10.0, return_when=FIRST_COMPLETED)
+        for future in done:
+            _consume_parallel_fold_future(
+                future=future,
+                task=future_map[future],
+                rows=rows,
+                fold_timing_rows=fold_timing_rows,
+                chain_state=chain_state,
+            )
+        now = time.perf_counter()
+        if pending and (now - last_heartbeat) >= 30.0:
+            active = []
+            for future in sorted(pending, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
+                task = future_map[future]
+                log_path = str(task.get("log_path") or "")
+                log_state = "no-log"
+                try:
+                    if os.path.exists(log_path):
+                        age = max(0.0, time.time() - os.path.getmtime(log_path))
+                        size = os.path.getsize(log_path)
+                        log_state = f"log={size}B age={age:.0f}s"
+                except OSError:
+                    log_state = "log=?"
+                active.append(f"[{int(task['fold_idx'])}/{int(task.get('fold_count', 0) or 0)}] OOS {int(task['oos_year'])} {log_state}")
+            print(
+                f"{C_GRAY}⏱️ Rolling fold parallel running | pending={len(pending)} | elapsed={_fmt_duration(now - started_at)} | "
+                + " ; ".join(active)
+                + f"{C_RESET}",
+                flush=True,
+            )
+            last_heartbeat = now
+    return chain_state
+
+
+def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
+    """Run one rolling fold in an isolated process for timing-mode fold parallelism."""
+    log_path = str((task or {}).get("log_path") or "")
+
+    def _execute() -> dict:
+        from tools.optimizer.main import build_optimizer_session, configure_optuna_logging, _ensure_study_effective_policy_compatible
+        from tools.optimizer.prep import load_all_raw_data
+        from tools.optimizer.runtime import create_optimizer_study
+        from tools.optimizer.session import close_study_storage
+
+        configure_optuna_logging()
+        base_policy = dict(task["base_policy"])
+        config_payload = dict(task["config"])
+        config = OuterRollingConfig(
+            training_start_year=int(config_payload["training_start_year"]),
+            first_oos_year=int(config_payload["first_oos_year"]),
+            last_oos_year=int(config_payload["last_oos_year"]),
+            trials_per_fold=int(config_payload["trials_per_fold"]),
+            window_mode=str(config_payload.get("window_mode", "fixed")),
+            train_window_years=int(config_payload.get("train_window_years", 5)),
+            confirm=False,
+        )
+        output_dir = str(task["output_dir"])
+        selected_data_dir = str(task["selected_data_dir"])
+        session_ts = str(task["session_ts"])
+        optimizer_seed = task.get("optimizer_seed")
+        sampler_kind = str(task.get("sampler_kind", "random") or "random")
+        fold_idx = int(task["fold_idx"])
+        fold_count = int(task["fold_count"])
+        oos_year = int(task["oos_year"])
+        optimizer_required_min_rows = int(task["optimizer_required_min_rows"])
+        fold_workers = int(task.get("fold_workers", 1) or 1)
+        timing_mode = bool(task.get("timing_mode", False))
+
+        fold_start = time.perf_counter()
+        selection_end = int(oos_year) - 1
+        selection_start = _selection_start_for_oos(config, int(oos_year))
+        print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | parallel fold START | selection={selection_start}~{selection_end}", flush=True)
+        fold_policy = dict(base_policy)
+        fold_policy["selection_start_year"] = int(selection_start)
+        fold_policy["train_start_year"] = int(selection_start)
+        fold_policy["search_train_end_year"] = int(selection_end)
+        fold_policy["oos_start_year"] = int(oos_year)
+        fold_policy = build_optimizer_runtime_policy(fold_policy, "split")
+        objective_mode = str(fold_policy.get("objective_mode", "split_train_romd"))
+        session = build_optimizer_session(walk_forward_policy=fold_policy)
+        session.rolling_fold_workers_max = int(fold_workers)
+        session.rolling_fold_parallel = True
+        reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
+        if callable(reset_prep_cache_stats):
+            reset_prep_cache_stats()
+        chain_max_positions = int(session.train_max_positions)
+        chain_enable_rotation = bool(session.train_enable_rotation)
+        session.n_trials = int(config.trials_per_fold)
+        session.disable_milestone_dashboard = True
+        session.timing_mode = bool(timing_mode)
+        db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
+        os.makedirs(db_dir, exist_ok=True)
+        db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
+        db_name = f"sqlite:///{db_file}"
+        study = None
+        try:
+            install_started = time.perf_counter()
+            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
+            session.profile_recorder.init_output_files()
+            session.profile_recorder.mark_run_started()
+            study_started = time.perf_counter()
+            study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
+            _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=fold_policy)
+            study_create_sec = max(0.0, time.perf_counter() - study_started)
+            optimize_started = time.perf_counter()
+            study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[])
+            optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
+
+            local_started = time.perf_counter()
+            finalists = list_local_min_score_finalists(
+                study,
+                session=session,
+                objective_mode=objective_mode,
+                include_trial=None,
+                show_progress=False,
+                include_oos_diagnostics=False,
+                single_finalist_fast_path=True,
+                selection_pruning=True,
+            )
+            local_elapsed = time.perf_counter() - local_started
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | local-min review DONE | finalists={len(finalists)} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            policy_items = _build_policy_items(finalists, objective_mode=objective_mode)
+            if not any(item is not None for item in policy_items.values()):
+                fold_elapsed = time.perf_counter() - fold_start
+                timing_row = _build_outer_timing_row(
+                    fold_idx=fold_idx,
+                    fold_count=fold_count,
+                    oos_year=int(oos_year),
+                    selection_start=int(selection_start),
+                    selection_end=int(selection_end),
+                    status="skipped_no_finalist",
+                    session=session,
+                    db_file=db_file,
+                    install_shared_cache_sec=install_shared_cache_sec,
+                    study_create_sec=study_create_sec,
+                    optimize_sec=optimize_sec,
+                    local_min_review_sec=local_elapsed,
+                    oos_diagnostics_sec=0.0,
+                    fold_total_sec=fold_elapsed,
+                    finalists_count=len(finalists),
+                )
+                return {
+                    "status": "skipped_no_finalist",
+                    "fold_idx": fold_idx,
+                    "oos_year": int(oos_year),
+                    "row": None,
+                    "timing_row": timing_row,
+                    "chain_max_positions": chain_max_positions,
+                    "chain_enable_rotation": chain_enable_rotation,
+                    "log_path": log_path,
+                }
+            local_rank_map = _build_local_rank_map(finalists)
+            retention_rank_map = _build_retention_rank_map(finalists)
+            diagnostics_started = time.perf_counter()
+            diagnostics = _evaluate_finalist_oos_diagnostics(
+                session=session,
+                finalists=finalists,
+                policy_items=policy_items,
+                oos_year=int(oos_year),
+            )
+            oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            fold_elapsed = time.perf_counter() - fold_start
+            selection_period = f"{selection_start}~{selection_end}"
+            policy_schedules = {
+                name: _build_policy_schedule_entry(
+                    item=item,
+                    policy_name=name,
+                    oos_year=int(oos_year),
+                    selection_period=selection_period,
+                    local_rank_map=local_rank_map,
+                    retention_rank_map=retention_rank_map,
+                )
+                for name, item in policy_items.items()
+                if item is not None
+            }
+            row = {
+                "fold": f"{fold_idx}/{fold_count}",
+                "oos_year": int(oos_year),
+                "selection_period": selection_period,
+                "selection_start_year": int(selection_start),
+                "selection_end_year": int(selection_end),
+                "best_finalist_oos_score": float(diagnostics.get("best_finalist_oos_score", 0.0)),
+                "best_finalist_trial": diagnostics.get("best_finalist_trial"),
+                "best_finalist_return_pct": float(diagnostics.get("best_finalist_return_pct", 0.0)),
+                "best_finalist_mdd_pct": float(diagnostics.get("best_finalist_mdd_pct", 0.0)),
+                "best_finalist_trades": int(diagnostics.get("best_finalist_trades", 0) or 0),
+                "best_finalist_initial_capital": float(diagnostics.get("best_finalist_initial_capital", 0.0)),
+                "best_finalist_equity_curve": list(diagnostics.get("best_finalist_equity_curve") or []),
+                "best_finalist_params": dict(diagnostics.get("best_finalist_params") or {}),
+                "benchmark_oos_score": float(diagnostics.get("benchmark_oos_score", 0.0)),
+                "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
+                "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
+                "base": diagnostics.get("policies", {}).get("base", {}),
+                "local": diagnostics.get("policies", {}).get("local", {}),
+                "retention": diagnostics.get("policies", {}).get("retention", {}),
+                "policy_schedules": policy_schedules,
+                "elapsed_sec": float(fold_elapsed),
+                "optimizer_search_sec": float(optimize_sec),
+                "local_min_review_sec": float(local_elapsed),
+                "oos_diagnostics_sec": float(oos_diagnostics_sec),
+                "install_shared_cache_sec": float(install_shared_cache_sec),
+                "study_create_sec": float(study_create_sec),
+            }
+            timing_row = _build_outer_timing_row(
+                fold_idx=fold_idx,
+                fold_count=fold_count,
+                oos_year=int(oos_year),
+                selection_start=int(selection_start),
+                selection_end=int(selection_end),
+                status="done",
+                session=session,
+                db_file=db_file,
+                install_shared_cache_sec=install_shared_cache_sec,
+                study_create_sec=study_create_sec,
+                optimize_sec=optimize_sec,
+                local_min_review_sec=local_elapsed,
+                oos_diagnostics_sec=oos_diagnostics_sec,
+                fold_total_sec=fold_elapsed,
+                finalists_count=len(finalists),
+            )
+            return {
+                "status": "done",
+                "fold_idx": fold_idx,
+                "oos_year": int(oos_year),
+                "row": row,
+                "timing_row": timing_row,
+                "chain_max_positions": chain_max_positions,
+                "chain_enable_rotation": chain_enable_rotation,
+                "log_path": log_path,
+            }
+        finally:
+            session.close_trial_prep_executor()
+            if study is not None:
+                close_study_storage(study)
+
+    if log_path:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "w", encoding="utf-8") as log_handle:
+            with redirect_stdout(log_handle), redirect_stderr(log_handle):
+                return _execute()
+    return _execute()
+
+
+
 def run_outer_rolling_oos(
     *,
     argv,
@@ -1982,16 +2304,24 @@ def run_outer_rolling_oos(
     rolling_shared_local_min_field_order_score_cache = {}
     rolling_shared_prep_executor_holder = {}
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
+    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode))
+    fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     overall_start = time.perf_counter()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
     if bool(timing_mode):
         print(f"{C_GRAY}📏 Timing mode：outer rolling 使用 RandomSampler 重播 trial 組合，並輸出 fold 分段耗時。{C_RESET}")
-    if rolling_shared_prep_cache_max_items > 0:
-        print(f"{C_GRAY}🧠 Rolling shared prep cache：max_items={rolling_shared_prep_cache_max_items}，跨 fold 共用 signal/prep 結果。{C_RESET}")
+    if fold_parallel_enabled:
+        print(f"{C_GRAY}🧠 Rolling shared prep cache：parallel fold mode 使用各 worker 行程內 cache；跨 fold cache 不共享。{C_RESET}")
+        print(f"{C_GRAY}🧠 Rolling shared prep executor：parallel fold mode 使用各 worker 行程內 executor。{C_RESET}")
+        print(f"{C_GRAY}⚡ Rolling fold parallel：enabled | workers={int(fold_workers)} | timing mode only。{C_RESET}")
     else:
-        print(f"{C_GRAY}🧠 Rolling shared prep cache：disabled。{C_RESET}")
-    print(f"{C_GRAY}🧠 Rolling shared prep executor：enabled，跨 fold 保留 worker feature bank。{C_RESET}")
+        if rolling_shared_prep_cache_max_items > 0:
+            print(f"{C_GRAY}🧠 Rolling shared prep cache：max_items={rolling_shared_prep_cache_max_items}，跨 fold 共用 signal/prep 結果。{C_RESET}")
+        else:
+            print(f"{C_GRAY}🧠 Rolling shared prep cache：disabled。{C_RESET}")
+        print(f"{C_GRAY}🧠 Rolling shared prep executor：enabled，跨 fold 保留 worker feature bank。{C_RESET}")
+        print(f"{C_GRAY}⚡ Rolling fold parallel：disabled | workers=1。{C_RESET}")
 
     shared_load_start = time.perf_counter()
     shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
@@ -2009,10 +2339,64 @@ def run_outer_rolling_oos(
     raw_data_load_sec = max(0.0, time.perf_counter() - shared_load_start)
     print(f"{C_CYAN}⏱️ Rolling 共用資料快取完成：raw_data_load_once={raw_data_load_sec:.3f}s | folds={len(years)}{C_RESET}")
 
-    for fold_idx, oos_year in enumerate(years, start=1):
+    if fold_parallel_enabled:
+        log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
+        os.makedirs(log_dir, exist_ok=True)
+        config_payload = {
+            "training_start_year": int(config.training_start_year),
+            "first_oos_year": int(config.first_oos_year),
+            "last_oos_year": int(config.last_oos_year),
+            "trials_per_fold": int(config.trials_per_fold),
+            "window_mode": str(config.window_mode),
+            "train_window_years": int(config.train_window_years),
+        }
+        tasks = []
+        for fold_idx, oos_year in enumerate(years, start=1):
+            selection_end = int(oos_year) - 1
+            selection_start = _selection_start_for_oos(config, int(oos_year))
+            tasks.append({
+                "project_root": str(project_root),
+                "output_dir": str(output_dir),
+                "base_policy": dict(base_policy),
+                "selected_data_dir": str(selected_data_dir),
+                "optimizer_required_min_rows": int(optimizer_required_min_rows),
+                "session_ts": str(session_ts),
+                "config": dict(config_payload),
+                "fold_idx": int(fold_idx),
+                "fold_count": int(len(years)),
+                "oos_year": int(oos_year),
+                "optimizer_seed": optimizer_seed,
+                "sampler_kind": str(sampler_kind),
+                "timing_mode": bool(timing_mode),
+                "fold_workers": int(fold_workers),
+                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
+            })
+            print(f"{C_GRAY}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | queued parallel fold{C_RESET}")
+        with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
+            chain_state = _run_parallel_fold_futures(
+                executor=executor,
+                tasks=tasks,
+                rows=rows,
+                fold_timing_rows=fold_timing_rows,
+            )
+            if chain_state.get("chain_max_positions") is not None:
+                chain_max_positions = int(chain_state.get("chain_max_positions"))
+            if chain_state.get("chain_enable_rotation") is not None:
+                chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
+        rows.sort(key=lambda item: int(item.get("oos_year", 0) or 0))
+        fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
+        for idx, row in enumerate(rows, start=1):
+            row["fold"] = f"{idx}/{len(years)}"
+        if rows:
+            _print_completed_results(rows)
+
+    years_to_run = [] if fold_parallel_enabled else years
+
+    for fold_idx, oos_year in enumerate(years_to_run, start=1):
         fold_start = time.perf_counter()
         selection_end = int(oos_year) - 1
         selection_start = _selection_start_for_oos(config, int(oos_year))
+        print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | parallel fold START | selection={selection_start}~{selection_end}", flush=True)
         fold_policy = dict(base_policy)
         fold_policy["selection_start_year"] = int(selection_start)
         fold_policy["train_start_year"] = int(selection_start)
@@ -2142,6 +2526,7 @@ def run_outer_rolling_oos(
                 oos_year=int(oos_year),
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             fold_elapsed = time.perf_counter() - fold_start
             selection_period = f"{selection_start}~{selection_end}"
             policy_schedules = {
