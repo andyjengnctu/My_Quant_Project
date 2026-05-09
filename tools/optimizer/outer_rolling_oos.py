@@ -90,6 +90,29 @@ def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count:
     return bool(timing_mode) and int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode) > 1
 
 
+def _env_value_for_display(environ, name: str, default: str) -> str:
+    value = None
+    if isinstance(environ, dict):
+        value = environ.get(name)
+    if value is None:
+        value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return str(default)
+    return str(value).strip()
+
+
+def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
+    rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
+    local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
+    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    return (
+        "平行化設定："
+        f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
+        f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
+        f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers}"
+    )
+
+
 def _shutdown_rolling_shared_prep_executor_holder(holder: dict) -> None:
     bundle = holder.pop("bundle", None) if isinstance(holder, dict) else None
     if bundle is None:
@@ -2101,19 +2124,17 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     if stage == "OPTIMIZER_SEARCH":
         completed = int(progress.get("completed", 0) or 0)
         total = int(progress.get("total", 0) or 0)
-        pct = _parallel_progress_pct(completed, total)
         best = progress.get("best_score")
         best_text = "N/A" if best is None else f"{float(best):.3f}"
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
-            f"trial {completed}/{total} ({pct:5.1f}%) | best={best_text}{elapsed_text}"
+            f"trial {completed}/{total} | best={best_text}{elapsed_text}"
         )
     if stage == "LOCAL_MIN_REVIEW":
         finalist_idx = int(progress.get("finalist_idx", 0) or 0)
         finalist_total = int(progress.get("finalist_total", 0) or 0)
         neighbor_done = int(progress.get("neighbor_done", 0) or 0)
         neighbor_total = int(progress.get("neighbor_total", 0) or 0)
-        pct = _parallel_progress_pct(neighbor_done, neighbor_total)
         current = progress.get("current")
         current_text = "N/A" if current is None else f"{float(current):.3f}"
         best = progress.get("best")
@@ -2121,7 +2142,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         status = str(progress.get("status") or "RUN")
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_year} | "
-            f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} ({pct:5.1f}%) | "
+            f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
             f"current={current_text} | best={best_text} | {status}{elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
@@ -2195,7 +2216,10 @@ class _ParallelCompletedResultsBoard:
         if not table:
             return
         title = f"{C_CYAN}📌 Completed fold results ({len(completed)}) | OOS_CHAIN 於全部 fold 完成後才計算{C_RESET}"
-        lines = [title] + table.splitlines()
+        table_lines = table.splitlines()
+        if table_lines and table_lines[0].strip().upper() == "ROLLING NEXT-1Y OOS RESULTS":
+            table_lines = table_lines[1:]
+        lines = [title] + table_lines
         if self.inline:
             if self.rendered_lines > 0:
                 sys.stdout.write(f"\x1b[{self.rendered_lines}F")
@@ -2247,7 +2271,7 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
     print(
         f"{C_GREEN if status == 'done' else C_YELLOW}[{fold_idx}/{fold_count}] OOS {oos_year} | PARALLEL FOLD {status} | "
         f"elapsed={_fmt_duration(float(timing_row.get('fold_total_sec', 0.0) or 0.0))} | "
-        f"completed={len(rows)}/{fold_count} | log={result.get('log_path', '')}{C_RESET}",
+        f"completed={len(rows)}/{fold_count}{C_RESET}",
         flush=True,
     )
 
@@ -2701,6 +2725,7 @@ def run_outer_rolling_oos(
         print(f"{C_GRAY}🧠 Rolling shared prep cache：parallel fold mode 使用各 worker 行程內 cache；跨 fold cache 不共享。{C_RESET}")
         print(f"{C_GRAY}🧠 Rolling shared prep executor：parallel fold mode 使用各 worker 行程內 executor。{C_RESET}")
         print(f"{C_GRAY}⚡ Rolling fold parallel：enabled | workers={int(fold_workers)} | timing mode only。{C_RESET}")
+        print(f"{C_CYAN}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
     else:
         if rolling_shared_prep_cache_max_items > 0:
             print(f"{C_GRAY}🧠 Rolling shared prep cache：max_items={rolling_shared_prep_cache_max_items}，跨 fold 共用 signal/prep 結果。{C_RESET}")
@@ -2757,10 +2782,7 @@ def run_outer_rolling_oos(
                 "fold_workers": int(fold_workers),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
-            print(
-                f"{C_GRAY}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | "
-                f"queued parallel fold | log={tasks[-1]['log_path']}{C_RESET}"
-            )
+            # Fold log path is kept internally for diagnostics, but not printed during normal progress.
         with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
             chain_state = _run_parallel_fold_futures(
                 executor=executor,
@@ -2776,8 +2798,6 @@ def run_outer_rolling_oos(
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
             row["fold"] = f"{idx}/{len(years)}"
-        if rows:
-            _print_completed_results(rows)
 
     years_to_run = [] if fold_parallel_enabled else years
 
@@ -3027,10 +3047,12 @@ def run_outer_rolling_oos(
         overall_sec=max(0.0, time.perf_counter() - overall_start),
         fold_timing_rows=fold_timing_rows,
     )
-    print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
-    print("FINAL REPORT")
-    print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
+    print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
+    if bool(fold_parallel_enabled) and bool(timing_mode):
+        print(f"{C_GRAY}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
+        print(f"{C_GRAY}parallel timing mode：完整 fold 結果與 OOS_CHAIN 已寫入 timing JSON；console 不重複輸出 OVERALL SUMMARY / OOS_CHAIN 表格。{C_RESET}")
+    else:
+        print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
