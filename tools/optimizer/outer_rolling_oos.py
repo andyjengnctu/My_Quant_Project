@@ -1035,7 +1035,7 @@ def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
     return int(config.training_start_year)
 
 
-def _print_plan(config: OuterRollingConfig):
+def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
@@ -1049,6 +1049,8 @@ def _print_plan(config: OuterRollingConfig):
     print("promotion        : disabled")
     print("oos horizon      : next 1 year only")
     print(f"optimizer trials : {config.trials_per_fold} per fold")
+    if parallel_settings_line:
+        print(str(parallel_settings_line))
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"{'fold':<6} | {'selection period':<18} | {'OOS test period':<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
@@ -1345,6 +1347,23 @@ def _format_resource_usage_line(summary: dict, *, prefix: str = "⏱️ CPU/MEM/
         f"mode={mode}{C_RESET}"
     )
 
+
+
+def _format_resource_brief_line(summary: dict, *, prefix: str = "📏 效能摘要") -> str:
+    summary = dict(summary or {})
+    if not bool(summary.get("resource_sampling_available", False)):
+        err = str(summary.get("resource_sampling_error", "") or "unavailable")
+        return f"{prefix}: {C_CYAN}resource unavailable｜{err}{C_RESET}"
+    cpu_avg = float(summary.get("cpu_avg_percent", 0.0) or 0.0)
+    mem_avg = float(summary.get("memory_avg_percent", 0.0) or 0.0)
+    hd_avg = float(summary.get("disk_load_avg_percent", summary.get("disk_busy_avg_percent", 0.0)) or 0.0)
+    return (
+        f"{prefix}: "
+        f"{C_CYAN}CPU avg = {cpu_avg:.1f}%｜"
+        f"MEM avg = {mem_avg:.1f}%｜"
+        f"HD avg = {hd_avg:.1f}%{C_RESET}"
+    )
+
 def _print_outer_timing_summary(payload: dict):
     summary = dict((payload or {}).get("summary") or {})
     meta = dict((payload or {}).get("meta") or {})
@@ -1375,7 +1394,6 @@ def _print_outer_timing_summary(payload: dict):
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
-    print(_format_resource_usage_line(summary, prefix="📏 CPU/MEM/HD 摘要"))
 
 
 
@@ -2064,20 +2082,16 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
             if str(policy_name) not in policies:
                 policies.append(str(policy_name))
     total = len(records)
-    previous_width = 0
-    supports_inline = stdout_supports_inline_progress()
     policy_names = "/".join(sorted({policy for record in records for policy in record.get("_policies", [])})) or "N/A"
     replay_context_start = time.perf_counter()
     for idx, record in enumerate(records, start=1):
         signature = str(record["params_signature"])
         policies_text = ",".join(record.get("_policies", [])) or "N/A"
-        message = (
+        print(
             f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
             f"policies={policies_text} | effective={record.get('effective_date_text')} | "
             f"signature={signature[:8]} | elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
         )
-        if supports_inline:
-            previous_width = write_inline_progress(message, previous_width=previous_width)
         context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
         context = dict(context)
         if not context.get("all_pit_stats_index"):
@@ -2093,11 +2107,7 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
             f"contexts={total}/{total} | policies={policy_names} | "
             f"elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
         )
-        if supports_inline:
-            write_inline_progress(summary, previous_width=previous_width)
-            print()
-        else:
-            print(summary)
+        print(summary)
     return contexts_by_signature
 
 def _merge_active_replay_market_dates(contexts_by_signature: dict[str, dict]) -> list:
@@ -3512,7 +3522,12 @@ def run_outer_rolling_oos(
     latest_year = _resolve_latest_year_from_csv_data_dir(selected_data_dir)
 
     config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials, timing_mode=bool(timing_mode))
-    _print_plan(config)
+    years = list(range(config.first_oos_year, config.last_oos_year + 1))
+    _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    parallel_settings_line = _format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None
+    _print_plan(config, parallel_settings_line=parallel_settings_line)
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
         return 0
@@ -3527,17 +3542,10 @@ def run_outer_rolling_oos(
     rolling_shared_local_min_order_score_cache = {}
     rolling_shared_local_min_field_order_score_cache = {}
     rolling_shared_prep_executor_holder = {}
-    years = list(range(config.first_oos_year, config.last_oos_year + 1))
-    _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
-    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
-    fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     overall_start = time.perf_counter()
     resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
     resource_sampler.start()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
-    print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
-    if fold_parallel_enabled:
-        print(f"{C_CYAN}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
 
     shared_raw_context = None
     if fold_parallel_enabled:
@@ -3866,7 +3874,7 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
-    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
+    print(_format_resource_brief_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
