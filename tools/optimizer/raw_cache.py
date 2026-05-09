@@ -126,12 +126,14 @@ def _print_load_summary(*, fresh_raw_data_cache, totals, load_issues, issue_path
     dropped_rows = int(totals.get('total_dropped_rows', 0))
     invalid_rows = int(totals.get('total_invalid_rows', 0))
     duplicate_dates = int(totals.get('total_duplicate_dates', 0))
+    issue_text = ""
+    if load_issues and issue_path:
+        issue_text = f"｜資料載入/清洗摘要={len(load_issues)}筆（已寫入 issue log）"
     print(
         f"{C_GREEN}📦 歷史資料：{source_text}｜標的={len(fresh_raw_data_cache)}｜"
-        f"清洗移除={dropped_rows}列（異常OHLCV={invalid_rows}, 重複日期={duplicate_dates}）{C_RESET}"
+        f"清洗移除={dropped_rows}列（異常OHLCV={invalid_rows}, 重複日期={duplicate_dates}）"
+        f"{issue_text}{C_RESET}"
     )
-    if load_issues and issue_path:
-        print(f"{C_YELLOW}⚠️ 資料載入/清洗摘要共 {len(load_issues)} 筆，已寫入 issue log{C_RESET}")
 
 def is_insufficient_data_message(message):
     return isinstance(message, str) and ("有效資料不足" in message)

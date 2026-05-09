@@ -273,7 +273,7 @@ def _resolve_latest_year_from_csv_data_dir(data_dir: str) -> int | None:
     return latest_year
 
 
-def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, default_trials: int) -> OuterRollingConfig:
+def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None, default_trials: int, timing_mode: bool = False) -> OuterRollingConfig:
     env = os.environ if environ is None else environ
     train_start_default = int(base_policy.get("train_start_year", 2016) or 2016)
     first_oos_default = int(base_policy.get("oos_start_year") or base_policy.get("search_train_end_year", train_start_default + 4) + 1)
@@ -295,11 +295,15 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         window_mode = str(cli_window_mode).strip().lower()
         if window_mode not in ("fixed", "expanding"):
             raise ValueError("--outer-window-mode 必須是 fixed 或 expanding")
+    elif bool(timing_mode):
+        window_mode = window_mode_default
     else:
         window_mode = _prompt_str("window mode", window_mode_default, allowed=("fixed", "expanding"))
 
     if cli_train_window_years:
         train_window_years = int(cli_train_window_years)
+    elif bool(timing_mode):
+        train_window_years = train_window_default
     else:
         train_window_years = _prompt_int("train window years", train_window_default, minimum=1)
 
@@ -307,6 +311,8 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         train_start = int(cli_train_start)
     elif str(env.get("V16_OUTER_ROLLING_TRAIN_START", "")).strip():
         train_start = int(str(env["V16_OUTER_ROLLING_TRAIN_START"]).strip())
+    elif bool(timing_mode):
+        train_start = train_start_default
     else:
         train_start = _prompt_int("training start year", train_start_default, minimum=1900)
 
@@ -314,6 +320,8 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         first_oos = int(cli_first)
     elif str(env.get("V16_OUTER_ROLLING_FIRST_OOS", "")).strip():
         first_oos = int(str(env["V16_OUTER_ROLLING_FIRST_OOS"]).strip())
+    elif bool(timing_mode):
+        first_oos = first_oos_default
     else:
         first_oos = _prompt_int("first OOS year", first_oos_default, minimum=train_start + 1)
 
@@ -321,11 +329,15 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
         last_oos = int(cli_last)
     elif str(env.get("V16_OUTER_ROLLING_LAST_OOS", "")).strip():
         last_oos = int(str(env["V16_OUTER_ROLLING_LAST_OOS"]).strip())
+    elif bool(timing_mode):
+        last_oos = last_oos_default
     else:
         last_oos = _prompt_int("last OOS year", last_oos_default, minimum=first_oos)
 
     if cli_trials:
         trials = int(cli_trials)
+    elif bool(timing_mode):
+        trials = trials_default
     else:
         trials = _prompt_int("optimizer trials per fold", trials_default, minimum=1)
 
@@ -1996,33 +2008,8 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
     return summary
 
 def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False) -> str:
-    lines = []
-    lines.append("=" * 218)
-    lines.append("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
-    lines.append("=" * 218)
-    lines.append("OVERALL SUMMARY")
-    lines.append("-" * 218)
-    if rows:
-        lines.append(f"folds                    : {summary['folds']}")
-        lines.append(f"selection_period         : {summary['selection_period']}")
-        lines.append(f"oos_period               : {summary['oos_period']}")
-        lines.append(f"aggregation_method       : {summary.get('aggregation_method', 'N/A')}")
-        for policy_name in ("base", "local", "retention"):
-            item = summary.get(policy_name) or {}
-            lines.append(
-                f"{policy_name:<24}: chain_score={float(item.get('chained_oos_score', 0.0)):.{OOS_SCORE_DECIMALS}f} | "
-                f"chain_return={float(item.get('chained_return_pct', 0.0)):.2f}% | "
-                f"gap_vs_0050={float(item.get('chained_gap_vs_0050_pct', 0.0)):+.2f}% | "
-                f"positive_years={int(item.get('positive_years', 0))}/{int(item.get('total_years', 0))}"
-            )
-        bench = summary.get("benchmark_0050") or {}
-        lines.append(
-            f"benchmark_0050           : chain_score={float(bench.get('chained_oos_score', 0.0)):.{OOS_SCORE_DECIMALS}f} | "
-            f"chain_return={float(bench.get('chained_return_pct', 0.0)):.2f}% | "
-            f"positive_years={int(bench.get('positive_years', 0))}/{int(bench.get('total_years', 0))}"
-        )
-    lines.append("-" * 218)
     rendered = _render_results_table(rows, color=color, include_chain=True, chained_override=summary.get("chained_oos"))
+    lines = []
     if rendered:
         lines.append(rendered)
     lines.append("oos_feedback_used : False")
@@ -2697,7 +2684,7 @@ def run_outer_rolling_oos(
 
     latest_year = _resolve_latest_year_from_csv_data_dir(selected_data_dir)
 
-    config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials)
+    config = _resolve_config(argv, environ, base_policy=base_policy, latest_year=latest_year, default_trials=default_trials, timing_mode=bool(timing_mode))
     _print_plan(config)
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
@@ -2719,20 +2706,8 @@ def run_outer_rolling_oos(
     overall_start = time.perf_counter()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     print(f"{C_CYAN}開始 outer rolling OOS：資料集={dataset_label} | folds={len(years)} | trials/fold={config.trials_per_fold}{C_RESET}")
-    if bool(timing_mode):
-        print(f"{C_GRAY}📏 Timing mode：outer rolling 使用 RandomSampler 重播 trial 組合，並輸出 fold 分段耗時。{C_RESET}")
     if fold_parallel_enabled:
-        print(f"{C_GRAY}🧠 Rolling shared prep cache：parallel fold mode 使用各 worker 行程內 cache；跨 fold cache 不共享。{C_RESET}")
-        print(f"{C_GRAY}🧠 Rolling shared prep executor：parallel fold mode 使用各 worker 行程內 executor。{C_RESET}")
-        print(f"{C_GRAY}⚡ Rolling fold parallel：enabled | workers={int(fold_workers)} | timing mode only。{C_RESET}")
         print(f"{C_CYAN}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
-    else:
-        if rolling_shared_prep_cache_max_items > 0:
-            print(f"{C_GRAY}🧠 Rolling shared prep cache：max_items={rolling_shared_prep_cache_max_items}，跨 fold 共用 signal/prep 結果。{C_RESET}")
-        else:
-            print(f"{C_GRAY}🧠 Rolling shared prep cache：disabled。{C_RESET}")
-        print(f"{C_GRAY}🧠 Rolling shared prep executor：enabled，跨 fold 保留 worker feature bank。{C_RESET}")
-        print(f"{C_GRAY}⚡ Rolling fold parallel：disabled | workers=1。{C_RESET}")
 
     shared_load_start = time.perf_counter()
     shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")
@@ -3048,11 +3023,7 @@ def run_outer_rolling_oos(
         fold_timing_rows=fold_timing_rows,
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
-    if bool(fold_parallel_enabled) and bool(timing_mode):
-        print(f"{C_GRAY}{_format_parallel_settings_line(environ, fold_workers=int(fold_workers))}{C_RESET}")
-        print(f"{C_GRAY}parallel timing mode：完整 fold 結果與 OOS_CHAIN 已寫入 timing JSON；console 不重複輸出 OVERALL SUMMARY / OOS_CHAIN 表格。{C_RESET}")
-    else:
-        print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
+    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
