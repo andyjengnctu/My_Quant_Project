@@ -4,6 +4,7 @@ import os
 #
 # 本檔只放會影響訓練時間、記憶體、process/cache 併發行為的設定。
 # 策略口徑、分數口徑與交易規則仍維持在 training_policy.py / execution_policy.py。
+# 一般 outer rolling 與 timing outer rolling 預設共用本檔，避免效能口徑分叉。
 
 # OPTIMIZER_ROLLING_FOLD_WORKERS:
 # - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
@@ -59,7 +60,7 @@ def resolve_optimizer_rolling_parallel_prep_cache_max_items_default():
 def resolve_optimizer_feature_bank_max_items_default():
     return _coerce_int(
         OPTIMIZER_FEATURE_BANK_MAX_ITEMS,
-        default=2048,
+        default=1024,
         min_value=0,
         max_value=65536,
     )

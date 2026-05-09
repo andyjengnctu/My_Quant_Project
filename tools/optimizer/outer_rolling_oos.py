@@ -79,9 +79,8 @@ def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
 
 
 def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int | None = None) -> int:
-    default_workers = 1
-    if bool(timing_mode) and fold_count is not None:
-        default_workers = resolve_optimizer_rolling_fold_workers_default(fold_count)
+    _ = timing_mode  # 一般模式與 timing mode 共用 training_performance_policy.py 的同一套效能預設。
+    default_workers = resolve_optimizer_rolling_fold_workers_default(fold_count) if fold_count is not None else 1
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_FOLD_WORKERS")
     if raw_value is None:
         raw_value = os.environ.get("OPTIMIZER_ROLLING_FOLD_WORKERS", str(default_workers))
@@ -89,21 +88,19 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int
         resolved = int(raw_value)
     except (TypeError, ValueError):
         resolved = default_workers
-    if bool(timing_mode) and fold_count is not None:
+    if fold_count is not None:
         try:
             max_workers = max(1, int(fold_count))
         except (TypeError, ValueError):
             max_workers = 8
     else:
         max_workers = 8
-    resolved = max(1, min(max_workers, resolved))
-    if not bool(timing_mode):
-        return 1
-    return resolved
+    return max(1, min(max_workers, resolved))
 
 
 def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:
-    return bool(timing_mode) and int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode, fold_count=fold_count) > 1
+    _ = timing_mode  # timing mode 不再是 rolling fold 平行化的必要條件；正式模式也使用同一效能口徑。
+    return int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode, fold_count=fold_count) > 1
 
 
 def _env_value_for_display(environ, name: str, default: str) -> str:
@@ -139,6 +136,7 @@ def _env_flag(environ, name: str, default: bool) -> bool:
 
 
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
+    _ = timing_mode  # 本函式只處理效能/資源預設；正式模式與 timing mode 應盡可能一致。
     _set_env_default(environ, "OPTIMIZER_PROFILE_WRITE_FILES", "0")
     _set_env_default(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory")
     _set_env_default(environ, "OPTIMIZER_RESOURCE_WRITE_CSV", "0")
@@ -146,12 +144,11 @@ def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fo
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", "1")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", "0")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", "0")
-    if bool(timing_mode):
-        _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(resolve_optimizer_rolling_fold_workers_default(fold_count)))
-        _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
-        _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
-        _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()))
-        _set_env_default(environ, "OPTIMIZER_FEATURE_BANK_MAX_ITEMS", str(resolve_optimizer_feature_bank_max_items_default()))
+    _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(resolve_optimizer_rolling_fold_workers_default(fold_count)))
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()))
+    _set_env_default(environ, "OPTIMIZER_FEATURE_BANK_MAX_ITEMS", str(resolve_optimizer_feature_bank_max_items_default()))
 
 
 def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
@@ -181,6 +178,158 @@ def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
         f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items} | "
         f"OPTIMIZER_FEATURE_BANK_MAX_ITEMS={feature_bank_max_items}"
     )
+
+
+def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold_workers: int, sampler_kind: str) -> list[dict]:
+    rolling_workers_text = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
+    local_min_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
+    local_min_process_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    parallel_cache_text = _env_value_for_display(
+        environ,
+        "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
+        str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()),
+    )
+    feature_bank_text = _env_value_for_display(
+        environ,
+        "OPTIMIZER_FEATURE_BANK_MAX_ITEMS",
+        str(resolve_optimizer_feature_bank_max_items_default()),
+    )
+    profile_write_files = "on" if _env_flag(environ, "OPTIMIZER_PROFILE_WRITE_FILES", False) else "off"
+    study_storage = _env_value_for_display(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory")
+    resource_write_csv = "on" if _env_flag(environ, "OPTIMIZER_RESOURCE_WRITE_CSV", False) else "off"
+    replay_trade_logs = "on" if _env_flag(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_TRADE_LOGS", False) else "off"
+    replay_pit_stats = "on" if _env_flag(environ, "OPTIMIZER_ACTIVE_REPLAY_INCLUDE_PIT_STATS_INDEX", True) else "off"
+    replay_use_cache = "on" if _env_flag(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", False) else "off"
+    replay_write_cache = "on" if _env_flag(environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", False) else "off"
+    field_order = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER", "hard_fail_first")
+    portfolio_order = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER", "last")
+    dep_stats = "on" if _env_flag(environ, "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED", True) else "off"
+
+    rows = [
+        {
+            "item": "rolling_fold_workers",
+            "normal_mode": rolling_workers_text,
+            "timing_mode": rolling_workers_text,
+            "consistent": True,
+            "result_scope": "不改單一 fold 計算；只改不同年度 fold 的執行順序",
+            "display": "console plan / timing JSON summary / timing CSV fold rows",
+        },
+        {
+            "item": "rolling_fold_parallel",
+            "normal_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
+            "timing_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
+            "consistent": True,
+            "result_scope": "年度 fold 彼此獨立；正式 OOS_CHAIN 仍在所有 fold 完成後重算",
+            "display": "console plan / timing JSON summary: rolling_fold_parallel",
+        },
+        {
+            "item": "study_storage",
+            "normal_mode": study_storage,
+            "timing_mode": study_storage,
+            "consistent": True,
+            "result_scope": "不改分數；只避免 sqlite I/O",
+            "display": "timing JSON summary: study_storage",
+        },
+        {
+            "item": "profile_write_files",
+            "normal_mode": profile_write_files,
+            "timing_mode": profile_write_files,
+            "consistent": True,
+            "result_scope": "不改分數；只減少 profile 檔案輸出",
+            "display": "timing JSON summary: profile_write_files",
+        },
+        {
+            "item": "parallel_worker_prep_cache",
+            "normal_mode": parallel_cache_text,
+            "timing_mode": parallel_cache_text,
+            "consistent": True,
+            "result_scope": "不改分數；0 表示 parallel worker 不保留大型 prepared input cache",
+            "display": "console plan / timing JSON summary: parallel_worker_prep_cache_max_items",
+        },
+        {
+            "item": "feature_bank_max_items",
+            "normal_mode": feature_bank_text,
+            "timing_mode": feature_bank_text,
+            "consistent": True,
+            "result_scope": "不改特徵計算值；只限制 worker feature cache 大小",
+            "display": "console plan / timing JSON summary: prep_feature_bank_max_items",
+        },
+        {
+            "item": "local_min_workers",
+            "normal_mode": f"thread={local_min_workers_text}, process={local_min_process_workers_text}",
+            "timing_mode": f"thread={local_min_workers_text}, process={local_min_process_workers_text}",
+            "consistent": True,
+            "result_scope": "不改 local_min 定義；只固定同 fold 內鄰點評估併發口徑",
+            "display": "console plan / timing JSON summary: local_min_parallel_workers_max",
+        },
+        {
+            "item": "local_min_dependency_order",
+            "normal_mode": f"portfolio={portfolio_order}, signal={field_order}",
+            "timing_mode": f"portfolio={portfolio_order}, signal={field_order}",
+            "consistent": True,
+            "result_scope": "不改鄰點集合；只改 early-stop 前的鄰點排序",
+            "display": "timing JSON summary: local_min_portfolio_dependency_deprioritized / local_min_signal_dependency_field_prioritized",
+        },
+        {
+            "item": "local_min_dependency_stats",
+            "normal_mode": dep_stats,
+            "timing_mode": dep_stats,
+            "consistent": True,
+            "result_scope": "只新增觀測欄位",
+            "display": "console timing summary / timing JSON summary / timing CSV fold rows",
+        },
+        {
+            "item": "resource_csv",
+            "normal_mode": resource_write_csv,
+            "timing_mode": resource_write_csv,
+            "consistent": True,
+            "result_scope": "不改分數；只控制 resource 明細 CSV",
+            "display": "timing JSON summary: resource_write_csv / resource_csv_rows",
+        },
+        {
+            "item": "active_replay_lightweight",
+            "normal_mode": f"trade_logs={replay_trade_logs}, pit_stats={replay_pit_stats}, use_cache={replay_use_cache}, write_cache={replay_write_cache}",
+            "timing_mode": f"trade_logs={replay_trade_logs}, pit_stats={replay_pit_stats}, use_cache={replay_use_cache}, write_cache={replay_write_cache}",
+            "consistent": True,
+            "result_scope": "不改 OOS_CHAIN 權益曲線；只控制附帶 trade log/cache 輸出",
+            "display": "timing JSON summary: active_replay_*",
+        },
+        {
+            "item": "sampler_kind",
+            "normal_mode": str(sampler_kind),
+            "timing_mode": "random",
+            "consistent": str(sampler_kind).strip().lower() == "random",
+            "result_scope": "正式模式保留 TPE 選參；timing mode 保留 random 量測口徑，這是刻意差異",
+            "display": "timing JSON root: sampler_kind / console final timing summary",
+        },
+        {
+            "item": "formal_outputs",
+            "normal_mode": "results + paramsets + timing json/csv",
+            "timing_mode": "timing json/csv only",
+            "consistent": False,
+            "result_scope": "輸出範圍刻意不同；不影響計算口徑",
+            "display": "console output paths",
+        },
+    ]
+    return rows
+
+
+def _format_training_performance_alignment_table(rows: list[dict]) -> str:
+    rows = list(rows or [])
+    if not rows:
+        return ""
+    header = f"{'效能項目':<34} | {'一般模式':<34} | {'timing模式':<34} | {'一致':<4} | 顯示方式"
+    sep = "-" * max(100, len(header))
+    lines = ["訓練效能設定對照", sep, header, sep]
+    for row in rows:
+        item = str(row.get("item", ""))[:34]
+        normal = str(row.get("normal_mode", ""))[:34]
+        timing = str(row.get("timing_mode", ""))[:34]
+        consistent = "是" if bool(row.get("consistent", False)) else "否"
+        display = str(row.get("display", ""))
+        lines.append(f"{item:<34} | {normal:<34} | {timing:<34} | {consistent:<4} | {display}")
+    lines.append(sep)
+    return "\n".join(lines)
 
 
 def _shutdown_rolling_shared_prep_executor_holder(holder: dict) -> None:
@@ -1067,7 +1216,7 @@ def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
     return int(config.training_start_year)
 
 
-def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
+def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None, performance_alignment_rows: list[dict] | None = None):
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print("OUTER ROLLING OOS TEST | VERY NEXT 1 YEAR")
@@ -1083,6 +1232,9 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
     print(f"optimizer trials : {config.trials_per_fold} per fold")
     if parallel_settings_line:
         print(str(parallel_settings_line))
+    alignment_table = _format_training_performance_alignment_table(list(performance_alignment_rows or []))
+    if alignment_table:
+        print(alignment_table)
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"{'fold':<6} | {'selection period':<18} | {'OOS test period':<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
@@ -1303,6 +1455,7 @@ def _write_outer_timing_summary(
     fold_timing_rows: list[dict],
     resource_summary: dict | None = None,
     resource_samples: list[dict] | None = None,
+    performance_alignment_rows: list[dict] | None = None,
 ) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
     os.makedirs(report_dir, exist_ok=True)
@@ -1402,6 +1555,7 @@ def _write_outer_timing_summary(
             "fold_count": len(fold_timing_rows),
             "completed_trials": int(completed_trials),
         },
+        "training_performance_alignment": list(performance_alignment_rows or []),
         "summary": {
             "overall_sec": float(overall_sec),
             "raw_data_load_once_sec": float(raw_data_load_sec),
@@ -3918,7 +4072,16 @@ def run_outer_rolling_oos(
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
-    _print_plan(config, parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None)
+    _print_plan(
+        config,
+        parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None,
+        performance_alignment_rows=_build_training_performance_alignment_rows(
+            environ,
+            fold_count=fold_count,
+            fold_workers=int(fold_workers),
+            sampler_kind=("random" if bool(timing_mode) else "tpe"),
+        ),
+    )
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
         return 0
@@ -3937,6 +4100,12 @@ def run_outer_rolling_oos(
     resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
     resource_sampler.start()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
+    performance_alignment_rows = _build_training_performance_alignment_rows(
+        environ,
+        fold_count=fold_count,
+        fold_workers=int(fold_workers),
+        sampler_kind=sampler_kind,
+    )
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
@@ -4265,6 +4434,7 @@ def run_outer_rolling_oos(
         fold_timing_rows=fold_timing_rows,
         resource_summary=resource_sampler.summary(),
         resource_samples=resource_sampler.samples,
+        performance_alignment_rows=performance_alignment_rows,
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
