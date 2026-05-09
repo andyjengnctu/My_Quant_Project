@@ -2012,7 +2012,6 @@ def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False
     lines = []
     if rendered:
         lines.append(rendered)
-    lines.append("oos_feedback_used : False")
     return "\n".join(lines) + "\n"
 
 
@@ -2224,6 +2223,87 @@ class _ParallelCompletedResultsBoard:
             self.rendered_lines = 0
 
 
+class _ParallelFoldLiveBoard:
+    """Render parallel-fold progress and completed results as one refresh block."""
+
+    def __init__(self, tasks: list[dict]):
+        self.tasks = sorted(list(tasks or []), key=lambda item: int(item.get("fold_idx", 0) or 0))
+        self.inline = stdout_supports_inline_progress()
+        self.started_at = time.perf_counter()
+        self.rendered_lines = 0
+        self.last_lines: list[str] = []
+        self.last_render_key: list[str] = []
+
+    def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict]) -> list[str]:
+        completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
+        completed_oos = {int(row.get("oos_year", 0) or 0) for row in completed_rows_sorted}
+        header = (
+            f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
+            f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
+        )
+        lines: list[str] = [f"{C_GRAY}{header}{C_RESET}"]
+        for task in self.tasks:
+            log_path = str(task.get("log_path") or "")
+            progress = _read_latest_parallel_fold_progress(log_path)
+            if int(task.get("oos_year", 0) or 0) in completed_oos and not progress:
+                progress = {
+                    "stage": "DONE",
+                    "status": "done",
+                    "fold_idx": int(task.get("fold_idx", 0) or 0),
+                    "fold_count": int(task.get("fold_count", 0) or 0),
+                    "oos_year": int(task.get("oos_year", 0) or 0),
+                }
+            log_status = _latest_parallel_fold_log_status(log_path)
+            lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
+        if completed_rows_sorted:
+            table = _render_results_table(completed_rows_sorted, color=True, include_chain=False)
+            if table:
+                lines.append("")
+                lines.append(f"{C_CYAN}📌 Completed fold results ({len(completed_rows_sorted)}) | OOS_CHAIN 於全部 fold 完成後才計算{C_RESET}")
+                lines.extend(table.splitlines())
+        return lines
+
+    @staticmethod
+    def _stable_render_key(lines: list[str]) -> list[str]:
+        # Ignore elapsed-only heartbeat changes; refresh when fold progress or completed results change.
+        key: list[str] = []
+        for line in list(lines or []):
+            text = str(line)
+            if " | elapsed=" in text:
+                text = text.split(" | elapsed=", 1)[0]
+            key.append(text)
+        return key
+
+    def render(self, *, pending: set, future_map: dict, completed_rows: list[dict], force: bool = False) -> None:
+        lines = self._build_lines(pending=pending, future_map=future_map, completed_rows=completed_rows)
+        render_key = self._stable_render_key(lines)
+        if not force and render_key == self.last_render_key:
+            return
+        self.last_lines = list(lines)
+        self.last_render_key = list(render_key)
+        if self.inline:
+            if self.rendered_lines > 0:
+                sys.stdout.write(f"\x1b[{self.rendered_lines}F")
+            for line in lines:
+                sys.stdout.write("\r" + line + "\x1b[K\n")
+            if self.rendered_lines > len(lines):
+                for _ in range(self.rendered_lines - len(lines)):
+                    sys.stdout.write("\r\x1b[K\n")
+            sys.stdout.flush()
+            self.rendered_lines = len(lines)
+        else:
+            # Non-interactive outputs cannot refresh safely; print only on meaningful changes.
+            print("\n".join(lines), flush=True)
+            self.rendered_lines = 0
+
+    def close(self) -> None:
+        if self.inline and self.rendered_lines > 0:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        self.rendered_lines = 0
+
+
+
 def _print_parallel_fold_result(row: dict) -> None:
     if not row:
         return
@@ -2253,39 +2333,28 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
         chain_state["chain_max_positions"] = int(result.get("chain_max_positions"))
     if result.get("chain_enable_rotation") is not None:
         chain_state["chain_enable_rotation"] = bool(result.get("chain_enable_rotation"))
-    status = str(result.get("status", "done"))
-    timing_row = dict(result.get("timing_row") or {})
-    print(
-        f"{C_GREEN if status == 'done' else C_YELLOW}[{fold_idx}/{fold_count}] OOS {oos_year} | PARALLEL FOLD {status} | "
-        f"elapsed={_fmt_duration(float(timing_row.get('fold_total_sec', 0.0) or 0.0))} | "
-        f"completed={len(rows)}/{fold_count}{C_RESET}",
-        flush=True,
-    )
 
 
 def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict]) -> dict:
     future_map = {executor.submit(_run_outer_rolling_oos_fold_task, task): task for task in tasks}
     pending = set(future_map)
     chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
-    progress_board = _ParallelFoldProgressBoard(tasks)
-    results_board = _ParallelCompletedResultsBoard()
-    progress_board.update(pending=pending, future_map=future_map, completed_rows=rows, force=True)
-    while pending:
-        done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
-        if done:
-            progress_board.close()
-        for future in sorted(done, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
-            _consume_parallel_fold_future(
-                future=future,
-                task=future_map[future],
-                rows=rows,
-                fold_timing_rows=fold_timing_rows,
-                chain_state=chain_state,
-            )
-            results_board.render(rows)
-        progress_board.update(pending=pending, future_map=future_map, completed_rows=rows, force=bool(done))
-    progress_board.close()
-    results_board.close()
+    live_board = _ParallelFoldLiveBoard(tasks)
+    live_board.render(pending=pending, future_map=future_map, completed_rows=rows, force=True)
+    try:
+        while pending:
+            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            for future in sorted(done, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
+                _consume_parallel_fold_future(
+                    future=future,
+                    task=future_map[future],
+                    rows=rows,
+                    fold_timing_rows=fold_timing_rows,
+                    chain_state=chain_state,
+                )
+            live_board.render(pending=pending, future_map=future_map, completed_rows=rows, force=bool(done))
+    finally:
+        live_board.close()
     return chain_state
 
 class _FoldLogSearchProgress:
