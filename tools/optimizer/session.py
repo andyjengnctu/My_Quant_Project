@@ -111,6 +111,9 @@ class OptimizerSession:
             "parallel_submitted": 0,
             "parallel_completed": 0,
             "parallel_cancelled": 0,
+            "hard_fail_stops": 0,
+            "hard_fail_neighbors_skipped": 0,
+            "hard_fail_cancelled": 0,
         }
         self.local_min_order_score_cache = {}
         self.local_min_field_order_score_cache = {}
@@ -210,6 +213,9 @@ class OptimizerSession:
             "parallel_submitted": 0,
             "parallel_completed": 0,
             "parallel_cancelled": 0,
+            "hard_fail_stops": 0,
+            "hard_fail_neighbors_skipped": 0,
+            "hard_fail_cancelled": 0,
         }
 
     def record_local_min_review_stats(
@@ -227,6 +233,9 @@ class OptimizerSession:
         parallel_submitted=0,
         parallel_completed=0,
         parallel_cancelled=0,
+        hard_fail_stopped=False,
+        hard_fail_neighbors_skipped=0,
+        hard_fail_cancelled=0,
     ):
         with self._local_min_stats_lock:
             stats = self.local_min_review_stats
@@ -240,6 +249,10 @@ class OptimizerSession:
             stats["parallel_submitted"] = int(stats.get("parallel_submitted", 0)) + int(parallel_submitted or 0)
             stats["parallel_completed"] = int(stats.get("parallel_completed", 0)) + int(parallel_completed or 0)
             stats["parallel_cancelled"] = int(stats.get("parallel_cancelled", 0)) + int(parallel_cancelled or 0)
+            stats["hard_fail_neighbors_skipped"] = int(stats.get("hard_fail_neighbors_skipped", 0)) + int(hard_fail_neighbors_skipped or 0)
+            stats["hard_fail_cancelled"] = int(stats.get("hard_fail_cancelled", 0)) + int(hard_fail_cancelled or 0)
+            if bool(hard_fail_stopped):
+                stats["hard_fail_stops"] = int(stats.get("hard_fail_stops", 0)) + 1
             if bool(early_stopped):
                 stats["early_stops"] = int(stats.get("early_stops", 0)) + 1
             if bool(selection_pruned):
@@ -264,6 +277,9 @@ class OptimizerSession:
             "parallel_submitted": int(stats.get("parallel_submitted", 0) or 0),
             "parallel_completed": int(stats.get("parallel_completed", 0) or 0),
             "parallel_cancelled": int(stats.get("parallel_cancelled", 0) or 0),
+            "hard_fail_stops": int(stats.get("hard_fail_stops", 0) or 0),
+            "hard_fail_neighbors_skipped": int(stats.get("hard_fail_neighbors_skipped", 0) or 0),
+            "hard_fail_cancelled": int(stats.get("hard_fail_cancelled", 0) or 0),
         }
 
     def get_prep_cache_stats(self):

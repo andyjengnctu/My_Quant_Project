@@ -401,7 +401,16 @@ def _update_local_min_order_hints(session, center_payload: dict, payload: dict, 
                 field_score_cache[delta_key] = float(score)
 
 
+def _is_local_min_hard_fail_score(score) -> bool:
+    try:
+        return float(score) <= float(INVALID_TRIAL_VALUE)
+    except (TypeError, ValueError):
+        return False
+
+
 def _should_stop_local_min(local_min_score: float, selection_prune_floor) -> tuple[bool, bool]:
+    if _is_local_min_hard_fail_score(local_min_score):
+        return True, False
     if float(local_min_score) <= 0.0:
         return True, False
     if selection_prune_floor is not None and float(local_min_score) < float(selection_prune_floor):
@@ -426,6 +435,9 @@ def _evaluate_local_min_neighbors_ordered(
         payload_score_cache_hit_count = 0
         early_stopped = False
         selection_pruned = False
+        hard_fail_stopped = False
+        hard_fail_neighbors_skipped = 0
+        hard_fail_cancelled = 0
         for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
             evaluated_neighbors = neighbor_idx
             result = _evaluate_local_min_neighbor_payload(session, payload, payload_score_cache)
@@ -442,6 +454,9 @@ def _evaluate_local_min_neighbors_ordered(
             if bool(should_stop):
                 early_stopped = neighbor_idx < total_neighbors
                 selection_pruned = bool(stopped_by_prune) and neighbor_idx < total_neighbors
+                hard_fail_stopped = bool(_is_local_min_hard_fail_score(local_min_score)) and neighbor_idx < total_neighbors
+                if bool(hard_fail_stopped):
+                    hard_fail_neighbors_skipped = max(0, int(total_neighbors) - int(neighbor_idx))
                 break
         return {
             "local_min_score": local_min_score,
@@ -453,6 +468,9 @@ def _evaluate_local_min_neighbors_ordered(
             "parallel_submitted": int(evaluated_neighbors),
             "parallel_completed": int(evaluated_neighbors),
             "parallel_cancelled": 0,
+            "hard_fail_stopped": bool(hard_fail_stopped),
+            "hard_fail_neighbors_skipped": int(hard_fail_neighbors_skipped),
+            "hard_fail_cancelled": int(hard_fail_cancelled),
         }
 
     local_min_score = float("inf")
@@ -460,6 +478,9 @@ def _evaluate_local_min_neighbors_ordered(
     payload_score_cache_hit_count = 0
     early_stopped = False
     selection_pruned = False
+    hard_fail_stopped = False
+    hard_fail_neighbors_skipped = 0
+    hard_fail_cancelled = 0
     submitted = 0
     completed = 0
     cancelled = 0
@@ -496,9 +517,14 @@ def _evaluate_local_min_neighbors_ordered(
             if bool(should_stop):
                 early_stopped = neighbor_idx < total_neighbors
                 selection_pruned = bool(stopped_by_prune) and neighbor_idx < total_neighbors
+                hard_fail_stopped = bool(_is_local_min_hard_fail_score(local_min_score)) and neighbor_idx < total_neighbors
+                if bool(hard_fail_stopped):
+                    hard_fail_neighbors_skipped = max(0, int(total_neighbors) - int(neighbor_idx))
                 for pending_future in list(pending.values()):
                     if pending_future.cancel():
                         cancelled += 1
+                        if bool(hard_fail_stopped):
+                            hard_fail_cancelled += 1
                 break
 
             while next_submit_idx <= total_neighbors and len(pending) < int(workers):
@@ -520,6 +546,9 @@ def _evaluate_local_min_neighbors_ordered(
         "parallel_submitted": int(submitted),
         "parallel_completed": int(completed),
         "parallel_cancelled": int(cancelled),
+        "hard_fail_stopped": bool(hard_fail_stopped),
+        "hard_fail_neighbors_skipped": int(hard_fail_neighbors_skipped),
+        "hard_fail_cancelled": int(hard_fail_cancelled),
     }
 
 
@@ -1107,6 +1136,9 @@ def compute_local_min_score(
     payload_score_cache_hit_count = int(evaluation_result.get("payload_score_cache_hits", 0) or 0)
     early_stopped = bool(evaluation_result.get("early_stopped", False))
     selection_pruned = bool(evaluation_result.get("selection_pruned", False))
+    hard_fail_stopped = bool(evaluation_result.get("hard_fail_stopped", False))
+    hard_fail_neighbors_skipped = int(evaluation_result.get("hard_fail_neighbors_skipped", 0) or 0)
+    hard_fail_cancelled = int(evaluation_result.get("hard_fail_cancelled", 0) or 0)
 
     if local_min_score == float("inf"):
         local_min_score = float(INVALID_TRIAL_VALUE)
@@ -1132,6 +1164,9 @@ def compute_local_min_score(
             parallel_submitted=int(evaluation_result.get("parallel_submitted", evaluated_neighbors) or 0),
             parallel_completed=int(evaluation_result.get("parallel_completed", evaluated_neighbors) or 0),
             parallel_cancelled=int(evaluation_result.get("parallel_cancelled", 0) or 0),
+            hard_fail_stopped=bool(hard_fail_stopped),
+            hard_fail_neighbors_skipped=int(hard_fail_neighbors_skipped),
+            hard_fail_cancelled=int(hard_fail_cancelled),
         )
     if on_finish is not None:
         on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))

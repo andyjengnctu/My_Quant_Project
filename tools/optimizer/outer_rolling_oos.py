@@ -424,6 +424,9 @@ def _build_outer_timing_row(
         "local_min_parallel_submitted": int(local_min_stats.get("parallel_submitted", 0) or 0),
         "local_min_parallel_completed": int(local_min_stats.get("parallel_completed", 0) or 0),
         "local_min_parallel_cancelled": int(local_min_stats.get("parallel_cancelled", 0) or 0),
+        "local_min_hard_fail_stops": int(local_min_stats.get("hard_fail_stops", 0) or 0),
+        "local_min_hard_fail_neighbors_skipped": int(local_min_stats.get("hard_fail_neighbors_skipped", 0) or 0),
+        "local_min_hard_fail_cancelled": int(local_min_stats.get("hard_fail_cancelled", 0) or 0),
     }
 
 
@@ -487,6 +490,9 @@ def _write_outer_timing_summary(
     local_min_parallel_submitted = sum(int(row.get("local_min_parallel_submitted", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_parallel_completed = sum(int(row.get("local_min_parallel_completed", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_parallel_cancelled = sum(int(row.get("local_min_parallel_cancelled", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_hard_fail_stops = sum(int(row.get("local_min_hard_fail_stops", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_hard_fail_neighbors_skipped = sum(int(row.get("local_min_hard_fail_neighbors_skipped", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_hard_fail_cancelled = sum(int(row.get("local_min_hard_fail_cancelled", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
     payload = {
@@ -538,6 +544,9 @@ def _write_outer_timing_summary(
             "local_min_parallel_submitted": int(local_min_parallel_submitted),
             "local_min_parallel_completed": int(local_min_parallel_completed),
             "local_min_parallel_cancelled": int(local_min_parallel_cancelled),
+            "local_min_hard_fail_stops": int(local_min_hard_fail_stops),
+            "local_min_hard_fail_neighbors_skipped": int(local_min_hard_fail_neighbors_skipped),
+            "local_min_hard_fail_cancelled": int(local_min_hard_fail_cancelled),
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },
