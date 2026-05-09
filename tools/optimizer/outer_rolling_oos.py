@@ -3089,21 +3089,15 @@ class _ParallelFoldLiveBoard:
     def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict]) -> list[str]:
         completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
         completed_oos = {int(row.get("oos_year", 0) or 0) for row in completed_rows_sorted}
+        fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
+        total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
+        other_elapsed = max(0.0, total_elapsed - fold_wall_elapsed - self.raw_data_load_sec)
         header = (
             f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
-            f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
+            f"pending={len(pending)} | elapsed={_fmt_duration(fold_wall_elapsed)} | "
+            f"raw={_fmt_duration(self.raw_data_load_sec)} | other={_fmt_duration(other_elapsed)}"
         )
-        total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
-        fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
-        other_elapsed = max(0.0, total_elapsed - fold_wall_elapsed - self.raw_data_load_sec)
-        timing_line = (
-            f"⏱️ 耗時摘要｜total={_fmt_duration(total_elapsed)}｜"
-            f"folds wall={_fmt_duration(fold_wall_elapsed)}｜"
-            f"OOS_CHAIN={_fmt_duration(0.0)}｜"
-            f"raw={_fmt_duration(self.raw_data_load_sec)}｜"
-            f"other={_fmt_duration(other_elapsed)}"
-        )
-        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}", f"{C_CYAN}{timing_line}{C_RESET}"]
+        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
         for task in self.tasks:
             log_path = str(task.get("log_path") or "")
             progress = _read_latest_parallel_fold_progress(log_path)
