@@ -3086,16 +3086,37 @@ class _ParallelFoldLiveBoard:
         self.last_lines: list[str] = []
         self.last_render_key: list[str] = []
 
-    def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict]) -> list[str]:
+    def _build_lines(self, *, pending: set, future_map: dict, completed_rows: list[dict], fold_timing_rows: list[dict] | None = None) -> list[str]:
         completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
         completed_oos = {int(row.get("oos_year", 0) or 0) for row in completed_rows_sorted}
         fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
-        total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
-        other_elapsed = max(0.0, total_elapsed - fold_wall_elapsed - self.raw_data_load_sec)
+        timing_rows = list(fold_timing_rows or [])
+        raw_parts: list[float] = []
+        fold_total_parts: list[float] = []
+        for row in timing_rows:
+            try:
+                raw_parts.append(max(0.0, float(row.get("install_shared_cache_sec", 0.0) or 0.0)))
+            except (TypeError, ValueError):
+                pass
+            try:
+                fold_total_parts.append(max(0.0, float(row.get("fold_total_sec", 0.0) or 0.0)))
+            except (TypeError, ValueError):
+                pass
+        if raw_parts:
+            raw_text = f"worker_raw_max={_fmt_duration(max(raw_parts))}"
+        elif self.raw_data_load_sec > 0.0:
+            raw_text = f"raw={_fmt_duration(self.raw_data_load_sec)}"
+        else:
+            raw_text = "worker_raw_max=collecting"
+        if fold_total_parts:
+            other_elapsed = max(0.0, fold_wall_elapsed - max(fold_total_parts))
+            other_text = f"other={_fmt_duration(other_elapsed)}"
+        else:
+            other_text = "other=collecting"
         header = (
             f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
             f"pending={len(pending)} | elapsed={_fmt_duration(fold_wall_elapsed)} | "
-            f"raw={_fmt_duration(self.raw_data_load_sec)} | other={_fmt_duration(other_elapsed)}"
+            f"{raw_text} | {other_text}"
         )
         lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
         for task in self.tasks:
@@ -3131,8 +3152,8 @@ class _ParallelFoldLiveBoard:
             key.append(text)
         return key
 
-    def render(self, *, pending: set, future_map: dict, completed_rows: list[dict], force: bool = False) -> None:
-        lines = self._build_lines(pending=pending, future_map=future_map, completed_rows=completed_rows)
+    def render(self, *, pending: set, future_map: dict, completed_rows: list[dict], fold_timing_rows: list[dict] | None = None, force: bool = False) -> None:
+        lines = self._build_lines(pending=pending, future_map=future_map, completed_rows=completed_rows, fold_timing_rows=fold_timing_rows)
         render_key = self._stable_render_key(lines)
         if not force and render_key == self.last_render_key:
             return
@@ -3197,7 +3218,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
     pending = set(future_map)
     chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
     live_board = _ParallelFoldLiveBoard(tasks, overall_start=overall_start, raw_data_load_sec=raw_data_load_sec)
-    live_board.render(pending=pending, future_map=future_map, completed_rows=rows, force=True)
+    live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=True)
     try:
         while pending:
             done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
@@ -3209,7 +3230,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                     fold_timing_rows=fold_timing_rows,
                     chain_state=chain_state,
                 )
-            live_board.render(pending=pending, future_map=future_map, completed_rows=rows, force=bool(done))
+            live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
     return chain_state
