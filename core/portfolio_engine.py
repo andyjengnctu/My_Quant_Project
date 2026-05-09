@@ -247,6 +247,7 @@ def run_portfolio_timeline(
     build_trade_index_sec = 0.0
     ticker_dates_sec = 0.0
     closeout_sec = 0.0
+    idle_fast_path_days = 0
 
     t0 = time.perf_counter() if profile_timing_enabled else None
     start_idx = find_sim_start_idx(sorted_dates, start_year)
@@ -326,6 +327,15 @@ def run_portfolio_timeline(
             bucket.setdefault("orderable_dates", [])
             bucket.setdefault("trade_rows", [])
 
+    training_idle_fast_path_enabled = bool(
+        is_training
+        and replay_counts is None
+        and active_params_resolver is None
+        and active_context_resolver is None
+        and (not capture_equity_curve)
+        and benchmark_period_stats is not None
+    )
+
     for i in range(start_idx, len(sorted_dates)):
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
@@ -348,12 +358,25 @@ def run_portfolio_timeline(
             year_start_equity[today.year] = milli_to_money(current_equity)
             year_first_sim_date[today.year] = pd.Timestamp(today)
 
-        current_equity_money = milli_to_money(current_equity)
-        cash_money = milli_to_money(cash)
-
         sold_today = set()
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
         has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
+
+        if bool(training_idle_fast_path_enabled) and not bool(has_portfolio_work_today):
+            current_equity_money = milli_to_money(current_equity)
+            if today.month != current_month:
+                monthly_equities.append(yesterday_equity)
+                current_month = today.month
+            yesterday_equity = current_equity_money
+            year_end_equity[today.year] = current_equity_money
+            year_last_sim_date[today.year] = pd.Timestamp(today)
+            idle_fast_path_days += 1
+            if profile_timing_enabled:
+                day_loop_sec += time.perf_counter() - t_day_start
+            continue
+
+        current_equity_money = milli_to_money(current_equity)
+        cash_money = milli_to_money(cash)
 
         if verbose and (not is_training) and i % 20 == 0:
             exp = ((current_equity_money - cash_money) / current_equity_money) * 100 if current_equity_money > 0 else 0
@@ -707,6 +730,7 @@ def run_portfolio_timeline(
         profile_stats['portfolio_equity_mark_sec'] = equity_mark_sec
         profile_stats['portfolio_closeout_sec'] = closeout_sec
         profile_stats['curve_stats_sec'] = curve_stats_sec
+        profile_stats['idle_fast_path_days'] = int(idle_fast_path_days)
         profile_stats['dominant_year_dependency_diagnostics'] = build_dominant_year_dependency_diagnostics(closed_trades_stats)
         profile_stats['sim_years'] = sim_years
         profile_stats['annual_return_pct'] = annual_return_pct
