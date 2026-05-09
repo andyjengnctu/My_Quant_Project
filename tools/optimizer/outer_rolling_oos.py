@@ -12,6 +12,9 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
+PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC = 15.0
+PARALLEL_FOLD_LOG_STATUS_MAX_CHARS = 140
+
 import pandas as pd
 
 from config.training_policy import (
@@ -1672,7 +1675,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     total = len(rows or [])
     for idx, row in enumerate(display_rows, start=1):
         is_chain = str(row.get("fold", "")).upper() == "OOS_CHAIN"
-        fold_text = "OOS_CHAIN" if is_chain else f"{idx}/{total}"
+        fold_text = "OOS_CHAIN" if is_chain else str(row.get("fold") or f"{idx}/{total}")
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
         base_rank, _base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
@@ -2014,6 +2017,30 @@ def _tail_text_file(path: str, *, max_lines: int = 8) -> str:
         return ""
 
 
+def _latest_parallel_fold_log_status(path: str, *, max_chars: int = PARALLEL_FOLD_LOG_STATUS_MAX_CHARS) -> str:
+    tail = _tail_text_file(path, max_lines=12)
+    if not tail:
+        return ""
+    for line in reversed(tail.splitlines()):
+        text = str(line).strip()
+        if not text:
+            continue
+        text = " ".join(text.split())
+        if len(text) > int(max_chars):
+            text = text[: max(0, int(max_chars) - 3)] + "..."
+        return text
+    return ""
+
+
+def _print_parallel_fold_result(row: dict) -> None:
+    if not row:
+        return
+    print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={row.get('selection_period')} | OOS={row.get('oos_year')}{C_RESET}", flush=True)
+    rendered = _render_results_table([row], color=True, include_chain=False)
+    if rendered:
+        print(rendered, flush=True)
+
+
 def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_timing_rows: list[dict], chain_state: dict) -> None:
     fold_idx = int(task["fold_idx"])
     fold_count = int(task.get("fold_count", 0) or 0)
@@ -2025,8 +2052,9 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
         tail = _tail_text_file(log_path, max_lines=12)
         detail = f"\n最後 fold log：\n{tail}" if tail else ""
         raise RuntimeError(f"parallel fold failed: fold={fold_idx}/{fold_count} OOS={oos_year} log={log_path}{detail}") from exc
-    if result.get("row") is not None:
-        rows.append(result["row"])
+    row = result.get("row")
+    if row is not None:
+        rows.append(row)
     if result.get("timing_row") is not None:
         fold_timing_rows.append(result["timing_row"])
     if result.get("chain_max_positions") is not None:
@@ -2038,9 +2066,11 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
     print(
         f"{C_GREEN if status == 'done' else C_YELLOW}[{fold_idx}/{fold_count}] OOS {oos_year} | PARALLEL FOLD {status} | "
         f"elapsed={_fmt_duration(float(timing_row.get('fold_total_sec', 0.0) or 0.0))} | "
-        f"log={result.get('log_path', '')}{C_RESET}",
+        f"completed={len(rows)}/{fold_count} | log={result.get('log_path', '')}{C_RESET}",
         flush=True,
     )
+    if row is not None:
+        _print_parallel_fold_result(dict(row))
 
 
 def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict]) -> dict:
@@ -2060,26 +2090,29 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                 chain_state=chain_state,
             )
         now = time.perf_counter()
-        if pending and (now - last_heartbeat) >= 30.0:
+        if pending and (now - last_heartbeat) >= PARALLEL_FOLD_HEARTBEAT_INTERVAL_SEC:
             active = []
             for future in sorted(pending, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
                 task = future_map[future]
                 log_path = str(task.get("log_path") or "")
                 log_state = "no-log"
+                latest_status = ""
                 try:
                     if os.path.exists(log_path):
                         age = max(0.0, time.time() - os.path.getmtime(log_path))
                         size = os.path.getsize(log_path)
                         log_state = f"log={size}B age={age:.0f}s"
+                        latest_status = _latest_parallel_fold_log_status(log_path)
                 except OSError:
                     log_state = "log=?"
-                active.append(f"[{int(task['fold_idx'])}/{int(task.get('fold_count', 0) or 0)}] OOS {int(task['oos_year'])} {log_state}")
+                status_text = f" | {latest_status}" if latest_status else ""
+                active.append(f"[{int(task['fold_idx'])}/{int(task.get('fold_count', 0) or 0)}] OOS {int(task['oos_year'])} {log_state}{status_text}")
             print(
-                f"{C_GRAY}⏱️ Rolling fold parallel running | pending={len(pending)} | elapsed={_fmt_duration(now - started_at)} | "
-                + " ; ".join(active)
-                + f"{C_RESET}",
+                f"{C_GRAY}⏱️ Rolling fold parallel running | pending={len(pending)} | completed={len(tasks) - len(pending)}/{len(tasks)} | elapsed={_fmt_duration(now - started_at)}{C_RESET}",
                 flush=True,
             )
+            for item in active:
+                print(f"{C_GRAY}  - {item}{C_RESET}", flush=True)
             last_heartbeat = now
     return chain_state
 
@@ -2410,7 +2443,10 @@ def run_outer_rolling_oos(
                 "fold_workers": int(fold_workers),
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
-            print(f"{C_GRAY}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | queued parallel fold{C_RESET}")
+            print(
+                f"{C_GRAY}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year} | "
+                f"queued parallel fold | log={tasks[-1]['log_path']}{C_RESET}"
+            )
         with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
             chain_state = _run_parallel_fold_futures(
                 executor=executor,
