@@ -1355,12 +1355,11 @@ def _timing_phase_summary_from_payload(payload: dict) -> dict:
 def _format_timing_phase_line(payload: dict) -> str:
     phases = _timing_phase_summary_from_payload(payload)
     return (
-        f"{C_CYAN}⏱️ 耗時摘要｜"
+        f"{C_CYAN}⏱️ 耗時對帳｜"
         f"total={_fmt_duration(phases['total_sec'])}｜"
-        f"folds wall={_fmt_duration(phases['fold_wall_sec'])}｜"
+        f"folds={_fmt_duration(phases['fold_wall_sec'])}｜"
         f"OOS_CHAIN={_fmt_duration(phases['active_replay_chain_sec'])}｜"
-        f"raw={_fmt_duration(phases['raw_data_load_once_sec'])}｜"
-        f"other={_fmt_duration(phases['other_overhead_sec'])}{C_RESET}"
+        f"setup/收尾={_fmt_duration(phases['other_overhead_sec'])}{C_RESET}"
     )
 
 
@@ -2055,7 +2054,14 @@ def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
 
 
-def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups: dict[str, list[dict]], first_year: int | None = None, last_year: int | None = None) -> dict[str, dict]:
+def _load_active_replay_contexts_by_signature(
+    *,
+    data_dir: str,
+    schedule_groups: dict[str, list[dict]],
+    first_year: int | None = None,
+    last_year: int | None = None,
+    overall_start: float | None = None,
+) -> dict[str, dict]:
     from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index
     from tools.portfolio_sim.simulation_runner import load_portfolio_market_context
 
@@ -2116,10 +2122,14 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
     for idx, record in enumerate(records, start=1):
         signature = str(record["params_signature"])
         policies_text = ",".join(record.get("_policies", [])) or "N/A"
+        chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
+        total_elapsed_text = ""
+        if overall_start is not None:
+            total_elapsed_text = f" | total={_fmt_duration(time.perf_counter() - float(overall_start))}"
         message = (
             f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
             f"covers={_covers_text(idx, record)} | policies={policies_text} | effective={record.get('effective_date_text')} | "
-            f"signature={signature[:8]}{years_label} | elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
+            f"signature={signature[:8]}{years_label} | chain={_fmt_duration(chain_elapsed)}{total_elapsed_text}{C_RESET}"
         )
         if supports_inline:
             previous_width = write_inline_progress(message, previous_width=previous_width)
@@ -2135,10 +2145,14 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
         context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
         contexts_by_signature[signature] = context
     if total:
+        chain_elapsed = max(0.0, time.perf_counter() - replay_context_start)
+        total_elapsed_text = ""
+        if overall_start is not None:
+            total_elapsed_text = f" | total={_fmt_duration(time.perf_counter() - float(overall_start))}"
         summary = (
             f"{C_CYAN}⏱️ OOS_CHAIN active replay context 完成 | "
             f"contexts={total}/{total}{years_label} | policies={policy_names} | "
-            f"elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
+            f"chain={_fmt_duration(chain_elapsed)}{total_elapsed_text}{C_RESET}"
         )
         if supports_inline:
             write_inline_progress(summary, previous_width=previous_width)
@@ -2214,7 +2228,15 @@ def _run_active_replay_metrics_from_schedule_records(*, schedule_records: list[d
     return _extract_active_replay_metrics((*result, pf_profile))
 
 
-def _build_active_replay_chained_oos_summary(*, rows: list[dict], config: OuterRollingConfig, selected_data_dir: str, max_positions: int, enable_rotation: bool) -> dict:
+def _build_active_replay_chained_oos_summary(
+    *,
+    rows: list[dict],
+    config: OuterRollingConfig,
+    selected_data_dir: str,
+    max_positions: int,
+    enable_rotation: bool,
+    overall_start: float | None = None,
+) -> dict:
     if not rows:
         return {}
     first_year = min(int(row["oos_year"]) for row in rows)
@@ -2234,6 +2256,7 @@ def _build_active_replay_chained_oos_summary(*, rows: list[dict], config: OuterR
         schedule_groups=schedule_groups,
         first_year=first_year,
         last_year=last_year,
+        overall_start=overall_start,
     )
 
     replay_metrics: dict[str, dict] = {}
@@ -3090,33 +3113,14 @@ class _ParallelFoldLiveBoard:
         completed_rows_sorted = sorted(list(completed_rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
         completed_oos = {int(row.get("oos_year", 0) or 0) for row in completed_rows_sorted}
         fold_wall_elapsed = max(0.0, time.perf_counter() - self.started_at)
-        timing_rows = list(fold_timing_rows or [])
-        raw_parts: list[float] = []
-        fold_total_parts: list[float] = []
-        for row in timing_rows:
-            try:
-                raw_parts.append(max(0.0, float(row.get("install_shared_cache_sec", 0.0) or 0.0)))
-            except (TypeError, ValueError):
-                pass
-            try:
-                fold_total_parts.append(max(0.0, float(row.get("fold_total_sec", 0.0) or 0.0)))
-            except (TypeError, ValueError):
-                pass
-        if raw_parts:
-            raw_text = f"worker_raw_max={_fmt_duration(max(raw_parts))}"
-        elif self.raw_data_load_sec > 0.0:
-            raw_text = f"raw={_fmt_duration(self.raw_data_load_sec)}"
-        else:
-            raw_text = "worker_raw_max=collecting"
-        if fold_total_parts:
-            other_elapsed = max(0.0, fold_wall_elapsed - max(fold_total_parts))
-            other_text = f"other={_fmt_duration(other_elapsed)}"
-        else:
-            other_text = "other=collecting"
+        total_elapsed = max(0.0, time.perf_counter() - self.overall_start)
+        setup_elapsed = max(0.0, self.started_at - self.overall_start)
+        # parallel fold 模式下，raw data 由各 fold worker 自行載入，
+        # worker raw 時間已包含在 folds wall 裡；不要再以 raw/other 顯示，避免與總時間對帳時重複或缺項。
         header = (
             f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
-            f"pending={len(pending)} | elapsed={_fmt_duration(fold_wall_elapsed)} | "
-            f"{raw_text} | {other_text}"
+            f"pending={len(pending)} | total={_fmt_duration(total_elapsed)} | "
+            f"folds={_fmt_duration(fold_wall_elapsed)} | setup={_fmt_duration(setup_elapsed)}"
         )
         lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
         for task in self.tasks:
@@ -3147,6 +3151,11 @@ class _ParallelFoldLiveBoard:
             text = str(line)
             if "⏱️ 耗時摘要" in text:
                 text = "⏱️ 耗時摘要"
+            elif "⏱️ Rolling fold parallel" in text:
+                for marker in (" | total=", " | elapsed="):
+                    if marker in text:
+                        text = text.split(marker, 1)[0]
+                        break
             elif " | elapsed=" in text:
                 text = text.split(" | elapsed=", 1)[0]
             key.append(text)
@@ -3961,6 +3970,7 @@ def run_outer_rolling_oos(
         selected_data_dir=selected_data_dir,
         max_positions=resolved_chain_max_positions,
         enable_rotation=resolved_chain_enable_rotation,
+        overall_start=overall_start,
     ) if rows else {}
     active_replay_chain_sec = max(0.0, time.perf_counter() - active_replay_started)
     final_report_chain_elapsed_sec = max(0.0, time.perf_counter() - overall_start)
@@ -3992,6 +4002,7 @@ def run_outer_rolling_oos(
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
     if bool(timing_mode):
+        print(_format_timing_phase_line(timing_paths.get("payload") or {}))
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
             print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
