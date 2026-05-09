@@ -72,14 +72,20 @@ def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     return max(0, min(4096, resolved))
 
 
-def _resolve_rolling_fold_workers(environ, *, timing_mode: bool) -> int:
+def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int | None = None) -> int:
+    default_workers = 1
+    if bool(timing_mode) and fold_count is not None:
+        try:
+            default_workers = max(1, int(fold_count))
+        except (TypeError, ValueError):
+            default_workers = 1
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_FOLD_WORKERS")
     if raw_value is None:
-        raw_value = os.environ.get("OPTIMIZER_ROLLING_FOLD_WORKERS", "1")
+        raw_value = os.environ.get("OPTIMIZER_ROLLING_FOLD_WORKERS", str(default_workers))
     try:
         resolved = int(raw_value)
     except (TypeError, ValueError):
-        resolved = 1
+        resolved = default_workers
     resolved = max(1, min(8, resolved))
     if not bool(timing_mode):
         return 1
@@ -87,7 +93,7 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool) -> int:
 
 
 def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:
-    return bool(timing_mode) and int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode) > 1
+    return bool(timing_mode) and int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode, fold_count=fold_count) > 1
 
 
 def _env_value_for_display(environ, name: str, default: str) -> str:
@@ -101,10 +107,28 @@ def _env_value_for_display(environ, name: str, default: str) -> str:
     return str(value).strip()
 
 
+def _set_env_default(environ, name: str, value: str) -> None:
+    if isinstance(environ, dict) and str(environ.get(name, "")).strip():
+        return
+    if str(os.environ.get(name, "")).strip():
+        return
+    os.environ[name] = str(value)
+    if isinstance(environ, dict):
+        environ[name] = str(value)
+
+
+def _apply_parallel_timing_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
+    if not bool(timing_mode):
+        return
+    _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "1")
+
+
 def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
     rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
     local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
-    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "1")
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
@@ -1343,13 +1367,14 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
     previous_width = 0
     supports_inline = stdout_supports_inline_progress()
     policy_names = "/".join(sorted({policy for record in records for policy in record.get("_policies", [])})) or "N/A"
+    replay_context_start = time.perf_counter()
     for idx, record in enumerate(records, start=1):
         signature = str(record["params_signature"])
         policies_text = ",".join(record.get("_policies", [])) or "N/A"
         message = (
-            f"{C_GRAY}OOS_CHAIN active replay context [{idx}/{total}] "
-            f"policies={policies_text} effective={record.get('effective_date_text')} "
-            f"signature={signature[:8]}{C_RESET}"
+            f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
+            f"policies={policies_text} | effective={record.get('effective_date_text')} | "
+            f"signature={signature[:8]} | elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
         )
         if supports_inline:
             previous_width = write_inline_progress(message, previous_width=previous_width)
@@ -1363,7 +1388,11 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
         context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
         contexts_by_signature[signature] = context
     if total:
-        summary = f"{C_GRAY}OOS_CHAIN active replay context 完成｜contexts={total}｜policies={policy_names}{C_RESET}"
+        summary = (
+            f"{C_CYAN}⏱️ OOS_CHAIN active replay context 完成 | "
+            f"contexts={total}/{total} | policies={policy_names} | "
+            f"elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
+        )
         if supports_inline:
             write_inline_progress(summary, previous_width=previous_width)
             print()
@@ -2171,7 +2200,7 @@ class _ParallelFoldProgressBoard:
             f"⏱️ Rolling fold parallel | completed={len(completed_rows)}/{len(self.tasks)} | "
             f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
         )
-        output_lines = [f"{C_GRAY}{header}{C_RESET}"] + [f"{C_GRAY}  {line}{C_RESET}" for _, line in sorted(new_lines.items())]
+        output_lines = [f"{C_CYAN}{header}{C_RESET}"] + [f"{C_GRAY}  {line}{C_RESET}" for _, line in sorted(new_lines.items())]
         if self.inline:
             if self.rendered_lines > 0:
                 sys.stdout.write(f"\x1b[{self.rendered_lines}F")
@@ -2201,11 +2230,10 @@ class _ParallelCompletedResultsBoard:
         table = _render_results_table(completed, color=True, include_chain=False)
         if not table:
             return
-        title = f"{C_CYAN}📌 Completed fold results ({len(completed)}) | OOS_CHAIN 於全部 fold 完成後才計算{C_RESET}"
         table_lines = table.splitlines()
         if table_lines and table_lines[0].strip().upper() == "ROLLING NEXT-1Y OOS RESULTS":
             table_lines = table_lines[1:]
-        lines = [title] + table_lines
+        lines = table_lines
         if self.inline:
             if self.rendered_lines > 0:
                 sys.stdout.write(f"\x1b[{self.rendered_lines}F")
@@ -2241,7 +2269,7 @@ class _ParallelFoldLiveBoard:
             f"⏱️ Rolling fold parallel | completed={len(completed_rows_sorted)}/{len(self.tasks)} | "
             f"pending={len(pending)} | elapsed={_fmt_duration(time.perf_counter() - self.started_at)}"
         )
-        lines: list[str] = [f"{C_GRAY}{header}{C_RESET}"]
+        lines: list[str] = [f"{C_CYAN}{header}{C_RESET}"]
         for task in self.tasks:
             log_path = str(task.get("log_path") or "")
             progress = _read_latest_parallel_fold_progress(log_path)
@@ -2259,7 +2287,6 @@ class _ParallelFoldLiveBoard:
             table = _render_results_table(completed_rows_sorted, color=True, include_chain=False)
             if table:
                 lines.append("")
-                lines.append(f"{C_CYAN}📌 Completed fold results ({len(completed_rows_sorted)}) | OOS_CHAIN 於全部 fold 完成後才計算{C_RESET}")
                 lines.extend(table.splitlines())
         return lines
 
@@ -2770,7 +2797,8 @@ def run_outer_rolling_oos(
     rolling_shared_local_min_field_order_score_cache = {}
     rolling_shared_prep_executor_holder = {}
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
-    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode))
+    _apply_parallel_timing_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     overall_start = time.perf_counter()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
