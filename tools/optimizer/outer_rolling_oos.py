@@ -23,6 +23,8 @@ from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    resolve_optimizer_rolling_fold_workers_default,
+    resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
@@ -76,10 +78,7 @@ def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
 def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int | None = None) -> int:
     default_workers = 1
     if bool(timing_mode) and fold_count is not None:
-        try:
-            default_workers = max(1, int(fold_count))
-        except (TypeError, ValueError):
-            default_workers = 1
+        default_workers = resolve_optimizer_rolling_fold_workers_default(fold_count)
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_FOLD_WORKERS")
     if raw_value is None:
         raw_value = os.environ.get("OPTIMIZER_ROLLING_FOLD_WORKERS", str(default_workers))
@@ -145,10 +144,10 @@ def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fo
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", "0")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", "0")
     if bool(timing_mode):
-        _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
+        _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(resolve_optimizer_rolling_fold_workers_default(fold_count)))
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
         _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
-        _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "32")
+        _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()))
 
 
 def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
@@ -160,11 +159,17 @@ def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
     rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
     local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
     process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    parallel_prep_cache_max_items = _env_value_for_display(
+        environ,
+        "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
+        str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()),
+    )
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
-        f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers}"
+        f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers} | "
+        f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items}"
     )
 
 
@@ -204,11 +209,12 @@ def _resolve_resource_sample_interval_sec(environ) -> float:
 
 
 def _resolve_parallel_worker_prep_cache_max_items(environ) -> int:
-    raw_value = _env_value_for_display(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", "32")
+    policy_default = resolve_optimizer_rolling_parallel_prep_cache_max_items_default()
+    raw_value = _env_value_for_display(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(policy_default))
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
-        value = 32
+        value = int(policy_default)
     return max(0, min(256, value))
 
 

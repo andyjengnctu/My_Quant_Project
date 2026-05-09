@@ -432,12 +432,14 @@ class OptimizerSession:
         self._optimizer_trial_milestone_inputs.pop(int(trial_number), None)
 
     def has_prepared_trial_inputs_in_cache(self, cache_key):
-        if cache_key is None:
+        if cache_key is None or int(self._prepared_trial_input_cache_max_items) <= 0:
             return False
         with self._cache_lock:
             return cache_key in self._prepared_trial_input_cache
 
     def get_prepared_trial_inputs_from_cache(self, cache_key):
+        if int(self._prepared_trial_input_cache_max_items) <= 0:
+            return None
         with self._cache_lock:
             cached = self._prepared_trial_input_cache.get(cache_key)
             if cached is None:
@@ -485,9 +487,9 @@ class OptimizerSession:
         if cache_key is None:
             return
         with self._cache_lock:
+            self._record_prepared_trial_inputs_profile(prep_result)
             if int(self._prepared_trial_input_cache_max_items) <= 0:
                 return
-            self._record_prepared_trial_inputs_profile(prep_result)
             self.prep_cache_stats["stores"] = int(self.prep_cache_stats.get("stores", 0)) + 1
             self._prepared_trial_input_cache[cache_key] = {
                 "all_dfs_fast": prep_result["all_dfs_fast"],

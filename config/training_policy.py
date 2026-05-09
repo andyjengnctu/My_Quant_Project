@@ -25,6 +25,53 @@ SCORE_NUMERATOR_METHOD = 'TOTAL_RETURN'
 
 SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影響 console/report 顯示)
 
+# Optimizer 效能參數區
+# OPTIMIZER_ROLLING_FOLD_WORKERS:
+# - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
+# - 正整數 = 固定 rolling fold process 數。
+# - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
+OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"
+
+# OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
+# - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。
+# - 正整數 = 每個 fold worker 最多保留的 prepared trial input 筆數。
+# - 環境變數 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS 仍可覆寫此預設。
+OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
+
+
+def resolve_optimizer_rolling_fold_workers_default(fold_count):
+    try:
+        resolved_fold_count = max(1, int(fold_count))
+    except (TypeError, ValueError):
+        resolved_fold_count = 1
+    raw_value = OPTIMIZER_ROLLING_FOLD_WORKERS
+    if raw_value is None:
+        return resolved_fold_count
+    text = str(raw_value).strip().lower()
+    if text in {"", "fold_count", "folds", "auto"}:
+        return resolved_fold_count
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return resolved_fold_count
+    return max(1, value)
+
+
+def resolve_optimizer_rolling_parallel_prep_cache_max_items_default():
+    try:
+        value = int(OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, min(256, value))
+
+
+def build_training_performance_policy_snapshot(fold_count=None):
+    return {
+        "OPTIMIZER_ROLLING_FOLD_WORKERS": OPTIMIZER_ROLLING_FOLD_WORKERS,
+        "OPTIMIZER_ROLLING_FOLD_WORKERS_RESOLVED": None if fold_count is None else resolve_optimizer_rolling_fold_workers_default(fold_count),
+        "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
+    }
+
 # 停利比例固定開關
 # None = 由 optimizer 搜尋 tp_percent
 # 0.0 = 固定關閉停利
