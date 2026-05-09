@@ -1545,6 +1545,43 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
     return summary
 
 
+def _resolve_chain_elapsed_sec(rows: list[dict], chained: dict) -> float:
+    """Return the OOS_CHAIN elapsed value for display/reporting.
+
+    In serial mode the chain row historically used the sum of fold elapsed time. In
+    parallel-fold timing mode, however, the sum of fold elapsed time is total work
+    time, not user-visible wall-clock time. When the caller provides an
+    ``elapsed_sec`` override in the chained summary, prefer it; otherwise fall back
+    to the serial-compatible fold sum.
+    """
+    try:
+        override = chained.get("elapsed_sec")
+    except AttributeError:
+        override = None
+    if override is not None:
+        try:
+            return max(0.0, float(override))
+        except (TypeError, ValueError):
+            pass
+    total = 0.0
+    for item in list(rows or []):
+        try:
+            total += float(item.get("elapsed_sec", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return max(0.0, total)
+
+
+def _with_chain_elapsed_override(chained_override: dict | None, *, elapsed_sec: float | None) -> dict:
+    payload = dict(chained_override or {})
+    if elapsed_sec is not None:
+        try:
+            payload["elapsed_sec"] = max(0.0, float(elapsed_sec))
+        except (TypeError, ValueError):
+            pass
+    return payload
+
+
 def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = None) -> dict | None:
     if not rows:
         return None
@@ -1557,7 +1594,7 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
         "benchmark_oos_score": float(chained.get("benchmark_oos_score", 0.0)),
         "best_finalist_return_pct": float(chained.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(chained.get("benchmark_return_pct", 0.0)),
-        "elapsed_sec": sum(float(item.get("elapsed_sec", 0.0)) for item in rows),
+        "elapsed_sec": _resolve_chain_elapsed_sec(rows, chained),
         "aggregation_method": chained.get("score_aggregation_method") or chained.get("method"),
     }
     for policy_name in ("base", "local", "retention"):
@@ -2122,6 +2159,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             optimize_started = time.perf_counter()
             study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[])
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
+            trial_count = len(list(getattr(study, "trials", []) or []))
+            session.current_session_trial = int(trial_count or config.trials_per_fold)
             print(f"[{fold_idx}/{fold_count}] OOS {oos_year} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
@@ -2615,10 +2654,15 @@ def run_outer_rolling_oos(
         enable_rotation=resolved_chain_enable_rotation,
     ) if rows else {}
     active_replay_chain_sec = max(0.0, time.perf_counter() - active_replay_started)
+    final_report_chain_elapsed_sec = max(0.0, time.perf_counter() - overall_start)
+    active_replay_chained_for_report = _with_chain_elapsed_override(
+        active_replay_chained,
+        elapsed_sec=final_report_chain_elapsed_sec,
+    )
     report_write_started = time.perf_counter()
     paths = {}
     if not bool(timing_mode):
-        paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained)
+        paths = _write_reports(project_root=project_root, output_dir=output_dir, session_ts=session_ts, rows=rows, config=config, chained_override=active_replay_chained_for_report)
     report_write_sec = max(0.0, time.perf_counter() - report_write_started)
     timing_paths = _write_outer_timing_summary(
         output_dir=output_dir,
@@ -2636,7 +2680,7 @@ def run_outer_rolling_oos(
     print(f"\n{C_CYAN}{'=' * 100}{C_RESET}")
     print("FINAL REPORT")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
-    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained), color=True))
+    print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
