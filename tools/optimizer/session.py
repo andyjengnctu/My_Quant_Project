@@ -158,6 +158,7 @@ class OptimizerSession:
             "prep_cache_prioritized": 0,
             "order_score_prioritized": 0,
             "field_order_score_prioritized": 0,
+            "portfolio_dependency_deprioritized": 0,
             "early_stops": 0,
             "selection_prunes": 0,
             "parallel_workers_max": 0,
@@ -324,6 +325,7 @@ class OptimizerSession:
             "prep_cache_prioritized": 0,
             "order_score_prioritized": 0,
             "field_order_score_prioritized": 0,
+            "portfolio_dependency_deprioritized": 0,
             "early_stops": 0,
             "selection_prunes": 0,
             "parallel_workers_max": 0,
@@ -345,6 +347,7 @@ class OptimizerSession:
         prep_cache_prioritized=0,
         order_score_prioritized=0,
         field_order_score_prioritized=0,
+        portfolio_dependency_deprioritized=0,
         early_stopped=False,
         selection_pruned=False,
         parallel_workers=0,
@@ -377,6 +380,7 @@ class OptimizerSession:
             stats["prep_cache_prioritized"] = int(stats.get("prep_cache_prioritized", 0)) + int(prep_cache_prioritized or 0)
             stats["order_score_prioritized"] = int(stats.get("order_score_prioritized", 0)) + int(order_score_prioritized or 0)
             stats["field_order_score_prioritized"] = int(stats.get("field_order_score_prioritized", 0)) + int(field_order_score_prioritized or 0)
+            stats["portfolio_dependency_deprioritized"] = int(stats.get("portfolio_dependency_deprioritized", 0)) + int(portfolio_dependency_deprioritized or 0)
             stats["parallel_workers_max"] = max(int(stats.get("parallel_workers_max", 0)), int(parallel_workers or 0))
             stats["parallel_submitted"] = int(stats.get("parallel_submitted", 0)) + int(parallel_submitted or 0)
             stats["parallel_completed"] = int(stats.get("parallel_completed", 0)) + int(parallel_completed or 0)
@@ -421,6 +425,7 @@ class OptimizerSession:
             "prep_cache_prioritized": int(stats.get("prep_cache_prioritized", 0) or 0),
             "order_score_prioritized": int(stats.get("order_score_prioritized", 0) or 0),
             "field_order_score_prioritized": int(stats.get("field_order_score_prioritized", 0) or 0),
+            "portfolio_dependency_deprioritized": int(stats.get("portfolio_dependency_deprioritized", 0) or 0),
             "early_stops": int(stats.get("early_stops", 0) or 0),
             "selection_prunes": int(stats.get("selection_prunes", 0) or 0),
             "parallel_workers_max": int(stats.get("parallel_workers_max", 0) or 0),

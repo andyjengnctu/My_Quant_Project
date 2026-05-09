@@ -9,7 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 
-from config.training_performance_policy import is_optimizer_local_min_dependency_stats_enabled
+from config.training_performance_policy import (
+    is_optimizer_local_min_dependency_stats_enabled,
+    resolve_optimizer_local_min_portfolio_dependency_order,
+)
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
@@ -289,6 +292,14 @@ def _record_local_min_dependency_evaluated(stats: dict, center_payload: dict, pa
     _record_local_min_dependency(stats, layer=layer, field_name=field_name, bucket="evaluated")
 
 
+def _get_local_min_dependency_sort_bucket(center_payload: dict, payload: dict) -> int:
+    order_mode = resolve_optimizer_local_min_portfolio_dependency_order()
+    if order_mode != "last":
+        return 0
+    layer, _field_name = _classify_local_min_neighbor_dependency(center_payload, payload)
+    return 1 if str(layer) == "portfolio" else 0
+
+
 def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
     """Evaluate cheap / likely-pruning neighbors first without changing local-min semantics.
 
@@ -307,7 +318,11 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
     payload_score_candidates = 0
     order_score_prioritized = 0
     field_order_score_prioritized = 0
+    portfolio_dependency_deprioritized = 0
     for original_idx, payload in enumerate(list(neighbor_payloads or [])):
+        dependency_sort_bucket = _get_local_min_dependency_sort_bucket(center_payload, payload)
+        if dependency_sort_bucket > 0:
+            portfolio_dependency_deprioritized += 1
         payload_cache_key = _build_payload_score_cache_key(payload)
         cached_payload_score = payload_score_cache.get(payload_cache_key)
         if cached_payload_score is not None:
@@ -316,7 +331,7 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
                 cached_score_sort_value = float(cached_payload_score)
             except (TypeError, ValueError):
                 cached_score_sort_value = float(INVALID_TRIAL_VALUE)
-            ranked_items.append((0, cached_score_sort_value, original_idx, payload))
+            ranked_items.append((0, cached_score_sort_value, 0, original_idx, payload))
             continue
 
         order_score = order_score_cache.get(payload_cache_key)
@@ -348,27 +363,28 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
             prep_cache_prioritized += 1
             if has_order_score:
                 order_score_prioritized += 1
-                ranked_items.append((1, order_score_sort_value, original_idx, payload))
+                ranked_items.append((1, order_score_sort_value, dependency_sort_bucket, original_idx, payload))
             elif has_field_order_score:
                 field_order_score_prioritized += 1
-                ranked_items.append((2, field_order_score_sort_value, original_idx, payload))
+                ranked_items.append((2, field_order_score_sort_value, dependency_sort_bucket, original_idx, payload))
             else:
-                ranked_items.append((3, 0.0, original_idx, payload))
+                ranked_items.append((3, 0.0, dependency_sort_bucket, original_idx, payload))
         elif has_order_score:
             order_score_prioritized += 1
-            ranked_items.append((4, order_score_sort_value, original_idx, payload))
+            ranked_items.append((4, order_score_sort_value, dependency_sort_bucket, original_idx, payload))
         elif has_field_order_score:
             field_order_score_prioritized += 1
-            ranked_items.append((5, field_order_score_sort_value, original_idx, payload))
+            ranked_items.append((5, field_order_score_sort_value, dependency_sort_bucket, original_idx, payload))
         else:
-            ranked_items.append((6, 0.0, original_idx, payload))
+            ranked_items.append((6, 0.0, dependency_sort_bucket, original_idx, payload))
 
-    ranked_items.sort(key=lambda item: (item[0], item[1], item[2]))
-    return [item[3] for item in ranked_items], {
+    ranked_items.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+    return [item[4] for item in ranked_items], {
         "payload_score_candidates": int(payload_score_candidates),
         "prep_cache_prioritized": int(prep_cache_prioritized),
         "order_score_prioritized": int(order_score_prioritized),
         "field_order_score_prioritized": int(field_order_score_prioritized),
+        "portfolio_dependency_deprioritized": int(portfolio_dependency_deprioritized),
     }
 
 
@@ -1280,6 +1296,7 @@ def compute_local_min_score(
             prep_cache_prioritized=int(neighbor_rank_stats.get("prep_cache_prioritized", 0) or 0),
             order_score_prioritized=int(neighbor_rank_stats.get("order_score_prioritized", 0) or 0),
             field_order_score_prioritized=int(neighbor_rank_stats.get("field_order_score_prioritized", 0) or 0),
+            portfolio_dependency_deprioritized=int(neighbor_rank_stats.get("portfolio_dependency_deprioritized", 0) or 0),
             early_stopped=bool(early_stopped),
             selection_pruned=bool(selection_pruned),
             parallel_workers=int(evaluation_result.get("parallel_workers", 1) or 1),

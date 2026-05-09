@@ -71,6 +71,26 @@ def resolve_optimizer_feature_bank_max_items_default():
 # - 僅影響 timing 統計，不改 optimizer 分數、交易規則或 local_min 評估順序。
 OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED = True
 
+# OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER:
+# - "last" = local_min 鄰點排序時，將 portfolio-only 鄰點排在未命中快取/提示的 signal 鄰點之後。
+#            不改鄰點集合與 local_min 定義；只讓 early stop/prune 更早遇到較可能需要重算 signal 的鄰點。
+# - "original" = 保留原本鄰點產生順序。
+# - 環境變數 OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER 仍可覆寫此預設。
+OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER = "last"
+
+
+def resolve_optimizer_local_min_portfolio_dependency_order():
+    raw_value = os.environ.get(
+        "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER",
+        OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER,
+    )
+    text = str(raw_value or "").strip().lower()
+    if text in {"last", "deprioritize", "deprioritized", "tail"}:
+        return "last"
+    if text in {"original", "off", "0", "false", "no"}:
+        return "original"
+    return "last"
+
 
 def _coerce_bool(value, *, default: bool) -> bool:
     if value is None:
@@ -103,4 +123,5 @@ def build_training_performance_policy_snapshot(fold_count=None):
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
+        "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
     }

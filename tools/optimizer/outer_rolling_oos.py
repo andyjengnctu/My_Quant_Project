@@ -1205,6 +1205,7 @@ def _build_outer_timing_row(
         "local_min_prep_cache_prioritized": int(local_min_stats.get("prep_cache_prioritized", 0) or 0),
         "local_min_order_score_prioritized": int(local_min_stats.get("order_score_prioritized", 0) or 0),
         "local_min_field_order_score_prioritized": int(local_min_stats.get("field_order_score_prioritized", 0) or 0),
+        "local_min_portfolio_dependency_deprioritized": int(local_min_stats.get("portfolio_dependency_deprioritized", 0) or 0),
         "local_min_early_stops": int(local_min_stats.get("early_stops", 0) or 0),
         "local_min_selection_prunes": int(local_min_stats.get("selection_prunes", 0) or 0),
         "local_min_parallel_workers_max": int(local_min_stats.get("parallel_workers_max", 0) or 0),
@@ -1344,6 +1345,7 @@ def _write_outer_timing_summary(
     local_min_prep_cache_prioritized = sum(int(row.get("local_min_prep_cache_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_order_score_prioritized = sum(int(row.get("local_min_order_score_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_field_order_score_prioritized = sum(int(row.get("local_min_field_order_score_prioritized", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_portfolio_dependency_deprioritized = sum(int(row.get("local_min_portfolio_dependency_deprioritized", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_early_stops = sum(int(row.get("local_min_early_stops", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_selection_prunes = sum(int(row.get("local_min_selection_prunes", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_parallel_workers_max = max((int(row.get("local_min_parallel_workers_max", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
@@ -1450,6 +1452,7 @@ def _write_outer_timing_summary(
             "local_min_prep_cache_prioritized": int(local_min_prep_cache_prioritized),
             "local_min_order_score_prioritized": int(local_min_order_score_prioritized),
             "local_min_field_order_score_prioritized": int(local_min_field_order_score_prioritized),
+            "local_min_portfolio_dependency_deprioritized": int(local_min_portfolio_dependency_deprioritized),
             "local_min_early_stops": int(local_min_early_stops),
             "local_min_selection_prunes": int(local_min_selection_prunes),
             "local_min_parallel_workers_max": int(local_min_parallel_workers_max),
