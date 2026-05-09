@@ -1274,6 +1274,8 @@ def _write_outer_timing_summary(
             "fold_total_sum_sec": float(fold_total_sec),
             "avg_optimize_sec_per_completed_trial": (float(optimize_sec) / float(completed_trials)) if completed_trials > 0 else 0.0,
             "avg_fold_total_sec": (float(fold_total_sec) / float(len(fold_timing_rows))) if fold_timing_rows else 0.0,
+            "fold_wall_sec": (max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in list(fold_timing_rows or [])), default=0.0) if bool(rolling_fold_parallel) else float(fold_total_sec)),
+            "other_overhead_sec": max(0.0, float(overall_sec) - (max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in list(fold_timing_rows or [])), default=0.0) if bool(rolling_fold_parallel) else float(fold_total_sec)) - float(active_replay_chain_sec) - float(raw_data_load_sec) - float(report_write_sec)),
             "prep_cache_hits": int(prep_cache_hits),
             "prep_cache_misses": int(prep_cache_misses),
             "prep_cache_stores": int(prep_cache_stores),
@@ -1315,54 +1317,52 @@ def _write_outer_timing_summary(
     return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "resource_csv": resource_csv_path, "payload": payload}
 
 
-def _format_resource_usage_line(summary: dict, *, prefix: str = "⏱️ CPU/MEM/HD") -> str:
+def _format_resource_usage_line(summary: dict, *, prefix: str = "📏 效能摘要:") -> str:
     summary = dict(summary or {})
     if not bool(summary.get("resource_sampling_available", False)):
         err = str(summary.get("resource_sampling_error", "") or "unavailable")
-        return f"{C_CYAN}{prefix}｜resource unavailable｜{err}{C_RESET}"
-    cpu_avg = float(summary.get("cpu_avg_percent", 0.0) or 0.0)
-    cpu_max = float(summary.get("cpu_max_percent", 0.0) or 0.0)
-    mem_avg = float(summary.get("memory_avg_percent", 0.0) or 0.0)
-    mem_max = float(summary.get("memory_max_percent", 0.0) or 0.0)
-    mem_avail_min = float(summary.get("memory_min_available_gb", 0.0) or 0.0)
-    rss_peak = float(summary.get("process_tree_rss_max_gb", 0.0) or 0.0)
-    swap_avg = float(summary.get("swap_avg_percent", 0.0) or 0.0)
-    swap_max = float(summary.get("swap_max_percent", 0.0) or 0.0)
-    hd_avg = float(summary.get("disk_load_avg_percent", summary.get("disk_busy_avg_percent", 0.0)) or 0.0)
-    hd_max = float(summary.get("disk_load_max_percent", summary.get("disk_busy_max_percent", 0.0)) or 0.0)
-    hd_rate_avg = float(summary.get("disk_total_mb_per_sec_avg", 0.0) or 0.0)
-    hd_rate_max = float(summary.get("disk_total_mb_per_sec_max", 0.0) or 0.0)
-    hd_total = float(summary.get("disk_total_mb", summary.get("process_tree_total_io_mb", 0.0)) or 0.0)
-    mode = str(summary.get("resource_sampling_mode", "") or "unknown")
-    return (
-        f"{C_CYAN}{prefix}｜"
-        f"CPU avg/max={cpu_avg:.1f}/{cpu_max:.1f}%｜"
-        f"MEM avg/max={mem_avg:.1f}/{mem_max:.1f}%｜"
-        f"MEM可用min={mem_avail_min:.2f}GB｜"
-        f"Pagefile avg/max={swap_avg:.1f}/{swap_max:.1f}%｜"
-        f"RSS peak={rss_peak:.2f}GB｜"
-        f"HD avg/max={hd_avg:.1f}/{hd_max:.1f}%｜"
-        f"HD速率avg/max={hd_rate_avg:.1f}/{hd_rate_max:.1f}MB/s｜"
-        f"HD總量={hd_total:.1f}MB｜"
-        f"mode={mode}{C_RESET}"
-    )
-
-
-
-def _format_resource_brief_line(summary: dict, *, prefix: str = "📏 效能摘要") -> str:
-    summary = dict(summary or {})
-    if not bool(summary.get("resource_sampling_available", False)):
-        err = str(summary.get("resource_sampling_error", "") or "unavailable")
-        return f"{prefix}: {C_CYAN}resource unavailable｜{err}{C_RESET}"
+        return f"{prefix} {C_CYAN}CPU avg = N/A｜MEM avg = N/A｜HD avg = N/A｜resource={err}{C_RESET}"
     cpu_avg = float(summary.get("cpu_avg_percent", 0.0) or 0.0)
     mem_avg = float(summary.get("memory_avg_percent", 0.0) or 0.0)
     hd_avg = float(summary.get("disk_load_avg_percent", summary.get("disk_busy_avg_percent", 0.0)) or 0.0)
+    return f"{prefix} {C_CYAN}CPU avg = {cpu_avg:.1f}%｜MEM avg = {mem_avg:.1f}%｜HD avg = {hd_avg:.1f}%{C_RESET}"
+
+
+def _timing_phase_summary_from_payload(payload: dict) -> dict:
+    payload = dict(payload or {})
+    summary = dict(payload.get("summary") or {})
+    folds = list(payload.get("folds") or [])
+    rolling_parallel = bool(summary.get("rolling_fold_parallel", False))
+    if rolling_parallel:
+        fold_wall = max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in folds), default=0.0)
+    else:
+        fold_wall = float(summary.get("fold_total_sum_sec", 0.0) or 0.0)
+    total = float(summary.get("overall_sec", 0.0) or 0.0)
+    chain = float(summary.get("active_replay_chain_sec", 0.0) or 0.0)
+    raw = float(summary.get("raw_data_load_once_sec", 0.0) or 0.0)
+    report = float(summary.get("report_write_sec", 0.0) or 0.0)
+    other = max(0.0, total - fold_wall - chain - raw - report)
+    return {
+        "total_sec": total,
+        "fold_wall_sec": fold_wall,
+        "active_replay_chain_sec": chain,
+        "raw_data_load_once_sec": raw,
+        "report_write_sec": report,
+        "other_overhead_sec": other,
+    }
+
+
+def _format_timing_phase_line(payload: dict) -> str:
+    phases = _timing_phase_summary_from_payload(payload)
     return (
-        f"{prefix}: "
-        f"{C_CYAN}CPU avg = {cpu_avg:.1f}%｜"
-        f"MEM avg = {mem_avg:.1f}%｜"
-        f"HD avg = {hd_avg:.1f}%{C_RESET}"
+        f"{C_CYAN}⏱️ 耗時摘要｜"
+        f"total={_fmt_duration(phases['total_sec'])}｜"
+        f"folds wall={_fmt_duration(phases['fold_wall_sec'])}｜"
+        f"OOS_CHAIN={_fmt_duration(phases['active_replay_chain_sec'])}｜"
+        f"raw={_fmt_duration(phases['raw_data_load_once_sec'])}｜"
+        f"other={_fmt_duration(phases['other_overhead_sec'])}{C_RESET}"
     )
+
 
 def _print_outer_timing_summary(payload: dict):
     summary = dict((payload or {}).get("summary") or {})
@@ -1394,6 +1394,7 @@ def _print_outer_timing_summary(payload: dict):
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
     )
+    print(_format_resource_usage_line(summary, prefix="📏 CPU/MEM/HD 摘要"))
 
 
 
@@ -2060,7 +2061,7 @@ def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
 
 
-def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups: dict[str, list[dict]]) -> dict[str, dict]:
+def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups: dict[str, list[dict]], first_year: int | None = None, last_year: int | None = None) -> dict[str, dict]:
     from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index
     from tools.portfolio_sim.simulation_runner import load_portfolio_market_context
 
@@ -2081,17 +2082,55 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
             policies = existing.setdefault("_policies", [])
             if str(policy_name) not in policies:
                 policies.append(str(policy_name))
+    def _record_year(item: dict) -> int:
+        try:
+            return int(item.get("year", 0) or 0)
+        except (TypeError, ValueError):
+            text = str(item.get("effective_date_text") or "")
+            try:
+                return int(text[:4])
+            except (TypeError, ValueError):
+                return 0
+
+    records.sort(key=lambda item: (_record_year(item), str(item.get("effective_date_text") or ""), str(item.get("params_signature") or "")))
     total = len(records)
+    previous_width = 0
+    supports_inline = stdout_supports_inline_progress()
     policy_names = "/".join(sorted({policy for record in records for policy in record.get("_policies", [])})) or "N/A"
     replay_context_start = time.perf_counter()
+    years_label = ""
+    if first_year and last_year:
+        years_label = f" | years={int(first_year)}~{int(last_year)}"
+
+    def _covers_text(index: int, item: dict) -> str:
+        year = _record_year(item)
+        if year <= 0:
+            return "N/A"
+        next_year = None
+        for follow in records[index:]:
+            candidate = _record_year(follow)
+            if candidate > year:
+                next_year = candidate
+                break
+        end_year = int(last_year) if last_year else year
+        if next_year is not None:
+            end_year = min(end_year, int(next_year) - 1)
+        if end_year <= year:
+            return str(year)
+        return f"{year}~{end_year}"
+
     for idx, record in enumerate(records, start=1):
         signature = str(record["params_signature"])
         policies_text = ",".join(record.get("_policies", [])) or "N/A"
-        print(
+        message = (
             f"{C_CYAN}⏱️ OOS_CHAIN active replay context [{idx}/{total}] | "
-            f"policies={policies_text} | effective={record.get('effective_date_text')} | "
-            f"signature={signature[:8]} | elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
+            f"covers={_covers_text(idx, record)} | policies={policies_text} | effective={record.get('effective_date_text')} | "
+            f"signature={signature[:8]}{years_label} | elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
         )
+        if supports_inline:
+            previous_width = write_inline_progress(message, previous_width=previous_width)
+        else:
+            print(message)
         context = load_portfolio_market_context(data_dir, record["params_obj"], verbose=False)
         context = dict(context)
         if not context.get("all_pit_stats_index"):
@@ -2104,10 +2143,14 @@ def _load_active_replay_contexts_by_signature(*, data_dir: str, schedule_groups:
     if total:
         summary = (
             f"{C_CYAN}⏱️ OOS_CHAIN active replay context 完成 | "
-            f"contexts={total}/{total} | policies={policy_names} | "
+            f"contexts={total}/{total}{years_label} | policies={policy_names} | "
             f"elapsed={_fmt_duration(time.perf_counter() - replay_context_start)}{C_RESET}"
         )
-        print(summary)
+        if supports_inline:
+            write_inline_progress(summary, previous_width=previous_width)
+            print()
+        else:
+            print(summary)
     return contexts_by_signature
 
 def _merge_active_replay_market_dates(contexts_by_signature: dict[str, dict]) -> list:
@@ -2195,6 +2238,8 @@ def _build_active_replay_chained_oos_summary(*, rows: list[dict], config: OuterR
     contexts_by_signature = _load_active_replay_contexts_by_signature(
         data_dir=selected_data_dir,
         schedule_groups=schedule_groups,
+        first_year=first_year,
+        last_year=last_year,
     )
 
     replay_metrics: dict[str, dict] = {}
@@ -2389,6 +2434,49 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
     return row
 
 
+
+def _avg_float_from_rows(rows: list[dict], getter, default: float = 0.0) -> float:
+    values: list[float] = []
+    for row in list(rows or []):
+        try:
+            value = float(getter(row))
+        except (TypeError, ValueError, KeyError, AttributeError):
+            continue
+        values.append(value)
+    return (sum(values) / float(len(values))) if values else float(default)
+
+
+def _build_oos_avg_row(rows: list[dict]) -> dict | None:
+    source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
+    if not source_rows:
+        return None
+    selection_start = min(int(row.get("selection_start_year", str(row.get("selection_period", "0~0")).split("~", 1)[0])) for row in source_rows)
+    selection_end = max(int(row.get("selection_end_year", str(row.get("selection_period", "0~0")).split("~", 1)[-1])) for row in source_rows)
+    first_oos = min(int(row.get("oos_year", 0) or 0) for row in source_rows)
+    last_oos = max(int(row.get("oos_year", 0) or 0) for row in source_rows)
+    row = {
+        "fold": "OOS_AVG",
+        "selection_period": f"{selection_start}~{selection_end}",
+        "oos_year": f"{first_oos}~{last_oos}" if first_oos != last_oos else str(first_oos),
+        "best_finalist_oos_score": _avg_float_from_rows(source_rows, lambda item: item.get("best_finalist_oos_score", 0.0)),
+        "benchmark_oos_score": _avg_float_from_rows(source_rows, lambda item: item.get("benchmark_oos_score", 0.0)),
+        "best_finalist_return_pct": _avg_float_from_rows(source_rows, lambda item: item.get("best_finalist_return_pct", 0.0)),
+        "benchmark_return_pct": _avg_float_from_rows(source_rows, lambda item: item.get("benchmark_return_pct", 0.0)),
+        "elapsed_sec": None,
+    }
+    for policy_name in ("base", "local", "retention"):
+        rank_score = _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_oos", 0.0))
+        row[policy_name] = {
+            "rank_1_trial": None,
+            "rank_1_oos": rank_score,
+            "rank_1_return_pct": _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_return_pct", 0.0)),
+            "rank_1_mdd_pct": _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_mdd_pct", 0.0)),
+            "best_gap": rank_score - float(row["best_finalist_oos_score"]),
+            "benchmark_0050_gap": rank_score - float(row["benchmark_oos_score"]),
+        }
+    return row
+
+
 def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: float, color: bool = True) -> tuple[str, str, str]:
     rank_1 = float(policy_row.get("rank_1_oos", 0.0))
     if color:
@@ -2408,8 +2496,12 @@ def _table_separator(width: int = 218) -> str:
     return "-" * int(width)
 
 
-def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, chained_override: dict | None = None) -> str:
+def _render_results_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
     display_rows = list(rows or [])
+    if include_oos_avg and display_rows:
+        avg_row = _build_oos_avg_row(display_rows)
+        if avg_row is not None:
+            display_rows = display_rows + [avg_row]
     if include_chain:
         chain_row = _build_chained_oos_row(display_rows, chained_override=chained_override)
         if chain_row is not None:
@@ -2449,8 +2541,10 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     lines.append(separator)
     total = len(rows or [])
     for idx, row in enumerate(display_rows, start=1):
-        is_chain = str(row.get("fold", "")).upper() == "OOS_CHAIN"
-        fold_text = "OOS_CHAIN" if is_chain else str(row.get("fold") or f"{idx}/{total}")
+        fold_kind = str(row.get("fold", "")).upper()
+        is_chain = fold_kind == "OOS_CHAIN"
+        is_avg = fold_kind == "OOS_AVG"
+        fold_text = "OOS_CHAIN" if is_chain else ("OOS_AVG" if is_avg else str(row.get("fold") or f"{idx}/{total}"))
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
         base_rank, _base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
@@ -2461,7 +2555,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
             f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_best, widths['best'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(_fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
+            f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
         lines.append(line)
     lines.append(separator)
@@ -2961,7 +3055,7 @@ class _ParallelCompletedResultsBoard:
         completed = sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
         if not completed:
             return
-        table = _render_results_table(completed, color=True, include_chain=False)
+        table = _render_results_table(completed, color=True, include_chain=False, include_oos_avg=True)
         if not table:
             return
         table_lines = table.splitlines()
@@ -3018,7 +3112,7 @@ class _ParallelFoldLiveBoard:
             log_status = _latest_parallel_fold_log_status(log_path)
             lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
         if completed_rows_sorted:
-            table = _render_results_table(completed_rows_sorted, color=True, include_chain=False)
+            table = _render_results_table(completed_rows_sorted, color=True, include_chain=False, include_oos_avg=True)
             if table:
                 lines.append("")
                 lines.extend(table.splitlines())
@@ -3526,8 +3620,7 @@ def run_outer_rolling_oos(
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
-    parallel_settings_line = _format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None
-    _print_plan(config, parallel_settings_line=parallel_settings_line)
+    _print_plan(config, parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None)
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
         return 0
@@ -3546,7 +3639,6 @@ def run_outer_rolling_oos(
     resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
     resource_sampler.start()
     sampler_kind = "random" if bool(timing_mode) else "tpe"
-
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
@@ -3874,7 +3966,7 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
-    print(_format_resource_brief_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
+    print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     if bool(timing_mode):
         print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
         if timing_paths.get("csv"):
