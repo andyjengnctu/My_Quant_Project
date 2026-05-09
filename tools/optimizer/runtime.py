@@ -40,10 +40,11 @@ def create_optimizer_study(db_name, *, seed=None, sampler_kind="tpe"):
 
         create_kwargs = {
             "study_name": "portfolio_optimization_overnight",
-            "storage": db_name,
-            "load_if_exists": True,
             "direction": "maximize",
         }
+        if db_name is not None:
+            create_kwargs["storage"] = db_name
+            create_kwargs["load_if_exists"] = True
         sampler_key = str(sampler_kind or "tpe").strip().lower()
         if sampler_key == "random":
             create_kwargs["sampler"] = optuna.samplers.RandomSampler(seed=(None if seed is None else int(seed)))

@@ -86,7 +86,14 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int
         resolved = int(raw_value)
     except (TypeError, ValueError):
         resolved = default_workers
-    resolved = max(1, min(8, resolved))
+    if bool(timing_mode) and fold_count is not None:
+        try:
+            max_workers = max(1, int(fold_count))
+        except (TypeError, ValueError):
+            max_workers = 8
+    else:
+        max_workers = 8
+    resolved = max(1, min(max_workers, resolved))
     if not bool(timing_mode):
         return 1
     return resolved
@@ -117,18 +124,24 @@ def _set_env_default(environ, name: str, value: str) -> None:
         environ[name] = str(value)
 
 
-def _apply_parallel_timing_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
-    if not bool(timing_mode):
-        return
-    _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
-    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
-    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "1")
+def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
+    _set_env_default(environ, "OPTIMIZER_PROFILE_WRITE_FILES", "0")
+    _set_env_default(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory")
+    if bool(timing_mode):
+        _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(max(1, int(fold_count))))
+        _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
+        _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+
+
+def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
+    value = _env_value_for_display(environ, "OPTIMIZER_OUTER_ROLLING_STUDY_STORAGE", "memory").strip().lower()
+    return value in {"1", "true", "yes", "on", "sqlite", "sqlite_db", "db"}
 
 
 def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
     rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
     local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
-    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "1")
+    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
@@ -468,9 +481,12 @@ def _build_outer_timing_row(
         "requested_trials": int(getattr(session, "n_trials", 0) or 0),
         "completed_trials": completed_trials,
         "finalists_count": int(finalists_count),
-        "db_file": str(db_file),
-        "profile_csv_path": str(session.profile_recorder.csv_path),
-        "profile_summary_path": str(session.profile_recorder.summary_path),
+        "db_file": str(db_file or "memory"),
+        "profile_csv_path": str(session.profile_recorder.csv_path if getattr(session.profile_recorder, "write_files", True) else ""),
+        "profile_summary_path": str(session.profile_recorder.summary_path if getattr(session.profile_recorder, "write_files", True) else ""),
+        "profile_write_files": bool(getattr(session.profile_recorder, "write_files", True)),
+        "study_storage": "sqlite" if db_file else "memory",
+        "parallel_fold_log_mode": "progress_only",
         "install_shared_cache_sec": float(install_shared_cache_sec),
         "study_create_sec": float(study_create_sec),
         "optimize_sec": float(optimize_sec),
@@ -636,6 +652,9 @@ def _write_outer_timing_summary(
             "local_min_hard_fail_cancelled": int(local_min_hard_fail_cancelled),
             "rolling_fold_workers_max": int(rolling_fold_workers_max),
             "rolling_fold_parallel": bool(rolling_fold_parallel),
+            "profile_write_files": str(os.environ.get("OPTIMIZER_PROFILE_WRITE_FILES", "1")).strip().lower() not in {"0", "false", "no", "off"},
+            "study_storage": "sqlite" if _is_outer_rolling_sqlite_storage_enabled(os.environ) else "memory",
+            "parallel_fold_log_mode": "progress_only" if bool(rolling_fold_parallel) else "normal",
             "prep_executor_created": int(prep_executor_created),
             "prep_executor_reused": int(prep_executor_reused),
         },
@@ -2045,6 +2064,30 @@ def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False
 
 
 
+class _ParallelFoldProgressLogFilter:
+    def __init__(self, handle):
+        self.handle = handle
+        self._buffer = ""
+
+    def write(self, text):
+        if not text:
+            return 0
+        raw = str(text)
+        self._buffer += raw
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            if line.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+                self.handle.write(line + "\n")
+                self.handle.flush()
+        return len(raw)
+
+    def flush(self):
+        if self._buffer.startswith(PARALLEL_FOLD_PROGRESS_PREFIX):
+            self.handle.write(self._buffer)
+            self._buffer = ""
+        self.handle.flush()
+
+
 def _tail_text_file(path: str, *, max_lines: int = 8) -> str:
     if not path or not os.path.exists(path):
         return ""
@@ -2493,10 +2536,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         session.n_trials = int(config.trials_per_fold)
         session.disable_milestone_dashboard = True
         session.timing_mode = bool(timing_mode)
-        db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
-        os.makedirs(db_dir, exist_ok=True)
-        db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
-        db_name = f"sqlite:///{db_file}"
+        sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
+        db_file = ""
+        db_name = None
+        if sqlite_storage_enabled:
+            db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
+            os.makedirs(db_dir, exist_ok=True)
+            db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
+            db_name = f"sqlite:///{db_file}"
         study = None
         try:
             install_started = time.perf_counter()
@@ -2748,7 +2795,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
     if log_path:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "w", encoding="utf-8") as log_handle:
-            with redirect_stdout(log_handle), redirect_stderr(log_handle):
+            progress_log = _ParallelFoldProgressLogFilter(log_handle)
+            with redirect_stdout(progress_log), redirect_stderr(log_handle):
                 return _execute()
     return _execute()
 
@@ -2797,7 +2845,7 @@ def run_outer_rolling_oos(
     rolling_shared_local_min_field_order_score_cache = {}
     rolling_shared_prep_executor_holder = {}
     years = list(range(config.first_oos_year, config.last_oos_year + 1))
-    _apply_parallel_timing_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
+    _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=len(years))
     overall_start = time.perf_counter()
@@ -2907,10 +2955,14 @@ def run_outer_rolling_oos(
         session.n_trials = int(config.trials_per_fold)
         session.disable_milestone_dashboard = True
         session.timing_mode = bool(timing_mode)
-        db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
-        os.makedirs(db_dir, exist_ok=True)
-        db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
-        db_name = f"sqlite:///{db_file}"
+        sqlite_storage_enabled = _is_outer_rolling_sqlite_storage_enabled(os.environ)
+        db_file = ""
+        db_name = None
+        if sqlite_storage_enabled:
+            db_dir = os.path.join(output_dir, "outer_rolling_oos", "db")
+            os.makedirs(db_dir, exist_ok=True)
+            db_file = os.path.join(db_dir, f"outer_oos_{session_ts}_{int(oos_year)}.db")
+            db_name = f"sqlite:///{db_file}"
         study = None
         try:
             print(f"\n{C_CYAN}[{fold_idx}/{len(years)}] selection={selection_start}~{selection_end} | OOS {oos_year}{C_RESET}")

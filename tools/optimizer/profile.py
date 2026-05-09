@@ -32,6 +32,7 @@ class OptimizerProfileRecorder:
         self.enabled = bool(enabled)
         self.console_print = bool(console_print)
         self.print_every_n_trials = max(1, int(print_every_n_trials))
+        self.write_files = str(os.environ.get("OPTIMIZER_PROFILE_WRITE_FILES", "1")).strip().lower() not in {"0", "false", "no", "off"}
         self.csv_path = os.path.join(output_dir, f"optimizer_profile_{session_ts}.csv")
         self.summary_path = os.path.join(output_dir, f"optimizer_profile_summary_{session_ts}.json")
         self.rows = []
@@ -39,7 +40,7 @@ class OptimizerProfileRecorder:
         self.first_trial_completed_wall_sec = None
 
     def init_output_files(self):
-        if not self.enabled:
+        if not self.enabled or not self.write_files:
             return
         os.makedirs(self.output_dir, exist_ok=True)
         with open(self.csv_path, "w", newline="", encoding="utf-8-sig") as handle:
@@ -58,6 +59,8 @@ class OptimizerProfileRecorder:
         self.rows.append(normalized)
         if self._run_started_perf_counter is not None and self.first_trial_completed_wall_sec is None:
             self.first_trial_completed_wall_sec = max(0.0, time.perf_counter() - self._run_started_perf_counter)
+        if not self.write_files:
+            return
         with open(self.csv_path, "a", newline="", encoding="utf-8-sig") as handle:
             writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
             writer.writerow(normalized)
@@ -88,7 +91,7 @@ class OptimizerProfileRecorder:
                 return
 
     def _rewrite_csv_from_rows(self):
-        if not self.enabled:
+        if not self.enabled or not self.write_files:
             return
         os.makedirs(self.output_dir, exist_ok=True)
         with open(self.csv_path, "w", newline="", encoding="utf-8-sig") as handle:
@@ -144,10 +147,11 @@ class OptimizerProfileRecorder:
             return
 
         summary = self.build_summary_payload()
-        self._rewrite_csv_from_rows()
-        os.makedirs(self.output_dir, exist_ok=True)
-        with open(self.summary_path, "w", encoding="utf-8") as handle:
-            json.dump(summary, handle, ensure_ascii=False, indent=2)
+        if self.write_files:
+            self._rewrite_csv_from_rows()
+            os.makedirs(self.output_dir, exist_ok=True)
+            with open(self.summary_path, "w", encoding="utf-8") as handle:
+                json.dump(summary, handle, ensure_ascii=False, indent=2)
 
         if not self.rows or not emit_console:
             return
