@@ -77,6 +77,34 @@ def build_trial_params(session, trial):
     )
 
 
+BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS = frozenset({
+    "high_len",
+    "atr_len",
+    "atr_times_trail",
+    "atr_buy_tol",
+    "bb_len",
+    "bb_mult",
+    "kc_len",
+    "kc_mult",
+    "vol_short_len",
+    "vol_long_len",
+})
+
+BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS = frozenset({
+    "atr_times_init",
+    "tp_percent",
+})
+
+
+def classify_breakout_local_min_dependency_layer(field_name: str) -> str:
+    field = str(field_name or "")
+    if field in BREAKOUT_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELDS:
+        return "signal"
+    if field in BREAKOUT_LOCAL_MIN_PORTFOLIO_DEPENDENCY_FIELDS:
+        return "portfolio"
+    return "unknown"
+
+
 def get_breakout_local_min_candidate_fields(trial, *, center_payload):
     candidate_fields = [
         "high_len",

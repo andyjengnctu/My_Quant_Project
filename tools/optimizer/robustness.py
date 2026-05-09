@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 
+from config.training_performance_policy import is_optimizer_local_min_dependency_stats_enabled
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
@@ -19,7 +20,11 @@ from config.training_policy import (
 from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.runtime_utils import choose_inline_progress_message, stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import build_runtime_param_raw_value
-from strategies.breakout.search_space import get_breakout_local_min_candidate_fields, resolve_breakout_neighbor_spec
+from strategies.breakout.search_space import (
+    classify_breakout_local_min_dependency_layer,
+    get_breakout_local_min_candidate_fields,
+    resolve_breakout_neighbor_spec,
+)
 from tools.optimizer.objective_runner import (
     evaluate_prepared_inner_validate_score,
     evaluate_prepared_train_score,
@@ -207,6 +212,81 @@ def _infer_neighbor_delta(center_payload: dict, payload: dict) -> tuple[str, int
     except (TypeError, ValueError):
         direction = 1 if str(new_value) > str(old_value) else -1
     return str(field_name), int(direction)
+
+
+def _infer_neighbor_changed_fields(center_payload: dict, payload: dict) -> list[str]:
+    return [
+        str(field_name) for field_name in sorted(set(center_payload or {}) | set(payload or {}))
+        if (center_payload or {}).get(field_name) != (payload or {}).get(field_name)
+    ]
+
+
+def _classify_local_min_neighbor_dependency(center_payload: dict, payload: dict) -> tuple[str, str]:
+    changed_fields = _infer_neighbor_changed_fields(center_payload, payload)
+    if len(changed_fields) == 1:
+        field_name = str(changed_fields[0])
+        layer = str(classify_breakout_local_min_dependency_layer(field_name))
+        if layer not in {"signal", "portfolio"}:
+            layer = "unknown"
+        return layer, field_name
+    if len(changed_fields) > 1:
+        return "mixed", "+".join(changed_fields)
+    return "unknown", "unchanged"
+
+
+def _empty_local_min_dependency_runtime_stats() -> dict:
+    return {
+        "dependency_signal_total": 0,
+        "dependency_signal_evaluated": 0,
+        "dependency_portfolio_total": 0,
+        "dependency_portfolio_evaluated": 0,
+        "dependency_mixed_total": 0,
+        "dependency_mixed_evaluated": 0,
+        "dependency_unknown_total": 0,
+        "dependency_unknown_evaluated": 0,
+        "signal_reuse_candidate_total": 0,
+        "signal_reuse_candidate_evaluated": 0,
+        "signal_recompute_required_total": 0,
+        "signal_recompute_required_evaluated": 0,
+        "dependency_field_total_counts": {},
+        "dependency_field_evaluated_counts": {},
+    }
+
+
+def _record_local_min_dependency(stats: dict, *, layer: str, field_name: str, bucket: str) -> None:
+    if not isinstance(stats, dict):
+        return
+    normalized_bucket = "evaluated" if str(bucket) == "evaluated" else "total"
+    normalized_layer = str(layer or "unknown")
+    if normalized_layer not in {"signal", "portfolio", "mixed", "unknown"}:
+        normalized_layer = "unknown"
+    stats[f"dependency_{normalized_layer}_{normalized_bucket}"] = int(stats.get(f"dependency_{normalized_layer}_{normalized_bucket}", 0) or 0) + 1
+    if normalized_layer == "portfolio":
+        stats[f"signal_reuse_candidate_{normalized_bucket}"] = int(stats.get(f"signal_reuse_candidate_{normalized_bucket}", 0) or 0) + 1
+    else:
+        stats[f"signal_recompute_required_{normalized_bucket}"] = int(stats.get(f"signal_recompute_required_{normalized_bucket}", 0) or 0) + 1
+    field_counts_key = f"dependency_field_{normalized_bucket}_counts"
+    if not isinstance(stats.get(field_counts_key), dict):
+        stats[field_counts_key] = {}
+    resolved_field = str(field_name or "unknown")
+    stats[field_counts_key][resolved_field] = int(stats[field_counts_key].get(resolved_field, 0) or 0) + 1
+
+
+def _build_local_min_dependency_total_stats(center_payload: dict, neighbor_payloads: list[dict]) -> dict:
+    stats = _empty_local_min_dependency_runtime_stats()
+    if not is_optimizer_local_min_dependency_stats_enabled():
+        return stats
+    for payload in list(neighbor_payloads or []):
+        layer, field_name = _classify_local_min_neighbor_dependency(center_payload, payload)
+        _record_local_min_dependency(stats, layer=layer, field_name=field_name, bucket="total")
+    return stats
+
+
+def _record_local_min_dependency_evaluated(stats: dict, center_payload: dict, payload: dict) -> None:
+    if not is_optimizer_local_min_dependency_stats_enabled():
+        return
+    layer, field_name = _classify_local_min_neighbor_dependency(center_payload, payload)
+    _record_local_min_dependency(stats, layer=layer, field_name=field_name, bucket="evaluated")
 
 
 def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_payloads: list[dict], payload_score_cache: dict) -> tuple[list[dict], dict]:
@@ -429,6 +509,7 @@ def _evaluate_local_min_neighbors_ordered(
     on_neighbor=None,
 ) -> dict:
     workers = _resolve_local_min_parallel_workers(session)
+    dependency_stats = _build_local_min_dependency_total_stats(center_payload, neighbor_payloads)
     if workers <= 1 or int(total_neighbors) <= 1:
         local_min_score = float("inf")
         evaluated_neighbors = 0
@@ -441,6 +522,7 @@ def _evaluate_local_min_neighbors_ordered(
         for neighbor_idx, payload in enumerate(neighbor_payloads, start=1):
             evaluated_neighbors = neighbor_idx
             result = _evaluate_local_min_neighbor_payload(session, payload, payload_score_cache)
+            _record_local_min_dependency_evaluated(dependency_stats, center_payload, payload)
             score = float(result["score"])
             if bool(result.get("payload_score_cache_hit", False)):
                 payload_score_cache_hit_count += 1
@@ -471,6 +553,7 @@ def _evaluate_local_min_neighbors_ordered(
             "hard_fail_stopped": bool(hard_fail_stopped),
             "hard_fail_neighbors_skipped": int(hard_fail_neighbors_skipped),
             "hard_fail_cancelled": int(hard_fail_cancelled),
+            **dependency_stats,
         }
 
     local_min_score = float("inf")
@@ -504,6 +587,7 @@ def _evaluate_local_min_neighbors_ordered(
             completed += 1
             evaluated_neighbors = neighbor_idx
             payload = neighbor_payloads[neighbor_idx - 1]
+            _record_local_min_dependency_evaluated(dependency_stats, center_payload, payload)
             score = float(result["score"])
             if bool(result.get("payload_score_cache_hit", False)):
                 payload_score_cache_hit_count += 1
@@ -549,6 +633,7 @@ def _evaluate_local_min_neighbors_ordered(
         "hard_fail_stopped": bool(hard_fail_stopped),
         "hard_fail_neighbors_skipped": int(hard_fail_neighbors_skipped),
         "hard_fail_cancelled": int(hard_fail_cancelled),
+        **dependency_stats,
     }
 
 
@@ -1204,6 +1289,20 @@ def compute_local_min_score(
             hard_fail_stopped=bool(hard_fail_stopped),
             hard_fail_neighbors_skipped=int(hard_fail_neighbors_skipped),
             hard_fail_cancelled=int(hard_fail_cancelled),
+            dependency_signal_total=int(evaluation_result.get("dependency_signal_total", 0) or 0),
+            dependency_signal_evaluated=int(evaluation_result.get("dependency_signal_evaluated", 0) or 0),
+            dependency_portfolio_total=int(evaluation_result.get("dependency_portfolio_total", 0) or 0),
+            dependency_portfolio_evaluated=int(evaluation_result.get("dependency_portfolio_evaluated", 0) or 0),
+            dependency_mixed_total=int(evaluation_result.get("dependency_mixed_total", 0) or 0),
+            dependency_mixed_evaluated=int(evaluation_result.get("dependency_mixed_evaluated", 0) or 0),
+            dependency_unknown_total=int(evaluation_result.get("dependency_unknown_total", 0) or 0),
+            dependency_unknown_evaluated=int(evaluation_result.get("dependency_unknown_evaluated", 0) or 0),
+            signal_reuse_candidate_total=int(evaluation_result.get("signal_reuse_candidate_total", 0) or 0),
+            signal_reuse_candidate_evaluated=int(evaluation_result.get("signal_reuse_candidate_evaluated", 0) or 0),
+            signal_recompute_required_total=int(evaluation_result.get("signal_recompute_required_total", 0) or 0),
+            signal_recompute_required_evaluated=int(evaluation_result.get("signal_recompute_required_evaluated", 0) or 0),
+            dependency_field_total_counts=dict(evaluation_result.get("dependency_field_total_counts", {}) or {}),
+            dependency_field_evaluated_counts=dict(evaluation_result.get("dependency_field_evaluated_counts", {}) or {}),
         )
     if on_finish is not None:
         on_finish(evaluated_neighbors, total_neighbors, float(local_min_score), bool(early_stopped))

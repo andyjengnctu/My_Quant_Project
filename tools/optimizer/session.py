@@ -27,6 +27,57 @@ def close_study_storage(study):
         dispose()
 
 
+def _empty_local_min_dependency_stats():
+    return {
+        "dependency_signal_total": 0,
+        "dependency_signal_evaluated": 0,
+        "dependency_portfolio_total": 0,
+        "dependency_portfolio_evaluated": 0,
+        "dependency_mixed_total": 0,
+        "dependency_mixed_evaluated": 0,
+        "dependency_unknown_total": 0,
+        "dependency_unknown_evaluated": 0,
+        "signal_reuse_candidate_total": 0,
+        "signal_reuse_candidate_evaluated": 0,
+        "signal_recompute_required_total": 0,
+        "signal_recompute_required_evaluated": 0,
+        "dependency_field_total_counts": {},
+        "dependency_field_evaluated_counts": {},
+    }
+
+
+def _merge_int_count_dict(target: dict, source) -> None:
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return
+    for key, value in source.items():
+        field_name = str(key or "unknown")
+        try:
+            count = int(value or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        target[field_name] = int(target.get(field_name, 0) or 0) + int(count)
+
+
+def _format_int_count_dict(counts: dict, *, max_items: int = 24) -> str:
+    if not isinstance(counts, dict) or not counts:
+        return ""
+    items = []
+    for key, value in counts.items():
+        try:
+            count = int(value or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        items.append((str(key), count))
+    items.sort(key=lambda item: (-item[1], item[0]))
+    if max_items is not None:
+        items = items[:max(1, int(max_items))]
+    return ";".join(f"{field}:{count}" for field, count in items)
+
+
 class OptimizerSession:
     def __init__(
         self,
@@ -116,6 +167,7 @@ class OptimizerSession:
             "hard_fail_stops": 0,
             "hard_fail_neighbors_skipped": 0,
             "hard_fail_cancelled": 0,
+            **_empty_local_min_dependency_stats(),
         }
         self.local_min_order_score_cache = {}
         self.local_min_field_order_score_cache = {}
@@ -281,6 +333,7 @@ class OptimizerSession:
             "hard_fail_stops": 0,
             "hard_fail_neighbors_skipped": 0,
             "hard_fail_cancelled": 0,
+            **_empty_local_min_dependency_stats(),
         }
 
     def record_local_min_review_stats(
@@ -301,6 +354,20 @@ class OptimizerSession:
         hard_fail_stopped=False,
         hard_fail_neighbors_skipped=0,
         hard_fail_cancelled=0,
+        dependency_signal_total=0,
+        dependency_signal_evaluated=0,
+        dependency_portfolio_total=0,
+        dependency_portfolio_evaluated=0,
+        dependency_mixed_total=0,
+        dependency_mixed_evaluated=0,
+        dependency_unknown_total=0,
+        dependency_unknown_evaluated=0,
+        signal_reuse_candidate_total=0,
+        signal_reuse_candidate_evaluated=0,
+        signal_recompute_required_total=0,
+        signal_recompute_required_evaluated=0,
+        dependency_field_total_counts=None,
+        dependency_field_evaluated_counts=None,
     ):
         with self._local_min_stats_lock:
             stats = self.local_min_review_stats
@@ -316,6 +383,24 @@ class OptimizerSession:
             stats["parallel_cancelled"] = int(stats.get("parallel_cancelled", 0)) + int(parallel_cancelled or 0)
             stats["hard_fail_neighbors_skipped"] = int(stats.get("hard_fail_neighbors_skipped", 0)) + int(hard_fail_neighbors_skipped or 0)
             stats["hard_fail_cancelled"] = int(stats.get("hard_fail_cancelled", 0)) + int(hard_fail_cancelled or 0)
+            stats["dependency_signal_total"] = int(stats.get("dependency_signal_total", 0)) + int(dependency_signal_total or 0)
+            stats["dependency_signal_evaluated"] = int(stats.get("dependency_signal_evaluated", 0)) + int(dependency_signal_evaluated or 0)
+            stats["dependency_portfolio_total"] = int(stats.get("dependency_portfolio_total", 0)) + int(dependency_portfolio_total or 0)
+            stats["dependency_portfolio_evaluated"] = int(stats.get("dependency_portfolio_evaluated", 0)) + int(dependency_portfolio_evaluated or 0)
+            stats["dependency_mixed_total"] = int(stats.get("dependency_mixed_total", 0)) + int(dependency_mixed_total or 0)
+            stats["dependency_mixed_evaluated"] = int(stats.get("dependency_mixed_evaluated", 0)) + int(dependency_mixed_evaluated or 0)
+            stats["dependency_unknown_total"] = int(stats.get("dependency_unknown_total", 0)) + int(dependency_unknown_total or 0)
+            stats["dependency_unknown_evaluated"] = int(stats.get("dependency_unknown_evaluated", 0)) + int(dependency_unknown_evaluated or 0)
+            stats["signal_reuse_candidate_total"] = int(stats.get("signal_reuse_candidate_total", 0)) + int(signal_reuse_candidate_total or 0)
+            stats["signal_reuse_candidate_evaluated"] = int(stats.get("signal_reuse_candidate_evaluated", 0)) + int(signal_reuse_candidate_evaluated or 0)
+            stats["signal_recompute_required_total"] = int(stats.get("signal_recompute_required_total", 0)) + int(signal_recompute_required_total or 0)
+            stats["signal_recompute_required_evaluated"] = int(stats.get("signal_recompute_required_evaluated", 0)) + int(signal_recompute_required_evaluated or 0)
+            if not isinstance(stats.get("dependency_field_total_counts"), dict):
+                stats["dependency_field_total_counts"] = {}
+            if not isinstance(stats.get("dependency_field_evaluated_counts"), dict):
+                stats["dependency_field_evaluated_counts"] = {}
+            _merge_int_count_dict(stats["dependency_field_total_counts"], dependency_field_total_counts)
+            _merge_int_count_dict(stats["dependency_field_evaluated_counts"], dependency_field_evaluated_counts)
             if bool(hard_fail_stopped):
                 stats["hard_fail_stops"] = int(stats.get("hard_fail_stops", 0)) + 1
             if bool(early_stopped):
@@ -345,6 +430,20 @@ class OptimizerSession:
             "hard_fail_stops": int(stats.get("hard_fail_stops", 0) or 0),
             "hard_fail_neighbors_skipped": int(stats.get("hard_fail_neighbors_skipped", 0) or 0),
             "hard_fail_cancelled": int(stats.get("hard_fail_cancelled", 0) or 0),
+            "dependency_signal_total": int(stats.get("dependency_signal_total", 0) or 0),
+            "dependency_signal_evaluated": int(stats.get("dependency_signal_evaluated", 0) or 0),
+            "dependency_portfolio_total": int(stats.get("dependency_portfolio_total", 0) or 0),
+            "dependency_portfolio_evaluated": int(stats.get("dependency_portfolio_evaluated", 0) or 0),
+            "dependency_mixed_total": int(stats.get("dependency_mixed_total", 0) or 0),
+            "dependency_mixed_evaluated": int(stats.get("dependency_mixed_evaluated", 0) or 0),
+            "dependency_unknown_total": int(stats.get("dependency_unknown_total", 0) or 0),
+            "dependency_unknown_evaluated": int(stats.get("dependency_unknown_evaluated", 0) or 0),
+            "signal_reuse_candidate_total": int(stats.get("signal_reuse_candidate_total", 0) or 0),
+            "signal_reuse_candidate_evaluated": int(stats.get("signal_reuse_candidate_evaluated", 0) or 0),
+            "signal_recompute_required_total": int(stats.get("signal_recompute_required_total", 0) or 0),
+            "signal_recompute_required_evaluated": int(stats.get("signal_recompute_required_evaluated", 0) or 0),
+            "dependency_field_total_counts": _format_int_count_dict(stats.get("dependency_field_total_counts", {}) or {}),
+            "dependency_field_evaluated_counts": _format_int_count_dict(stats.get("dependency_field_evaluated_counts", {}) or {}),
         }
 
     def get_prep_cache_stats(self):

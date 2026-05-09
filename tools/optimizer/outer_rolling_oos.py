@@ -1214,6 +1214,20 @@ def _build_outer_timing_row(
         "local_min_hard_fail_stops": int(local_min_stats.get("hard_fail_stops", 0) or 0),
         "local_min_hard_fail_neighbors_skipped": int(local_min_stats.get("hard_fail_neighbors_skipped", 0) or 0),
         "local_min_hard_fail_cancelled": int(local_min_stats.get("hard_fail_cancelled", 0) or 0),
+        "local_min_dependency_signal_total": int(local_min_stats.get("dependency_signal_total", 0) or 0),
+        "local_min_dependency_signal_evaluated": int(local_min_stats.get("dependency_signal_evaluated", 0) or 0),
+        "local_min_dependency_portfolio_total": int(local_min_stats.get("dependency_portfolio_total", 0) or 0),
+        "local_min_dependency_portfolio_evaluated": int(local_min_stats.get("dependency_portfolio_evaluated", 0) or 0),
+        "local_min_dependency_mixed_total": int(local_min_stats.get("dependency_mixed_total", 0) or 0),
+        "local_min_dependency_mixed_evaluated": int(local_min_stats.get("dependency_mixed_evaluated", 0) or 0),
+        "local_min_dependency_unknown_total": int(local_min_stats.get("dependency_unknown_total", 0) or 0),
+        "local_min_dependency_unknown_evaluated": int(local_min_stats.get("dependency_unknown_evaluated", 0) or 0),
+        "local_min_signal_reuse_candidate_total": int(local_min_stats.get("signal_reuse_candidate_total", 0) or 0),
+        "local_min_signal_reuse_candidate_evaluated": int(local_min_stats.get("signal_reuse_candidate_evaluated", 0) or 0),
+        "local_min_signal_recompute_required_total": int(local_min_stats.get("signal_recompute_required_total", 0) or 0),
+        "local_min_signal_recompute_required_evaluated": int(local_min_stats.get("signal_recompute_required_evaluated", 0) or 0),
+        "local_min_dependency_field_total_counts": str(local_min_stats.get("dependency_field_total_counts", "") or ""),
+        "local_min_dependency_field_evaluated_counts": str(local_min_stats.get("dependency_field_evaluated_counts", "") or ""),
         "rolling_fold_workers_max": int(getattr(session, "rolling_fold_workers_max", 1) or 1),
         "rolling_fold_parallel": bool(getattr(session, "rolling_fold_parallel", False)),
     }
@@ -1227,6 +1241,49 @@ def _sum_timing_rows(rows: list[dict], key: str) -> float:
         except (TypeError, ValueError):
             continue
     return total
+
+
+def _sum_int_timing_rows(rows: list[dict], key: str) -> int:
+    total = 0
+    for row in list(rows or []):
+        try:
+            total += int(row.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+    return int(total)
+
+
+def _parse_compact_count_text(value) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    text = str(value or "").strip()
+    if not text:
+        return counts
+    for part in text.split(";"):
+        if not part or ":" not in part:
+            continue
+        name, raw_count = part.rsplit(":", 1)
+        field_name = str(name or "unknown")
+        try:
+            count = int(raw_count or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            continue
+        counts[field_name] = int(counts.get(field_name, 0) or 0) + int(count)
+    return counts
+
+
+def _merge_compact_timing_count_text(rows: list[dict], key: str, *, max_items: int = 24) -> str:
+    merged: dict[str, int] = {}
+    for row in list(rows or []):
+        row_counts = _parse_compact_count_text(row.get(key, ""))
+        for field_name, count in row_counts.items():
+            merged[field_name] = int(merged.get(field_name, 0) or 0) + int(count)
+    items = [(field_name, count) for field_name, count in merged.items() if int(count or 0) > 0]
+    items.sort(key=lambda item: (-item[1], item[0]))
+    if max_items is not None:
+        items = items[:max(1, int(max_items))]
+    return ";".join(f"{field_name}:{count}" for field_name, count in items)
 
 
 def _write_outer_timing_summary(
@@ -1296,6 +1353,20 @@ def _write_outer_timing_summary(
     local_min_hard_fail_stops = sum(int(row.get("local_min_hard_fail_stops", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_hard_fail_neighbors_skipped = sum(int(row.get("local_min_hard_fail_neighbors_skipped", 0) or 0) for row in list(fold_timing_rows or []))
     local_min_hard_fail_cancelled = sum(int(row.get("local_min_hard_fail_cancelled", 0) or 0) for row in list(fold_timing_rows or []))
+    local_min_dependency_signal_total = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_signal_total")
+    local_min_dependency_signal_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_signal_evaluated")
+    local_min_dependency_portfolio_total = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_portfolio_total")
+    local_min_dependency_portfolio_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_portfolio_evaluated")
+    local_min_dependency_mixed_total = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_mixed_total")
+    local_min_dependency_mixed_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_mixed_evaluated")
+    local_min_dependency_unknown_total = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_unknown_total")
+    local_min_dependency_unknown_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_dependency_unknown_evaluated")
+    local_min_signal_reuse_candidate_total = _sum_int_timing_rows(fold_timing_rows, "local_min_signal_reuse_candidate_total")
+    local_min_signal_reuse_candidate_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_signal_reuse_candidate_evaluated")
+    local_min_signal_recompute_required_total = _sum_int_timing_rows(fold_timing_rows, "local_min_signal_recompute_required_total")
+    local_min_signal_recompute_required_evaluated = _sum_int_timing_rows(fold_timing_rows, "local_min_signal_recompute_required_evaluated")
+    local_min_dependency_field_total_counts = _merge_compact_timing_count_text(fold_timing_rows, "local_min_dependency_field_total_counts")
+    local_min_dependency_field_evaluated_counts = _merge_compact_timing_count_text(fold_timing_rows, "local_min_dependency_field_evaluated_counts")
     rolling_fold_workers_max = max((int(row.get("rolling_fold_workers_max", 1) or 1) for row in list(fold_timing_rows or [])), default=1)
     rolling_fold_parallel = any(bool(row.get("rolling_fold_parallel", False)) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
@@ -1388,6 +1459,20 @@ def _write_outer_timing_summary(
             "local_min_hard_fail_stops": int(local_min_hard_fail_stops),
             "local_min_hard_fail_neighbors_skipped": int(local_min_hard_fail_neighbors_skipped),
             "local_min_hard_fail_cancelled": int(local_min_hard_fail_cancelled),
+            "local_min_dependency_signal_total": int(local_min_dependency_signal_total),
+            "local_min_dependency_signal_evaluated": int(local_min_dependency_signal_evaluated),
+            "local_min_dependency_portfolio_total": int(local_min_dependency_portfolio_total),
+            "local_min_dependency_portfolio_evaluated": int(local_min_dependency_portfolio_evaluated),
+            "local_min_dependency_mixed_total": int(local_min_dependency_mixed_total),
+            "local_min_dependency_mixed_evaluated": int(local_min_dependency_mixed_evaluated),
+            "local_min_dependency_unknown_total": int(local_min_dependency_unknown_total),
+            "local_min_dependency_unknown_evaluated": int(local_min_dependency_unknown_evaluated),
+            "local_min_signal_reuse_candidate_total": int(local_min_signal_reuse_candidate_total),
+            "local_min_signal_reuse_candidate_evaluated": int(local_min_signal_reuse_candidate_evaluated),
+            "local_min_signal_recompute_required_total": int(local_min_signal_recompute_required_total),
+            "local_min_signal_recompute_required_evaluated": int(local_min_signal_recompute_required_evaluated),
+            "local_min_dependency_field_total_counts": str(local_min_dependency_field_total_counts),
+            "local_min_dependency_field_evaluated_counts": str(local_min_dependency_field_evaluated_counts),
             "rolling_fold_workers_max": int(rolling_fold_workers_max),
             "rolling_fold_parallel": bool(rolling_fold_parallel),
             "profile_write_files": str(os.environ.get("OPTIMIZER_PROFILE_WRITE_FILES", "1")).strip().lower() not in {"0", "false", "no", "off"},
@@ -1483,6 +1568,16 @@ def _print_outer_timing_summary(payload: dict):
         f"field_hint={int(summary.get('local_min_field_order_score_prioritized', 0) or 0)}｜"
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
+    )
+    print(
+        "📏 Local-min dependency｜"
+        f"signal={int(summary.get('local_min_dependency_signal_evaluated', 0) or 0)}/"
+        f"{int(summary.get('local_min_dependency_signal_total', 0) or 0)}｜"
+        f"portfolio={int(summary.get('local_min_dependency_portfolio_evaluated', 0) or 0)}/"
+        f"{int(summary.get('local_min_dependency_portfolio_total', 0) or 0)}｜"
+        f"reuse_candidate={int(summary.get('local_min_signal_reuse_candidate_evaluated', 0) or 0)}/"
+        f"{int(summary.get('local_min_signal_reuse_candidate_total', 0) or 0)}｜"
+        f"fields={str(summary.get('local_min_dependency_field_evaluated_counts', '') or '-')}"
     )
     print(
         "📏 Prep 細分摘要｜"

@@ -1,3 +1,5 @@
+import os
+
 # Optimizer 訓練效能參數區
 #
 # 本檔只放會影響訓練時間、記憶體、process/cache 併發行為的設定。
@@ -63,6 +65,33 @@ def resolve_optimizer_feature_bank_max_items_default():
     )
 
 
+# OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED:
+# - True = timing mode 追加 local_min 鄰點的 signal / portfolio 依賴分層統計。
+# - False = 關閉此觀測欄位。
+# - 僅影響 timing 統計，不改 optimizer 分數、交易規則或 local_min 評估順序。
+OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED = True
+
+
+def _coerce_bool(value, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "n"}:
+        return False
+    return bool(default)
+
+
+def is_optimizer_local_min_dependency_stats_enabled():
+    raw_value = os.environ.get(
+        "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED",
+        OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED,
+    )
+    return _coerce_bool(raw_value, default=True)
+
 def build_training_performance_policy_snapshot(fold_count=None):
     return {
         "OPTIMIZER_ROLLING_FOLD_WORKERS": OPTIMIZER_ROLLING_FOLD_WORKERS,
@@ -73,4 +102,5 @@ def build_training_performance_policy_snapshot(fold_count=None):
         ),
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
+        "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
     }
