@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import os
 import re
 import sys
 import time
@@ -43,6 +44,15 @@ from tools.optimizer.study_utils import (
 def _get_progress_colors(session):
     colors = getattr(session, "colors", None)
     return colors if isinstance(colors, dict) else {}
+
+
+def _resolve_local_min_progress_min_interval_sec():
+    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PROGRESS_MIN_INTERVAL_SEC", "1.0")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = 1.0
+    return max(0.0, min(10.0, float(value)))
 
 
 def _get_local_min_score_cache(session):
@@ -334,6 +344,8 @@ class _FinalistProgressBoard:
         self.best_local_score = float("-inf")
         self.best_local_trial = None
         self.completed_status: dict[int, tuple[float, bool, bool]] = {}
+        self.progress_min_interval_sec = _resolve_local_min_progress_min_interval_sec()
+        self._last_progress_render_at = 0.0
 
     def _format_duration(self, seconds) -> str:
         if seconds is None:
@@ -381,7 +393,24 @@ class _FinalistProgressBoard:
         )
         self._render()
 
+    def _should_render_progress_update(self, *, current_neighbor: int, total_neighbors: int) -> bool:
+        current_neighbor = int(current_neighbor or 0)
+        total_neighbors = int(total_neighbors or 0)
+        if current_neighbor <= 1 or (total_neighbors > 0 and current_neighbor >= total_neighbors):
+            self._last_progress_render_at = time.perf_counter()
+            return True
+        min_interval = float(self.progress_min_interval_sec)
+        if min_interval <= 0.0:
+            return True
+        now = time.perf_counter()
+        if now - float(self._last_progress_render_at or 0.0) >= min_interval:
+            self._last_progress_render_at = now
+            return True
+        return False
+
     def update_neighbor(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min):
+        if not self._should_render_progress_update(current_neighbor=current_neighbor, total_neighbors=total_neighbors):
+            return
         if self.single_line_context:
             self._render_single_line(
                 idx,

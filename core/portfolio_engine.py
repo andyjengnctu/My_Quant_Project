@@ -1,4 +1,3 @@
-import os
 import pandas as pd
 import time
 from collections import OrderedDict
@@ -37,46 +36,6 @@ from core.portfolio_exits import append_portfolio_position_active_level_row
 
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
 _BENCHMARK_PERIOD_STATS_CACHE = OrderedDict()
-_NORMAL_SETUP_INDEX_CACHE = OrderedDict()
-
-
-def _resolve_normal_setup_index_cache_max_items():
-    raw_value = os.environ.get("PORTFOLIO_NORMAL_SETUP_INDEX_CACHE_MAX_ITEMS", "256")
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        value = 256
-    return max(0, min(1024, value))
-
-
-def _make_normal_setup_index_cache_key(all_dfs_fast):
-    if all_dfs_fast is None:
-        return None
-    return id(all_dfs_fast)
-
-
-def _get_cached_normal_setup_index(all_dfs_fast):
-    cache_key = _make_normal_setup_index_cache_key(all_dfs_fast)
-    max_items = _resolve_normal_setup_index_cache_max_items()
-    if cache_key is None or max_items <= 0:
-        return build_normal_setup_index(all_dfs_fast)
-
-    cached_entry = _NORMAL_SETUP_INDEX_CACHE.get(cache_key)
-    if isinstance(cached_entry, dict) and cached_entry.get("source") is all_dfs_fast:
-        _NORMAL_SETUP_INDEX_CACHE.move_to_end(cache_key)
-        return cached_entry["normal_setup_index"]
-
-    normal_setup_index = build_normal_setup_index(all_dfs_fast)
-    _NORMAL_SETUP_INDEX_CACHE[cache_key] = {
-        "source": all_dfs_fast,
-        "normal_setup_index": normal_setup_index,
-    }
-    _NORMAL_SETUP_INDEX_CACHE.move_to_end(cache_key)
-    while len(_NORMAL_SETUP_INDEX_CACHE) > int(max_items):
-        _NORMAL_SETUP_INDEX_CACHE.popitem(last=False)
-    return normal_setup_index
-
-
 def _make_benchmark_period_cache_key(*, benchmark_data, sorted_dates, start_idx):
     if benchmark_data is None or not sorted_dates or start_idx >= len(sorted_dates):
         return None
@@ -304,10 +263,10 @@ def run_portfolio_timeline(
                 for ticker, logs in all_standalone_logs.items():
                     if pit_stats_index.get(ticker) is None:
                         pit_stats_index[ticker] = build_trade_stats_index(logs)
-        normal_setup_index = _get_cached_normal_setup_index(all_dfs_fast)
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     else:
         pit_stats_index = dict(pit_stats_index or {})
-        normal_setup_index = _get_cached_normal_setup_index(all_dfs_fast)
+        normal_setup_index = build_normal_setup_index(all_dfs_fast)
     if profile_timing_enabled:
         build_trade_index_sec = time.perf_counter() - t0
 
