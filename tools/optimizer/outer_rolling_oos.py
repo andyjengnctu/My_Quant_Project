@@ -1158,6 +1158,30 @@ def _build_outer_timing_row(
         "prep_executor_created": int(prep_cache_stats.get("executor_created", 0) or 0),
         "prep_executor_reused": int(prep_cache_stats.get("executor_reused", 0) or 0),
         "prep_executor_shared": bool(prep_cache_stats.get("executor_shared", False)),
+        "prep_call_count": int(prep_cache_stats.get("prep_call_count", 0) or 0),
+        "prep_wall_sum_sec": float(prep_cache_stats.get("prep_wall_sum_sec", 0.0) or 0.0),
+        "prep_worker_total_sum_sec": float(prep_cache_stats.get("prep_worker_total_sum_sec", 0.0) or 0.0),
+        "prep_total_sum_sec": float(prep_cache_stats.get("prep_total_sum_sec", 0.0) or 0.0),
+        "prep_copy_sum_sec": float(prep_cache_stats.get("prep_copy_sum_sec", 0.0) or 0.0),
+        "prep_generate_signals_sum_sec": float(prep_cache_stats.get("prep_generate_signals_sum_sec", 0.0) or 0.0),
+        "prep_assign_sum_sec": float(prep_cache_stats.get("prep_assign_sum_sec", 0.0) or 0.0),
+        "prep_run_backtest_sum_sec": float(prep_cache_stats.get("prep_run_backtest_sum_sec", 0.0) or 0.0),
+        "prep_to_dict_sum_sec": float(prep_cache_stats.get("prep_to_dict_sum_sec", 0.0) or 0.0),
+        "prep_static_pack_sum_sec": float(prep_cache_stats.get("prep_static_pack_sum_sec", 0.0) or 0.0),
+        "prep_executor_setup_sum_sec": float(prep_cache_stats.get("prep_executor_setup_sum_sec", 0.0) or 0.0),
+        "prep_executor_submit_sum_sec": float(prep_cache_stats.get("prep_executor_submit_sum_sec", 0.0) or 0.0),
+        "prep_executor_collect_sum_sec": float(prep_cache_stats.get("prep_executor_collect_sum_sec", 0.0) or 0.0),
+        "prep_executor_shutdown_sum_sec": float(prep_cache_stats.get("prep_executor_shutdown_sum_sec", 0.0) or 0.0),
+        "prep_merge_sum_sec": float(prep_cache_stats.get("prep_merge_sum_sec", 0.0) or 0.0),
+        "prep_master_union_sum_sec": float(prep_cache_stats.get("prep_master_union_sum_sec", 0.0) or 0.0),
+        "prep_ticker_count_sum": int(prep_cache_stats.get("prep_ticker_count_sum", 0) or 0),
+        "prep_batch_count_sum": int(prep_cache_stats.get("prep_batch_count_sum", 0) or 0),
+        "prep_ok_count_sum": int(prep_cache_stats.get("prep_ok_count_sum", 0) or 0),
+        "prep_fail_count_sum": int(prep_cache_stats.get("prep_fail_count_sum", 0) or 0),
+        "prep_feature_bank_hits": int(prep_cache_stats.get("prep_feature_bank_hits", 0) or 0),
+        "prep_feature_bank_misses": int(prep_cache_stats.get("prep_feature_bank_misses", 0) or 0),
+        "prep_feature_bank_size_max": int(prep_cache_stats.get("prep_feature_bank_size_max", 0) or 0),
+        "prep_feature_bank_max_items": int(prep_cache_stats.get("prep_feature_bank_max_items", 0) or 0),
         "local_min_neighbors_total": int(local_min_stats.get("total_neighbors", 0) or 0),
         "local_min_neighbors_evaluated": int(local_min_stats.get("evaluated_neighbors", 0) or 0),
         "local_min_neighbors_skipped": int(local_min_stats.get("skipped_neighbors", 0) or 0),
@@ -1260,6 +1284,15 @@ def _write_outer_timing_summary(
     rolling_fold_parallel = any(bool(row.get("rolling_fold_parallel", False)) for row in list(fold_timing_rows or []))
     prep_executor_created = sum(int(row.get("prep_executor_created", 0) or 0) for row in list(fold_timing_rows or []))
     prep_executor_reused = sum(int(row.get("prep_executor_reused", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_call_count = sum(int(row.get("prep_call_count", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_ticker_count_sum = sum(int(row.get("prep_ticker_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_batch_count_sum = sum(int(row.get("prep_batch_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_ok_count_sum = sum(int(row.get("prep_ok_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_fail_count_sum = sum(int(row.get("prep_fail_count_sum", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_feature_bank_hits = sum(int(row.get("prep_feature_bank_hits", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_feature_bank_misses = sum(int(row.get("prep_feature_bank_misses", 0) or 0) for row in list(fold_timing_rows or []))
+    prep_feature_bank_size_max = max((int(row.get("prep_feature_bank_size_max", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
+    prep_feature_bank_max_items = max((int(row.get("prep_feature_bank_max_items", 0) or 0) for row in list(fold_timing_rows or [])), default=0)
     payload = {
         "type": "outer_rolling_oos_timing",
         "version": 1,
@@ -1298,6 +1331,31 @@ def _write_outer_timing_summary(
             "prep_cache_stores": int(prep_cache_stores),
             "prep_cache_evictions": int(prep_cache_evictions),
             "prep_cache_hit_rate": (float(prep_cache_hits) / float(prep_cache_hits + prep_cache_misses)) if (prep_cache_hits + prep_cache_misses) > 0 else 0.0,
+            "prep_call_count": int(prep_call_count),
+            "prep_wall_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_wall_sum_sec")),
+            "prep_worker_total_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_worker_total_sum_sec")),
+            "prep_total_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_total_sum_sec")),
+            "prep_copy_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_copy_sum_sec")),
+            "prep_generate_signals_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_generate_signals_sum_sec")),
+            "prep_assign_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_assign_sum_sec")),
+            "prep_run_backtest_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_run_backtest_sum_sec")),
+            "prep_to_dict_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_to_dict_sum_sec")),
+            "prep_static_pack_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_static_pack_sum_sec")),
+            "prep_executor_setup_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_executor_setup_sum_sec")),
+            "prep_executor_submit_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_executor_submit_sum_sec")),
+            "prep_executor_collect_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_executor_collect_sum_sec")),
+            "prep_executor_shutdown_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_executor_shutdown_sum_sec")),
+            "prep_merge_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_merge_sum_sec")),
+            "prep_master_union_sum_sec": float(_sum_timing_rows(fold_timing_rows, "prep_master_union_sum_sec")),
+            "prep_ticker_count_sum": int(prep_ticker_count_sum),
+            "prep_batch_count_sum": int(prep_batch_count_sum),
+            "prep_ok_count_sum": int(prep_ok_count_sum),
+            "prep_fail_count_sum": int(prep_fail_count_sum),
+            "prep_feature_bank_hits": int(prep_feature_bank_hits),
+            "prep_feature_bank_misses": int(prep_feature_bank_misses),
+            "prep_feature_bank_hit_rate": (float(prep_feature_bank_hits) / float(prep_feature_bank_hits + prep_feature_bank_misses)) if (prep_feature_bank_hits + prep_feature_bank_misses) > 0 else 0.0,
+            "prep_feature_bank_size_max": int(prep_feature_bank_size_max),
+            "prep_feature_bank_max_items": int(prep_feature_bank_max_items),
             "local_min_neighbors_total": int(local_min_neighbors_total),
             "local_min_neighbors_evaluated": int(local_min_neighbors_evaluated),
             "local_min_neighbors_skipped": max(0, int(local_min_neighbors_total) - int(local_min_neighbors_evaluated)),
@@ -1409,6 +1467,17 @@ def _print_outer_timing_summary(payload: dict):
         f"field_hint={int(summary.get('local_min_field_order_score_prioritized', 0) or 0)}｜"
         f"early/prune={int(summary.get('local_min_early_stops', 0) or 0)}/"
         f"{int(summary.get('local_min_selection_prunes', 0) or 0)}"
+    )
+    print(
+        "📏 Prep 細分摘要｜"
+        f"calls={int(summary.get('prep_call_count', 0) or 0)}｜"
+        f"wall={float(summary.get('prep_wall_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"signals={float(summary.get('prep_generate_signals_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"backtest={float(summary.get('prep_run_backtest_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"pack={float(summary.get('prep_to_dict_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"collect={float(summary.get('prep_executor_collect_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"merge={float(summary.get('prep_merge_sum_sec', 0.0) or 0.0):.3f}s｜"
+        f"feature_hit={float(summary.get('prep_feature_bank_hit_rate', 0.0) or 0.0):.1%}"
     )
 
 

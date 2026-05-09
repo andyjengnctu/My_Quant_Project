@@ -98,6 +98,7 @@ class OptimizerSession:
             "stores": 0,
             "evictions": 0,
         }
+        self.prep_phase_stats = self._empty_prep_phase_stats()
         self.local_min_review_stats = {
             "total_neighbors": 0,
             "evaluated_neighbors": 0,
@@ -195,6 +196,65 @@ class OptimizerSession:
         update_cache.clear()
         return int(merged)
 
+    @staticmethod
+    def _empty_prep_phase_stats():
+        return {
+            "prep_call_count": 0,
+            "prep_wall_sum_sec": 0.0,
+            "prep_worker_total_sum_sec": 0.0,
+            "prep_total_sum_sec": 0.0,
+            "prep_copy_sum_sec": 0.0,
+            "prep_generate_signals_sum_sec": 0.0,
+            "prep_assign_sum_sec": 0.0,
+            "prep_run_backtest_sum_sec": 0.0,
+            "prep_to_dict_sum_sec": 0.0,
+            "prep_static_pack_sum_sec": 0.0,
+            "prep_executor_setup_sum_sec": 0.0,
+            "prep_executor_submit_sum_sec": 0.0,
+            "prep_executor_collect_sum_sec": 0.0,
+            "prep_executor_shutdown_sum_sec": 0.0,
+            "prep_merge_sum_sec": 0.0,
+            "prep_master_union_sum_sec": 0.0,
+            "prep_ticker_count_sum": 0,
+            "prep_batch_count_sum": 0,
+            "prep_ok_count_sum": 0,
+            "prep_fail_count_sum": 0,
+            "prep_feature_bank_hits": 0,
+            "prep_feature_bank_misses": 0,
+            "prep_feature_bank_size_max": 0,
+            "prep_feature_bank_max_items": 0,
+        }
+
+    def _record_prepared_trial_inputs_profile(self, prep_result):
+        if not isinstance(prep_result, dict):
+            return
+        profile = dict(prep_result.get("prep_profile") or {})
+        stats = self.prep_phase_stats
+        stats["prep_call_count"] = int(stats.get("prep_call_count", 0) or 0) + 1
+        stats["prep_wall_sum_sec"] = float(stats.get("prep_wall_sum_sec", 0.0) or 0.0) + float(prep_result.get("prep_wall_sec", 0.0) or 0.0)
+        stats["prep_worker_total_sum_sec"] = float(stats.get("prep_worker_total_sum_sec", 0.0) or 0.0) + float(profile.get("worker_total_sum_sec", 0.0) or 0.0)
+        stats["prep_total_sum_sec"] = float(stats.get("prep_total_sum_sec", 0.0) or 0.0) + float(profile.get("prep_total_sum_sec", 0.0) or 0.0)
+        stats["prep_copy_sum_sec"] = float(stats.get("prep_copy_sum_sec", 0.0) or 0.0) + float(profile.get("copy_sum_sec", 0.0) or 0.0)
+        stats["prep_generate_signals_sum_sec"] = float(stats.get("prep_generate_signals_sum_sec", 0.0) or 0.0) + float(profile.get("generate_signals_sum_sec", 0.0) or 0.0)
+        stats["prep_assign_sum_sec"] = float(stats.get("prep_assign_sum_sec", 0.0) or 0.0) + float(profile.get("assign_sum_sec", 0.0) or 0.0)
+        stats["prep_run_backtest_sum_sec"] = float(stats.get("prep_run_backtest_sum_sec", 0.0) or 0.0) + float(profile.get("run_backtest_sum_sec", 0.0) or 0.0)
+        stats["prep_to_dict_sum_sec"] = float(stats.get("prep_to_dict_sum_sec", 0.0) or 0.0) + float(profile.get("to_dict_sum_sec", 0.0) or 0.0)
+        stats["prep_static_pack_sum_sec"] = float(stats.get("prep_static_pack_sum_sec", 0.0) or 0.0) + float(profile.get("static_pack_sec", 0.0) or 0.0)
+        stats["prep_executor_setup_sum_sec"] = float(stats.get("prep_executor_setup_sum_sec", 0.0) or 0.0) + float(profile.get("executor_setup_sec", 0.0) or 0.0)
+        stats["prep_executor_submit_sum_sec"] = float(stats.get("prep_executor_submit_sum_sec", 0.0) or 0.0) + float(profile.get("executor_submit_sec", 0.0) or 0.0)
+        stats["prep_executor_collect_sum_sec"] = float(stats.get("prep_executor_collect_sum_sec", 0.0) or 0.0) + float(profile.get("executor_collect_sec", 0.0) or 0.0)
+        stats["prep_executor_shutdown_sum_sec"] = float(stats.get("prep_executor_shutdown_sum_sec", 0.0) or 0.0) + float(profile.get("executor_shutdown_sec", 0.0) or 0.0)
+        stats["prep_merge_sum_sec"] = float(stats.get("prep_merge_sum_sec", 0.0) or 0.0) + float(profile.get("merge_sum_sec", 0.0) or 0.0)
+        stats["prep_master_union_sum_sec"] = float(stats.get("prep_master_union_sum_sec", 0.0) or 0.0) + float(profile.get("master_union_sec", 0.0) or 0.0)
+        stats["prep_ticker_count_sum"] = int(stats.get("prep_ticker_count_sum", 0) or 0) + int(profile.get("ticker_count", 0) or 0)
+        stats["prep_batch_count_sum"] = int(stats.get("prep_batch_count_sum", 0) or 0) + int(profile.get("batch_count", 0) or 0)
+        stats["prep_ok_count_sum"] = int(stats.get("prep_ok_count_sum", 0) or 0) + int(profile.get("ok_count", 0) or 0)
+        stats["prep_fail_count_sum"] = int(stats.get("prep_fail_count_sum", 0) or 0) + int(profile.get("fail_count", 0) or 0)
+        stats["prep_feature_bank_hits"] = int(stats.get("prep_feature_bank_hits", 0) or 0) + int(profile.get("feature_bank_hits", 0) or 0)
+        stats["prep_feature_bank_misses"] = int(stats.get("prep_feature_bank_misses", 0) or 0) + int(profile.get("feature_bank_misses", 0) or 0)
+        stats["prep_feature_bank_size_max"] = max(int(stats.get("prep_feature_bank_size_max", 0) or 0), int(profile.get("feature_bank_size_max", 0) or 0))
+        stats["prep_feature_bank_max_items"] = max(int(stats.get("prep_feature_bank_max_items", 0) or 0), int(profile.get("feature_bank_max_items", 0) or 0))
+
     def reset_prep_cache_stats(self):
         self.prep_cache_stats = {
             "hits": 0,
@@ -202,6 +262,7 @@ class OptimizerSession:
             "stores": 0,
             "evictions": 0,
         }
+        self.prep_phase_stats = self._empty_prep_phase_stats()
         self.local_min_review_stats = {
             "total_neighbors": 0,
             "evaluated_neighbors": 0,
@@ -296,6 +357,7 @@ class OptimizerSession:
             "executor_created": int(self.prep_executor_stats.get("created", 0)),
             "executor_reused": int(self.prep_executor_stats.get("reused", 0)),
             "executor_shared": self._shared_trial_prep_executor_holder is not None,
+            **dict(getattr(self, "prep_phase_stats", {}) or {}),
         }
 
     def _precompute_optimizer_true_range(self):
@@ -397,6 +459,19 @@ class OptimizerSession:
                     "assign_sum_sec": 0.0,
                     "run_backtest_sum_sec": 0.0,
                     "to_dict_sum_sec": 0.0,
+                    "feature_bank_hits": 0,
+                    "feature_bank_misses": 0,
+                    "feature_bank_size_max": 0,
+                    "feature_bank_max_items": 0,
+                    "static_pack_sec": 0.0,
+                    "executor_setup_sec": 0.0,
+                    "executor_submit_sec": 0.0,
+                    "executor_collect_sec": 0.0,
+                    "executor_shutdown_sec": 0.0,
+                    "merge_sum_sec": 0.0,
+                    "master_union_sec": 0.0,
+                    "ticker_count": 0,
+                    "batch_count": 0,
                     "ok_count": int(cached["ok_count"]),
                     "fail_count": int(cached["fail_count"]),
                 },
@@ -412,6 +487,7 @@ class OptimizerSession:
         with self._cache_lock:
             if int(self._prepared_trial_input_cache_max_items) <= 0:
                 return
+            self._record_prepared_trial_inputs_profile(prep_result)
             self.prep_cache_stats["stores"] = int(self.prep_cache_stats.get("stores", 0)) + 1
             self._prepared_trial_input_cache[cache_key] = {
                 "all_dfs_fast": prep_result["all_dfs_fast"],

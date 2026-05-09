@@ -50,12 +50,41 @@ def _empty_worker_profile(worker_start=None):
         "assign_columns_sec": 0.0,
         "run_backtest_sec": 0.0,
         "to_dict_sec": 0.0,
+        "feature_bank_hits": 0,
+        "feature_bank_misses": 0,
+        "feature_bank_size": 0,
+        "feature_bank_max_items": 0,
+    }
+
+
+def _snapshot_feature_bank(feature_bank):
+    snapshot_stats = getattr(feature_bank, "snapshot_stats", None)
+    if not callable(snapshot_stats):
+        return {"hits": 0, "misses": 0, "size": 0, "max_items": 0}
+    stats = snapshot_stats() or {}
+    return {
+        "hits": int(stats.get("hits", 0) or 0),
+        "misses": int(stats.get("misses", 0) or 0),
+        "size": int(stats.get("size", 0) or 0),
+        "max_items": int(stats.get("max_items", 0) or 0),
+    }
+
+
+def _feature_bank_profile_delta(before, after):
+    before = dict(before or {})
+    after = dict(after or {})
+    return {
+        "feature_bank_hits": max(0, int(after.get("hits", 0) or 0) - int(before.get("hits", 0) or 0)),
+        "feature_bank_misses": max(0, int(after.get("misses", 0) or 0) - int(before.get("misses", 0) or 0)),
+        "feature_bank_size": int(after.get("size", 0) or 0),
+        "feature_bank_max_items": int(after.get("max_items", 0) or 0),
     }
 
 
 def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, profile_enabled=True):
     worker_start = time.perf_counter() if profile_enabled else None
     profile_stats = {} if profile_enabled else None
+    feature_bank_before = _snapshot_feature_bank(feature_bank) if profile_enabled else None
     try:
         min_rows_needed = get_required_min_rows(params)
         if len(df) < min_rows_needed:
@@ -78,15 +107,19 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
             include_pit_stats_index=include_pit_stats_index,
             feature_bank=feature_bank,
         )
-        worker_profile = _empty_worker_profile(worker_start) if profile_stats is None else {
-            "worker_total_sec": time.perf_counter() - worker_start,
-            "prep_total_sec": float(profile_stats.get("total_sec", 0.0)),
-            "copy_sec": float(profile_stats.get("copy_sec", 0.0)),
-            "generate_signals_sec": float(profile_stats.get("generate_signals_sec", 0.0)),
-            "assign_columns_sec": float(profile_stats.get("assign_columns_sec", 0.0)),
-            "run_backtest_sec": float(profile_stats.get("run_backtest_sec", 0.0)),
-            "to_dict_sec": float(profile_stats.get('to_dict_sec', 0.0)),
-        }
+        if profile_stats is None:
+            worker_profile = _empty_worker_profile(worker_start)
+        else:
+            worker_profile = {
+                "worker_total_sec": time.perf_counter() - worker_start,
+                "prep_total_sec": float(profile_stats.get("total_sec", 0.0)),
+                "copy_sec": float(profile_stats.get("copy_sec", 0.0)),
+                "generate_signals_sec": float(profile_stats.get("generate_signals_sec", 0.0)),
+                "assign_columns_sec": float(profile_stats.get("assign_columns_sec", 0.0)),
+                "run_backtest_sec": float(profile_stats.get("run_backtest_sec", 0.0)),
+                "to_dict_sec": float(profile_stats.get('to_dict_sec', 0.0)),
+            }
+            worker_profile.update(_feature_bank_profile_delta(feature_bank_before, _snapshot_feature_bank(feature_bank)))
         return {
             "ticker": ticker,
             "ok": True,
@@ -118,6 +151,7 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
                         "assign_columns_sec": float(profile_stats.get("assign_columns_sec", 0.0)),
                         "run_backtest_sec": float(profile_stats.get("run_backtest_sec", 0.0)),
                         "to_dict_sec": 0.0,
+                        **_feature_bank_profile_delta(feature_bank_before, _snapshot_feature_bank(feature_bank)),
                     }
                 ),
             }
@@ -148,6 +182,16 @@ def merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index,
     prep_profile["assign_sum_sec"] += float(result_profile.get("assign_columns_sec", 0.0))
     prep_profile["run_backtest_sum_sec"] += float(result_profile.get("run_backtest_sec", 0.0))
     prep_profile["to_dict_sum_sec"] += float(result_profile.get("to_dict_sec", 0.0))
+    prep_profile["feature_bank_hits"] += int(result_profile.get("feature_bank_hits", 0) or 0)
+    prep_profile["feature_bank_misses"] += int(result_profile.get("feature_bank_misses", 0) or 0)
+    prep_profile["feature_bank_size_max"] = max(
+        int(prep_profile.get("feature_bank_size_max", 0) or 0),
+        int(result_profile.get("feature_bank_size", 0) or 0),
+    )
+    prep_profile["feature_bank_max_items"] = max(
+        int(prep_profile.get("feature_bank_max_items", 0) or 0),
+        int(result_profile.get("feature_bank_max_items", 0) or 0),
+    )
 
     if result["ok"]:
         prep_profile["ok_count"] += 1
@@ -231,18 +275,33 @@ def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
 
 def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=None, update_master_dates=True, profile_enabled=True):
     ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
+    prep_profile["ticker_count"] += int(len(tickers))
+    prep_profile["batch_count"] += int(len(ticker_batches))
+    t_submit = time.perf_counter()
     if executor_kind == 'thread':
         futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled) for batch in ticker_batches]
     else:
         futures = [executor.submit(worker_prep_batch_from_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled) for batch in ticker_batches]
+    prep_profile["executor_submit_sec"] += time.perf_counter() - t_submit
+    t_collect = time.perf_counter()
     for future in as_completed(futures):
         batch_results = future.result()
+        now = time.perf_counter()
+        prep_profile["executor_collect_sec"] += now - t_collect
         for result in batch_results:
+            t_merge = time.perf_counter()
             merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, static_fast_cache, ok_tickers=ok_tickers, update_master_dates=update_master_dates)
+            prep_profile["merge_sum_sec"] += time.perf_counter() - t_merge
+        t_collect = time.perf_counter()
 
 
 def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True):
-    resolved_static_fast_cache = static_fast_cache or {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
+    t_static_pack = time.perf_counter()
+    if static_fast_cache is None:
+        resolved_static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
+    else:
+        resolved_static_fast_cache = static_fast_cache
+    static_pack_sec = time.perf_counter() - t_static_pack
     all_dfs_fast, all_trade_logs, all_pit_stats_index = {}, {}, {}
     master_dates = set()
     prep_failures = []
@@ -256,6 +315,19 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
         "assign_sum_sec": 0.0,
         "run_backtest_sum_sec": 0.0,
         "to_dict_sum_sec": 0.0,
+        "feature_bank_hits": 0,
+        "feature_bank_misses": 0,
+        "feature_bank_size_max": 0,
+        "feature_bank_max_items": 0,
+        "static_pack_sec": float(static_pack_sec),
+        "executor_setup_sec": 0.0,
+        "executor_submit_sec": 0.0,
+        "executor_collect_sec": 0.0,
+        "executor_shutdown_sec": 0.0,
+        "merge_sum_sec": 0.0,
+        "master_union_sec": 0.0,
+        "ticker_count": 0,
+        "batch_count": 0,
         "ok_count": 0,
         "fail_count": 0,
     }
@@ -275,7 +347,9 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             executor_kind = executor_bundle.get("executor_kind", 'process')
             _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled)
         else:
+            t_setup = time.perf_counter()
             created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
+            prep_profile["executor_setup_sec"] += time.perf_counter() - t_setup
             executor_kind = 'process'
             try:
                 if executor_kind == 'thread':
@@ -288,7 +362,9 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
                         result = future.result()
                         merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union)
             finally:
+                t_shutdown = time.perf_counter()
                 created_executor.shutdown(wait=True, cancel_futures=False)
+                prep_profile["executor_shutdown_sec"] += time.perf_counter() - t_shutdown
                 created_executor = None
     except BrokenProcessPool as exc:
         prep_mode = "sequential_fallback"
@@ -309,6 +385,8 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             "fail_count": 0,
         }
         sequential_feature_bank = _build_optimizer_feature_bank()
+        prep_profile["ticker_count"] += int(len(raw_data_cache))
+        prep_profile["batch_count"] += int(len(raw_data_cache))
         for ticker, df in raw_data_cache.items():
             result = worker_prep_data(
                 ticker,
@@ -319,15 +397,19 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
                 feature_bank=sequential_feature_bank,
                 profile_enabled=profile_enabled,
             )
+            t_merge = time.perf_counter()
             merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union)
+            prep_profile["merge_sum_sec"] += time.perf_counter() - t_merge
 
     if defer_master_date_union:
+        t_master_union = time.perf_counter()
         if prep_profile.get("fail_count", 0) == 0:
             master_dates = set(static_master_dates)
         else:
             master_dates = set()
             for ticker in ok_tickers or []:
                 master_dates.update(resolved_static_fast_cache[ticker]["dates"])
+        prep_profile["master_union_sec"] += time.perf_counter() - t_master_union
 
     prep_wall_sec = time.perf_counter() - prep_wall_start
     return {
