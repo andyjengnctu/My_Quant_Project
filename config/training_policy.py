@@ -32,7 +32,7 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影�
 OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 3  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
 # inner validation anti-overfitting 開關。
 # True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。

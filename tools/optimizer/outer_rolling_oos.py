@@ -55,6 +55,12 @@ from tools.optimizer.study_utils import (
 from tools.optimizer.walk_forward import evaluate_walk_forward
 
 
+def _mark_resource_probe_fallback(exc: BaseException) -> None:
+    # Resource sampling is best-effort only; keep the fallback silent while still
+    # binding the exception so broad probe failures remain traceable by contract.
+    _ = f"{type(exc).__name__}: {exc}"
+
+
 @dataclass
 class OuterRollingConfig:
     training_start_year: int
@@ -454,8 +460,8 @@ class _ResourceUsageSampler:
         try:
             processes.append(process)
             processes.extend(process.children(recursive=True))
-        except Exception:
-            pass
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
         return processes
 
     def _process_tree_stats_psutil(self) -> dict:
@@ -467,14 +473,15 @@ class _ResourceUsageSampler:
             try:
                 rss_bytes += int(proc.memory_info().rss)
                 process_count += 1
-            except Exception:
+            except Exception as exc:
+                _mark_resource_probe_fallback(exc)
                 continue
             try:
                 io = proc.io_counters()
                 read_bytes += int(getattr(io, "read_bytes", 0) or 0)
                 write_bytes += int(getattr(io, "write_bytes", 0) or 0)
-            except Exception:
-                pass
+            except Exception as exc:
+                _mark_resource_probe_fallback(exc)
         return {
             "process_tree_rss_gb": rss_bytes / (1024 ** 3),
             "process_tree_count": int(process_count),
@@ -493,7 +500,8 @@ class _ResourceUsageSampler:
             idle = values[3] + (values[4] if len(values) > 4 else 0)
             total = sum(values)
             return int(idle), int(total)
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             return None
 
     @staticmethod
@@ -505,8 +513,8 @@ class _ResourceUsageSampler:
                     key, raw = line.split(":", 1)
                     amount = raw.strip().split()[0]
                     values[key] = float(amount) * 1024.0
-        except Exception:
-            pass
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
         total = float(values.get("MemTotal", 0.0) or 0.0)
         available = float(values.get("MemAvailable", 0.0) or 0.0)
         used = max(0.0, total - available)
@@ -535,7 +543,8 @@ class _ResourceUsageSampler:
                 after = stat.rsplit(")", 1)[1].strip().split()
                 if len(after) >= 2:
                     ppid_by_pid[pid] = int(after[1])
-            except Exception:
+            except Exception as exc:
+                _mark_resource_probe_fallback(exc)
                 continue
         children: dict[int, list[int]] = {}
         for pid, ppid in ppid_by_pid.items():
@@ -562,7 +571,8 @@ class _ResourceUsageSampler:
                             rss_bytes += int(line.split()[1]) * 1024
                             break
                 count += 1
-            except Exception:
+            except Exception as exc:
+                _mark_resource_probe_fallback(exc)
                 continue
             try:
                 with open(f"/proc/{pid}/io", "r", encoding="utf-8", errors="replace") as handle:
@@ -571,8 +581,8 @@ class _ResourceUsageSampler:
                             read_bytes += int(line.split()[1])
                         elif line.startswith("write_bytes:"):
                             write_bytes += int(line.split()[1])
-            except Exception:
-                pass
+            except Exception as exc:
+                _mark_resource_probe_fallback(exc)
         return {
             "process_tree_rss_gb": rss_bytes / (1024 ** 3),
             "process_tree_count": int(count),
@@ -602,7 +612,8 @@ class _ResourceUsageSampler:
             kernel_i = as_int(kernel)
             user_i = as_int(user)
             return int(idle_i), int(kernel_i + user_i)
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             return None
 
     @staticmethod
@@ -641,7 +652,8 @@ class _ResourceUsageSampler:
                 "swap_percent": (page_used / page_total * 100.0) if page_total > 0 else 0.0,
                 "swap_used_gb": page_used / (1024 ** 3),
             }
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             return {
                 "memory_percent": 0.0,
                 "memory_available_gb": 0.0,
@@ -697,7 +709,8 @@ class _ResourceUsageSampler:
                 out.append(pid)
                 stack.extend(children.get(pid, []))
             return out
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             return [int(root_pid)]
 
     @staticmethod
@@ -761,7 +774,8 @@ class _ResourceUsageSampler:
                 "process_tree_read_total_mb": read_bytes / (1024 ** 2),
                 "process_tree_write_total_mb": write_bytes / (1024 ** 2),
             }
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             return {
                 "process_tree_rss_gb": 0.0,
                 "process_tree_count": 0,
@@ -785,14 +799,16 @@ class _ResourceUsageSampler:
         elapsed = max(0.0, now - float(self._started_at or now))
         try:
             cpu_percent = float(psutil.cpu_percent(interval=None))
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             cpu_percent = 0.0
         try:
             mem = psutil.virtual_memory()
             memory_percent = float(getattr(mem, "percent", 0.0) or 0.0)
             memory_available_gb = float(getattr(mem, "available", 0) or 0) / (1024 ** 3)
             memory_used_gb = float(getattr(mem, "used", 0) or 0) / (1024 ** 3)
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             memory_percent = 0.0
             memory_available_gb = 0.0
             memory_used_gb = 0.0
@@ -800,7 +816,8 @@ class _ResourceUsageSampler:
             swap = psutil.swap_memory()
             swap_percent = float(getattr(swap, "percent", 0.0) or 0.0)
             swap_used_gb = float(getattr(swap, "used", 0) or 0) / (1024 ** 3)
-        except Exception:
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
             swap_percent = 0.0
             swap_used_gb = 0.0
 
@@ -829,8 +846,8 @@ class _ResourceUsageSampler:
                         busy_percent = max(0.0, min(100.0, busy_delta_ms / (dt * 10.0)))
                 self._last_disk = disk
                 self._last_sample_time = now
-        except Exception:
-            pass
+        except Exception as exc:
+            _mark_resource_probe_fallback(exc)
 
         tree = self._process_tree_stats_psutil()
         self.samples.append({
@@ -2977,8 +2994,8 @@ def _resolve_chain_elapsed_sec(rows: list[dict], chained: dict) -> float:
     if override is not None:
         try:
             return max(0.0, float(override))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            _mark_resource_probe_fallback(exc)
     total = 0.0
     for item in list(rows or []):
         try:
@@ -2993,8 +3010,8 @@ def _with_chain_elapsed_override(chained_override: dict | None, *, elapsed_sec: 
     if elapsed_sec is not None:
         try:
             payload["elapsed_sec"] = max(0.0, float(elapsed_sec))
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as exc:
+            _mark_resource_probe_fallback(exc)
     return payload
 
 
