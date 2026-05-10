@@ -320,22 +320,6 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
     return rows
 
 
-def _format_training_performance_alignment_table(rows: list[dict]) -> str:
-    rows = list(rows or [])
-    if not rows:
-        return ""
-    header = f"{'效能項目':<34} | {'一般模式':<34} | {'timing模式':<34} | {'一致':<4} | 顯示方式"
-    sep = "-" * max(100, len(header))
-    lines = ["訓練效能設定對照", sep, header, sep]
-    for row in rows:
-        item = str(row.get("item", ""))[:34]
-        normal = str(row.get("normal_mode", ""))[:34]
-        timing = str(row.get("timing_mode", ""))[:34]
-        consistent = "是" if bool(row.get("consistent", False)) else "否"
-        display = str(row.get("display", ""))
-        lines.append(f"{item:<34} | {normal:<34} | {timing:<34} | {consistent:<4} | {display}")
-    lines.append(sep)
-    return "\n".join(lines)
 
 
 def _shutdown_rolling_shared_prep_executor_holder(holder: dict) -> None:
@@ -1329,7 +1313,7 @@ def _selection_start_for_oos(config: OuterRollingConfig, oos_year: int) -> int:
     return int(config.training_start_year)
 
 
-def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None, performance_alignment_rows: list[dict] | None = None):
+def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | None = None):
     folds = _build_rolling_folds(config)
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
     print(f"OUTER ROLLING OOS TEST | NEXT {int(config.oos_horizon_months)} MONTHS")
@@ -1345,9 +1329,6 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
     print(f"optimizer trials : {config.trials_per_fold} per fold")
     if parallel_settings_line:
         print(str(parallel_settings_line))
-    alignment_table = _format_training_performance_alignment_table(list(performance_alignment_rows or []))
-    if alignment_table:
-        print(alignment_table)
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"{'fold':<6} | {'selection period':<23} | {'OOS test period':<23}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
@@ -4319,12 +4300,6 @@ def run_outer_rolling_oos(
     _print_plan(
         config,
         parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None,
-        performance_alignment_rows=_build_training_performance_alignment_rows(
-            environ,
-            fold_count=fold_count,
-            fold_workers=int(fold_workers),
-            sampler_kind=("random" if bool(timing_mode) else "tpe"),
-        ),
     )
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
