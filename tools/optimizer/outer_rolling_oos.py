@@ -21,7 +21,7 @@ PARALLEL_FOLD_PROGRESS_PREFIX = "FOLD_PROGRESS\t"
 import pandas as pd
 
 from config.training_policy import (
-    OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN,
+    OPTIMIZER_BASE_RETENTION_GT_MIN,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
@@ -85,12 +85,21 @@ class OuterRollingConfig:
 
 OOS_SCORE_DECIMALS = 2
 
-REPORT_POLICY_NAMES = ("base", "base_local_min_gt0", "local", "retention")
+REPORT_POLICY_NAMES = ("base", "base_local_min_gt0", "base_retention_gt_min", "local", "retention")
 REPORT_POLICY_LABELS = {
     "base": "base",
-    "base_local_min_gt0": f"base_lm>0 r>{OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN:g}",
+    "base_local_min_gt0": "base (ml>0)",
+    "base_retention_gt_min": f"base (r>{OPTIMIZER_BASE_RETENTION_GT_MIN:g})",
     "local": "local",
     "retention": "retention",
+}
+
+PARAMSET_FILENAME_BY_POLICY = {
+    "base": "roos_base.json",
+    "base_local_min_gt0": "roos_base_ml.json",
+    "base_retention_gt_min": "roos_base_r.json",
+    "local": "roos_local.json",
+    "retention": "roos_retention.json",
 }
 
 
@@ -1681,14 +1690,16 @@ def _write_outer_timing_summary(
     resource_summary: dict | None = None,
     resource_samples: list[dict] | None = None,
     performance_alignment_rows: list[dict] | None = None,
+    write_files: bool = False,
 ) -> dict:
     report_dir = os.path.join(output_dir, "outer_rolling_oos")
-    os.makedirs(report_dir, exist_ok=True)
     base = os.path.join(report_dir, f"outer_rolling_oos_timing_{session_ts}")
-    csv_path = base + ".csv"
-    json_path = base + ".json"
-    resource_write_csv = _env_flag(os.environ, "OPTIMIZER_RESOURCE_WRITE_CSV", False)
+    csv_path = base + ".csv" if bool(write_files) else ""
+    json_path = base + ".json" if bool(write_files) else ""
+    resource_write_csv = bool(write_files) and _env_flag(os.environ, "OPTIMIZER_RESOURCE_WRITE_CSV", False)
     resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv") if resource_write_csv else ""
+    if bool(write_files):
+        os.makedirs(report_dir, exist_ok=True)
     sampler_kind = "random" if bool(timing_mode) else "tpe"
     single_fold_search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
     single_fold_allow_tpe_parallel_search = _env_flag(
@@ -1697,7 +1708,7 @@ def _write_outer_timing_summary(
         is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
     )
 
-    if fold_timing_rows:
+    if bool(write_files) and fold_timing_rows:
         fieldnames = list(fold_timing_rows[0].keys())
         with open(csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -1705,7 +1716,7 @@ def _write_outer_timing_summary(
             writer.writerows(fold_timing_rows)
 
     samples_for_csv = list(resource_samples or [])
-    if resource_write_csv and samples_for_csv:
+    if bool(write_files) and resource_write_csv and samples_for_csv:
         sample_fieldnames = list(samples_for_csv[0].keys())
         with open(resource_csv_path, "w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=sample_fieldnames)
@@ -1892,9 +1903,10 @@ def _write_outer_timing_summary(
         "resource_csv_path": resource_csv_path,
         "json_path": json_path,
     }
-    with open(json_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-    return {"json": json_path, "csv": csv_path if fold_timing_rows else "", "resource_csv": resource_csv_path, "payload": payload}
+    if bool(write_files) and json_path:
+        with open(json_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+    return {"json": json_path, "csv": csv_path if (bool(write_files) and fold_timing_rows) else "", "resource_csv": resource_csv_path, "payload": payload}
 
 
 def _format_resource_usage_line(summary: dict, *, prefix: str = "📏 效能摘要:") -> str:
@@ -1943,7 +1955,7 @@ def _format_timing_phase_line(payload: dict) -> str:
     )
 
 
-def _print_outer_timing_summary(payload: dict):
+def _print_outer_timing_summary(payload: dict, *, include_details: bool = True):
     summary = dict((payload or {}).get("summary") or {})
     print(
         "📏 Outer rolling 測時摘要: "
@@ -1952,6 +1964,8 @@ def _print_outer_timing_summary(payload: dict):
         f"local_review={float(summary.get('local_min_review_sum_sec', 0.0)):.3f}s｜"
         f"平均={float(summary.get('avg_optimize_sec_per_completed_trial', 0.0)):.3f}s/completed trial"
     )
+    if not bool(include_details):
+        return
     print(
         "📏 Cache / local-min 摘要｜"
         f"prep_hit/miss/evict={int(summary.get('prep_cache_hits', 0) or 0)}/"
@@ -2121,12 +2135,23 @@ def _select_base_rank1_item(finalists: list[dict]):
 
 
 def _select_base_local_min_gt0_rank1_item(finalists: list[dict]):
-    retention_min = float(OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN)
     items = [
         item
         for item in list(finalists or [])
         if item.get("trial") is not None
         and float(item.get("local_min_score", INVALID_TRIAL_VALUE)) > 0.0
+    ]
+    if not items:
+        return None
+    return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
+
+
+def _select_base_retention_gt_min_rank1_item(finalists: list[dict]):
+    retention_min = float(OPTIMIZER_BASE_RETENTION_GT_MIN)
+    items = [
+        item
+        for item in list(finalists or [])
+        if item.get("trial") is not None
         and float(item.get("local_retention", float("-inf"))) > retention_min
     ]
     if not items:
@@ -2161,6 +2186,7 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
     return {
         "base": _select_base_rank1_item(finalists),
         "base_local_min_gt0": _select_base_local_min_gt0_rank1_item(finalists),
+        "base_retention_gt_min": _select_base_retention_gt_min_rank1_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         "retention": _select_retention_rank1_item(finalists),
     }
@@ -2170,10 +2196,9 @@ def _policy_description(policy_name: str) -> str:
     if policy_name == "base":
         return "Use base_rank #1 params for each OOS year."
     if policy_name == "base_local_min_gt0":
-        return (
-            "Use the first base_rank candidate whose local_min_score > 0 "
-            f"and local_retention > {OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN:g} for each OOS period."
-        )
+        return "Use the first base_rank candidate whose local_min_score > 0 for each OOS period."
+    if policy_name == "base_retention_gt_min":
+        return f"Use the first base_rank candidate whose local_retention > {OPTIMIZER_BASE_RETENTION_GT_MIN:g} for each OOS period."
     if policy_name == "local":
         return "Use local_rank #1 params for each OOS year."
     if policy_name == "retention":
@@ -3284,25 +3309,24 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         "oos_year": 15,
         "rank": 8,
         "best": 17,
-        "bench": 15,
+        "bench": 12,
         "elapsed": 8,
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
     lines.append("ROLLING MONTHLY OOS RESULTS")
+    policy_header = " | ".join(_pad_ansi(REPORT_POLICY_LABELS[name], policy_group_width, align="^") for name in REPORT_POLICY_NAMES)
+    policy_subheader = " | ".join(
+        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')}"
+        for _ in REPORT_POLICY_NAMES
+    )
     header1 = (
         f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('selection', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['base'], policy_group_width, align='^')} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['base_local_min_gt0'], policy_group_width, align='^')} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['local'], policy_group_width, align='^')} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['retention'], policy_group_width, align='^')} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
+        f"{policy_header} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
     )
     header2 = (
         f"{_pad_ansi('', widths['fold'])} | {_pad_ansi('', widths['selection'])} | {_pad_ansi('', widths['oos_year'])} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | {_pad_ansi('', widths['elapsed'])}"
+        f"{policy_subheader} | {_pad_ansi('', widths['elapsed'])}"
     )
     separator = _table_separator(max(_visible_len(header1), _visible_len(header2), 120))
     lines.append(separator)
@@ -3318,16 +3342,13 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         fold_text = "OOS_CHAIN" if is_chain else ("OOS_AVG" if is_avg else str(row.get("fold") or f"{idx}/{total}"))
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
-        base_rank, _base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
-        base_lm_rank, _base_lm_best, base_lm_bench = _policy_cell_text(row.get("base_local_min_gt0") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
-        local_rank, _local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
-        retention_rank, _retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+        policy_cells: list[str] = []
+        for policy_name in REPORT_POLICY_NAMES:
+            rank_text, _best_text, bench_text = _policy_cell_text(row.get(policy_name) or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+            policy_cells.append(f"{_pad_ansi(rank_text, widths['rank'], align='>')} | {_pad_ansi(bench_text, widths['bench'], align='>')}")
         line = (
             f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
-            f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(base_lm_rank, widths['rank'], align='>')} | {_pad_ansi(base_lm_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
+            f"{' | '.join(policy_cells)} | "
             f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
         lines.append(line)
@@ -3505,7 +3526,7 @@ def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: O
     paths = {}
     for policy_name in REPORT_POLICY_NAMES:
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
-        path = os.path.join(models_dir, f"rolling_oos_{policy_name}_paramset.json")
+        path = os.path.join(models_dir, str(PARAMSET_FILENAME_BY_POLICY.get(policy_name, f"roos_{policy_name}.json")))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=4, ensure_ascii=False)
         paths[policy_name] = path
@@ -3513,69 +3534,11 @@ def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: O
 
 
 def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows: list[dict], config: OuterRollingConfig, chained_override: dict | None = None) -> dict:
-    report_dir = os.path.join(output_dir, "outer_rolling_oos")
-    os.makedirs(report_dir, exist_ok=True)
+    _ = (output_dir, session_ts)
     models_dir = os.path.join(project_root, "models")
-    base = os.path.join(report_dir, f"outer_rolling_oos_next{int(config.oos_horizon_months)}m_{session_ts}")
-    json_path = base + ".json"
-    csv_path = base + ".csv"
-    txt_path = base + ".txt"
     summary = _build_summary(rows, config=config, chained_override=chained_override)
     paramset_paths = _write_policy_paramset_files(models_dir=models_dir, rows=rows, config=config, summary=summary)
-    yearly_results = []
-    for row in rows:
-        light_row = dict(row)
-        light_row.pop("policy_schedules", None)
-        light_row.pop("best_finalist_equity_curve", None)
-        light_row.pop("best_finalist_params", None)
-        for policy_name in REPORT_POLICY_NAMES:
-            if isinstance(light_row.get(policy_name), dict):
-                policy_copy = dict(light_row[policy_name])
-                policy_copy.pop("rank_1_equity_curve", None)
-                light_row[policy_name] = policy_copy
-        yearly_results.append(light_row)
-    payload = {
-        "type": "outer_rolling_oos_monthly",
-        "version": 1,
-        "created_at": get_taipei_now().isoformat(),
-        "meta": {
-            "window_mode": str(config.window_mode),
-            "train_window_years": int(config.train_window_years),
-            "first_oos_date": str(config.first_oos_date),
-            "last_oos_date": str(config.last_oos_date),
-            "train_window_months": int(config.train_window_months),
-            "oos_horizon_months": int(config.oos_horizon_months),
-            "training_start_year": int(config.training_start_year),
-            "first_oos_year": int(config.first_oos_year),
-            "last_oos_year": int(config.last_oos_year),
-            "oos_horizon": f"next_{int(config.oos_horizon_months)}m",
-            "oos_feedback_used": False,
-            "promotion_enabled": False,
-            "trials_per_fold": int(config.trials_per_fold),
-        },
-        "gate_config": {
-            "LOCAL_MIN_SCORE": True,
-            "INNER_VALIDATE_RANK": bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
-            "DOMINANT_YEAR_DEPENDENCY": bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED),
-        },
-        "summary": summary,
-        "period_results": yearly_results,
-        "yearly_results": yearly_results,
-        "policies": _build_policies_schedule(rows),
-        "rolling_paramsets": paramset_paths,
-    }
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=4, ensure_ascii=False)
-    if rows:
-        flat_rows = [_flatten_row_for_csv(row) for row in rows]
-        with open(csv_path, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(flat_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(flat_rows)
-    with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(_format_final_report(rows, summary, color=False))
-    return {"json": json_path, "csv": csv_path, "txt": txt_path, "paramsets": paramset_paths}
-
+    return {"paramsets": paramset_paths}
 
 def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None, chained_override: dict | None = None) -> dict:
     if not rows:
@@ -4405,6 +4368,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
                 "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
+                "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
                 "policy_schedules": policy_schedules,
@@ -4818,6 +4782,7 @@ def run_outer_rolling_oos(
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
                 "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
+                "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
                 "policy_schedules": policy_schedules,
@@ -4905,24 +4870,10 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
-    if bool(timing_mode):
-        print(_format_timing_phase_line(timing_paths.get("payload") or {}))
-        print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
-        if timing_paths.get("csv"):
-            print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
-        if timing_paths.get("resource_csv"):
-            print(f"{C_GREEN}已輸出：{timing_paths['resource_csv']}{C_RESET}")
-    else:
-        print(f"{C_GREEN}已輸出：{paths['txt']}{C_RESET}")
-        print(f"{C_GREEN}已輸出：{paths['json']}{C_RESET}")
-        print(f"{C_GREEN}已輸出：{paths['csv']}{C_RESET}")
-        print(f"{C_GREEN}已輸出：{timing_paths['json']}{C_RESET}")
-        if timing_paths.get("csv"):
-            print(f"{C_GREEN}已輸出：{timing_paths['csv']}{C_RESET}")
-        if timing_paths.get("resource_csv"):
-            print(f"{C_GREEN}已輸出：{timing_paths['resource_csv']}{C_RESET}")
+    print(_format_timing_phase_line(timing_paths.get("payload") or {}))
+    if not bool(timing_mode):
         for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
-            print(f"{C_GREEN}已輸出 rolling {policy_name} active-param 參數組：{paramset_path}{C_RESET}")
-    _print_outer_timing_summary(timing_paths.get("payload", {}))
+            print(f"{C_GREEN}已輸出 params {policy_name}: {paramset_path}{C_RESET}")
+    _print_outer_timing_summary(timing_paths.get("payload", {}), include_details=bool(timing_mode))
     print(_format_resource_usage_line(dict((timing_paths.get("payload") or {}).get("summary") or {})))
     return 0
