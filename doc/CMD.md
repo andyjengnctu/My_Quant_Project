@@ -1,7 +1,7 @@
 # 常用指令
 
 python apps/ml_optimizer.py --dataset full --timing --trials 10 `效能驗證`
-python apps/ml_optimizer.py --dataset full --outer-oos --timing --trials 3 --outer-first-oos 2023 --outer-last-oos 2026 --outer-window-mode fixed --outer-train-window-years 5 --yes `rolling效能驗證`
+python apps\ml_optimizer.py --dataset full --outer-oos --timing --trials 10 --outer-first-oos-date 2021-01-01 --outer-last-oos-date 2026-01-01 --outer-window-mode fixed --outer-train-window-months 60 --outer-oos-months 12 --yes `rolling效能驗證`
 
 ## 環境 / 測試
 
