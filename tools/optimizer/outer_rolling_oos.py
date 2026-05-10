@@ -21,6 +21,7 @@ PARALLEL_FOLD_PROGRESS_PREFIX = "FOLD_PROGRESS\t"
 import pandas as pd
 
 from config.training_policy import (
+    OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
@@ -87,7 +88,7 @@ OOS_SCORE_DECIMALS = 2
 REPORT_POLICY_NAMES = ("base", "base_local_min_gt0", "local", "retention")
 REPORT_POLICY_LABELS = {
     "base": "base",
-    "base_local_min_gt0": "base_lm>0",
+    "base_local_min_gt0": f"base_lm>0 r>{OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN:g}",
     "local": "local",
     "retention": "retention",
 }
@@ -2120,10 +2121,13 @@ def _select_base_rank1_item(finalists: list[dict]):
 
 
 def _select_base_local_min_gt0_rank1_item(finalists: list[dict]):
+    retention_min = float(OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN)
     items = [
         item
         for item in list(finalists or [])
-        if item.get("trial") is not None and float(item.get("local_min_score", INVALID_TRIAL_VALUE)) > 0.0
+        if item.get("trial") is not None
+        and float(item.get("local_min_score", INVALID_TRIAL_VALUE)) > 0.0
+        and float(item.get("local_retention", float("-inf"))) > retention_min
     ]
     if not items:
         return None
@@ -2166,7 +2170,10 @@ def _policy_description(policy_name: str) -> str:
     if policy_name == "base":
         return "Use base_rank #1 params for each OOS year."
     if policy_name == "base_local_min_gt0":
-        return "Use the first base_rank candidate whose local_min_score > 0 for each OOS period."
+        return (
+            "Use the first base_rank candidate whose local_min_score > 0 "
+            f"and local_retention > {OPTIMIZER_BASE_LOCAL_MIN_GT0_RETENTION_MIN:g} for each OOS period."
+        )
     if policy_name == "local":
         return "Use local_rank #1 params for each OOS year."
     if policy_name == "retention":
