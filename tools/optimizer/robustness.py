@@ -982,6 +982,8 @@ class _FinalistProgressBoard:
         best_text = "N/A"
         if self.best_local_trial is not None and self.best_local_score != float("-inf"):
             best_text = f"{self.best_local_score:.3f} #{int(self.best_local_trial.number) + 1}"
+        best_base_score = ctx.get("best_base_score")
+        best_base_text = "N/A" if best_base_score is None else f"{float(best_base_score):.3f}"
         eta_stage = self._estimate_single_line_eta(safe_idx, int(current_neighbor), int(total_neighbors))
         eta_total = self._estimate_total_eta(eta_stage)
         elapsed = time.perf_counter() - self.stage_start
@@ -1004,7 +1006,7 @@ class _FinalistProgressBoard:
                 f"selection={selection_text} | OOS={oos_text} | "
                 f"LOCAL_MIN_REVIEW={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
                 f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
-                f"current={current_text} {readable_status} | best={best_text} | "
+                f"current={current_text} {readable_status} | best_base={best_base_text} | best_local_min={best_text} | "
                 f"pass/fail/early={pass_count}/{fail_count}/{early_count} | "
                 f"elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
@@ -1013,7 +1015,7 @@ class _FinalistProgressBoard:
                 f"selection={selection_compact} | OOS={oos_compact} | "
                 f"review={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
                 f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
-                f"current={current_text} {readable_status} | best={best_text} | "
+                f"current={current_text} {readable_status} | best_base={best_base_text} | best_local_min={best_text} | "
                 f"pass/fail/early={pass_count}/{fail_count}/{early_count} | "
                 f"elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
@@ -1022,7 +1024,7 @@ class _FinalistProgressBoard:
                 f"{selection_compact}>OOS{oos_compact} | "
                 f"review {safe_idx + 1}/{len(self.finalists)} #{int(trial.number) + 1} | "
                 f"{int(current_neighbor)}/{int(total_neighbors)} | "
-                f"current={current_text} {compact_status} | best={best_compact} | "
+                f"current={current_text} {compact_status} | base={best_base_text} | local={best_compact} | "
                 f"pass/fail/early={pass_count}/{fail_count}/{early_count}"
             ),
         ))
@@ -1811,7 +1813,7 @@ def print_local_min_score_finalist_review(study, *, session, objective_mode: str
     header = (
         f"{'trial':<8} | "
         f"{'base_score':>12} {'base_rank':>10} | "
-        f"{'local_min':>12} {'local_rank*':>12} {'local_gate':>12}"
+        f"{'local_min':>12} {'local_rank':>12} {'local_gate':>12}"
     )
     if inner_validate_enabled:
         header += f" | {'val_score':>10} {'val_rank':>10} {'val_gate':>10}"

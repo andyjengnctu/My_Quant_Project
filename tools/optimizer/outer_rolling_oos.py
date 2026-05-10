@@ -82,6 +82,14 @@ class OuterRollingConfig:
 
 OOS_SCORE_DECIMALS = 2
 
+REPORT_POLICY_NAMES = ("base", "base_local_min_gt0", "local", "retention")
+REPORT_POLICY_LABELS = {
+    "base": "base",
+    "base_local_min_gt0": "base_lm>0",
+    "local": "local",
+    "retention": "retention",
+}
+
 
 def _resolve_rolling_shared_prep_cache_max_items(environ) -> int:
     raw_value = (environ or {}).get("OPTIMIZER_ROLLING_SHARED_PREP_CACHE_MAX_ITEMS")
@@ -1973,16 +1981,16 @@ class _SearchProgress:
             (
                 f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
                 f"OPTIMIZER_SEARCH | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
-                f"best_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+                f"best_base_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
                 f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
                 f"search | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
-                f"best={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
+                f"best_base={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
                 f"[{self.fold_idx}/{self.fold_count}] {self.selection_start}~{self.selection_end}>OOS{self.oos_year} | "
-                f"search {completed}/{self.total_trials} | best={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
+                f"search {completed}/{self.total_trials} | best_base={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
             ),
         ))
         self.inline_progress_width = write_inline_progress(line, previous_width=self.inline_progress_width)
@@ -2051,6 +2059,17 @@ def _select_base_rank1_item(finalists: list[dict]):
     return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
 
 
+def _select_base_local_min_gt0_rank1_item(finalists: list[dict]):
+    items = [
+        item
+        for item in list(finalists or [])
+        if item.get("trial") is not None and float(item.get("local_min_score", INVALID_TRIAL_VALUE)) > 0.0
+    ]
+    if not items:
+        return None
+    return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
+
+
 def _select_local_rank1_item(finalists: list[dict], *, objective_mode: str):
     winner = _select_winner(finalists, objective_mode=objective_mode)
     if winner is not None:
@@ -2077,6 +2096,7 @@ def _select_retention_rank1_item(finalists: list[dict]):
 def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[str, dict | None]:
     return {
         "base": _select_base_rank1_item(finalists),
+        "base_local_min_gt0": _select_base_local_min_gt0_rank1_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         "retention": _select_retention_rank1_item(finalists),
     }
@@ -2085,6 +2105,8 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
 def _policy_description(policy_name: str) -> str:
     if policy_name == "base":
         return "Use base_rank #1 params for each OOS year."
+    if policy_name == "base_local_min_gt0":
+        return "Use the first base_rank candidate whose local_min_score > 0 for each OOS period."
     if policy_name == "local":
         return "Use local_rank #1 params for each OOS year."
     if policy_name == "retention":
@@ -2413,7 +2435,7 @@ def _stitch_benchmark_equity_curve(rows: list[dict]) -> dict:
             raw_initial = _derive_curve_initial_capital(best_curve, row.get("best_finalist_initial_capital"))
         else:
             raw_initial = 0.0
-            for policy_name in ("base", "local", "retention"):
+            for policy_name in REPORT_POLICY_NAMES:
                 policy = dict(row.get(policy_name) or {})
                 policy_curve = _normalize_equity_curve_rows(list(policy.get("rank_1_equity_curve") or []))
                 if policy_curve:
@@ -2890,12 +2912,9 @@ def _build_active_replay_chained_oos_summary(
     selection_period_label = _period_label(selection_start_ts, selection_end_ts)
     oos_period_label = _period_label(first_oos_start, last_oos_end)
 
-    payloads = {
-        "best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True),
-        "base": _build_active_param_replay_payload_from_rows(rows, policy_name="base"),
-        "local": _build_active_param_replay_payload_from_rows(rows, policy_name="local"),
-        "retention": _build_active_param_replay_payload_from_rows(rows, policy_name="retention"),
-    }
+    payloads = {"best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True)}
+    for policy_name in REPORT_POLICY_NAMES:
+        payloads[policy_name] = _build_active_param_replay_payload_from_rows(rows, policy_name=policy_name)
     schedule_groups = {name: _build_active_replay_schedule_records(payload) for name, payload in payloads.items()}
     contexts_by_signature = _load_active_replay_contexts_by_signature(
         data_dir=selected_data_dir,
@@ -2921,7 +2940,7 @@ def _build_active_replay_chained_oos_summary(
 
     best_metrics = dict(replay_metrics.get("best") or {})
     benchmark_source = dict(best_metrics)
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         if not benchmark_source and replay_metrics.get(policy_name):
             benchmark_source = dict(replay_metrics[policy_name])
             break
@@ -2953,7 +2972,7 @@ def _build_active_replay_chained_oos_summary(
         "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
         "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         metrics = dict(replay_metrics.get(policy_name) or {})
         chain_score = float(metrics.get("score", 0.0))
         chain_return = float(metrics.get("return_pct", 0.0))
@@ -3017,7 +3036,7 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
         "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
         "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         stitched = _stitch_strategy_equity_curves(rows, policy_name=policy_name)
         metrics = _calc_stitched_curve_metrics(stitched)
         chain_score = float(metrics.get("score", 0.0))
@@ -3090,7 +3109,7 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
         "elapsed_sec": _resolve_chain_elapsed_sec(rows, chained),
         "aggregation_method": chained.get("score_aggregation_method") or chained.get("method"),
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         item = dict(chained.get(policy_name) or {})
         rank_score = float(item.get("rank_1_oos", 0.0))
         row[policy_name] = {
@@ -3148,7 +3167,7 @@ def _build_oos_avg_row(rows: list[dict]) -> dict | None:
         "benchmark_return_pct": _avg_float_from_rows(source_rows, lambda item: item.get("benchmark_return_pct", 0.0)),
         "elapsed_sec": None,
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         rank_score = _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_oos", 0.0))
         row[policy_name] = {
             "rank_1_trial": None,
@@ -3201,21 +3220,21 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         "bench": 17,
         "elapsed": 8,
     }
-    base_group_width = widths["rank"] + widths["bench"] + 3
-    local_group_width = widths["rank"] + widths["best"] + widths["bench"] + 6
-    retention_group_width = widths["rank"] + widths["bench"] + 3
+    policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
     lines.append("ROLLING MONTHLY OOS RESULTS")
     header1 = (
         f"{_pad_ansi('fold', widths['fold'])} | {_pad_ansi('selection', widths['selection'])} | {_pad_ansi('oos_period', widths['oos_year'])} | "
-        f"{_pad_ansi('base', base_group_width)} | "
-        f"{_pad_ansi('local*', local_group_width)} | "
-        f"{_pad_ansi('retention', retention_group_width)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
+        f"{_pad_ansi(REPORT_POLICY_LABELS['base'], policy_group_width)} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['base_local_min_gt0'], policy_group_width)} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['local'], policy_group_width)} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['retention'], policy_group_width)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
     )
     header2 = (
         f"{_pad_ansi('', widths['fold'])} | {_pad_ansi('', widths['selection'])} | {_pad_ansi('', widths['oos_year'])} | "
         f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('best', widths['best'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
         f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | {_pad_ansi('', widths['elapsed'])}"
     )
     separator = _table_separator(max(_visible_len(header1), _visible_len(header2), 120))
@@ -3232,12 +3251,14 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         best_score = float(row.get("best_finalist_oos_score", 0.0))
         benchmark_score = float(row.get("benchmark_oos_score", 0.0))
         base_rank, _base_best, base_bench = _policy_cell_text(row.get("base") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
-        local_rank, local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+        base_lm_rank, _base_lm_best, base_lm_bench = _policy_cell_text(row.get("base_local_min_gt0") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
+        local_rank, _local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         retention_rank, _retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         line = (
             f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(str(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(str(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
             f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
-            f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_best, widths['best'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
+            f"{_pad_ansi(base_lm_rank, widths['rank'], align='>')} | {_pad_ansi(base_lm_bench, widths['bench'], align='>')} | "
+            f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(retention_rank, widths['rank'], align='>')} | {_pad_ansi(retention_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
         )
@@ -3282,7 +3303,7 @@ def _flatten_row_for_csv(row: dict) -> dict:
         "best_finalist_return_pct": float(row.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(row.get("benchmark_return_pct", 0.0)),
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         flat.update(_flatten_policy_for_csv(row, policy_name))
     flat["elapsed"] = _fmt_duration(row.get("elapsed_sec", 0.0))
     return flat
@@ -3290,7 +3311,7 @@ def _flatten_row_for_csv(row: dict) -> dict:
 
 def _build_policies_schedule(rows: list[dict]) -> dict:
     policies: dict[str, dict] = {}
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         policies[policy_name] = {
             "description": _policy_description(policy_name),
             "schedule": [dict(row.get("policy_schedules", {}).get(policy_name) or {}) for row in rows if row.get("policy_schedules", {}).get(policy_name)],
@@ -3414,7 +3435,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
 def _write_policy_paramset_files(*, models_dir: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     os.makedirs(models_dir, exist_ok=True)
     paths = {}
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         payload = _build_policy_paramset_payload(policy_name=policy_name, rows=rows, config=config, summary=summary)
         path = os.path.join(models_dir, f"rolling_oos_{policy_name}_paramset.json")
         with open(path, "w", encoding="utf-8") as f:
@@ -3439,7 +3460,7 @@ def _write_reports(*, project_root: str, output_dir: str, session_ts: str, rows:
         light_row.pop("policy_schedules", None)
         light_row.pop("best_finalist_equity_curve", None)
         light_row.pop("best_finalist_params", None)
-        for policy_name in ("base", "local", "retention"):
+        for policy_name in REPORT_POLICY_NAMES:
             if isinstance(light_row.get(policy_name), dict):
                 policy_copy = dict(light_row[policy_name])
                 policy_copy.pop("rank_1_equity_curve", None)
@@ -3502,7 +3523,7 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         "note": chained.get("note"),
         "chained_oos": chained,
     }
-    for policy_name in ("base", "local", "retention"):
+    for policy_name in REPORT_POLICY_NAMES:
         scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows]
         returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
         benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in rows]
@@ -3686,7 +3707,7 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         best_text = "N/A" if best is None else f"{float(best):.3f}"
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
-            f"trial {completed}/{total} | best={best_text}{elapsed_text}"
+            f"trial {completed}/{total} | best_base={best_text}{elapsed_text}"
         )
     if stage == "LOCAL_MIN_REVIEW":
         finalist_idx = int(progress.get("finalist_idx", 0) or 0)
@@ -3697,18 +3718,28 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         current_text = "N/A" if current is None else f"{float(current):.3f}"
         best = progress.get("best")
         best_text = "N/A" if best is None else f"{float(best):.3f}"
+        base_best = progress.get("best_base_score")
+        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         status = str(progress.get("status") or "RUN")
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
             f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
-            f"current={current_text} | best={best_text} | {status}{elapsed_text}"
+            f"current={current_text} | best_base={base_best_text} | best_local_min={best_text} | {status}{elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status}{elapsed_text}"
+        base_best = progress.get("best_base_score")
+        local_best = progress.get("best_local_min_score")
+        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
+        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | diagnostics {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage == "DONE":
         status = str(progress.get("status") or "done")
-        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | DONE {status}{elapsed_text}"
+        base_best = progress.get("best_base_score")
+        local_best = progress.get("best_local_min_score")
+        base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
+        local_best_text = "N/A" if local_best is None else f"{float(local_best):.3f}"
+        return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | DONE {status} | best_base={base_best_text} | best_local_min={local_best_text}{elapsed_text}"
     if stage in {"START", "RAW_DATA", "STUDY_CREATE"}:
         status = str(progress.get("status") or stage).replace("_", " ")
         return f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | {status}{elapsed_text}"
@@ -4120,7 +4151,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or config.trials_per_fold)
             progress.done(int(session.current_session_trial))
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | optimizer search DONE | elapsed={_fmt_duration(optimize_sec)}", flush=True)
+            best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
+            best_base_text = "N/A" if best_base_score is None else f"{best_base_score:.3f}"
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
 
@@ -4140,6 +4173,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     neighbor_total=int(data.get("neighbor_total", 0) or 0),
                     current=data.get("current"),
                     best=data.get("best"),
+                    best_base_score=best_base_score,
                     status=str(data.get("status") or "RUN"),
                     elapsed_sec=max(0.0, time.perf_counter() - local_started),
                 )
@@ -4151,6 +4185,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "oos_year": int(oos_year),
                 "selection_start": str(selection_start),
                 "selection_end": str(selection_end),
+                "best_base_score": best_base_score,
                 "completed_results": [],
                 "overall_start": fold_start,
             }
@@ -4169,7 +4204,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             if hasattr(session, "outer_rolling_local_progress_context"):
                 delattr(session, "outer_rolling_local_progress_context")
             local_elapsed = time.perf_counter() - local_started
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | local-min review DONE | finalists={len(finalists)} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
+            best_local_min_text = "N/A" if best_local_min_score is None else f"{best_local_min_score:.3f}"
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | local-min review DONE | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
                 fold_idx=fold_idx,
@@ -4181,8 +4218,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 finalist_total=len(finalists),
                 neighbor_done=1,
                 neighbor_total=1,
-                current=float(finalists[0].get("local_min_score", 0.0)) if finalists else None,
-                best=float(finalists[0].get("local_min_score", 0.0)) if finalists else None,
+                current=best_local_min_score,
+                best=best_local_min_score,
+                best_base_score=best_base_score,
+                best_local_min_score=best_local_min_score,
                 status="DONE",
                 elapsed_sec=local_elapsed,
             )
@@ -4227,6 +4266,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 selection_start=selection_start,
                 selection_end=selection_end,
                 status="RUN",
+                best_base_score=best_base_score,
+                best_local_min_score=best_local_min_score,
                 elapsed_sec=0.0,
             )
             diagnostics = _evaluate_finalist_oos_diagnostics(
@@ -4247,6 +4288,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 selection_start=selection_start,
                 selection_end=selection_end,
                 status="DONE",
+                best_base_score=best_base_score,
+                best_local_min_score=best_local_min_score,
                 elapsed_sec=oos_diagnostics_sec,
             )
             fold_elapsed = time.perf_counter() - fold_start
@@ -4288,6 +4331,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
+                "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
                 "policy_schedules": policy_schedules,
@@ -4323,6 +4367,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 selection_start=selection_start,
                 selection_end=selection_end,
                 status="done",
+                best_base_score=best_base_score,
+                best_local_min_score=best_local_min_score,
                 elapsed_sec=fold_elapsed,
             )
             return {
@@ -4588,6 +4634,7 @@ def run_outer_rolling_oos(
             )
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             progress.done(int(session.current_session_trial))
+            best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
 
             local_started = time.perf_counter()
             session.outer_rolling_local_progress_context = {
@@ -4596,6 +4643,7 @@ def run_outer_rolling_oos(
                 "oos_year": int(oos_year),
                 "selection_start": str(selection_start),
                 "selection_end": str(selection_end),
+                "best_base_score": best_base_score,
                 "completed_results": rows,
                 "overall_start": overall_start,
             }
@@ -4694,6 +4742,7 @@ def run_outer_rolling_oos(
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
+                "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
                 "policy_schedules": policy_schedules,
