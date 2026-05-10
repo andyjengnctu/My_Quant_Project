@@ -78,13 +78,17 @@ def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
 # full  = 全資料選參；不額外切 OOS
 
 DEFAULT_OPTIMIZER_MODEL_MODE = 'split'
-PREDEPLOY_SELECTION_START_YEAR = 2016
+PREDEPLOY_SELECTION_START_YEAR = 2011
 OOS_EVALUATION_START_YEAR = 2021
 
 # Outer rolling OOS 預設改以月份切窗：60 個月訓練、6 個月 OOS。
 # 年份欄位仍保留給一般 optimizer split/full 與既有相容邏輯。
-OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 60
-OUTER_ROLLING_OOS_HORIZON_MONTHS = 6
+OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
+OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
+
+# Rolling OOS optimizer search 預設 trial 數。
+# CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。
+OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT = 1000
 
 OPTIMIZER_TRAIN_START_YEAR = PREDEPLOY_SELECTION_START_YEAR
 OPTIMIZER_MIN_TRAIN_YEARS = OOS_EVALUATION_START_YEAR - PREDEPLOY_SELECTION_START_YEAR
@@ -151,4 +155,8 @@ def build_selection_policy_snapshot():
 
 
 def build_optimizer_train_test_policy_snapshot():
-    return dict(TRAINING_SPLIT_POLICY)
+    payload = dict(TRAINING_SPLIT_POLICY)
+    payload["OUTER_ROLLING_TRAIN_WINDOW_MONTHS"] = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
+    payload["OUTER_ROLLING_OOS_HORIZON_MONTHS"] = int(OUTER_ROLLING_OOS_HORIZON_MONTHS)
+    payload["OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+    return payload

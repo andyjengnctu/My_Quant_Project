@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -23,6 +24,7 @@ from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
+    OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
@@ -1072,6 +1074,10 @@ def _pad_ansi(text: str, width: int, *, align: str = "<") -> str:
     pad = max(0, int(width) - _visible_len(raw))
     if align == ">":
         return " " * pad + raw
+    if align == "^":
+        left = pad // 2
+        right = pad - left
+        return " " * left + raw + " " * right
     return raw + " " * pad
 
 
@@ -1173,12 +1179,54 @@ def _period_label(start, end) -> str:
     return f"{pd.Timestamp(start).strftime('%Y-%m-%d')}~{pd.Timestamp(end).strftime('%Y-%m-%d')}"
 
 
+def _display_month_value(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "~" in text:
+        return _display_month_period(text)
+    try:
+        if re.fullmatch(r"\d{6}", text):
+            return f"{text[:4]}-{text[4:6]}"
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return pd.Timestamp(text).strftime("%Y-%m")
+        if re.fullmatch(r"\d{4}-\d{2}", text):
+            return text
+        if re.fullmatch(r"\d{4}", text):
+            return text
+        return pd.Timestamp(text).strftime("%Y-%m")
+    except (TypeError, ValueError, OverflowError):
+        return text
+
+
+def _display_month_period(value, end_value=None) -> str:
+    if end_value is not None:
+        start_text = _display_month_value(value)
+        end_text = _display_month_value(end_value)
+        if start_text and end_text and start_text != end_text:
+            return f"{start_text}~{end_text}"
+        return start_text or end_text
+    text = str(value or "").strip()
+    if "~" in text:
+        start_text, end_text = text.split("~", 1)
+        return _display_month_period(start_text, end_text)
+    return _display_month_value(text)
+
+
 def _fold_label(fold: dict) -> str:
     return str(fold.get("oos_period") or _period_label(fold.get("oos_start_date"), fold.get("oos_end_date")))
 
 
 def _fold_selection_label(fold: dict) -> str:
     return str(fold.get("selection_period") or _period_label(fold.get("selection_start_date"), fold.get("selection_end_date")))
+
+
+def _fold_label_display(fold: dict) -> str:
+    return _display_month_period(_fold_label(fold))
+
+
+def _fold_selection_label_display(fold: dict) -> str:
+    return _display_month_period(_fold_selection_label(fold))
 
 
 def _build_rolling_folds(config: OuterRollingConfig) -> list[dict]:
@@ -1272,7 +1320,17 @@ def _resolve_config(argv, environ, *, base_policy: dict, latest_year: int | None
     first_oos_date_default = pd.Timestamp(year=first_oos_year_default, month=1, day=1)
     latest_ts = pd.Timestamp(latest_date).normalize() if latest_date is not None else pd.Timestamp(year=int(latest_year or first_oos_year_default), month=1, day=1)
     last_oos_date_default = _month_start(latest_ts)
-    trials_default = int(default_trials if int(default_trials or 0) > 0 else int(env.get("V16_OUTER_ROLLING_OOS_TRIALS", "500") or 500))
+    trials_default = int(
+        default_trials
+        if int(default_trials or 0) > 0
+        else int(
+            env.get(
+                "V16_OUTER_ROLLING_OOS_TRIALS",
+                str(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
+            )
+            or OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT
+        )
+    )
     window_mode_default = str(env.get("V16_OUTER_ROLLING_WINDOW_MODE", "fixed") or "fixed").strip().lower()
     if window_mode_default not in ("fixed", "expanding"):
         window_mode_default = "fixed"
@@ -1403,10 +1461,10 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
     if parallel_settings_line:
         print(str(parallel_settings_line))
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"{'fold':<6} | {'selection period':<23} | {'OOS test period':<23}")
+    print(f"{'fold':<6} | {'selection period':<15} | {'OOS test period':<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     for idx, fold in enumerate(folds, start=1):
-        print(f"{idx}/{len(folds):<4} | {_fold_selection_label(fold):<23} | {_fold_label(fold):<23}")
+        print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
     print(f"LOCAL_MIN_SCORE              : True")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
@@ -1974,22 +2032,24 @@ class _SearchProgress:
             current_remaining = eta_stage or 0.0
             eta_total = current_remaining + avg_done * max(0, self.fold_count - self.fold_idx)
         best_score = self.best_score if self.best_score != float("-inf") else 0.0
+        selection_text = _display_month_period(self.selection_start, self.selection_end)
+        oos_text = _display_month_value(self.oos_year)
         elapsed_text = _fmt_duration_compact(now - self.stage_start)
         eta_stage_text = _fmt_duration_compact(eta_stage)
         eta_total_text = _fmt_duration_compact(eta_total)
         line = choose_inline_progress_message((
             (
-                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
+                f"[{self.fold_idx}/{self.fold_count}] selection={selection_text} | OOS={oos_text} | "
                 f"OPTIMIZER_SEARCH | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
                 f"best_base_score={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
-                f"[{self.fold_idx}/{self.fold_count}] selection={self.selection_start}~{self.selection_end} | OOS={self.oos_year} | "
+                f"[{self.fold_idx}/{self.fold_count}] selection={selection_text} | OOS={oos_text} | "
                 f"search | 進度={completed}/{self.total_trials} ({pct:5.1f}%) | "
                 f"best_base={best_score:.3f} | elapsed={elapsed_text} | eta={eta_stage_text}/{eta_total_text}"
             ),
             (
-                f"[{self.fold_idx}/{self.fold_count}] {self.selection_start}~{self.selection_end}>OOS{self.oos_year} | "
+                f"[{self.fold_idx}/{self.fold_count}] {selection_text}>OOS{oos_text} | "
                 f"search {completed}/{self.total_trials} | best_base={best_score:.3f} | eta={eta_stage_text}/{eta_total_text}"
             ),
         ))
@@ -3213,33 +3273,34 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         return ""
     widths = {
         "fold": 9,
-        "selection": 23,
-        "oos_year": 23,
+        "selection": 15,
+        "oos_year": 15,
         "rank": 8,
         "best": 17,
-        "bench": 17,
+        "bench": 15,
         "elapsed": 8,
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
     lines: list[str] = []
     lines.append("ROLLING MONTHLY OOS RESULTS")
     header1 = (
-        f"{_pad_ansi('fold', widths['fold'])} | {_pad_ansi('selection', widths['selection'])} | {_pad_ansi('oos_period', widths['oos_year'])} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['base'], policy_group_width)} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['base_local_min_gt0'], policy_group_width)} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['local'], policy_group_width)} | "
-        f"{_pad_ansi(REPORT_POLICY_LABELS['retention'], policy_group_width)} | {_pad_ansi('elapsed', widths['elapsed'], align='>')}"
+        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('selection', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['base'], policy_group_width, align='^')} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['base_local_min_gt0'], policy_group_width, align='^')} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['local'], policy_group_width, align='^')} | "
+        f"{_pad_ansi(REPORT_POLICY_LABELS['retention'], policy_group_width, align='^')} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
     )
     header2 = (
         f"{_pad_ansi('', widths['fold'])} | {_pad_ansi('', widths['selection'])} | {_pad_ansi('', widths['oos_year'])} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | "
-        f"{_pad_ansi('rank_1', widths['rank'], align='>')} | {_pad_ansi('0050', widths['bench'], align='>')} | {_pad_ansi('', widths['elapsed'])}"
+        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | "
+        f"{_pad_ansi('rank_1', widths['rank'], align='^')} | {_pad_ansi('0050', widths['bench'], align='^')} | {_pad_ansi('', widths['elapsed'])}"
     )
     separator = _table_separator(max(_visible_len(header1), _visible_len(header2), 120))
     lines.append(separator)
     lines.append(header1)
+    lines.append(separator)
     lines.append(header2)
     lines.append(separator)
     total = len(rows or [])
@@ -3255,7 +3316,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         local_rank, _local_best, local_bench = _policy_cell_text(row.get("local") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         retention_rank, _retention_best, retention_bench = _policy_cell_text(row.get("retention") or {}, best_score=best_score, benchmark_score=benchmark_score, color=color)
         line = (
-            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(str(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(str(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
+            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
             f"{_pad_ansi(base_rank, widths['rank'], align='>')} | {_pad_ansi(base_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(base_lm_rank, widths['rank'], align='>')} | {_pad_ansi(base_lm_bench, widths['bench'], align='>')} | "
             f"{_pad_ansi(local_rank, widths['rank'], align='>')} | {_pad_ansi(local_bench, widths['bench'], align='>')} | "
@@ -3687,13 +3748,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
     fold_idx = int(task.get("fold_idx", progress.get("fold_idx", 0)) or 0)
     fold_count = int(task.get("fold_count", progress.get("fold_count", 0)) or 0)
     oos_year = int(task.get("oos_year", progress.get("oos_year", 0)) or 0)
-    oos_label = str(task.get("oos_period") or oos_year)
+    oos_label = _display_month_period(task.get("oos_period") or oos_year)
     selection_start = str(progress.get("selection_start") or task.get("selection_period") or "").strip()
     selection_end = str(progress.get("selection_end") or "").strip()
     if selection_start and selection_end:
-        selection_text = f"selection={selection_start}~{selection_end}"
+        selection_text = f"selection={_display_month_period(selection_start, selection_end)}"
     elif selection_start:
-        selection_text = f"selection={selection_start}"
+        selection_text = f"selection={_display_month_period(selection_start)}"
     else:
         selection_text = "selection=?"
     stage = str(progress.get("stage") or "QUEUED").upper()
@@ -3926,7 +3987,7 @@ class _ParallelFoldLiveBoard:
 def _print_parallel_fold_result(row: dict) -> None:
     if not row:
         return
-    print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={row.get('selection_period')} | OOS={row.get('oos_period') or row.get('oos_year')}{C_RESET}", flush=True)
+    print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={_display_month_period(row.get('selection_period'))} | OOS={_display_month_period(row.get('oos_period') or row.get('oos_year'))}{C_RESET}", flush=True)
     rendered = _render_results_table([row], color=True, include_chain=False)
     if rendered:
         print(rendered, flush=True)
@@ -4066,10 +4127,12 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         selection_start = str(task.get("selection_start_date") or "")
         selection_end = str(task.get("selection_end_date") or "")
         selection_period = str(task.get("selection_period") or f"{selection_start}~{selection_end}")
+        selection_period_display = _display_month_period(selection_period)
         oos_period = str(task.get("oos_period") or str(oos_year))
+        oos_period_display = _display_month_period(oos_period)
         oos_start_date = str(task.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")
         oos_end_date = str(task.get("oos_end_date") or f"{str(oos_year)[:4]}-12-31")
-        print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | parallel fold START | selection={selection_period}", flush=True)
+        print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | parallel fold START | selection={selection_period_display}", flush=True)
         _write_parallel_fold_progress_event(
             stage="START",
             fold_idx=fold_idx,
@@ -4116,7 +4179,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             install_started = time.perf_counter()
             session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
             install_shared_cache_sec = max(0.0, time.perf_counter() - install_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | raw data loaded | elapsed={_fmt_duration(install_shared_cache_sec)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="RAW_DATA",
                 fold_idx=fold_idx,
@@ -4156,7 +4219,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             progress.done(int(session.current_session_trial))
             best_base_score = None if progress.best_score == float("-inf") else float(progress.best_score)
             best_base_text = "N/A" if best_base_score is None else f"{best_base_score:.3f}"
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | optimizer search DONE | best_base_score={best_base_text} | elapsed={_fmt_duration(optimize_sec)}", flush=True)
 
             local_started = time.perf_counter()
 
@@ -4209,7 +4272,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             local_elapsed = time.perf_counter() - local_started
             best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
             best_local_min_text = "N/A" if best_local_min_score is None else f"{best_local_min_score:.3f}"
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | local-min review DONE | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | local-min review DONE | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
                 fold_idx=fold_idx,
@@ -4282,7 +4345,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 oos_end_date=oos_end_date,
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="OOS_DIAGNOSTICS",
                 fold_idx=fold_idx,
@@ -4415,7 +4478,7 @@ def run_outer_rolling_oos(
     ensure_study_effective_policy_compatible,
     configure_optuna_logging,
     optimizer_seed=None,
-    default_trials: int = 500,
+    default_trials: int = OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
     timing_mode: bool = False,
 ) -> int:
     from tools.optimizer.session import close_study_storage
@@ -4552,11 +4615,13 @@ def run_outer_rolling_oos(
         oos_year = int(fold["oos_year"])
         oos_period = str(fold["oos_period"])
         selection_period = str(fold["selection_period"])
+        oos_period_display = _display_month_period(oos_period)
+        selection_period_display = _display_month_period(selection_period)
         selection_start = str(fold["selection_start_date"])
         selection_end = str(fold["selection_end_date"])
         oos_start_date = str(fold["oos_start_date"])
         oos_end_date = str(fold["oos_end_date"])
-        print(f"[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | fold START", flush=True)
+        print(f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | fold START", flush=True)
         fold_policy = dict(base_policy)
         fold_policy["selection_start_year"] = int(fold["selection_start_year"])
         fold_policy["train_start_year"] = int(fold["selection_start_year"])
@@ -4601,7 +4666,7 @@ def run_outer_rolling_oos(
             db_name = f"sqlite:///{db_file}"
         study = None
         try:
-            print(f"\n{C_CYAN}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period}{C_RESET}")
+            print(f"\n{C_CYAN}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display}{C_RESET}")
             install_started = time.perf_counter()
             session.install_raw_data_cache(
                 selected_data_dir,
@@ -4665,7 +4730,7 @@ def run_outer_rolling_oos(
             local_elapsed = time.perf_counter() - local_started
             prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
-                f"[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | LOCAL_MIN_REVIEW DONE | "
+                f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | LOCAL_MIN_REVIEW DONE | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "
@@ -4691,7 +4756,7 @@ def run_outer_rolling_oos(
                     fold_total_sec=fold_elapsed,
                     finalists_count=len(finalists),
                 ))
-                print(f"{C_YELLOW}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | 無可用 finalist，略過。{C_RESET}")
+                print(f"{C_YELLOW}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | 無可用 finalist，略過。{C_RESET}")
                 continue
             local_rank_map = _build_local_rank_map(finalists)
             retention_rank_map = _build_retention_rank_map(finalists)
@@ -4705,7 +4770,7 @@ def run_outer_rolling_oos(
                 oos_end_date=oos_end_date,
             )
             oos_diagnostics_sec = max(0.0, time.perf_counter() - diagnostics_started)
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | OOS diagnostics DONE | elapsed={_fmt_duration(oos_diagnostics_sec)}", flush=True)
             fold_elapsed = time.perf_counter() - fold_start
             selection_period = str(selection_period)
             policy_schedules = {
@@ -4776,7 +4841,7 @@ def run_outer_rolling_oos(
             ))
             local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
             print(
-                f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period} | OOS {oos_period} | DONE | "
+                f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | DONE | "
                 f"local_rank_1_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
                 f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(fold_elapsed)}{C_RESET}"
             )

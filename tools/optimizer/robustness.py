@@ -125,9 +125,11 @@ def _format_progress_value(value, *, compact: bool = False) -> str:
     match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", text)
     if match:
         year, month, _day = match.groups()
-        return f"{year[-2:]}-{month}" if compact else text
+        return f"{year[-2:]}-{month}" if compact else f"{year}-{month}"
     if re.fullmatch(r"\d{6}", text):
-        return text[-4:] if compact else text
+        return f"{text[-4:-2]}-{text[-2:]}" if compact else f"{text[:4]}-{text[4:]}"
+    if re.fullmatch(r"\d{4}-\d{2}", text):
+        return text[-5:] if compact else text
     if re.fullmatch(r"\d{4}", text):
         return text[-2:] if compact else text
     return text

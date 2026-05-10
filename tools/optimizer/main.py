@@ -33,6 +33,7 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
+    OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
 )
 
 warnings.simplefilter("default")
@@ -682,7 +683,7 @@ def main(argv=None, environ=None):
             ensure_study_effective_policy_compatible=_ensure_study_effective_policy_compatible,
             configure_optuna_logging=configure_optuna_logging,
             optimizer_seed=optimizer_seed,
-            default_trials=int(getattr(session, "n_trials", 0) or 500),
+            default_trials=int(getattr(session, "n_trials", 0) or OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT),
             timing_mode=outer_timing_mode,
         )
     if str(getattr(session, "run_action", "train")) == "promote_candidate":
