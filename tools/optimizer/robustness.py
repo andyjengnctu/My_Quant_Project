@@ -13,6 +13,7 @@ from config.training_performance_policy import (
     is_optimizer_local_min_dependency_stats_enabled,
     resolve_optimizer_local_min_portfolio_dependency_order,
     resolve_optimizer_local_min_signal_dependency_field_order,
+    resolve_optimizer_single_fold_local_min_parallel_workers_default,
 )
 from config.training_policy import (
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -115,6 +116,33 @@ def _format_year_range(start_year, end_year) -> str:
     if start_year == end_year:
         return str(start_year)
     return f"{start_year}~{end_year}"
+
+
+def _format_progress_value(value, *, compact: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "N/A"
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if match:
+        year, month, _day = match.groups()
+        return f"{year[-2:]}-{month}" if compact else text
+    if re.fullmatch(r"\d{6}", text):
+        return text[-4:] if compact else text
+    if re.fullmatch(r"\d{4}", text):
+        return text[-2:] if compact else text
+    return text
+
+
+def _format_progress_range(start_value, end_value, *, compact: bool = False) -> str:
+    start_text = _format_progress_value(start_value, compact=compact)
+    end_text = _format_progress_value(end_value, compact=compact)
+    if start_text == "N/A" and end_text == "N/A":
+        return "N/A"
+    if end_text == "N/A":
+        return f"{start_text}~latest"
+    if start_text == end_text:
+        return start_text
+    return f"{start_text}~{end_text}"
 
 
 def _resolve_report_periods(session, *, objective_mode: str) -> dict:
@@ -409,11 +437,12 @@ def _rank_local_min_neighbor_payloads(session, center_payload: dict, neighbor_pa
 
 
 def _resolve_local_min_parallel_workers(session) -> int:
-    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "2")
+    default_workers = resolve_optimizer_single_fold_local_min_parallel_workers_default()
+    raw_value = os.environ.get("OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(default_workers))
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
-        value = 2
+        value = int(default_workers)
     # AI註: local-min 平行化採小型 ordered prefetch window，避免重演 batch 過度超前計算。
     return max(1, min(4, int(value)))
 
@@ -956,9 +985,13 @@ class _FinalistProgressBoard:
         eta_stage = self._estimate_single_line_eta(safe_idx, int(current_neighbor), int(total_neighbors))
         eta_total = self._estimate_total_eta(eta_stage)
         elapsed = time.perf_counter() - self.stage_start
-        selection_start = int(ctx.get('selection_start', 0) or 0)
-        selection_end = int(ctx.get('selection_end', 0) or 0)
-        oos_year = int(ctx.get('oos_year', 0) or 0)
+        selection_start = ctx.get('selection_start', '')
+        selection_end = ctx.get('selection_end', '')
+        oos_value = ctx.get('oos_period') or ctx.get('oos_year', '')
+        selection_text = _format_progress_range(selection_start, selection_end, compact=False)
+        selection_compact = _format_progress_range(selection_start, selection_end, compact=True)
+        oos_text = _format_progress_value(oos_value, compact=False)
+        oos_compact = _format_progress_value(oos_value, compact=True)
         readable_status = str(status_text).strip()
         compact_status = readable_status.replace(" early_stop", " early").replace(" cache", " cache")
         best_compact = best_text.replace(" #", "#")
@@ -968,7 +1001,7 @@ class _FinalistProgressBoard:
         line = choose_inline_progress_message((
             (
                 f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
-                f"selection={selection_start}~{selection_end} | OOS={oos_year} | "
+                f"selection={selection_text} | OOS={oos_text} | "
                 f"LOCAL_MIN_REVIEW={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
                 f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
                 f"current={current_text} {readable_status} | best={best_text} | "
@@ -977,7 +1010,7 @@ class _FinalistProgressBoard:
             ),
             (
                 f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
-                f"selection={selection_start % 100:02d}~{selection_end % 100:02d} | OOS={oos_year % 100:02d} | "
+                f"selection={selection_compact} | OOS={oos_compact} | "
                 f"review={safe_idx + 1}/{len(self.finalists)} | trial=#{int(trial.number) + 1} | "
                 f"進度={int(current_neighbor)}/{int(total_neighbors)} | "
                 f"current={current_text} {readable_status} | best={best_text} | "
@@ -986,7 +1019,7 @@ class _FinalistProgressBoard:
             ),
             (
                 f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "
-                f"{selection_start % 100:02d}~{selection_end % 100:02d}>{oos_year % 100:02d} | "
+                f"{selection_compact}>OOS{oos_compact} | "
                 f"review {safe_idx + 1}/{len(self.finalists)} #{int(trial.number) + 1} | "
                 f"{int(current_neighbor)}/{int(total_neighbors)} | "
                 f"current={current_text} {compact_status} | best={best_compact} | "

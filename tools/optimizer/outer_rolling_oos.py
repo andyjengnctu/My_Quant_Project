@@ -7,7 +7,7 @@ import statistics
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from contextlib import redirect_stderr, redirect_stdout
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -27,9 +27,13 @@ from config.training_policy import (
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from config.training_performance_policy import (
+    is_optimizer_single_fold_tpe_parallel_search_allowed_default,
     resolve_optimizer_feature_bank_max_items_default,
     resolve_optimizer_rolling_fold_workers_default,
     resolve_optimizer_rolling_parallel_prep_cache_max_items_default,
+    resolve_optimizer_single_fold_local_min_parallel_workers_default,
+    resolve_optimizer_single_fold_local_min_process_workers_default,
+    resolve_optimizer_single_fold_search_parallel_trials_default,
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
@@ -111,8 +115,10 @@ def _resolve_rolling_fold_workers(environ, *, timing_mode: bool, fold_count: int
 
 
 def _is_rolling_fold_parallel_enabled(environ, *, timing_mode: bool, fold_count: int) -> bool:
-    _ = timing_mode  # timing mode 不再是 rolling fold 平行化的必要條件；正式模式也使用同一效能口徑。
-    return int(fold_count) > 1 and _resolve_rolling_fold_workers(environ, timing_mode=timing_mode, fold_count=fold_count) > 1
+    _ = (environ, timing_mode)
+    # 多 fold 一律走 parallel live board 路徑；OPTIMIZER_ROLLING_FOLD_WORKERS 只控制同時執行幾個 fold，
+    # 不再讓 workers=1 / >1 分叉成兩套 console 顯示口徑。
+    return int(fold_count) > 1
 
 
 def _env_value_for_display(environ, name: str, default: str) -> str:
@@ -147,6 +153,30 @@ def _env_flag(environ, name: str, default: bool) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
 
 
+def _resolve_single_fold_search_parallel_trials(environ, *, sampler_kind: str) -> int:
+    default_trials = resolve_optimizer_single_fold_search_parallel_trials_default()
+    raw_value = _env_value_for_display(
+        environ,
+        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS",
+        str(default_trials),
+    )
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        resolved = int(default_trials)
+    resolved = max(1, min(16, resolved))
+    sampler_text = str(sampler_kind or "").strip().lower()
+    if sampler_text == "tpe" and resolved > 1:
+        allow_tpe_parallel = _env_flag(
+            environ,
+            "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
+            is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
+        )
+        if not allow_tpe_parallel:
+            return 1
+    return int(resolved)
+
+
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
     _ = timing_mode  # 本函式只處理效能/資源預設；正式模式與 timing mode 應盡可能一致。
     _set_env_default(environ, "OPTIMIZER_PROFILE_WRITE_FILES", "0")
@@ -157,8 +187,14 @@ def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fo
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE", "0")
     _set_env_default(environ, "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE", "0")
     _set_env_default(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(resolve_optimizer_rolling_fold_workers_default(fold_count)))
-    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
-    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    _set_env_default(environ, "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS", str(resolve_optimizer_single_fold_search_parallel_trials_default()))
+    _set_env_default(
+        environ,
+        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
+        "1" if is_optimizer_single_fold_tpe_parallel_search_allowed_default() else "0",
+    )
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(resolve_optimizer_single_fold_local_min_parallel_workers_default()))
+    _set_env_default(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", str(resolve_optimizer_single_fold_local_min_process_workers_default()))
     _set_env_default(environ, "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(resolve_optimizer_rolling_parallel_prep_cache_max_items_default()))
     _set_env_default(environ, "OPTIMIZER_FEATURE_BANK_MAX_ITEMS", str(resolve_optimizer_feature_bank_max_items_default()))
 
@@ -168,10 +204,11 @@ def _is_outer_rolling_sqlite_storage_enabled(environ) -> bool:
     return value in {"1", "true", "yes", "on", "sqlite", "sqlite_db", "db"}
 
 
-def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
+def _format_parallel_settings_line(environ, *, fold_workers: int, sampler_kind: str = "") -> str:
     rolling_workers = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
-    local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
-    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    search_parallel_trials = _resolve_single_fold_search_parallel_trials(environ, sampler_kind=sampler_kind)
+    local_min_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(resolve_optimizer_single_fold_local_min_parallel_workers_default()))
+    process_workers = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", str(resolve_optimizer_single_fold_local_min_process_workers_default()))
     parallel_prep_cache_max_items = _env_value_for_display(
         environ,
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
@@ -185,6 +222,7 @@ def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
     return (
         "平行化設定："
         f"OPTIMIZER_ROLLING_FOLD_WORKERS={rolling_workers} | "
+        f"OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS={search_parallel_trials} | "
         f"OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS={local_min_workers} | "
         f"OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS={process_workers} | "
         f"OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS={parallel_prep_cache_max_items} | "
@@ -194,8 +232,10 @@ def _format_parallel_settings_line(environ, *, fold_workers: int) -> str:
 
 def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold_workers: int, sampler_kind: str) -> list[dict]:
     rolling_workers_text = _env_value_for_display(environ, "OPTIMIZER_ROLLING_FOLD_WORKERS", str(int(fold_workers)))
-    local_min_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", "1")
-    local_min_process_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", "0")
+    search_parallel_trials_text = str(_resolve_single_fold_search_parallel_trials(environ, sampler_kind=sampler_kind))
+    allow_tpe_parallel = "on" if _env_flag(environ, "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH", is_optimizer_single_fold_tpe_parallel_search_allowed_default()) else "off"
+    local_min_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PARALLEL_WORKERS", str(resolve_optimizer_single_fold_local_min_parallel_workers_default()))
+    local_min_process_workers_text = _env_value_for_display(environ, "OPTIMIZER_LOCAL_MIN_PROCESS_WORKERS", str(resolve_optimizer_single_fold_local_min_process_workers_default()))
     parallel_cache_text = _env_value_for_display(
         environ,
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS",
@@ -228,11 +268,19 @@ def _build_training_performance_alignment_rows(environ, *, fold_count: int, fold
         },
         {
             "item": "rolling_fold_parallel",
-            "normal_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
-            "timing_mode": "on" if int(fold_workers) > 1 and int(fold_count) > 1 else "off",
+            "normal_mode": "on" if int(fold_count) > 1 else "off",
+            "timing_mode": "on" if int(fold_count) > 1 else "off",
             "consistent": True,
             "result_scope": "OOS period fold 彼此獨立；正式 OOS_CHAIN 仍在所有 fold 完成後重算",
             "display": "console plan / timing JSON summary: rolling_fold_parallel",
+        },
+        {
+            "item": "single_fold_search_parallel_trials",
+            "normal_mode": f"{search_parallel_trials_text}, tpe_parallel={allow_tpe_parallel}",
+            "timing_mode": f"{search_parallel_trials_text}, tpe_parallel={allow_tpe_parallel}",
+            "consistent": True,
+            "result_scope": "控制同一 fold 內 Optuna trial 併發；TPE 預設保護為 1，避免 trial 序列漂移",
+            "display": "console plan / timing JSON summary: single_fold_search_parallel_trials",
         },
         {
             "item": "study_storage",
@@ -1574,6 +1622,13 @@ def _write_outer_timing_summary(
     json_path = base + ".json"
     resource_write_csv = _env_flag(os.environ, "OPTIMIZER_RESOURCE_WRITE_CSV", False)
     resource_csv_path = os.path.join(report_dir, f"outer_rolling_oos_resource_{session_ts}.csv") if resource_write_csv else ""
+    sampler_kind = "random" if bool(timing_mode) else "tpe"
+    single_fold_search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
+    single_fold_allow_tpe_parallel_search = _env_flag(
+        os.environ,
+        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
+        is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
+    )
 
     if fold_timing_rows:
         fieldnames = list(fold_timing_rows[0].keys())
@@ -1654,7 +1709,7 @@ def _write_outer_timing_summary(
         "timing_mode": bool(timing_mode),
         "dataset_label": str(dataset_label),
         "optimizer_seed": optimizer_seed,
-        "sampler_kind": "random" if bool(timing_mode) else "tpe",
+        "sampler_kind": sampler_kind,
         "meta": {
             "window_mode": str(config.window_mode),
             "train_window_years": int(config.train_window_years),
@@ -1682,6 +1737,8 @@ def _write_outer_timing_summary(
             "report_write_sec": float(report_write_sec),
             "fold_total_sum_sec": float(fold_total_sec),
             "avg_optimize_sec_per_completed_trial": (float(optimize_sec) / float(completed_trials)) if completed_trials > 0 else 0.0,
+            "single_fold_search_parallel_trials": int(single_fold_search_parallel_trials),
+            "single_fold_allow_tpe_parallel_search": bool(single_fold_allow_tpe_parallel_search),
             "avg_fold_total_sec": (float(fold_total_sec) / float(len(fold_timing_rows))) if fold_timing_rows else 0.0,
             "fold_wall_sec": (max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in list(fold_timing_rows or [])), default=0.0) if bool(rolling_fold_parallel) else float(fold_total_sec)),
             "other_overhead_sec": max(0.0, float(overall_sec) - (max((float(row.get("fold_total_sec", 0.0) or 0.0) for row in list(fold_timing_rows or [])), default=0.0) if bool(rolling_fold_parallel) else float(fold_total_sec)) - float(active_replay_chain_sec) - float(raw_data_load_sec) - float(report_write_sec)),
@@ -1881,6 +1938,7 @@ class _SearchProgress:
         self.stage_start = time.perf_counter()
         self.best_score = float("-inf")
         self.last_render = 0.0
+        self._lock = Lock()
         self.inline_progress_enabled = stdout_supports_inline_progress()
         self.inline_progress_width = 0
 
@@ -1931,10 +1989,12 @@ class _SearchProgress:
 
     def callback(self, session):
         def _callback(study, trial):
-            session.current_session_trial += 1
-            if trial.value is not None and is_qualified_trial_value(trial.value):
-                self.best_score = max(self.best_score, float(trial.value))
-            self.render(int(session.current_session_trial))
+            with self._lock:
+                session.current_session_trial += 1
+                if trial.value is not None and is_qualified_trial_value(trial.value):
+                    self.best_score = max(self.best_score, float(trial.value))
+                completed = int(session.current_session_trial)
+            self.render(completed)
         return _callback
 
     def done(self, completed: int):
@@ -3893,6 +3953,7 @@ class _FoldLogSearchProgress:
         self.stage_start = time.perf_counter()
         self.best_score = float("-inf")
         self.last_completed = -1
+        self._lock = Lock()
 
     def emit(self, completed: int, *, force: bool = False) -> None:
         completed = int(completed)
@@ -3915,10 +3976,12 @@ class _FoldLogSearchProgress:
 
     def callback(self, session):
         def _callback(study, trial):
-            session.current_session_trial += 1
-            if trial.value is not None and is_qualified_trial_value(trial.value):
-                self.best_score = max(self.best_score, float(trial.value))
-            self.emit(int(session.current_session_trial))
+            with self._lock:
+                session.current_session_trial += 1
+                if trial.value is not None and is_qualified_trial_value(trial.value):
+                    self.best_score = max(self.best_score, float(trial.value))
+                completed = int(session.current_session_trial)
+            self.emit(completed)
         return _callback
 
     def done(self, completed: int) -> None:
@@ -4046,7 +4109,13 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             )
             progress.emit(0, force=True)
             optimize_started = time.perf_counter()
-            study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[progress.callback(session)])
+            search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
+            study.optimize(
+                session.objective,
+                n_trials=int(config.trials_per_fold),
+                n_jobs=int(search_parallel_trials),
+                callbacks=[progress.callback(session)],
+            )
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             trial_count = len(list(getattr(study, "trials", []) or []))
             session.current_session_trial = int(trial_count or config.trials_per_fold)
@@ -4314,9 +4383,12 @@ def run_outer_rolling_oos(
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
+    sampler_kind = "random" if bool(timing_mode) else "tpe"
     _print_plan(
         config,
-        parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers)) if fold_parallel_enabled else None,
+        parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers), sampler_kind=sampler_kind)
+        if fold_parallel_enabled
+        else None,
     )
     if not _confirm_plan(config):
         print(f"{C_YELLOW}已取消 outer rolling OOS。{C_RESET}")
@@ -4335,7 +4407,6 @@ def run_outer_rolling_oos(
     overall_start = time.perf_counter()
     resource_sampler = _ResourceUsageSampler(interval_sec=_resolve_resource_sample_interval_sec(environ))
     resource_sampler.start()
-    sampler_kind = "random" if bool(timing_mode) else "tpe"
     performance_alignment_rows = _build_training_performance_alignment_rows(
         environ,
         fold_count=fold_count,
@@ -4508,7 +4579,13 @@ def run_outer_rolling_oos(
                 overall_start=overall_start,
             )
             optimize_started = time.perf_counter()
-            study.optimize(session.objective, n_trials=int(config.trials_per_fold), n_jobs=1, callbacks=[progress.callback(session)])
+            search_parallel_trials = _resolve_single_fold_search_parallel_trials(os.environ, sampler_kind=sampler_kind)
+            study.optimize(
+                session.objective,
+                n_trials=int(config.trials_per_fold),
+                n_jobs=int(search_parallel_trials),
+                callbacks=[progress.callback(session)],
+            )
             optimize_sec = max(0.0, time.perf_counter() - optimize_started)
             progress.done(int(session.current_session_trial))
 

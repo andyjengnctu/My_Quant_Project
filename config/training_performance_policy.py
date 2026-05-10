@@ -10,7 +10,7 @@ import os
 # - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
 # - 正整數 = 固定 rolling fold process 數。
 # - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_FOLD_WORKERS = 3
+OPTIMIZER_ROLLING_FOLD_WORKERS = 6
 
 # OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
 # - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。
@@ -26,6 +26,37 @@ OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
 OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
 
 
+# 單一 fold 內加速參數區
+#
+# 這一區只控制「同一個 rolling OOS fold 內部」的平行化。
+# 與 OPTIMIZER_ROLLING_FOLD_WORKERS 不同：
+# - OPTIMIZER_ROLLING_FOLD_WORKERS 控制幾個 OOS fold 同時跑。
+# - 本區控制單一 fold 內 optimizer search / local_min review 的併發程度。
+# 預設保守，不改既有 trial 序列與正式結果；需要壓縮單一 fold 時間時再手動調高。
+
+# OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS:
+# - 1 = 保持既有單一 fold trial 串行搜尋，正式模式預設使用。
+# - >1 = 同一 fold 內同時評估多個 Optuna trial。
+# - TPE sampler 預設仍會被保護為 1，除非打開 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH。
+OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 1
+
+# OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH:
+# - False = 正式 TPE 搜尋維持 n_jobs=1，避免平行 ask 導致 trial 序列漂移。
+# - True = 允許 TPE 也使用 OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS。
+# - 只改搜尋路徑，不改策略、交易與評分口徑。
+OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
+
+# OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS:
+# - 控制 local_min review 內鄰點 ordered prefetch 的 thread worker 數。
+# - 預設 1，保留最穩定的 local_min 評估節奏；需要加速可調高，但不設硬性上限。
+OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 2
+
+# OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS:
+# - 保留給 local_min process-level 併發；目前正式流程仍以 thread ordered prefetch 為主。
+# - 預設 0，避免 process 巢狀併發造成記憶體放大。
+OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS = 0
+
+
 def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | None = None) -> int:
     try:
         resolved = int(value)
@@ -35,6 +66,19 @@ def _coerce_int(value, *, default: int, min_value: int = 0, max_value: int | Non
     if max_value is not None:
         resolved = min(int(max_value), resolved)
     return resolved
+
+
+def _coerce_bool(value, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "n"}:
+        return False
+    return bool(default)
 
 
 def resolve_optimizer_rolling_fold_workers_default(fold_count):
@@ -136,17 +180,36 @@ def resolve_optimizer_local_min_signal_dependency_field_order() -> tuple[str, ..
     return tuple(fields)
 
 
-def _coerce_bool(value, *, default: bool) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on", "y"}:
-        return True
-    if text in {"0", "false", "no", "off", "n"}:
-        return False
-    return bool(default)
+def resolve_optimizer_single_fold_search_parallel_trials_default():
+    return _coerce_int(
+        OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS,
+        default=1,
+        min_value=1,
+        max_value=16,
+    )
+
+
+def is_optimizer_single_fold_tpe_parallel_search_allowed_default():
+    return _coerce_bool(
+        OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH,
+        default=False,
+    )
+
+
+def resolve_optimizer_single_fold_local_min_parallel_workers_default():
+    return _coerce_int(
+        OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS,
+        default=1,
+        min_value=1,
+    )
+
+
+def resolve_optimizer_single_fold_local_min_process_workers_default():
+    return _coerce_int(
+        OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS,
+        default=0,
+        min_value=0,
+    )
 
 
 def is_optimizer_local_min_dependency_stats_enabled():
@@ -166,6 +229,10 @@ def build_training_performance_policy_snapshot(fold_count=None):
         ),
         "OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS": resolve_optimizer_rolling_parallel_prep_cache_max_items_default(),
         "OPTIMIZER_FEATURE_BANK_MAX_ITEMS": resolve_optimizer_feature_bank_max_items_default(),
+        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS": resolve_optimizer_single_fold_search_parallel_trials_default(),
+        "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH": is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
+        "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS": resolve_optimizer_single_fold_local_min_parallel_workers_default(),
+        "OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS": resolve_optimizer_single_fold_local_min_process_workers_default(),
         "OPTIMIZER_LOCAL_MIN_DEPENDENCY_STATS_ENABLED": is_optimizer_local_min_dependency_stats_enabled(),
         "OPTIMIZER_LOCAL_MIN_PORTFOLIO_DEPENDENCY_ORDER": resolve_optimizer_local_min_portfolio_dependency_order(),
         "OPTIMIZER_LOCAL_MIN_SIGNAL_DEPENDENCY_FIELD_ORDER": ",".join(resolve_optimizer_local_min_signal_dependency_field_order()),

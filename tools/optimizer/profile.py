@@ -2,6 +2,7 @@ import csv
 import json
 import os
 import time
+from threading import RLock
 
 from core.display import C_CYAN, C_GRAY, C_RESET
 
@@ -40,6 +41,7 @@ class OptimizerProfileRecorder:
         self.csv_path = os.path.join(output_dir, f"optimizer_profile_{session_ts}.csv")
         self.summary_path = os.path.join(output_dir, f"optimizer_profile_summary_{session_ts}.json")
         self.rows = []
+        self._lock = RLock()
         self._run_started_perf_counter = None
         self.first_trial_completed_wall_sec = None
 
@@ -60,39 +62,42 @@ class OptimizerProfileRecorder:
             return
 
         normalized = {field: row.get(field, "") for field in PROFILE_FIELDS}
-        self.rows.append(normalized)
-        if self._run_started_perf_counter is not None and self.first_trial_completed_wall_sec is None:
-            self.first_trial_completed_wall_sec = max(0.0, time.perf_counter() - self._run_started_perf_counter)
-        if not self.write_files:
-            return
-        with open(self.csv_path, "a", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
-            writer.writerow(normalized)
+        with self._lock:
+            self.rows.append(normalized)
+            if self._run_started_perf_counter is not None and self.first_trial_completed_wall_sec is None:
+                self.first_trial_completed_wall_sec = max(0.0, time.perf_counter() - self._run_started_perf_counter)
+            if not self.write_files:
+                return
+            with open(self.csv_path, "a", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
+                writer.writerow(normalized)
 
     def mark_trial_completed(self, trial_number=None):
-        if self._run_started_perf_counter is None:
-            return
-        elapsed = max(0.0, time.perf_counter() - self._run_started_perf_counter)
-        if self.first_trial_completed_wall_sec is None:
-            self.first_trial_completed_wall_sec = elapsed
-            return
-        if trial_number in (0, "0"):
-            self.first_trial_completed_wall_sec = elapsed
+        with self._lock:
+            if self._run_started_perf_counter is None:
+                return
+            elapsed = max(0.0, time.perf_counter() - self._run_started_perf_counter)
+            if self.first_trial_completed_wall_sec is None:
+                self.first_trial_completed_wall_sec = elapsed
+                return
+            if trial_number in (0, "0"):
+                self.first_trial_completed_wall_sec = elapsed
 
     def patch_row(self, trial_number, updates):
         if not self.enabled or not updates:
             return
         target = int(trial_number) + 1
-        for row in self.rows:
-            try:
-                current_trial_number = int(row.get("trial_number", 0) or 0)
-            except (TypeError, ValueError):
-                continue
-            if current_trial_number == target:
-                for key, value in updates.items():
-                    if key in PROFILE_FIELDS:
-                        row[key] = value
-                return
+        with self._lock:
+            for row in self.rows:
+                try:
+                    current_trial_number = int(row.get("trial_number", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if current_trial_number == target:
+                    for key, value in updates.items():
+                        if key in PROFILE_FIELDS:
+                            row[key] = value
+                    return
 
     def _rewrite_csv_from_rows(self):
         if not self.enabled or not self.write_files:
@@ -101,15 +106,20 @@ class OptimizerProfileRecorder:
         with open(self.csv_path, "w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.DictWriter(handle, fieldnames=PROFILE_FIELDS)
             writer.writeheader()
-            for row in self.rows:
+            with self._lock:
+                current_rows = [dict(row) for row in self.rows]
+            for row in current_rows:
                 writer.writerow({field: row.get(field, "") for field in PROFILE_FIELDS})
 
     def build_summary_payload(self):
-        if not self.enabled or not self.rows:
+        with self._lock:
+            rows = [dict(row) for row in self.rows]
+            first_trial_completed_wall_sec = self.first_trial_completed_wall_sec
+        if not self.enabled or not rows:
             return {
-                "trial_count": len(self.rows),
+                "trial_count": len(rows),
                 "avg": {},
-                "first_trial_completed_wall_sec": self.first_trial_completed_wall_sec,
+                "first_trial_completed_wall_sec": first_trial_completed_wall_sec,
             }
 
         numeric_fields = [
@@ -130,14 +140,14 @@ class OptimizerProfileRecorder:
             "callback_milestone_payload_sec", "callback_milestone_candidate_wf_sec", "callback_milestone_render_sec",
         ]
         summary = {
-            "trial_count": len(self.rows),
+            "trial_count": len(rows),
             "avg": {},
-            "first_trial_completed_wall_sec": self.first_trial_completed_wall_sec,
+            "first_trial_completed_wall_sec": first_trial_completed_wall_sec,
         }
 
         for field in numeric_fields:
             values = []
-            for row_idx, row in enumerate(self.rows):
+            for row_idx, row in enumerate(rows):
                 value = row.get(field, "")
                 if isinstance(value, (int, float)):
                     values.append(float(value))

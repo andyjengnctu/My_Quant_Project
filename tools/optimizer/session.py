@@ -705,8 +705,9 @@ class OptimizerSession:
         insufficient_count = len(insufficient_failures)
         if insufficient_count <= 0:
             return
-        self.prep_summary["trials_with_insufficient"] += 1
-        self.prep_summary["insufficient_count_total"] += insufficient_count
+        with self._cache_lock:
+            self.prep_summary["trials_with_insufficient"] += 1
+            self.prep_summary["insufficient_count_total"] += insufficient_count
 
     def print_optimizer_prep_summary(self):
         insufficient_total = self.prep_summary["insufficient_count_total"]
