@@ -3721,10 +3721,13 @@ def _format_parallel_fold_progress_line(task: dict, progress: dict, *, log_statu
         base_best = progress.get("best_base_score")
         base_best_text = "N/A" if base_best is None else f"{float(base_best):.3f}"
         status = str(progress.get("status") or "RUN")
+        local_min_elapsed_text = ""
+        if progress.get("elapsed_sec") is not None:
+            local_min_elapsed_text = f" | elapsed : {_fmt_duration_compact(progress.get('elapsed_sec'))}"
         return (
             f"[{fold_idx}/{fold_count}] {selection_text} | OOS {oos_label} | "
-            f"local_min finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
-            f"current={current_text} | best_base={base_best_text} | best_local_min={best_text} | {status}{elapsed_text}"
+            f"finalist {finalist_idx}/{finalist_total} | neighbor {neighbor_done}/{neighbor_total} | "
+            f"current : {current_text} | best_base : {base_best_text} | best_lm : {best_text} | {status}{local_min_elapsed_text}"
         )
     if stage == "OOS_DIAGNOSTICS":
         status = str(progress.get("status") or "RUN")
