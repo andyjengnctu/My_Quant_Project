@@ -43,7 +43,7 @@ OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
 # - 1 = 保持既有單一 search unit trial 串行搜尋，正式模式預設使用。
 # - >1 = 同一 search unit 內同時評估多個 Optuna trial。
 # - TPE sampler 預設仍會被保護為 1，除非打開 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH。
-OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 3
+OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 1
 
 # OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH:
 # - False = 正式 TPE 搜尋維持 n_jobs=1，避免平行 ask 導致 trial 序列漂移。
