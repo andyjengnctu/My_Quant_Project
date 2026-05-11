@@ -589,6 +589,7 @@ def main(argv=None, environ=None):
         maybe_print_history_best,
         print_resolved_trial_count,
         prompt_existing_db_policy,
+        resolve_optimizer_single_fold_search_parallel_trials,
         resolve_training_session_export_policy,
         resolve_trial_count_or_exit,
     )
@@ -859,7 +860,8 @@ def main(argv=None, environ=None):
             prompt_existing_db_policy(db_file, COLORS)
         if os.path.exists(db_file):
             ensure_optimizer_db_usable(db_file)
-        study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=("random" if timing_mode else "tpe"))
+        sampler_kind = "random" if timing_mode else "tpe"
+        study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
         _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
     except (ValueError, RuntimeError) as exc:
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
@@ -896,7 +898,16 @@ def main(argv=None, environ=None):
         optimize_started_at = time.perf_counter()
         training_interrupted = False
         try:
-            study.optimize(session.objective, n_trials=session.n_trials, n_jobs=1, callbacks=[session.monitoring_callback])
+            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(
+                environ,
+                sampler_kind=sampler_kind,
+            )
+            study.optimize(
+                session.objective,
+                n_trials=session.n_trials,
+                n_jobs=int(search_parallel_trials),
+                callbacks=[session.monitoring_callback],
+            )
         except KeyboardInterrupt:
             training_interrupted = True
             print(f"\n{C_YELLOW}⚠️ 使用者中斷訓練流程。{C_RESET}")
@@ -922,7 +933,7 @@ def main(argv=None, environ=None):
                 optimize_wall_sec=optimize_wall_sec,
                 total_wall_sec=max(0.0, time.perf_counter() - overall_started_at),
                 optimizer_seed=optimizer_seed,
-                timing_sampler_kind=("random" if timing_mode else "tpe"),
+                timing_sampler_kind=sampler_kind,
             )
             timing_summary_path = write_timing_summary(
                 output_dir=OUTPUT_DIR,

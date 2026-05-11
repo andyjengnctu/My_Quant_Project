@@ -5,6 +5,11 @@ import sys
 
 from core.log_utils import format_exception_summary
 
+from config.training_performance_policy import (
+    is_optimizer_single_fold_tpe_parallel_search_allowed_default,
+    resolve_optimizer_single_fold_search_parallel_trials_default,
+)
+
 from core.display import print_strategy_dashboard
 from tools.optimizer.callbacks import print_optimizer_trial_milestone_dashboard
 from core.runtime_utils import is_interactive_console, safe_prompt_choice
@@ -57,6 +62,51 @@ def create_optimizer_study(db_name, *, seed=None, sampler_kind="tpe"):
     except (sqlite3.Error, SQLAlchemyError, RuntimeError, ValueError, OSError) as exc:
         raise RuntimeError(f"Optimizer 記憶庫開啟失敗: {format_exception_summary(exc, include_traceback=False)}") from exc
 
+
+def _env_value_for_optimizer_runtime(environ, name: str, default: str) -> str:
+    if isinstance(environ, dict) and environ.get(name) is not None:
+        value = environ.get(name)
+    else:
+        value = os.environ.get(name, default)
+    if value is None or str(value).strip() == "":
+        return str(default)
+    return str(value).strip()
+
+
+def _env_flag_for_optimizer_runtime(environ, name: str, default: bool) -> bool:
+    value = None
+    if isinstance(environ, dict):
+        value = environ.get(name)
+    if value is None:
+        value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return bool(default)
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "n"}
+
+
+def resolve_optimizer_single_fold_search_parallel_trials(environ=None, *, sampler_kind: str) -> int:
+    """解析 rolling / 非 rolling 共用的單一 search unit Optuna trial 併發數。"""
+    default_trials = resolve_optimizer_single_fold_search_parallel_trials_default()
+    raw_value = _env_value_for_optimizer_runtime(
+        environ,
+        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS",
+        str(default_trials),
+    )
+    try:
+        resolved = int(raw_value)
+    except (TypeError, ValueError):
+        resolved = int(default_trials)
+    resolved = max(1, min(16, resolved))
+    sampler_text = str(sampler_kind or "").strip().lower()
+    if sampler_text == "tpe" and resolved > 1:
+        allow_tpe_parallel = _env_flag_for_optimizer_runtime(
+            environ,
+            "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
+            is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
+        )
+        if not allow_tpe_parallel:
+            return 1
+    return int(resolved)
 
 def ensure_optimizer_db_usable(db_file):
     if not os.path.exists(db_file):

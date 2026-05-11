@@ -26,19 +26,24 @@ OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0
 OPTIMIZER_FEATURE_BANK_MAX_ITEMS = 1024
 
 
-# 單一 fold 內加速參數區
+# 單一 optimizer search unit 內加速參數區
 #
-# 這一區只控制「同一個 rolling OOS fold 內部」的平行化。
+# 這一區控制「單一 optimizer search unit 內部」的平行化。
+# 適用範圍：
+# - 非 rolling 一般 optimizer / 一般 OOS：整次 optimizer search 視為一個 single unit。
+# - rolling OOS：每一個 rolling fold 視為一個 single unit。
+#
 # 與 OPTIMIZER_ROLLING_FOLD_WORKERS 不同：
-# - OPTIMIZER_ROLLING_FOLD_WORKERS 控制幾個 OOS fold 同時跑。
-# - 本區控制單一 fold 內 optimizer search / local_min review 的併發程度。
-# 預設保守，不改既有 trial 序列與正式結果；需要壓縮單一 fold 時間時再手動調高。
+# - OPTIMIZER_ROLLING_FOLD_WORKERS 只控制 rolling OOS 時幾個 OOS fold 同時跑。
+# - 本區控制單一 search unit 內 optimizer search / local_min review 的併發程度。
+#
+# 預設保守，不改既有 trial 序列與正式結果；需要壓縮單一 unit 時間時再手動調高。
 
 # OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS:
-# - 1 = 保持既有單一 fold trial 串行搜尋，正式模式預設使用。
-# - >1 = 同一 fold 內同時評估多個 Optuna trial。
+# - 1 = 保持既有單一 search unit trial 串行搜尋，正式模式預設使用。
+# - >1 = 同一 search unit 內同時評估多個 Optuna trial。
 # - TPE sampler 預設仍會被保護為 1，除非打開 OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH。
-OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 1
+OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS = 3
 
 # OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH:
 # - False = 正式 TPE 搜尋維持 n_jobs=1，避免平行 ask 導致 trial 序列漂移。
@@ -49,7 +54,7 @@ OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
 # OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS:
 # - 控制 local_min review 內鄰點 ordered prefetch 的 thread worker 數。
 # - 預設 1，保留最穩定的 local_min 評估節奏；需要加速可調高，但不設硬性上限。
-OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 2
+OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 3
 
 # OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS:
 # - 保留給 local_min process-level 併發；目前正式流程仍以 thread ordered prefetch 為主。

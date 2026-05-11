@@ -172,27 +172,12 @@ def _env_flag(environ, name: str, default: bool) -> bool:
 
 
 def _resolve_single_fold_search_parallel_trials(environ, *, sampler_kind: str) -> int:
-    default_trials = resolve_optimizer_single_fold_search_parallel_trials_default()
-    raw_value = _env_value_for_display(
+    from tools.optimizer.runtime import resolve_optimizer_single_fold_search_parallel_trials
+
+    return resolve_optimizer_single_fold_search_parallel_trials(
         environ,
-        "OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS",
-        str(default_trials),
+        sampler_kind=sampler_kind,
     )
-    try:
-        resolved = int(raw_value)
-    except (TypeError, ValueError):
-        resolved = int(default_trials)
-    resolved = max(1, min(16, resolved))
-    sampler_text = str(sampler_kind or "").strip().lower()
-    if sampler_text == "tpe" and resolved > 1:
-        allow_tpe_parallel = _env_flag(
-            environ,
-            "OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH",
-            is_optimizer_single_fold_tpe_parallel_search_allowed_default(),
-        )
-        if not allow_tpe_parallel:
-            return 1
-    return int(resolved)
 
 
 def _apply_outer_rolling_resource_env_defaults(environ, *, timing_mode: bool, fold_count: int) -> None:
