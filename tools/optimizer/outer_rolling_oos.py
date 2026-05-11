@@ -1209,12 +1209,19 @@ def _display_month_value(value) -> str:
         return text
 
 
+def _short_month_period_end(start_text: str, end_text: str) -> str:
+    if re.fullmatch(r"\d{4}-\d{2}", start_text or "") and re.fullmatch(r"\d{4}-\d{2}", end_text or ""):
+        if start_text[:2] == end_text[:2]:
+            return end_text[2:]
+    return end_text
+
+
 def _display_month_period(value, end_value=None) -> str:
     if end_value is not None:
         start_text = _display_month_value(value)
         end_text = _display_month_value(end_value)
         if start_text and end_text and start_text != end_text:
-            return f"{start_text}~{end_text}"
+            return f"{start_text}~{_short_month_period_end(start_text, end_text)}"
         return start_text or end_text
     text = str(value or "").strip()
     if "~" in text:
@@ -3309,7 +3316,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
         "oos_year": 15,
         "rank": 8,
         "best": 17,
-        "bench": 12,
+        "bench": 15,
         "elapsed": 8,
     }
     policy_group_width = widths["rank"] + widths["bench"] + 3
@@ -4470,7 +4477,7 @@ def run_outer_rolling_oos(
     _print_plan(
         config,
         parallel_settings_line=_format_parallel_settings_line(environ, fold_workers=int(fold_workers), sampler_kind=sampler_kind)
-        if fold_parallel_enabled
+        if (bool(timing_mode) and fold_parallel_enabled)
         else None,
     )
     if not _confirm_plan(config):
@@ -4870,7 +4877,8 @@ def run_outer_rolling_oos(
     )
     print(f"\n{C_CYAN}FINAL REPORT{C_RESET}")
     print(_format_final_report(rows, _build_summary(rows, config=config, chained_override=active_replay_chained_for_report), color=True))
-    print(_format_timing_phase_line(timing_paths.get("payload") or {}))
+    if bool(timing_mode):
+        print(_format_timing_phase_line(timing_paths.get("payload") or {}))
     if not bool(timing_mode):
         for policy_name, paramset_path in dict(paths.get("paramsets") or {}).items():
             print(f"{C_GREEN}已輸出 params {policy_name}: {paramset_path}{C_RESET}")
