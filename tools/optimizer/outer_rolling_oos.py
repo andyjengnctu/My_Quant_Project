@@ -85,10 +85,9 @@ class OuterRollingConfig:
 
 OOS_SCORE_DECIMALS = 2
 
-REPORT_POLICY_NAMES = ("base", "base_local_min_gt0", "base_retention_gt_min", "local", "retention")
+REPORT_POLICY_NAMES = ("base", "base_retention_gt_min", "local", "retention")
 REPORT_POLICY_LABELS = {
     "base": "base",
-    "base_local_min_gt0": "base (ml>0)",
     "base_retention_gt_min": f"base (r>{OPTIMIZER_BASE_RETENTION_GT_MIN:g})",
     "local": "local",
     "retention": "retention",
@@ -96,7 +95,6 @@ REPORT_POLICY_LABELS = {
 
 PARAMSET_FILENAME_BY_POLICY = {
     "base": "roos_base.json",
-    "base_local_min_gt0": "roos_base_ml.json",
     "base_retention_gt_min": "roos_base_r.json",
     "local": "roos_local.json",
     "retention": "roos_retention.json",
@@ -2141,17 +2139,6 @@ def _select_base_rank1_item(finalists: list[dict]):
     return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
 
 
-def _select_base_local_min_gt0_rank1_item(finalists: list[dict]):
-    items = [
-        item
-        for item in list(finalists or [])
-        if item.get("trial") is not None
-        and float(item.get("local_min_score", INVALID_TRIAL_VALUE)) > 0.0
-    ]
-    if not items:
-        return None
-    return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
-
 
 def _select_base_retention_gt_min_rank1_item(finalists: list[dict]):
     retention_min = float(OPTIMIZER_BASE_RETENTION_GT_MIN)
@@ -2192,7 +2179,6 @@ def _select_retention_rank1_item(finalists: list[dict]):
 def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[str, dict | None]:
     return {
         "base": _select_base_rank1_item(finalists),
-        "base_local_min_gt0": _select_base_local_min_gt0_rank1_item(finalists),
         "base_retention_gt_min": _select_base_retention_gt_min_rank1_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         "retention": _select_retention_rank1_item(finalists),
@@ -2202,8 +2188,6 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[s
 def _policy_description(policy_name: str) -> str:
     if policy_name == "base":
         return "Use base_rank #1 params for each OOS year."
-    if policy_name == "base_local_min_gt0":
-        return "Use the first base_rank candidate whose local_min_score > 0 for each OOS period."
     if policy_name == "base_retention_gt_min":
         return f"Use the first base_rank candidate whose local_retention > {OPTIMIZER_BASE_RETENTION_GT_MIN:g} for each OOS period."
     if policy_name == "local":
@@ -4374,7 +4358,6 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
-                "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
@@ -4788,7 +4771,6 @@ def run_outer_rolling_oos(
                 "benchmark_return_pct": float(diagnostics.get("benchmark_return_pct", 0.0)),
                 "benchmark_mdd_pct": float(diagnostics.get("benchmark_mdd_pct", 0.0)),
                 "base": diagnostics.get("policies", {}).get("base", {}),
-                "base_local_min_gt0": diagnostics.get("policies", {}).get("base_local_min_gt0", {}),
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
