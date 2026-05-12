@@ -10,7 +10,7 @@ import os
 # - "fold_count" = timing/rolling 平行模式預設使用 fold 總數。
 # - 正整數 = 固定 rolling fold process 數。
 # - 環境變數 OPTIMIZER_ROLLING_FOLD_WORKERS 仍可覆寫此預設。
-OPTIMIZER_ROLLING_FOLD_WORKERS = 6
+OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"
 
 # OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS:
 # - 0 = 關閉 parallel rolling worker 內的 prepared trial input cache。
@@ -54,7 +54,7 @@ OPTIMIZER_SINGLE_FOLD_ALLOW_TPE_PARALLEL_SEARCH = False
 # OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS:
 # - 控制 local_min review 內鄰點 ordered prefetch 的 thread worker 數。
 # - 預設 1，保留最穩定的 local_min 評估節奏；需要加速可調高，但不設硬性上限。
-OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 3
+OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PARALLEL_WORKERS = 4
 
 # OPTIMIZER_SINGLE_FOLD_LOCAL_MIN_PROCESS_WORKERS:
 # - 保留給 local_min process-level 併發；目前正式流程仍以 thread ordered prefetch 為主。

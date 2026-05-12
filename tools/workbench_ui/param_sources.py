@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 from core.model_paths import discover_model_param_sources, resolve_run_best_params_path
 
-DEFAULT_PARAM_SOURCE_LABEL = "run_best | 目前參數"
+DEFAULT_PARAM_SOURCE_LABEL = "run_best_params.json | 目前參數"
 
 
 def build_workbench_param_source_options(project_root: str, *, include_rolling_oos: bool = False) -> Tuple[List[str], Dict[str, str], Dict[str, str], str]:

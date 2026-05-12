@@ -12,10 +12,10 @@ CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_VAL_SCORE_BEST_PAR
 
 PARAMS_FILENAME_SUFFIX = "_params.json"
 CANONICAL_PARAM_FILENAME_LABELS = {
-    "run_best_params.json": "run_best | 目前參數",
-    "candidate_best_params.json": "candidate_best | 候選參數",
-    "candidate_retention_best_params.json": "candidate_retention_best | retention 最大候選",
-    "candidate_val_score_best_params.json": "candidate_val_score_best | val_score 第一候選",
+    "run_best_params.json": "run_best_params.json | 目前參數",
+    "candidate_best_params.json": "candidate_best_params.json | 候選參數",
+    "candidate_retention_best_params.json": "candidate_retention_best_params.json | retention 最大候選",
+    "candidate_val_score_best_params.json": "candidate_val_score_best_params.json | val_score 第一候選",
 }
 CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
 
@@ -83,7 +83,7 @@ def _format_param_source_label(filename: str) -> str:
     canonical_label = CANONICAL_PARAM_FILENAME_LABELS.get(basename)
     if canonical_label:
         return canonical_label
-    return f"{_param_source_key_from_filename(basename)} | {basename}"
+    return f"{basename} | {_param_source_key_from_filename(basename)}"
 
 
 def _canonical_param_source_sort_rank(filename: str) -> int:

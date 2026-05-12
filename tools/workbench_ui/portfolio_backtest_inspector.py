@@ -1744,8 +1744,6 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
                 enable_rotation=options["enable_rotation"],
                 start_year=options["start_year"],
                 end_year=options["end_year"],
-                start_date=representative_date,
-                end_date=rolling_last_date,
                 benchmark_ticker=options["benchmark_ticker"],
                 verbose=True,
                 pit_stats_index=context.get("all_pit_stats_index"),
