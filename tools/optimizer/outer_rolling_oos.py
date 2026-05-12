@@ -2728,6 +2728,49 @@ def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
 
 
+def _row_oos_start_date(row: dict) -> str:
+    try:
+        return str(row.get("oos_start_date") or f"{str(int(row.get('oos_year')) )[:4]}-01-01")
+    except (TypeError, ValueError):
+        return str(row.get("oos_start_date") or "")
+
+
+def _policy_has_complete_active_schedule(rows: list[dict], policy_name: str) -> bool:
+    for row in sorted(list(rows or []), key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or "")):
+        schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
+        if not dict(schedule.get("params") or {}):
+            return False
+        effective_start = str(schedule.get("effective_start") or "")
+        oos_start = _row_oos_start_date(row)
+        if effective_start and oos_start:
+            try:
+                if pd.Timestamp(effective_start).normalize() > pd.Timestamp(oos_start).normalize():
+                    return False
+            except (TypeError, ValueError):
+                return False
+    return bool(rows)
+
+
+def _empty_unavailable_chain_metrics() -> dict:
+    return {
+        "available": False,
+        "score": 0.0,
+        "return_pct": 0.0,
+        "mdd_pct": 0.0,
+        "annual_return_pct": 0.0,
+        "r_squared": 0.0,
+        "monthly_win_rate": 0.0,
+        "trade_count": 0,
+        "curve_points": 0,
+        "benchmark_oos_score": 0.0,
+        "benchmark_return_pct": 0.0,
+        "benchmark_mdd_pct": 0.0,
+        "benchmark_annual_return_pct": 0.0,
+        "benchmark_r_squared": 0.0,
+        "benchmark_monthly_win_rate": 0.0,
+    }
+
+
 def _load_active_replay_contexts_by_signature(
     *,
     data_dir: str,
@@ -3016,8 +3059,12 @@ def _build_active_replay_chained_oos_summary(
     oos_period_label = _period_label(first_oos_start, last_oos_end)
 
     payloads = {"best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True)}
+    skipped_chain_policies: dict[str, str] = {}
     for policy_name in CHAIN_POLICY_NAMES:
-        payloads[policy_name] = _build_active_param_replay_payload_from_rows(rows, policy_name=policy_name)
+        if _policy_has_complete_active_schedule(rows, policy_name):
+            payloads[policy_name] = _build_active_param_replay_payload_from_rows(rows, policy_name=policy_name)
+        else:
+            skipped_chain_policies[policy_name] = "incomplete_oos_schedule"
     schedule_groups = {name: _build_active_replay_schedule_records(payload) for name, payload in payloads.items()}
     contexts_by_signature = _load_active_replay_contexts_by_signature(
         data_dir=selected_data_dir,
@@ -3040,6 +3087,8 @@ def _build_active_replay_chained_oos_summary(
             max_positions=max_positions,
             enable_rotation=enable_rotation,
         )
+    for policy_name in skipped_chain_policies:
+        replay_metrics[policy_name] = _empty_unavailable_chain_metrics()
 
     best_metrics = dict(replay_metrics.get("best") or {})
     benchmark_source = dict(best_metrics)
@@ -3074,13 +3123,14 @@ def _build_active_replay_chained_oos_summary(
         "benchmark_curve_points": int(benchmark_source.get("curve_points", 0)),
         "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
         "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
+        "skipped_chain_policies": dict(skipped_chain_policies),
     }
     for policy_name in CHAIN_POLICY_NAMES:
         metrics = dict(replay_metrics.get(policy_name) or {})
         chain_score = float(metrics.get("score", 0.0))
         chain_return = float(metrics.get("return_pct", 0.0))
         summary[policy_name] = {
-            "available": int(metrics.get("curve_points", 0) or 0) > 0,
+            "available": bool(metrics.get("available", int(metrics.get("curve_points", 0) or 0) > 0)),
             "rank_1_oos": float(chain_score),
             "best_gap": float(chain_score - best_score),
             "benchmark_0050_gap": float(chain_score - benchmark_score),
@@ -3401,8 +3451,41 @@ def _build_base_retention_comparison_chained_row(rows: list[dict], *, chained_ov
     return row
 
 
-def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, chained_override: dict | None = None) -> str:
+def _build_base_retention_comparison_oos_avg_row(rows: list[dict]) -> dict | None:
+    source_rows = [dict(row) for row in list(rows or []) if str(row.get("fold", "")).upper() not in {"OOS_CHAIN", "OOS_AVG"}]
+    if not source_rows:
+        return None
+    bounds = _rows_period_bounds(source_rows)
+    row = {
+        "fold": "OOS_AVG",
+        "selection_period": str(bounds.get("selection_period", "")),
+        "oos_year": str(bounds.get("oos_period", "")),
+        "oos_period": str(bounds.get("oos_period", "")),
+        "elapsed_sec": None,
+    }
+    for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES:
+        values = []
+        for source in source_rows:
+            policy = dict(source.get(policy_name) or {})
+            if not policy or policy.get("available") is False:
+                continue
+            try:
+                values.append(float(policy.get("rank_1_oos", 0.0)))
+            except (TypeError, ValueError):
+                continue
+        row[policy_name] = {
+            "available": bool(values),
+            "rank_1_oos": float(statistics.mean(values)) if values else 0.0,
+        }
+    return row
+
+
+def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
     display_rows = list(rows or [])
+    if include_oos_avg and not include_chain:
+        avg_row = _build_base_retention_comparison_oos_avg_row(display_rows)
+        if avg_row is not None:
+            display_rows = display_rows + [avg_row]
     if include_chain:
         chain_row = _build_base_retention_comparison_chained_row(display_rows, chained_override=chained_override)
         if chain_row is not None:
@@ -3444,7 +3527,8 @@ def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = T
     for idx, row in enumerate(display_rows, start=1):
         fold_kind = str(row.get("fold", "")).upper()
         is_chain = fold_kind == "OOS_CHAIN"
-        fold_text = "OOS_CHAIN" if is_chain else str(row.get("fold") or f"{idx}/{total}")
+        is_avg = fold_kind == "OOS_AVG"
+        fold_text = "OOS_CHAIN" if is_chain else ("OOS_AVG" if is_avg else str(row.get("fold") or f"{idx}/{total}"))
         policy_cells = [
             _pad_ansi(_base_retention_comparison_score_text(row.get(policy_name) or {}, color=color), widths["score"], align=">")
             for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
@@ -3474,6 +3558,7 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         rows,
         color=color,
         include_chain=include_chain,
+        include_oos_avg=include_oos_avg,
         chained_override=chained_override,
     )
     if retention_table:
@@ -3961,7 +4046,7 @@ class _ParallelCompletedResultsBoard:
         completed = sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0))
         if not completed:
             return
-        table = _render_results_table(completed, color=True, include_chain=False, include_oos_avg=True)
+        table = _render_optimizer_results_tables(completed, color=True, include_chain=False, include_oos_avg=True)
         if not table:
             return
         table_lines = table.splitlines()
@@ -4026,7 +4111,7 @@ class _ParallelFoldLiveBoard:
             log_status = _latest_parallel_fold_log_status(log_path)
             lines.append(f"{C_GRAY}  {_format_parallel_fold_progress_line(task, progress, log_status=log_status)}{C_RESET}")
         if completed_rows_sorted:
-            table = _render_results_table(completed_rows_sorted, color=True, include_chain=False, include_oos_avg=True)
+            table = _render_optimizer_results_tables(completed_rows_sorted, color=True, include_chain=False, include_oos_avg=True)
             if table:
                 lines.append("")
                 lines.extend(table.splitlines())
@@ -4084,7 +4169,7 @@ def _print_parallel_fold_result(row: dict) -> None:
     if not row:
         return
     print(f"{C_CYAN}📌 Parallel fold result | fold={row.get('fold')} | selection={_display_month_period(row.get('selection_period'))} | OOS={_display_month_period(row.get('oos_period') or row.get('oos_year'))}{C_RESET}", flush=True)
-    rendered = _render_results_table([row], color=True, include_chain=False)
+    rendered = _render_optimizer_results_tables([row], color=True, include_chain=False)
     if rendered:
         print(rendered, flush=True)
 
