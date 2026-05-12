@@ -4803,7 +4803,7 @@ def run_outer_rolling_oos(
     shared_raw_context = None
     if fold_parallel_enabled:
         raw_data_load_sec = 0.0
-        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 自行載入 raw cache | folds={fold_count}{C_RESET}")
+        print(f"{C_CYAN}⏱️ Rolling 資料載入模式：parallel folds 共用磁碟 raw cache lock | folds={fold_count}{C_RESET}")
     else:
         shared_load_start = time.perf_counter()
         shared_data_policy = build_optimizer_runtime_policy(dict(base_policy), "split")

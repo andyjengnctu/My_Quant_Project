@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import pickle
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +17,10 @@ from core.dataset_profiles import (
 )
 
 RAW_CACHE_SCHEMA_VERSION = 1
+RAW_CACHE_LOCK_POLL_SEC = 0.25
+RAW_CACHE_LOCK_STALE_SEC = 6 * 60 * 60
+RAW_CACHE_REPLACE_RETRY_COUNT = 20
+RAW_CACHE_REPLACE_RETRY_SEC = 0.10
 
 
 def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
@@ -26,6 +31,7 @@ def _build_raw_cache_paths(output_dir, profile_key, required_min_rows):
         "cache_dir": cache_dir,
         "payload_path": cache_dir / f"{stem}.pkl",
         "meta_path": cache_dir / f"{stem}.json",
+        "lock_dir": cache_dir / f"{stem}.lock",
     }
 
 
@@ -77,6 +83,125 @@ def _load_persisted_raw_cache(paths, expected_signature):
     return payload
 
 
+def _safe_unlink(path):
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _atomic_replace_with_retries(src_path, dst_path):
+    src_path = Path(src_path)
+    dst_path = Path(dst_path)
+    last_exc = None
+    for attempt in range(1, RAW_CACHE_REPLACE_RETRY_COUNT + 1):
+        try:
+            os.replace(src_path, dst_path)
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt >= RAW_CACHE_REPLACE_RETRY_COUNT:
+                break
+            time.sleep(RAW_CACHE_REPLACE_RETRY_SEC)
+        except OSError as exc:
+            last_exc = exc
+            if attempt >= RAW_CACHE_REPLACE_RETRY_COUNT:
+                break
+            time.sleep(RAW_CACHE_REPLACE_RETRY_SEC)
+    raise RuntimeError(f"optimizer raw cache 寫入失敗：無法取代 {dst_path} | {format_exception_summary(last_exc)}") from last_exc
+
+
+def _build_unique_tmp_path(target_path):
+    target_path = Path(target_path)
+    return target_path.with_name(f"{target_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+
+
+def _raw_cache_lock_stale_seconds():
+    value = str(os.environ.get("OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC", "")).strip()
+    if not value:
+        return float(RAW_CACHE_LOCK_STALE_SEC)
+    try:
+        return max(60.0, float(value))
+    except ValueError as exc:
+        raise ValueError(f"OPTIMIZER_RAW_CACHE_LOCK_STALE_SEC 必須是數字秒數，收到: {value}") from exc
+
+
+class _RawCacheBuildLock:
+    def __init__(self, paths):
+        self.cache_dir = Path(paths["cache_dir"])
+        self.lock_dir = Path(paths["lock_dir"])
+        self.owner_path = self.lock_dir / "owner.json"
+        self.acquired = False
+
+    def __enter__(self):
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        stale_sec = _raw_cache_lock_stale_seconds()
+        while True:
+            try:
+                os.mkdir(self.lock_dir)
+                owner = {
+                    "pid": os.getpid(),
+                    "created_at": time.time(),
+                    "lock_dir": str(self.lock_dir),
+                }
+                try:
+                    self.owner_path.write_text(json.dumps(owner, ensure_ascii=False, indent=2), encoding="utf-8")
+                except OSError:
+                    pass
+                self.acquired = True
+                return self
+            except FileExistsError:
+                self._remove_stale_lock_if_needed(stale_sec)
+                time.sleep(RAW_CACHE_LOCK_POLL_SEC)
+            except OSError as exc:
+                raise RuntimeError(f"optimizer raw cache lock 建立失敗: {self.lock_dir} | {format_exception_summary(exc)}") from exc
+
+    def _remove_stale_lock_if_needed(self, stale_sec):
+        try:
+            mtime = self.lock_dir.stat().st_mtime
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+        if time.time() - float(mtime) < float(stale_sec):
+            return
+        _safe_unlink(self.owner_path)
+        try:
+            os.rmdir(self.lock_dir)
+        except OSError:
+            return
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.acquired:
+            return False
+        _safe_unlink(self.owner_path)
+        try:
+            os.rmdir(self.lock_dir)
+        except OSError:
+            pass
+        self.acquired = False
+        return False
+
+
+def _persisted_payload_to_raw_data_cache(persisted_payload, duplicate_file_issue_lines, *, output_dir, verbose=True):
+    fresh_raw_data_cache = persisted_payload["raw_data_cache"]
+    load_issues = list(duplicate_file_issue_lines)
+    load_issues.extend(str(x) for x in persisted_payload.get("load_issues", []))
+    totals = dict(persisted_payload.get("totals", {}))
+    issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
+    _print_load_summary(
+        fresh_raw_data_cache=fresh_raw_data_cache,
+        totals=totals,
+        load_issues=load_issues,
+        issue_path=issue_path,
+        cache_hit=True,
+        verbose=verbose,
+    )
+    return fresh_raw_data_cache
+
+
 def _save_persisted_raw_cache(paths, *, signature, signature_payload, raw_data_cache, load_issues, totals, profile_key, data_dir, required_min_rows):
     cache_dir = paths["cache_dir"]
     payload_path = paths["payload_path"]
@@ -103,14 +228,18 @@ def _save_persisted_raw_cache(paths, *, signature, signature_payload, raw_data_c
         "signature_payload": signature_payload,
     }
 
-    tmp_payload = payload_path.with_suffix(payload_path.suffix + ".tmp")
-    tmp_meta = meta_path.with_suffix(meta_path.suffix + ".tmp")
-    with open(tmp_payload, "wb") as handle:
-        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
-    with open(tmp_meta, "w", encoding="utf-8") as handle:
-        json.dump(meta, handle, ensure_ascii=False, indent=2)
-    os.replace(tmp_payload, payload_path)
-    os.replace(tmp_meta, meta_path)
+    tmp_payload = _build_unique_tmp_path(payload_path)
+    tmp_meta = _build_unique_tmp_path(meta_path)
+    try:
+        with open(tmp_payload, "wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(tmp_meta, "w", encoding="utf-8") as handle:
+            json.dump(meta, handle, ensure_ascii=False, indent=2)
+        _atomic_replace_with_retries(tmp_payload, payload_path)
+        _atomic_replace_with_retries(tmp_meta, meta_path)
+    finally:
+        _safe_unlink(tmp_payload)
+        _safe_unlink(tmp_meta)
 
 
 def _write_load_issues_if_needed(load_issues, *, output_dir):
@@ -167,89 +296,91 @@ def load_all_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
     signature, signature_payload = _build_raw_cache_signature(csv_inputs, required_min_rows)
     persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
     if persisted_payload is not None:
-        fresh_raw_data_cache = persisted_payload["raw_data_cache"]
+        return _persisted_payload_to_raw_data_cache(
+            persisted_payload,
+            duplicate_file_issue_lines,
+            output_dir=output_dir,
+            verbose=verbose,
+        )
+
+    with _RawCacheBuildLock(cache_paths):
+        persisted_payload = _load_persisted_raw_cache(cache_paths, signature)
+        if persisted_payload is not None:
+            return _persisted_payload_to_raw_data_cache(
+                persisted_payload,
+                duplicate_file_issue_lines,
+                output_dir=output_dir,
+                verbose=verbose,
+            )
+
         load_issues = list(duplicate_file_issue_lines)
-        load_issues.extend(str(x) for x in persisted_payload.get("load_issues", []))
-        totals = dict(persisted_payload.get("totals", {}))
+        total_invalid_rows = 0
+        total_duplicate_dates = 0
+        total_dropped_rows = 0
+        total_files = len(csv_inputs)
+        fresh_raw_data_cache = {}
+
+        for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
+            try:
+                raw_df = pd.read_csv(file_path)
+                if len(raw_df) < required_min_rows:
+                    load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {required_min_rows} 列")
+                    continue
+
+                clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=required_min_rows)
+                fresh_raw_data_cache[ticker] = clean_df
+
+                invalid_row_count = sanitize_stats["invalid_row_count"]
+                duplicate_date_count = sanitize_stats["duplicate_date_count"]
+                dropped_row_count = sanitize_stats["dropped_row_count"]
+
+                total_invalid_rows += invalid_row_count
+                total_duplicate_dates += duplicate_date_count
+                total_dropped_rows += dropped_row_count
+
+                if dropped_row_count > 0:
+                    load_issues.append(
+                        f"{ticker}: 清洗移除 {dropped_row_count} 列 "
+                        f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
+                    )
+            except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
+                if is_insufficient_data_error(exc):
+                    load_issues.append(f"{ticker}: {type(exc).__name__}: {exc}")
+                    continue
+                raise RuntimeError(
+                    f"optimizer 原始資料快取失敗: ticker={ticker} | {format_exception_summary(exc)}"
+                ) from exc
+
+            if bool(verbose) and (count % 50 == 0 or count == total_files):
+                print(f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}", end="\r")
+
+        if not fresh_raw_data_cache:
+            raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
+
+        totals = {
+            "total_invalid_rows": total_invalid_rows,
+            "total_duplicate_dates": total_duplicate_dates,
+            "total_dropped_rows": total_dropped_rows,
+        }
+        _save_persisted_raw_cache(
+            cache_paths,
+            signature=signature,
+            signature_payload=signature_payload,
+            raw_data_cache=fresh_raw_data_cache,
+            load_issues=load_issues,
+            totals=totals,
+            profile_key=profile_key,
+            data_dir=data_dir,
+            required_min_rows=required_min_rows,
+        )
         issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
         _print_load_summary(
             fresh_raw_data_cache=fresh_raw_data_cache,
             totals=totals,
             load_issues=load_issues,
             issue_path=issue_path,
-            cache_hit=True,
+            cache_hit=False,
             verbose=verbose,
         )
+
         return fresh_raw_data_cache
-
-    load_issues = list(duplicate_file_issue_lines)
-    total_invalid_rows = 0
-    total_duplicate_dates = 0
-    total_dropped_rows = 0
-    total_files = len(csv_inputs)
-    fresh_raw_data_cache = {}
-
-    for count, (ticker, file_path) in enumerate(csv_inputs, start=1):
-        try:
-            raw_df = pd.read_csv(file_path)
-            if len(raw_df) < required_min_rows:
-                load_issues.append(f"{ticker}: 原始資料列數不足 ({len(raw_df)})，至少需要 {required_min_rows} 列")
-                continue
-
-            clean_df, sanitize_stats = sanitize_ohlcv_dataframe(raw_df, ticker, min_rows=required_min_rows)
-            fresh_raw_data_cache[ticker] = clean_df
-
-            invalid_row_count = sanitize_stats["invalid_row_count"]
-            duplicate_date_count = sanitize_stats["duplicate_date_count"]
-            dropped_row_count = sanitize_stats["dropped_row_count"]
-
-            total_invalid_rows += invalid_row_count
-            total_duplicate_dates += duplicate_date_count
-            total_dropped_rows += dropped_row_count
-
-            if dropped_row_count > 0:
-                load_issues.append(
-                    f"{ticker}: 清洗移除 {dropped_row_count} 列 "
-                    f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
-                )
-        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as exc:
-            if is_insufficient_data_error(exc):
-                load_issues.append(f"{ticker}: {type(exc).__name__}: {exc}")
-                continue
-            raise RuntimeError(
-                f"optimizer 原始資料快取失敗: ticker={ticker} | {format_exception_summary(exc)}"
-            ) from exc
-
-        if bool(verbose) and (count % 50 == 0 or count == total_files):
-            print(f"{C_GRAY}   進度: [{count}/{total_files}] 已掃描股票快取...{C_RESET}", end="\r")
-
-    if not fresh_raw_data_cache:
-        raise RuntimeError("記憶體快取完成後仍無任何可用標的，無法進行 optimizer。")
-
-    totals = {
-        "total_invalid_rows": total_invalid_rows,
-        "total_duplicate_dates": total_duplicate_dates,
-        "total_dropped_rows": total_dropped_rows,
-    }
-    _save_persisted_raw_cache(
-        cache_paths,
-        signature=signature,
-        signature_payload=signature_payload,
-        raw_data_cache=fresh_raw_data_cache,
-        load_issues=load_issues,
-        totals=totals,
-        profile_key=profile_key,
-        data_dir=data_dir,
-        required_min_rows=required_min_rows,
-    )
-    issue_path = _write_load_issues_if_needed(load_issues, output_dir=output_dir)
-    _print_load_summary(
-        fresh_raw_data_cache=fresh_raw_data_cache,
-        totals=totals,
-        load_issues=load_issues,
-        issue_path=issue_path,
-        cache_hit=False,
-        verbose=verbose,
-    )
-
-    return fresh_raw_data_cache
