@@ -223,6 +223,12 @@ def _fmt_pct(value: Any) -> str:
     return f"{sign}{numeric:.2f}%"
 
 
+def _rolling_chained_oos_available(chained: Mapping[str, Any]) -> bool:
+    if not isinstance(chained, Mapping):
+        return False
+    return chained.get("available") is not False
+
+
 def format_rolling_oos_summary_lines(payload: Mapping[str, Any]) -> list[str]:
     selector = str(payload.get("selector") or (payload.get("meta") or {}).get("selector") or "-")
     summary = payload.get("summary") or {}
@@ -235,12 +241,16 @@ def format_rolling_oos_summary_lines(payload: Mapping[str, Any]) -> list[str]:
     ]
     if chained:
         lines.append(f"串連方式：{chained.get('method', '-')}" )
-        if "rank_1_return_pct" in chained:
-            lines.append(f"策略串連報酬：{_fmt_pct(chained.get('rank_1_return_pct'))}")
-        if "benchmark_return_pct" in chained:
-            lines.append(f"0050 串連報酬：{_fmt_pct(chained.get('benchmark_return_pct'))}")
-        if "alpha_return_pct" in chained:
-            lines.append(f"相對 0050：{_fmt_pct(chained.get('alpha_return_pct'))}")
+        if not _rolling_chained_oos_available(chained):
+            reason = str(chained.get("unavailable_reason") or "unavailable").strip()
+            lines.append(f"策略串連報酬：N/A（{reason}）")
+        else:
+            if "rank_1_return_pct" in chained:
+                lines.append(f"策略串連報酬：{_fmt_pct(chained.get('rank_1_return_pct'))}")
+            if "benchmark_return_pct" in chained:
+                lines.append(f"0050 串連報酬：{_fmt_pct(chained.get('benchmark_return_pct'))}")
+            if "alpha_return_pct" in chained:
+                lines.append(f"相對 0050：{_fmt_pct(chained.get('alpha_return_pct'))}")
     try:
         schedule = build_active_param_schedule(payload)
     except ValueError:

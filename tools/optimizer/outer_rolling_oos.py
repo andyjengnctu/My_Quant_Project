@@ -3088,8 +3088,10 @@ def _build_active_replay_chained_oos_summary(
             max_positions=max_positions,
             enable_rotation=enable_rotation,
         )
-    for policy_name in skipped_chain_policies:
-        replay_metrics[policy_name] = _empty_unavailable_chain_metrics()
+    for policy_name, reason in skipped_chain_policies.items():
+        metrics = _empty_unavailable_chain_metrics()
+        metrics["unavailable_reason"] = str(reason)
+        replay_metrics[policy_name] = metrics
 
     best_metrics = dict(replay_metrics.get("best") or {})
     benchmark_source = dict(best_metrics)
@@ -3142,6 +3144,7 @@ def _build_active_replay_chained_oos_summary(
             "rank_1_annual_return_pct": float(metrics.get("annual_return_pct", 0.0)),
             "rank_1_curve_points": int(metrics.get("curve_points", 0)),
             "rank_1_trades": int(metrics.get("trade_count", 0)),
+            "unavailable_reason": str(metrics.get("unavailable_reason") or skipped_chain_policies.get(policy_name, "")),
             "yearly_oos_score": [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows],
             "yearly_return_pct": [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows],
         }
@@ -3267,14 +3270,17 @@ def _build_chained_oos_row(rows: list[dict], *, chained_override: dict | None = 
     }
     for policy_name in REPORT_POLICY_NAMES:
         item = dict(chained.get(policy_name) or {})
-        rank_score = float(item.get("rank_1_oos", 0.0))
+        available = _policy_is_available(item)
+        rank_score = float(item.get("rank_1_oos", 0.0)) if available else 0.0
         row[policy_name] = {
+            "available": bool(available),
             "rank_1_trial": None,
             "rank_1_oos": rank_score,
-            "rank_1_return_pct": float(item.get("rank_1_return_pct", 0.0)),
-            "rank_1_mdd_pct": float(item.get("rank_1_mdd_pct", 0.0)),
-            "best_gap": rank_score - float(chained.get("best_finalist_oos_score", 0.0)),
-            "benchmark_0050_gap": rank_score - float(chained.get("benchmark_oos_score", 0.0)),
+            "rank_1_return_pct": float(item.get("rank_1_return_pct", 0.0)) if available else 0.0,
+            "rank_1_mdd_pct": float(item.get("rank_1_mdd_pct", 0.0)) if available else 0.0,
+            "best_gap": (rank_score - float(chained.get("best_finalist_oos_score", 0.0))) if available else 0.0,
+            "benchmark_0050_gap": (rank_score - float(chained.get("benchmark_oos_score", 0.0))) if available else 0.0,
+            "unavailable_reason": item.get("unavailable_reason") or item.get("skip_reason") or "",
         }
     return row
 
@@ -3324,19 +3330,51 @@ def _build_oos_avg_row(rows: list[dict]) -> dict | None:
         "elapsed_sec": None,
     }
     for policy_name in REPORT_POLICY_NAMES:
-        rank_score = _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_oos", 0.0))
+        available_rows = [
+            item
+            for item in source_rows
+            if _policy_is_available(dict((item.get(policy_name) or {})))
+        ]
+        if not available_rows:
+            row[policy_name] = {
+                "available": False,
+                "rank_1_trial": None,
+                "rank_1_oos": 0.0,
+                "rank_1_return_pct": 0.0,
+                "rank_1_mdd_pct": 0.0,
+                "best_gap": 0.0,
+                "benchmark_0050_gap": 0.0,
+                "unavailable_reason": "no_available_period",
+            }
+            continue
+        rank_score = _avg_float_from_rows(available_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_oos", 0.0))
         row[policy_name] = {
+            "available": True,
             "rank_1_trial": None,
             "rank_1_oos": rank_score,
-            "rank_1_return_pct": _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_return_pct", 0.0)),
-            "rank_1_mdd_pct": _avg_float_from_rows(source_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_mdd_pct", 0.0)),
+            "rank_1_return_pct": _avg_float_from_rows(available_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_return_pct", 0.0)),
+            "rank_1_mdd_pct": _avg_float_from_rows(available_rows, lambda item, name=policy_name: (item.get(name) or {}).get("rank_1_mdd_pct", 0.0)),
             "best_gap": rank_score - float(row["best_finalist_oos_score"]),
             "benchmark_0050_gap": rank_score - float(row["benchmark_oos_score"]),
         }
     return row
 
 
+def _policy_is_available(policy_row: dict) -> bool:
+    if not policy_row:
+        return False
+    if policy_row.get("available") is False:
+        return False
+    try:
+        float(policy_row.get("rank_1_oos"))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def _policy_cell_text(policy_row: dict, *, best_score: float, benchmark_score: float, color: bool = True) -> tuple[str, str, str]:
+    if not _policy_is_available(policy_row):
+        return "N/A", "N/A", "N/A"
     rank_1 = float(policy_row.get("rank_1_oos", 0.0))
     if color:
         return (
@@ -3421,7 +3459,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
 
 
 def _base_retention_comparison_score_text(policy_row: dict, *, color: bool = True) -> str:
-    if not policy_row or policy_row.get("available") is False:
+    if not _policy_is_available(policy_row):
         return "N/A"
     try:
         score = float(policy_row.get("rank_1_oos", 0.0))
@@ -3445,9 +3483,11 @@ def _build_base_retention_comparison_chained_row(rows: list[dict], *, chained_ov
     }
     for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES:
         policy = dict(chained.get(policy_name) or {})
+        available = _policy_is_available(policy)
         row[policy_name] = {
-            "available": bool(policy) and policy.get("available", True) is not False,
-            "rank_1_oos": float(policy.get("rank_1_oos", 0.0)) if policy else 0.0,
+            "available": bool(available),
+            "rank_1_oos": float(policy.get("rank_1_oos", 0.0)) if available else 0.0,
+            "unavailable_reason": policy.get("unavailable_reason") or policy.get("skip_reason") or "",
         }
     return row
 
@@ -3468,7 +3508,7 @@ def _build_base_retention_comparison_oos_avg_row(rows: list[dict]) -> dict | Non
         values = []
         for source in source_rows:
             policy = dict(source.get(policy_name) or {})
-            if not policy or policy.get("available") is False:
+            if not _policy_is_available(policy):
                 continue
             try:
                 values.append(float(policy.get("rank_1_oos", 0.0)))
@@ -3477,6 +3517,7 @@ def _build_base_retention_comparison_oos_avg_row(rows: list[dict]) -> dict | Non
         row[policy_name] = {
             "available": bool(values),
             "rank_1_oos": float(statistics.mean(values)) if values else 0.0,
+            "unavailable_reason": "" if values else "no_available_period",
         }
     return row
 
@@ -3577,8 +3618,22 @@ def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
     policy = dict(row.get(policy_name) or {})
     best = float(row.get("best_finalist_oos_score", 0.0))
     bench = float(row.get("benchmark_oos_score", 0.0))
+    if not _policy_is_available(policy):
+        return {
+            f"{policy_name}_available": False,
+            f"{policy_name}_rank_1_trial": policy.get("rank_1_trial"),
+            f"{policy_name}_rank_1_oos": "",
+            f"{policy_name}_rank_1_return_pct": "",
+            f"{policy_name}_rank_1_mdd_pct": "",
+            f"{policy_name}_rank_1_trades": "",
+            f"{policy_name}_best_oos": best,
+            f"{policy_name}_best_gap": "",
+            f"{policy_name}_0050_oos": bench,
+            f"{policy_name}_0050_gap": "",
+        }
     rank_1 = float(policy.get("rank_1_oos", 0.0))
     return {
+        f"{policy_name}_available": True,
         f"{policy_name}_rank_1_trial": policy.get("rank_1_trial"),
         f"{policy_name}_rank_1_oos": rank_1,
         f"{policy_name}_rank_1_return_pct": float(policy.get("rank_1_return_pct", 0.0)),
@@ -3662,23 +3717,26 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
         })
     chain_all = dict(summary.get("chained_oos") or {})
     chain_policy = dict(chain_all.get(policy_name) or {})
+    chain_policy_available = _policy_is_available(chain_policy)
     chained_oos = {
+        "available": bool(chain_policy_available),
+        "unavailable_reason": str(chain_policy.get("unavailable_reason") or "") if not chain_policy_available else "",
         "method": chain_all.get("method"),
         "score_aggregation_method": chain_all.get("score_aggregation_method"),
         "return_aggregation_method": chain_all.get("return_aggregation_method"),
         "note": chain_all.get("note"),
         "selection_period": chain_all.get("selection_period"),
         "oos_period": chain_all.get("oos_period"),
-        "rank_1_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
+        "rank_1_oos_score": float(chain_policy.get("rank_1_oos", 0.0)) if chain_policy_available else 0.0,
         "best_finalist_oos_score": float(chain_all.get("best_finalist_oos_score", 0.0)),
         "benchmark_oos_score": float(chain_all.get("benchmark_oos_score", 0.0)),
-        "alpha_oos_score": float(chain_policy.get("benchmark_0050_gap", 0.0)),
-        "best_gap_score": float(chain_policy.get("best_gap", 0.0)),
-        "rank_1_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
+        "alpha_oos_score": float(chain_policy.get("benchmark_0050_gap", 0.0)) if chain_policy_available else 0.0,
+        "best_gap_score": float(chain_policy.get("best_gap", 0.0)) if chain_policy_available else 0.0,
+        "rank_1_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)) if chain_policy_available else 0.0,
         "best_finalist_return_pct": float(chain_all.get("best_finalist_return_pct", 0.0)),
         "benchmark_return_pct": float(chain_all.get("benchmark_return_pct", 0.0)),
-        "alpha_return_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
-        "best_gap_pct": float(chain_policy.get("best_gap_pct", 0.0)),
+        "alpha_return_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)) if chain_policy_available else 0.0,
+        "best_gap_pct": float(chain_policy.get("best_gap_pct", 0.0)) if chain_policy_available else 0.0,
     }
     policy_summary = dict(summary.get(policy_name) or {})
     return {
@@ -3713,9 +3771,11 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "aggregation_method": summary.get("aggregation_method"),
             "return_aggregation_method": summary.get("return_aggregation_method"),
             "selector": str(policy_name),
+            "available": bool(policy_summary.get("available", True)),
             "chained_oos_score": float(policy_summary.get("chained_oos_score", 0.0)),
             "chained_return_pct": float(policy_summary.get("chained_return_pct", 0.0)),
             "chained_gap_vs_0050_pct": float(policy_summary.get("chained_gap_vs_0050_pct", 0.0)),
+            "chained_unavailable_reason": str(policy_summary.get("chained_unavailable_reason") or ""),
             "period_avg_oos_score": float(policy_summary.get("period_avg_oos_score", policy_summary.get("avg_oos_score", 0.0))),
             "yearly_avg_oos_score": float(policy_summary.get("period_avg_oos_score", policy_summary.get("yearly_avg_oos_score", policy_summary.get("avg_oos_score", 0.0)))),
             "avg_oos_score": float(policy_summary.get("avg_oos_score", 0.0)),
@@ -3767,26 +3827,32 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
         "chained_oos": chained,
     }
     for policy_name in REPORT_POLICY_NAMES:
-        scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in rows]
-        returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in rows]
-        benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in rows]
+        available_rows = [row for row in rows if _policy_is_available(dict(row.get(policy_name) or {}))]
+        scores = [float((row.get(policy_name) or {}).get("rank_1_oos", 0.0)) for row in available_rows]
+        returns = [float((row.get(policy_name) or {}).get("rank_1_return_pct", 0.0)) for row in available_rows]
+        benchmark_gaps = [float((row.get(policy_name) or {}).get("benchmark_0050_gap", 0.0)) for row in available_rows]
         chain_policy = dict(chained.get(policy_name) or {})
-        period_avg_score = sum(scores) / float(len(scores))
+        chain_available = _policy_is_available(chain_policy)
+        period_avg_score = (sum(scores) / float(len(scores))) if scores else 0.0
         summary[policy_name] = {
-            "chained_oos_score": float(chain_policy.get("rank_1_oos", 0.0)),
-            "chained_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)),
-            "chained_gap_vs_best_pct": float(chain_policy.get("best_gap_pct", 0.0)),
-            "chained_gap_vs_0050_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)),
+            "available": bool(chain_available),
+            "chained_oos_score": float(chain_policy.get("rank_1_oos", 0.0)) if chain_available else 0.0,
+            "chained_return_pct": float(chain_policy.get("rank_1_return_pct", 0.0)) if chain_available else 0.0,
+            "chained_gap_vs_best_pct": float(chain_policy.get("best_gap_pct", 0.0)) if chain_available else 0.0,
+            "chained_gap_vs_0050_pct": float(chain_policy.get("benchmark_0050_gap_pct", 0.0)) if chain_available else 0.0,
+            "chained_unavailable_reason": str(chain_policy.get("unavailable_reason") or "") if not chain_available else "",
             "period_avg_oos_score": float(period_avg_score),
             "yearly_avg_oos_score": float(period_avg_score),
             "avg_oos_score": float(period_avg_score),
-            "median_oos_score": float(statistics.median(scores)),
-            "worst_oos_score": min(scores),
+            "median_oos_score": float(statistics.median(scores)) if scores else 0.0,
+            "worst_oos_score": min(scores) if scores else 0.0,
             "positive_periods": sum(1 for value in returns if value > 0.0),
             "positive_years": sum(1 for value in returns if value > 0.0),
             "win_vs_0050_score": sum(1 for gap in benchmark_gaps if gap > 0.0),
-            "total_periods": len(scores),
-            "total_years": len(scores),
+            "available_periods": len(scores),
+            "available_years": len(scores),
+            "total_periods": len(rows),
+            "total_years": len(rows),
             "period_return_pct": returns,
             "period_oos_score": scores,
             "yearly_return_pct": returns,
