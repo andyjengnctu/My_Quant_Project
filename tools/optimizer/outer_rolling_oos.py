@@ -7,6 +7,7 @@ import re
 import statistics
 import sys
 import time
+import traceback
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from threading import Event, Lock, Thread
 from contextlib import redirect_stderr, redirect_stdout
@@ -3860,6 +3861,32 @@ def _tail_text_file(path: str, *, max_lines: int = 8) -> str:
         return ""
 
 
+def _format_exception_summary(exc: BaseException) -> str:
+    if exc is None:
+        return "unknown"
+    message = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name
+
+
+def _parallel_fold_log_path_for_fallback(path: str) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return raw
+    root, ext = os.path.splitext(raw)
+    return f"{root}_fallback{ext or '.log'}"
+
+
+def _build_parallel_fold_failure_message(*, task: dict, exc: BaseException, label: str = "parallel fold failed") -> str:
+    fold_idx = int((task or {}).get("fold_idx", 0) or 0)
+    fold_count = int((task or {}).get("fold_count", 0) or 0)
+    oos_year = int((task or {}).get("oos_year", 0) or 0)
+    log_path = str((task or {}).get("log_path") or "")
+    tail = _tail_text_file(log_path, max_lines=24)
+    detail = f"\n最後 fold log：\n{tail}" if tail else ""
+    return f"{label}: fold={fold_idx}/{fold_count} OOS={oos_year} error={_format_exception_summary(exc)} log={log_path}{detail}"
+
+
 def _latest_parallel_fold_log_status(path: str, *, max_chars: int = PARALLEL_FOLD_LOG_STATUS_MAX_CHARS) -> str:
     tail = _tail_text_file(path, max_lines=12)
     if not tail:
@@ -4174,17 +4201,8 @@ def _print_parallel_fold_result(row: dict) -> None:
         print(rendered, flush=True)
 
 
-def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_timing_rows: list[dict], chain_state: dict) -> None:
-    fold_idx = int(task["fold_idx"])
-    fold_count = int(task.get("fold_count", 0) or 0)
-    oos_year = int(task["oos_year"])
-    try:
-        result = future.result()
-    except Exception as exc:
-        log_path = str(task.get("log_path") or "")
-        tail = _tail_text_file(log_path, max_lines=12)
-        detail = f"\n最後 fold log：\n{tail}" if tail else ""
-        raise RuntimeError(f"parallel fold failed: fold={fold_idx}/{fold_count} OOS={oos_year} log={log_path}{detail}") from exc
+def _consume_parallel_fold_result(*, result: dict, rows: list[dict], fold_timing_rows: list[dict], chain_state: dict) -> None:
+    result = dict(result or {})
     row = result.get("row")
     if row is not None:
         rows.append(row)
@@ -4194,6 +4212,67 @@ def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_
         chain_state["chain_max_positions"] = int(result.get("chain_max_positions"))
     if result.get("chain_enable_rotation") is not None:
         chain_state["chain_enable_rotation"] = bool(result.get("chain_enable_rotation"))
+
+
+def _consume_parallel_fold_future(*, future, task: dict, rows: list[dict], fold_timing_rows: list[dict], chain_state: dict) -> None:
+    try:
+        result = future.result()
+    except Exception as exc:
+        raise RuntimeError(_build_parallel_fold_failure_message(task=task, exc=exc)) from exc
+    _consume_parallel_fold_result(result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state)
+
+
+def _cancel_parallel_fold_executor_after_failure(executor, pending: set) -> None:
+    for future in list(pending or []):
+        try:
+            future.cancel()
+        except Exception:
+            pass
+    processes = getattr(executor, "_processes", None)
+    if isinstance(processes, dict):
+        for process in list(processes.values()):
+            try:
+                if process is not None and process.is_alive():
+                    process.terminate()
+            except Exception:
+                pass
+    shutdown = getattr(executor, "shutdown", None)
+    if callable(shutdown):
+        try:
+            shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            try:
+                shutdown(wait=False)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], chain_state: dict, cause: BaseException | None = None) -> dict:
+    completed_oos = {int((row or {}).get("oos_year", 0) or 0) for row in list(rows or []) if row}
+    missing_tasks = [dict(task) for task in list(tasks or []) if int(task.get("oos_year", 0) or 0) not in completed_oos]
+    if not missing_tasks:
+        return chain_state
+    cause_text = f" | cause={_format_exception_summary(cause)}" if cause is not None else ""
+    print(f"{C_YELLOW}⚠️ parallel fold 中斷，改用單 fold fallback 跑完剩餘 {len(missing_tasks)} 個 fold{cause_text}{C_RESET}", flush=True)
+    for task in missing_tasks:
+        fallback_task = dict(task)
+        fallback_task["log_path"] = _parallel_fold_log_path_for_fallback(str(task.get("log_path") or ""))
+        print(
+            f"{C_CYAN}↪ fallback fold | fold={int(task.get('fold_idx', 0) or 0)}/{int(task.get('fold_count', 0) or 0)} "
+            f"| OOS={_display_month_period(task.get('oos_period') or task.get('oos_year'))} | log={fallback_task.get('log_path')}{C_RESET}",
+            flush=True,
+        )
+        try:
+            result = _run_outer_rolling_oos_fold_task(fallback_task)
+        except Exception as exc:
+            raise RuntimeError(_build_parallel_fold_failure_message(task=fallback_task, exc=exc, label="sequential fallback fold failed")) from exc
+        _consume_parallel_fold_result(result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state)
+        row = (result or {}).get("row")
+        if row is not None:
+            _print_parallel_fold_result(row)
+    return chain_state
 
 
 def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], overall_start: float | None = None, raw_data_load_sec: float = 0.0) -> dict:
@@ -4206,13 +4285,17 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
         while pending:
             done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
             for future in sorted(done, key=lambda item: int(future_map[item].get("fold_idx", 0) or 0)):
-                _consume_parallel_fold_future(
-                    future=future,
-                    task=future_map[future],
-                    rows=rows,
-                    fold_timing_rows=fold_timing_rows,
-                    chain_state=chain_state,
-                )
+                try:
+                    _consume_parallel_fold_future(
+                        future=future,
+                        task=future_map[future],
+                        rows=rows,
+                        fold_timing_rows=fold_timing_rows,
+                        chain_state=chain_state,
+                    )
+                except Exception:
+                    _cancel_parallel_fold_executor_after_failure(executor, pending)
+                    raise
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
@@ -4637,13 +4720,20 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             if study is not None:
                 close_study_storage(study)
 
+    def _execute_with_logged_exception() -> dict:
+        try:
+            return _execute()
+        except Exception:
+            traceback.print_exc()
+            raise
+
     if log_path:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "w", encoding="utf-8") as log_handle:
             progress_log = _ParallelFoldProgressLogFilter(log_handle)
             with redirect_stdout(progress_log), redirect_stderr(log_handle):
-                return _execute()
-    return _execute()
+                return _execute_with_logged_exception()
+    return _execute_with_logged_exception()
 
 
 
@@ -4775,19 +4865,29 @@ def run_outer_rolling_oos(
                 "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
             })
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
-        with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
-            chain_state = _run_parallel_fold_futures(
-                executor=executor,
+        chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
+        try:
+            with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
+                chain_state = _run_parallel_fold_futures(
+                    executor=executor,
+                    tasks=tasks,
+                    rows=rows,
+                    fold_timing_rows=fold_timing_rows,
+                    overall_start=overall_start,
+                    raw_data_load_sec=raw_data_load_sec,
+                )
+        except Exception as exc:
+            chain_state = _run_missing_parallel_fold_tasks_sequentially(
                 tasks=tasks,
                 rows=rows,
                 fold_timing_rows=fold_timing_rows,
-                overall_start=overall_start,
-                raw_data_load_sec=raw_data_load_sec,
+                chain_state=chain_state,
+                cause=exc,
             )
-            if chain_state.get("chain_max_positions") is not None:
-                chain_max_positions = int(chain_state.get("chain_max_positions"))
-            if chain_state.get("chain_enable_rotation") is not None:
-                chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
+        if chain_state.get("chain_max_positions") is not None:
+            chain_max_positions = int(chain_state.get("chain_max_positions"))
+        if chain_state.get("chain_enable_rotation") is not None:
+            chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
         rows.sort(key=lambda item: int(item.get("oos_year", 0) or 0))
         fold_timing_rows.sort(key=lambda item: int(item.get("fold_idx", 0) or 0))
         for idx, row in enumerate(rows, start=1):
