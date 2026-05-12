@@ -2,7 +2,7 @@ import os
 from typing import Dict, List, Mapping, Optional
 
 from core.output_paths import build_output_dir
-from core.rolling_oos_params import build_rolling_oos_display_label, is_rolling_oos_param_set_file, load_json_file
+from core.rolling_oos_params import is_rolling_oos_param_set_file, load_json_file
 
 MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
 RUN_BEST_PARAMS_PATH_ENV_VAR = "V16_RUN_BEST_PARAMS_PATH"
@@ -12,10 +12,10 @@ CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_VAL_SCORE_BEST_PAR
 
 PARAMS_FILENAME_SUFFIX = "_params.json"
 CANONICAL_PARAM_FILENAME_LABELS = {
-    "run_best_params.json": "run_best_params.json | 目前參數",
-    "candidate_best_params.json": "candidate_best_params.json | 候選參數",
-    "candidate_retention_best_params.json": "candidate_retention_best_params.json | retention 最大候選",
-    "candidate_val_score_best_params.json": "candidate_val_score_best_params.json | val_score 第一候選",
+    "run_best_params.json": "run_best_params.json",
+    "candidate_best_params.json": "candidate_best_params.json",
+    "candidate_retention_best_params.json": "candidate_retention_best_params.json",
+    "candidate_val_score_best_params.json": "candidate_val_score_best_params.json",
 }
 CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
 
@@ -80,10 +80,7 @@ def _param_source_key_from_filename(filename: str) -> str:
 
 def _format_param_source_label(filename: str) -> str:
     basename = os.path.basename(str(filename))
-    canonical_label = CANONICAL_PARAM_FILENAME_LABELS.get(basename)
-    if canonical_label:
-        return canonical_label
-    return f"{basename} | {_param_source_key_from_filename(basename)}"
+    return CANONICAL_PARAM_FILENAME_LABELS.get(basename, basename)
 
 
 def _canonical_param_source_sort_rank(filename: str) -> int:
@@ -94,12 +91,15 @@ def _canonical_param_source_sort_rank(filename: str) -> int:
 
 
 def _discover_rolling_oos_param_sets(project_root: str) -> List[Dict[str, str]]:
+    # Workbench 下拉選單以「實際檔名」作為唯一顯示名稱；models/ 為主來源，
+    # outputs/ 只補充尚未複製到 models/ 的 rolling OOS 參數組。
     search_dirs = [
-        os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
         resolve_models_dir(project_root),
+        os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
     ]
     records: List[Dict[str, str]] = []
     seen_paths = set()
+    seen_labels = set()
     for folder in search_dirs:
         try:
             filenames = os.listdir(folder)
@@ -117,11 +117,15 @@ def _discover_rolling_oos_param_sets(project_root: str) -> List[Dict[str, str]]:
                 payload = load_json_file(path)
             except (OSError, UnicodeDecodeError, ValueError):
                 continue
+            label = os.path.basename(filename)
+            if label in seen_labels:
+                continue
             seen_paths.add(path)
+            seen_labels.add(label)
             selector = str(payload.get("selector") or (payload.get("meta") or {}).get("selector") or _param_source_key_from_filename(filename)).strip()
             records.append({
                 "key": f"rolling_oos:{selector}:{os.path.splitext(filename)[0]}",
-                "label": build_rolling_oos_display_label(path, payload),
+                "label": label,
                 "path": path,
                 "filename": filename,
                 "kind": "rolling_oos_param_set",
