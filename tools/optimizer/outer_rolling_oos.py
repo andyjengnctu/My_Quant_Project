@@ -93,6 +93,20 @@ REPORT_POLICY_LABELS = {
     "retention": "retention",
 }
 
+BASE_RETENTION_COMPARISON_THRESHOLDS = (0.0, 0.2, 0.4, 0.6, 0.8)
+BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS = OrderedDict(
+    (f"base_retention_gt_{str(threshold).replace('.', '_')}", float(threshold))
+    for threshold in BASE_RETENTION_COMPARISON_THRESHOLDS
+)
+BASE_RETENTION_COMPARISON_POLICY_NAMES = tuple(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.keys())
+BASE_RETENTION_COMPARISON_POLICY_LABELS = {
+    name: f"base (r>{threshold:g})"
+    for name, threshold in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.items()
+}
+CHAIN_POLICY_NAMES = REPORT_POLICY_NAMES + tuple(
+    name for name in BASE_RETENTION_COMPARISON_POLICY_NAMES if name not in REPORT_POLICY_NAMES
+)
+
 PARAMSET_FILENAME_BY_POLICY = {
     "base": "roos_base.json",
     "base_retention_gt_min": "roos_base_r.json",
@@ -2125,8 +2139,8 @@ def _select_base_rank1_item(finalists: list[dict]):
 
 
 
-def _select_base_retention_gt_min_rank1_item(finalists: list[dict]):
-    retention_min = float(OPTIMIZER_BASE_RETENTION_GT_MIN)
+def _select_base_retention_gt_threshold_rank1_item(finalists: list[dict], *, threshold: float):
+    retention_min = float(threshold)
     items = [
         item
         for item in list(finalists or [])
@@ -2136,6 +2150,20 @@ def _select_base_retention_gt_min_rank1_item(finalists: list[dict]):
     if not items:
         return None
     return min(items, key=lambda item: (int(item.get("base_rank", 10**9) or 10**9), -float(item.get("base_score", INVALID_TRIAL_VALUE)), int(item["trial"].number)))
+
+
+def _select_base_retention_gt_min_rank1_item(finalists: list[dict]):
+    return _select_base_retention_gt_threshold_rank1_item(
+        finalists,
+        threshold=float(OPTIMIZER_BASE_RETENTION_GT_MIN),
+    )
+
+
+def _select_base_retention_comparison_policy_items(finalists: list[dict]) -> dict[str, dict | None]:
+    return {
+        name: _select_base_retention_gt_threshold_rank1_item(finalists, threshold=threshold)
+        for name, threshold in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS.items()
+    }
 
 
 def _select_local_rank1_item(finalists: list[dict], *, objective_mode: str):
@@ -2162,12 +2190,14 @@ def _select_retention_rank1_item(finalists: list[dict]):
 
 
 def _build_policy_items(finalists: list[dict], *, objective_mode: str) -> dict[str, dict | None]:
-    return {
+    items = {
         "base": _select_base_rank1_item(finalists),
         "base_retention_gt_min": _select_base_retention_gt_min_rank1_item(finalists),
         "local": _select_local_rank1_item(finalists, objective_mode=objective_mode),
         "retention": _select_retention_rank1_item(finalists),
     }
+    items.update(_select_base_retention_comparison_policy_items(finalists))
+    return items
 
 
 def _policy_description(policy_name: str) -> str:
@@ -2175,6 +2205,9 @@ def _policy_description(policy_name: str) -> str:
         return "Use base_rank #1 params for each OOS year."
     if policy_name == "base_retention_gt_min":
         return f"Use the first base_rank candidate whose local_retention > {OPTIMIZER_BASE_RETENTION_GT_MIN:g} for each OOS period."
+    if policy_name in BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS:
+        threshold = float(BASE_RETENTION_COMPARISON_POLICY_THRESHOLDS[policy_name])
+        return f"Use the first base_rank candidate whose local_retention > {threshold:g} for each OOS period."
     if policy_name == "local":
         return "Use local_rank #1 params for each OOS year."
     if policy_name == "retention":
@@ -2369,6 +2402,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     for policy_name, item in dict(policy_items or {}).items():
         if item is None or item.get("trial") is None:
             policies[policy_name] = {
+                "available": False,
                 "rank_1_trial": None,
                 "rank_1_oos": 0.0,
                 "rank_1_return_pct": 0.0,
@@ -2387,6 +2421,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
         benchmark_return_pct = float(metrics.get("benchmark_return_pct", benchmark_return_pct))
         benchmark_mdd_pct = float(metrics.get("benchmark_mdd_pct", benchmark_mdd_pct))
         policies[policy_name] = {
+            "available": True,
             "rank_1_trial": trial_number + 1,
             "rank_1_oos": rank_1_oos,
             "rank_1_return_pct": float(metrics.get("ret_pct", 0.0)),
@@ -2981,7 +3016,7 @@ def _build_active_replay_chained_oos_summary(
     oos_period_label = _period_label(first_oos_start, last_oos_end)
 
     payloads = {"best": _build_active_param_replay_payload_from_rows(rows, best_finalist=True)}
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         payloads[policy_name] = _build_active_param_replay_payload_from_rows(rows, policy_name=policy_name)
     schedule_groups = {name: _build_active_replay_schedule_records(payload) for name, payload in payloads.items()}
     contexts_by_signature = _load_active_replay_contexts_by_signature(
@@ -3008,7 +3043,7 @@ def _build_active_replay_chained_oos_summary(
 
     best_metrics = dict(replay_metrics.get("best") or {})
     benchmark_source = dict(best_metrics)
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         if not benchmark_source and replay_metrics.get(policy_name):
             benchmark_source = dict(replay_metrics[policy_name])
             break
@@ -3040,11 +3075,12 @@ def _build_active_replay_chained_oos_summary(
         "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
         "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
     }
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         metrics = dict(replay_metrics.get(policy_name) or {})
         chain_score = float(metrics.get("score", 0.0))
         chain_return = float(metrics.get("return_pct", 0.0))
         summary[policy_name] = {
+            "available": int(metrics.get("curve_points", 0) or 0) > 0,
             "rank_1_oos": float(chain_score),
             "best_gap": float(chain_score - best_score),
             "benchmark_0050_gap": float(chain_score - benchmark_score),
@@ -3104,12 +3140,13 @@ def _build_chained_oos_summary(rows: list[dict], *, chained_override: dict | Non
         "yearly_best_finalist_oos_score": [float(row.get("best_finalist_oos_score", 0.0)) for row in rows],
         "yearly_benchmark_oos_score": [float(row.get("benchmark_oos_score", 0.0)) for row in rows],
     }
-    for policy_name in REPORT_POLICY_NAMES:
+    for policy_name in CHAIN_POLICY_NAMES:
         stitched = _stitch_strategy_equity_curves(rows, policy_name=policy_name)
         metrics = _calc_stitched_curve_metrics(stitched)
         chain_score = float(metrics.get("score", 0.0))
         chain_return = float(metrics.get("return_pct", 0.0))
         summary[policy_name] = {
+            "available": int(metrics.get("curve_points", 0) or 0) > 0,
             "rank_1_oos": float(chain_score),
             "best_gap": float(chain_score - best_score),
             "benchmark_0050_gap": float(chain_score - benchmark_score),
@@ -3331,10 +3368,123 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     lines.append(separator)
     return "\n".join(lines)
 
+
+def _base_retention_comparison_score_text(policy_row: dict, *, color: bool = True) -> str:
+    if not policy_row or policy_row.get("available") is False:
+        return "N/A"
+    try:
+        score = float(policy_row.get("rank_1_oos", 0.0))
+    except (TypeError, ValueError):
+        return "N/A"
+    if color:
+        return _format_score(score)
+    return f"{score:.{OOS_SCORE_DECIMALS}f}"
+
+
+def _build_base_retention_comparison_chained_row(rows: list[dict], *, chained_override: dict | None = None) -> dict | None:
+    if not rows:
+        return None
+    chained = _build_chained_oos_summary(rows, chained_override=chained_override)
+    row = {
+        "fold": "OOS_CHAIN",
+        "selection_period": chained.get("selection_period", ""),
+        "oos_year": chained.get("oos_period", ""),
+        "oos_period": chained.get("oos_period", ""),
+        "elapsed_sec": _resolve_chain_elapsed_sec(rows, chained),
+    }
+    for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES:
+        policy = dict(chained.get(policy_name) or {})
+        row[policy_name] = {
+            "available": bool(policy) and policy.get("available", True) is not False,
+            "rank_1_oos": float(policy.get("rank_1_oos", 0.0)) if policy else 0.0,
+        }
+    return row
+
+
+def _render_base_retention_comparison_table(rows: list[dict], *, color: bool = True, include_chain: bool = True, chained_override: dict | None = None) -> str:
+    display_rows = list(rows or [])
+    if include_chain:
+        chain_row = _build_base_retention_comparison_chained_row(display_rows, chained_override=chained_override)
+        if chain_row is not None:
+            display_rows = display_rows + [chain_row]
+    if not display_rows:
+        return ""
+    widths = {
+        "fold": 9,
+        "selection": 15,
+        "oos_year": 15,
+        "score": 12,
+        "elapsed": 8,
+    }
+    lines: list[str] = []
+    lines.append("BASE RETENTION THRESHOLD OOS RESULTS")
+    policy_header = " | ".join(
+        _pad_ansi(BASE_RETENTION_COMPARISON_POLICY_LABELS[name], widths["score"], align="^")
+        for name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+    )
+    policy_subheader = " | ".join(
+        _pad_ansi("rank_1", widths["score"], align="^")
+        for _ in BASE_RETENTION_COMPARISON_POLICY_NAMES
+    )
+    header1 = (
+        f"{_pad_ansi('fold', widths['fold'], align='^')} | {_pad_ansi('selection', widths['selection'], align='^')} | {_pad_ansi('oos_period', widths['oos_year'], align='^')} | "
+        f"{policy_header} | {_pad_ansi('elapsed', widths['elapsed'], align='^')}"
+    )
+    header2 = (
+        f"{_pad_ansi('', widths['fold'])} | {_pad_ansi('', widths['selection'])} | {_pad_ansi('', widths['oos_year'])} | "
+        f"{policy_subheader} | {_pad_ansi('', widths['elapsed'])}"
+    )
+    separator = _table_separator(max(_visible_len(header1), _visible_len(header2), 120))
+    lines.append(separator)
+    lines.append(header1)
+    lines.append(separator)
+    lines.append(header2)
+    lines.append(separator)
+    total = len(rows or [])
+    for idx, row in enumerate(display_rows, start=1):
+        fold_kind = str(row.get("fold", "")).upper()
+        is_chain = fold_kind == "OOS_CHAIN"
+        fold_text = "OOS_CHAIN" if is_chain else str(row.get("fold") or f"{idx}/{total}")
+        policy_cells = [
+            _pad_ansi(_base_retention_comparison_score_text(row.get(policy_name) or {}, color=color), widths["score"], align=">")
+            for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+        ]
+        line = (
+            f"{_pad_ansi(fold_text, widths['fold'])} | {_pad_ansi(_display_month_period(row.get('selection_period', '')), widths['selection'])} | {_pad_ansi(_display_month_period(row.get('oos_period') or row.get('oos_year', '')), widths['oos_year'])} | "
+            f"{' | '.join(policy_cells)} | "
+            f"{_pad_ansi('' if row.get('elapsed_sec') is None else _fmt_duration(row.get('elapsed_sec', 0.0)), widths['elapsed'], align='>')}"
+        )
+        lines.append(line)
+    lines.append(separator)
+    return "\n".join(lines)
+
+
+def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+    tables = []
+    main_table = _render_results_table(
+        rows,
+        color=color,
+        include_chain=include_chain,
+        include_oos_avg=include_oos_avg,
+        chained_override=chained_override,
+    )
+    if main_table:
+        tables.append(main_table)
+    retention_table = _render_base_retention_comparison_table(
+        rows,
+        color=color,
+        include_chain=include_chain,
+        chained_override=chained_override,
+    )
+    if retention_table:
+        tables.append(retention_table)
+    return "\n\n".join(tables)
+
+
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return
-    print("\n" + _render_results_table(rows, color=True, include_chain=True))
+    print("\n" + _render_optimizer_results_tables(rows, color=True, include_chain=True))
 
 
 def _flatten_policy_for_csv(row: dict, policy_name: str) -> dict:
@@ -3582,7 +3732,7 @@ def _build_summary(rows: list[dict], *, config: OuterRollingConfig | None = None
     return summary
 
 def _format_final_report(rows: list[dict], summary: dict, *, color: bool = False) -> str:
-    rendered = _render_results_table(rows, color=color, include_chain=True, chained_override=summary.get("chained_oos"))
+    rendered = _render_optimizer_results_tables(rows, color=color, include_chain=True, chained_override=summary.get("chained_oos"))
     lines = []
     if rendered:
         lines.append(rendered)
@@ -4346,6 +4496,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
+                **{
+                    policy_name: diagnostics.get("policies", {}).get(policy_name, {})
+                    for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+                },
                 "policy_schedules": policy_schedules,
                 "elapsed_sec": float(fold_elapsed),
                 "optimizer_search_sec": float(optimize_sec),
@@ -4759,6 +4913,10 @@ def run_outer_rolling_oos(
                 "base_retention_gt_min": diagnostics.get("policies", {}).get("base_retention_gt_min", {}),
                 "local": diagnostics.get("policies", {}).get("local", {}),
                 "retention": diagnostics.get("policies", {}).get("retention", {}),
+                **{
+                    policy_name: diagnostics.get("policies", {}).get(policy_name, {})
+                    for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES
+                },
                 "policy_schedules": policy_schedules,
                 "elapsed_sec": float(fold_elapsed),
                 "optimizer_search_sec": float(optimize_sec),
