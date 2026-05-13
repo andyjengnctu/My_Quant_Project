@@ -2737,19 +2737,37 @@ def _row_oos_start_date(row: dict) -> str:
 
 
 def _policy_has_complete_active_schedule(rows: list[dict], policy_name: str) -> bool:
-    for row in sorted(list(rows or []), key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or "")):
-        schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
-        if not dict(schedule.get("params") or {}):
-            return False
-        effective_start = str(schedule.get("effective_start") or "")
+    source_rows = sorted(
+        list(rows or []),
+        key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or ""),
+    )
+    if not source_rows:
+        return False
+    first_oos_start = None
+    active_starts = []
+    for row in source_rows:
         oos_start = _row_oos_start_date(row)
-        if effective_start and oos_start:
+        if oos_start:
             try:
-                if pd.Timestamp(effective_start).normalize() > pd.Timestamp(oos_start).normalize():
-                    return False
+                oos_start_ts = pd.Timestamp(oos_start).normalize()
             except (TypeError, ValueError):
                 return False
-    return bool(rows)
+            if first_oos_start is None or oos_start_ts < first_oos_start:
+                first_oos_start = oos_start_ts
+        schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
+        if not dict(schedule.get("params") or {}):
+            continue
+        effective_start = str(schedule.get("effective_start") or oos_start or "")
+        try:
+            effective_start_ts = pd.Timestamp(effective_start).normalize()
+        except (TypeError, ValueError):
+            return False
+        if oos_start and effective_start_ts > oos_start_ts:
+            return False
+        active_starts.append(effective_start_ts)
+    if first_oos_start is None or not active_starts:
+        return False
+    return min(active_starts) <= first_oos_start
 
 
 def _empty_unavailable_chain_metrics() -> dict:
