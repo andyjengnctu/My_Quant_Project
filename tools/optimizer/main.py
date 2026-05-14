@@ -36,6 +36,7 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    is_optimizer_local_min_review_enabled,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
@@ -176,6 +177,9 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "action": str(action_label),
         "selection_rule": str(selection_rule),
         "compare_only": bool(compare_only),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_mode": str(finalist_entry.get("local_min_review_mode", "exact")),
+        "local_min_exact": bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
         "inner_validate_anti_overfit_enabled": bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
         "inner_validate_min_score": float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE),
         "inner_validate_max_rank_percentile": float(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE),
@@ -205,7 +209,7 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
 
 
 def _resolve_candidate_best_selection_rule():
-    parts = ["max_local_min_score"]
+    parts = ["max_local_min_score" if is_optimizer_local_min_review_enabled() else "max_base_score_local_min_disabled"]
     if bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED):
         parts.append("inner_validate_score_gt_0_and_rank_top_half")
     if bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED):
@@ -517,6 +521,9 @@ def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, fin
         member["local_min_score"] = float(finalist_entry.get("local_min_score", 0.0))
         member["retention"] = float(finalist_entry.get("local_retention", 0.0))
         member["local_gate"] = bool(finalist_entry.get("gate_pass", False))
+        member["local_min_review_enabled"] = bool(finalist_entry.get("local_min_review_enabled", is_optimizer_local_min_review_enabled()))
+        member["local_min_review_mode"] = str(finalist_entry.get("local_min_review_mode", "exact"))
+        member["local_min_exact"] = bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled())))
     return member
 
 
@@ -543,6 +550,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
         "local_min_score": min(local_scores) if local_scores else 0.0,
         "retention": min(retentions) if retentions else 0.0,
         "local_gate": all(bool(item.get("local_gate", False)) for item in members),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "member_metrics": [
             {
                 "member_index": int(item.get("member_index", idx + 1)),
@@ -552,6 +560,8 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
                 "local_min_score": float(item.get("local_min_score", 0.0)),
                 "retention": float(item.get("retention", 0.0)),
                 "local_gate": bool(item.get("local_gate", False)),
+                "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+                "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
             }
             for idx, item in enumerate(members)
         ],
@@ -574,6 +584,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
             "trials_per_seed": int(trials_per_seed),
             "seeds": [int(seed) for seed in seeds],
             "walk_forward_policy": dict(walk_forward_policy),
+            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         },
     )
     summary = _build_static_seed_ensemble_summary(

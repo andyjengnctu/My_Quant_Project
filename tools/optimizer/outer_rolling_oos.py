@@ -31,6 +31,7 @@ from config.training_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
+    is_optimizer_local_min_review_enabled,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
 from config.training_performance_policy import (
@@ -1495,7 +1496,7 @@ def _print_plan(config: OuterRollingConfig, *, parallel_settings_line: str | Non
     for idx, fold in enumerate(folds, start=1):
         print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<15}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"LOCAL_MIN_SCORE              : True")
+    print(f"LOCAL_MIN_SCORE              : {bool(is_optimizer_local_min_review_enabled())}")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
     print(f"DOMINANT_YEAR_DEPENDENCY     : {bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED)}")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")
@@ -2247,7 +2248,8 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
         "base_rank": int(item.get("base_rank", 0) or 0),
         "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
-        "local_min_exact": bool(item.get("local_min_exact", True)),
+        "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+        "local_min_exact": bool(item.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
         "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
         "local_rank": int(local_rank_map.get(trial_number, 0)),
         "retention": float(item.get("local_retention", 0.0)),
@@ -2704,6 +2706,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
             "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
             "params_by_oos_year": params_by_oos_year,
             "params_by_effective_date": params_by_effective_date,
+            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
             "folds": fold_entries,
         }
     return {
@@ -2714,6 +2717,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
         "active_param_policy": "daily_active_param",
         "params_by_oos_year": params_by_oos_year,
         "params_by_effective_date": params_by_effective_date,
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "folds": fold_entries,
     }
 
@@ -3914,6 +3918,9 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "base_score": schedule.get("base_score"),
             "base_rank": schedule.get("base_rank"),
             "local_min": schedule.get("local_min"),
+            "local_min_review_enabled": schedule.get("local_min_review_enabled", bool(is_optimizer_local_min_review_enabled())),
+            "local_min_review_mode": schedule.get("local_min_review_mode"),
+            "local_min_exact": schedule.get("local_min_exact"),
             "local_rank": schedule.get("local_rank"),
             "retention": schedule.get("retention"),
             "retention_rank": schedule.get("retention_rank"),
@@ -3975,8 +3982,9 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "promotion_enabled": False,
             "trials_per_fold": int(config.trials_per_fold),
             "live_trading_param": False,
-            "active_param_policy": "daily_active_param",
-            "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active param；實盤同理使用當下正式 promote 的最新 param.json。",
+            "active_param_policy": "daily_active_param_ensemble",
+            "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active-param ensemble；實盤同理使用當下正式 promote 的最新 ensemble param.json。",
+            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
             "random_seed_ensemble": seed_ensemble_policy,
             "requested_random_seed_ensemble": requested_seed_ensemble_policy,
         },
@@ -4000,8 +4008,9 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "positive_years": int(policy_summary.get("positive_years", 0)),
             "total_years": int(policy_summary.get("total_years", 0)),
         },
-        "active_param_policy": "daily_active_param",
-        "active_param_policy_note": "每日決策使用該日 active param；rolling 只是用歷史 effective date replay，不代表實盤使用固定單期參數組。",
+        "active_param_policy": "daily_active_param_ensemble",
+        "active_param_policy_note": "每日決策使用該日 active-param ensemble；rolling 只是用歷史 effective date replay，不代表實盤使用固定單期參數組。",
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "random_seed_ensemble": seed_ensemble_policy,
         "chained_oos": chained_oos,
         "params_by_effective_date": params_by_effective_date,
@@ -4674,7 +4683,7 @@ def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name:
             "selected_trial": schedule.get("selected_trial"),
             "params": params_payload,
         }
-        for key in ("base_score", "base_rank", "local_min", "local_rank", "retention", "retention_rank"):
+        for key in ("base_score", "base_rank", "local_min", "local_rank", "retention", "retention_rank", "local_min_review_enabled", "local_min_review_mode", "local_min_exact"):
             if key in schedule:
                 member[key] = schedule.get(key)
         members.append(member)
@@ -4907,6 +4916,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "install_shared_cache_sec": sum(float(row.get("install_shared_cache_sec", 0.0) or 0.0) for row in seed_rows),
         "study_create_sec": sum(float(row.get("study_create_sec", 0.0) or 0.0) for row in seed_rows),
         "random_seed_ensemble": _build_rolling_seed_ensemble_policy_payload(),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
         "optimizer_seeds": [_extract_seed_from_policy_schedules(row) for row in seed_rows],
     }
 
@@ -5187,7 +5197,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             local_elapsed = time.perf_counter() - local_started
             best_local_min_score = max((float(item.get("local_min_score", INVALID_TRIAL_VALUE)) for item in list(finalists or [])), default=None)
             best_local_min_text = "N/A" if best_local_min_score is None else f"{best_local_min_score:.3f}"
-            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | local-min review DONE | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
+            local_stage_label = "local-min review DONE" if is_optimizer_local_min_review_enabled() else "local-min disabled (base equivalent)"
+            print(f"[{fold_idx}/{fold_count}] OOS {oos_period_display} | {local_stage_label} | finalists={len(finalists)} | best_local_min={best_local_min_text} | elapsed={_fmt_duration(local_elapsed)}", flush=True)
             _write_parallel_fold_progress_event(
                 stage="LOCAL_MIN_REVIEW",
                 fold_idx=fold_idx,
@@ -5724,7 +5735,8 @@ def run_outer_rolling_oos(
             local_elapsed = time.perf_counter() - local_started
             prep_cache_stats = session.get_prep_cache_stats() if hasattr(session, "get_prep_cache_stats") else {}
             print(
-                f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | LOCAL_MIN_REVIEW DONE | "
+                f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | "
+                f"{'LOCAL_MIN_REVIEW DONE' if is_optimizer_local_min_review_enabled() else 'LOCAL_MIN_DISABLED'} | "
                 f"finalists={len(finalists)} | best_local={float(finalists[0].get('local_min_score', 0.0)) if finalists else 0.0:.3f} "
                 f"#{int(finalists[0]['trial'].number) + 1 if finalists else 0} | "
                 f"prep_cache_hit/miss/evict={int(prep_cache_stats.get('hits', 0))}/{int(prep_cache_stats.get('misses', 0))}/{int(prep_cache_stats.get('evictions', 0))} | "

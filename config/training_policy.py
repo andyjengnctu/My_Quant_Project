@@ -33,8 +33,13 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影�
 # 其他數值 = 固定停利比例
 OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.0  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 1  # local_min_score finalist review 的最小候選數
+# local_min review 計算開關。
+# True  = 正式計算 finalist 鄰點 local_min_score。
+# False = 不跑鄰點 review；全專案統一使用 base_score 作為 local_min_score 等價值，retention 固定為 1.0。
+OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = False
+
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
 
 # inner validation anti-overfitting 開關。
 # True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。
@@ -70,6 +75,10 @@ DOMINANT_YEAR_NARROW_POSITIVE_SYMBOL_COUNT = 3
 DOMINANT_YEAR_TOP_TRADE_OUTLIER_PNL_SHARE = 0.50
 
 
+def is_optimizer_local_min_review_enabled() -> bool:
+    return bool(OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED)
+
+
 def resolve_optimizer_local_min_score_finalist_top_k(n_trials):
     requested_trials = max(0, int(n_trials))
     proportional_top_k = int(math.ceil(requested_trials * OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE))
@@ -91,7 +100,7 @@ OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數。
 # rolling / 非 rolling 都必須輸出 active-param ensemble；交易時不得把 ensemble JSON 靜默降級成單一 params。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 5
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 3
 # "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 3
 
@@ -155,6 +164,7 @@ def build_training_score_policy_snapshot():
         "SCORE_NUMERATOR_METHOD": SCORE_NUMERATOR_METHOD,
         "SYSTEM_SCORE_DISPLAY_MULTIPLIER": SYSTEM_SCORE_DISPLAY_MULTIPLIER,
         "OPTIMIZER_FIXED_TP_PERCENT": OPTIMIZER_FIXED_TP_PERCENT,
+        "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
         "OPTIMIZER_BASE_RETENTION_GT_MIN": OPTIMIZER_BASE_RETENTION_GT_MIN,
@@ -178,6 +188,7 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OUTER_ROLLING_TRAIN_WINDOW_MONTHS"] = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
     payload["OUTER_ROLLING_OOS_HORIZON_MONTHS"] = int(OUTER_ROLLING_OOS_HORIZON_MONTHS)
     payload["OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+    payload["OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED"] = is_optimizer_local_min_review_enabled()
     payload["OPTIMIZER_RANDOM_SEED_ENSEMBLE"] = build_seed_ensemble_policy_snapshot(
         enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
         seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
