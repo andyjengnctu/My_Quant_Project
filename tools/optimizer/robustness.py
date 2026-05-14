@@ -1842,14 +1842,15 @@ def list_local_min_score_finalists(
     return enriched_finalists
 
 
-def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k=None, emit_table: bool = True):
+def print_local_min_score_finalist_review(study, *, session, objective_mode: str, colors: dict, winner_trial=None, top_k=None, emit_table: bool = True, show_progress: bool | None = None):
+    progress_enabled = bool(emit_table) if show_progress is None else bool(show_progress)
     finalists = list_local_min_score_finalists(
         study,
         session=session,
         objective_mode=objective_mode,
         top_k=top_k,
         include_trial=winner_trial,
-        show_progress=True,
+        show_progress=progress_enabled,
         include_oos_diagnostics=True,
     )
     if not finalists:

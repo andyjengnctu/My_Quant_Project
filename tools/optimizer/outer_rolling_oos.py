@@ -3760,6 +3760,69 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
     return "\n\n".join(tables)
 
 
+def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None) -> str:
+    """Render optimizer OOS result tables through the rolling-OOS table source.
+
+    Non-rolling summary display intentionally uses this public wrapper with a
+    single fold row so rolling and non-rolling console tables cannot drift.
+    """
+    return _render_optimizer_results_tables(
+        rows,
+        color=color,
+        include_chain=include_chain,
+        include_oos_avg=include_oos_avg,
+        chained_override=chained_override,
+    )
+
+
+def render_optimizer_fold_progress_line(
+    *,
+    fold_idx: int,
+    fold_count: int,
+    selection_start: str = "",
+    selection_end: str = "",
+    selection_period: str = "",
+    oos_period: str = "",
+    oos_year: int = 0,
+    stage: str = "START",
+    status: str = "",
+    completed: int = 0,
+    total: int = 0,
+    best_score=None,
+    best_base_score=None,
+    best_local_min_score=None,
+    elapsed_sec=None,
+) -> str:
+    """Render one optimizer fold progress line through the rolling-OOS source.
+
+    Non-rolling uses this with fold_count=1 so progress text and table text are
+    both owned by this module instead of being reimplemented in main.py.
+    """
+    task = {
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "oos_year": int(oos_year or 0),
+        "oos_period": str(oos_period or ""),
+        "selection_period": str(selection_period or selection_start or ""),
+    }
+    progress = {
+        "fold_idx": int(fold_idx),
+        "fold_count": int(fold_count),
+        "oos_year": int(oos_year or 0),
+        "stage": str(stage or "START"),
+        "status": str(status or ""),
+        "selection_start": str(selection_start or selection_period or ""),
+        "selection_end": str(selection_end or ""),
+        "completed": int(completed or 0),
+        "total": int(total or 0),
+        "best_score": best_score,
+        "best_base_score": best_base_score,
+        "best_local_min_score": best_local_min_score,
+        "elapsed_sec": elapsed_sec,
+    }
+    return _format_parallel_fold_progress_line(task, progress)
+
+
 def _print_completed_results(rows: list[dict]):
     if not rows:
         return

@@ -19,7 +19,7 @@ from core.dataset_profiles import (
 )
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW, print_strategy_dashboard
 from core.model_paths import resolve_models_dir, resolve_run_best_params_path
-from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice
+from core.runtime_utils import run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, resolve_cli_program_name, validate_cli_args, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.output_paths import build_output_dir
 from core.walk_forward_policy import (
     build_optimizer_effective_policy_fingerprint,
@@ -545,6 +545,86 @@ def _format_nonrolling_result_number(value) -> str:
         return "N/A"
 
 
+def _build_nonrolling_single_fold_period_context(walk_forward_policy: dict) -> dict:
+    selection_start_year = int(walk_forward_policy.get("selection_start_year", walk_forward_policy.get("train_start_year", 0)) or 0)
+    selection_end_year = int(walk_forward_policy.get("search_train_end_year", selection_start_year) or selection_start_year)
+    oos_start_year = int(walk_forward_policy.get("oos_start_year", selection_end_year + 1) or (selection_end_year + 1))
+    return {
+        "fold_idx": 1,
+        "fold_count": 1,
+        "selection_start": f"{selection_start_year:04d}-01-01" if selection_start_year > 0 else "",
+        "selection_end": f"{selection_end_year:04d}-12-31" if selection_end_year > 0 else "",
+        "selection_period": f"{selection_start_year:04d}-01~{selection_end_year % 100:02d}-12" if selection_start_year > 0 and selection_end_year > 0 else "",
+        "oos_year": oos_start_year,
+        "oos_period": f"{oos_start_year:04d}~latest" if oos_start_year > 0 else "",
+    }
+
+
+def _render_nonrolling_single_fold_progress_line(walk_forward_policy: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None) -> str:
+    from tools.optimizer.outer_rolling_oos import render_optimizer_fold_progress_line
+
+    context = _build_nonrolling_single_fold_period_context(walk_forward_policy)
+    return render_optimizer_fold_progress_line(
+        **context,
+        stage=stage,
+        status=status,
+        completed=completed,
+        total=total,
+        best_score=best_score,
+        best_base_score=best_base_score,
+        best_local_min_score=best_local_min_score,
+        elapsed_sec=elapsed_sec,
+    )
+
+
+def _finalize_nonrolling_single_fold_inline_progress(progress_owner) -> None:
+    if not bool(getattr(progress_owner, "nonrolling_fold_inline_progress_rendered", False)):
+        return
+    print(flush=True)
+    progress_owner.nonrolling_fold_inline_progress_rendered = False
+    progress_owner.nonrolling_fold_inline_progress_width = 0
+
+
+def _print_nonrolling_single_fold_progress(walk_forward_policy: dict, *, stage: str, status: str = "", completed: int = 0, total: int = 0, best_score=None, best_base_score=None, best_local_min_score=None, elapsed_sec=None, inline: bool = False, progress_owner=None) -> None:
+    line = _render_nonrolling_single_fold_progress_line(
+        walk_forward_policy,
+        stage=stage,
+        status=status,
+        completed=completed,
+        total=total,
+        best_score=best_score,
+        best_base_score=best_base_score,
+        best_local_min_score=best_local_min_score,
+        elapsed_sec=elapsed_sec,
+    )
+    owner = progress_owner
+    if inline and owner is not None and stdout_supports_inline_progress():
+        previous_width = int(getattr(owner, "nonrolling_fold_inline_progress_width", 0) or 0)
+        owner.nonrolling_fold_inline_progress_width = write_inline_progress(f"{C_GRAY}{line}{C_RESET}", previous_width=previous_width)
+        owner.nonrolling_fold_inline_progress_rendered = True
+        return
+    if owner is not None:
+        _finalize_nonrolling_single_fold_inline_progress(owner)
+    print(f"{C_GRAY}{line}{C_RESET}", flush=True)
+
+
+def _make_nonrolling_seed_trial_progress_callback(*, member_session, walk_forward_policy: dict, requested_trials: int, started_at: float):
+    def _callback(study, trial):
+        best_trial = member_session.get_best_completed_trial_or_none(study)
+        best_score = None if best_trial is None else best_trial.value
+        _print_nonrolling_single_fold_progress(
+            walk_forward_policy,
+            stage="OPTIMIZER_SEARCH",
+            completed=int(getattr(trial, "number", -1)) + 1,
+            total=int(requested_trials),
+            best_score=best_score,
+            elapsed_sec=max(0.0, time.perf_counter() - float(started_at)),
+            inline=True,
+            progress_owner=member_session,
+        )
+    return _callback
+
+
 def _print_static_seed_ensemble_result_table(*, members: list[dict], policy: dict, colors: dict) -> None:
     if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
         return
@@ -713,22 +793,49 @@ def _run_nonrolling_random_seed_ensemble_training(
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
     ensemble_db_dir = os.path.join(MODELS_DIR, "seed_ensemble")
     os.makedirs(ensemble_db_dir, exist_ok=True)
-    print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
+    compact_display = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+    if compact_display:
+        _print_nonrolling_single_fold_progress(
+            walk_forward_policy,
+            stage="START",
+            status=f"seed ensemble START N={len(seeds)} min_agree={policy['min_agree']}",
+            elapsed_sec=0.0,
+        )
+    else:
+        print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
 
     members: list[dict] = []
+    ensemble_started_at = time.perf_counter()
     configure_optuna_logging()
     for member_index, seed in enumerate(seeds, start=1):
         member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
+        member_session.disable_milestone_dashboard = compact_display
+        member_session.disable_optimizer_status_line = compact_display
         member_session_ts = _resolve_optimizer_session_ts(member_session, fallback_label=f"seed{int(seed)}")
         db_file = os.path.join(ensemble_db_dir, f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{member_session_ts}.db")
         db_name = f"sqlite:///{db_file}"
         study = None
         try:
-            print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
+            if compact_display:
+                _print_nonrolling_single_fold_progress(
+                    walk_forward_policy,
+                    stage="START",
+                    status=f"seed {member_index}/{len(seeds)} seed={int(seed)}",
+                    elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                )
+            else:
+                print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
             study = create_optimizer_study(db_name, seed=int(seed), sampler_kind="tpe")
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
+            if compact_display:
+                _print_nonrolling_single_fold_progress(
+                    walk_forward_policy,
+                    stage="RAW_DATA",
+                    status=f"seed {member_index}/{len(seeds)} raw data",
+                    elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                )
             member_session.load_raw_data(
                 selected_data_dir,
                 load_all_raw_data=load_all_raw_data,
@@ -738,12 +845,34 @@ def _run_nonrolling_random_seed_ensemble_training(
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
             search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(environ, sampler_kind="tpe")
+            search_callbacks = [member_session.monitoring_callback]
+            if compact_display:
+                _print_nonrolling_single_fold_progress(
+                    walk_forward_policy,
+                    stage="OPTIMIZER_SEARCH",
+                    completed=0,
+                    total=int(requested_trials),
+                    elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                    inline=True,
+                    progress_owner=member_session,
+                )
+                search_callbacks.append(
+                    _make_nonrolling_seed_trial_progress_callback(
+                        member_session=member_session,
+                        walk_forward_policy=walk_forward_policy,
+                        requested_trials=int(requested_trials),
+                        started_at=ensemble_started_at,
+                    )
+                )
             study.optimize(
                 member_session.objective,
                 n_trials=int(requested_trials),
                 n_jobs=int(search_parallel_trials),
-                callbacks=[member_session.monitoring_callback],
+                callbacks=search_callbacks,
             )
+            if compact_display:
+                _finalize_nonrolling_single_fold_inline_progress(member_session)
+            member_session.outer_rolling_local_progress_context = _build_nonrolling_single_fold_period_context(walk_forward_policy) if compact_display else None
             finalists, best_trial = print_local_min_score_finalist_review(
                 study,
                 session=member_session,
@@ -751,7 +880,10 @@ def _run_nonrolling_random_seed_ensemble_training(
                 colors=COLORS,
                 winner_trial=None,
                 emit_table=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+                show_progress=True if compact_display else bool(is_optimizer_nonrolling_train_result_table_enabled()),
             )
+            if compact_display:
+                _finalize_nonrolling_single_fold_inline_progress(member_session)
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
                 print(f"{C_YELLOW}ℹ️ seed={int(seed)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
                 continue
@@ -764,13 +896,23 @@ def _run_nonrolling_random_seed_ensemble_training(
             if finalist_entry is None:
                 raise ValueError(f"seed={int(seed)} 找不到 finalist entry，無法建立 ensemble member")
             params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
-            members.append(_build_seed_ensemble_member(
+            member_payload = _build_seed_ensemble_member(
                 member_index=member_index,
                 seed=int(seed),
                 best_trial=best_trial,
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
-            ))
+            )
+            members.append(member_payload)
+            if compact_display:
+                _print_nonrolling_single_fold_progress(
+                    walk_forward_policy,
+                    stage="DONE",
+                    status=f"seed {member_index}/{len(seeds)} done",
+                    best_base_score=member_payload.get("base_score"),
+                    best_local_min_score=member_payload.get("local_min_score"),
+                    elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
+                )
         finally:
             member_session.close_trial_prep_executor()
             if study is not None:
@@ -792,21 +934,32 @@ def _run_nonrolling_random_seed_ensemble_training(
         selected_model_mode=selected_model_mode,
         trials_per_seed=int(requested_trials),
     )
-    _print_static_seed_ensemble_result_table(
-        members=members,
-        policy=policy,
-        colors=COLORS,
+    from tools.optimizer.callbacks import (
+        print_optimizer_static_ensemble_console_dashboard,
+        print_optimizer_static_ensemble_rolling_oos_table,
     )
-    if bool(is_optimizer_nonrolling_train_result_table_enabled()):
-        from tools.optimizer.callbacks import print_optimizer_static_ensemble_console_dashboard
-        dashboard_session = member_session
-        print_optimizer_static_ensemble_console_dashboard(
-            dashboard_session,
-            ensemble_payload=ensemble_payload,
-            seeds=seeds,
-            milestone_title="🏆 ENSEMBLE 訓練結果",
-            title="ENSEMBLE 績效與風險對比表",
+    if compact_display:
+        _print_nonrolling_single_fold_progress(
+            walk_forward_policy,
+            stage="DONE",
+            status=f"seed ensemble done N={len(seeds)}",
+            best_base_score=_ensemble_summary.get("base_score"),
+            best_local_min_score=_ensemble_summary.get("local_min_score"),
+            elapsed_sec=max(0.0, time.perf_counter() - ensemble_started_at),
         )
+    dashboard_session = member_session
+    print_optimizer_static_ensemble_rolling_oos_table(
+        dashboard_session,
+        ensemble_payload=ensemble_payload,
+    )
+    print_optimizer_static_ensemble_console_dashboard(
+        dashboard_session,
+        ensemble_payload=ensemble_payload,
+        seeds=seeds,
+        milestone_title="🏆 ENSEMBLE 訓練結果",
+        title="ENSEMBLE 績效與風險對比表",
+        force=True,
+    )
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
         return int(promote_status)

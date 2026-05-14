@@ -873,6 +873,86 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
 
 
 
+def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_payload: dict, elapsed_sec: float | None = None) -> dict:
+    """Build the single-fold row used by the shared rolling-OOS table renderer."""
+    policy = get_active_param_ensemble_policy(ensemble_payload)
+    schedule = ensemble_payload.get("params_ensemble") or []
+    first_member = schedule[0] if schedule else {}
+    primary_params = _build_trial_params_object(first_member.get("params") or {})
+    initial_capital = _safe_float(get_p(primary_params, "initial_capital", 0.0))
+    model_mode = _resolve_model_mode(session.objective_mode)
+    search_train_dates = _build_search_train_dates_for_session(session)
+    selection_start = search_train_dates[0] if search_train_dates else _policy_date(session, "train_start_date")
+    selection_end = search_train_dates[-1] if search_train_dates else _policy_date(session, "search_train_end_date")
+    oos_start_date = None
+    oos_end_date = None
+    if model_mode == "split":
+        oos_start_date = _policy_date(session, "oos_start_date")
+        if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
+            oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
+        oos_end_date = _policy_date(session, "oos_end_date")
+    if not oos_start_date:
+        oos_start_date = selection_start
+        oos_end_date = selection_end
+    candidate_metrics, benchmark_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
+        session,
+        ensemble_payload,
+        start_date=oos_start_date,
+        end_date=oos_end_date,
+        initial_capital=initial_capital,
+    )
+    candidate_score = _safe_float(candidate_metrics.get("pf_romd", 0.0))
+    benchmark_score = _safe_float(benchmark_metrics.get("pf_romd", 0.0))
+    policy_row = {
+        "available": True,
+        "rank_1_trial": None,
+        "rank_1_oos": float(candidate_score),
+        "rank_1_return_pct": _safe_float(candidate_metrics.get("pf_return", 0.0)),
+        "rank_1_mdd_pct": _safe_float(candidate_metrics.get("pf_mdd", 0.0)),
+        "rank_1_trades": _safe_int(candidate_metrics.get("pf_trades", 0)),
+        "benchmark_0050_gap": float(candidate_score) - float(benchmark_score),
+    }
+    unavailable_policy = {
+        "available": False,
+        "rank_1_oos": 0.0,
+        "unavailable_reason": "nonrolling_static_ensemble_has_single_consensus_policy",
+    }
+    selection_period = ""
+    if selection_start is not None and selection_end is not None:
+        selection_period = f"{str(selection_start)[:10]}~{str(selection_end)[:10]}"
+    row = {
+        "fold": "1/1",
+        "selection_period": selection_period,
+        "oos_period": str(oos_range_text).replace(" ~ ", "~"),
+        "oos_year": str(oos_range_text).replace(" ~ ", "~"),
+        "best_finalist_oos_score": float(candidate_score),
+        "benchmark_oos_score": float(benchmark_score),
+        "benchmark_return_pct": _safe_float(benchmark_metrics.get("pf_return", 0.0)),
+        "benchmark_mdd_pct": _safe_float(benchmark_metrics.get("pf_mdd", 0.0)),
+        "elapsed_sec": elapsed_sec,
+        "random_seed_ensemble": dict(policy),
+        "base": dict(unavailable_policy),
+        "base_retention_gt_min": dict(unavailable_policy),
+        "local": dict(policy_row),
+        "retention": dict(unavailable_policy),
+    }
+    return row
+
+
+def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None) -> None:
+    """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
+    from tools.optimizer.outer_rolling_oos import render_optimizer_results_tables
+
+    row = build_optimizer_static_ensemble_single_fold_oos_row(
+        session,
+        ensemble_payload=ensemble_payload,
+        elapsed_sec=elapsed_sec,
+    )
+    table_text = render_optimizer_results_tables([row], color=True, include_chain=False, include_oos_avg=False)
+    if table_text:
+        print("\n" + table_text)
+
+
 def print_optimizer_static_ensemble_console_dashboard(
     session,
     *,
@@ -880,8 +960,9 @@ def print_optimizer_static_ensemble_console_dashboard(
     seeds: list[int],
     milestone_title: str = "🏆 ENSEMBLE 訓練結果",
     title: str = "ENSEMBLE 績效與風險對比表",
+    force: bool = False,
 ):
-    if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
+    if not bool(force) and not bool(is_optimizer_nonrolling_train_result_table_enabled()):
         return {"payload_sec": 0.0, "render_sec": 0.0}
     payload_started_at = time.perf_counter()
     policy = get_active_param_ensemble_policy(ensemble_payload)
@@ -998,6 +1079,8 @@ def run_optimizer_monitoring_callback(session, study, trial):
     total_trials_display = str(session.n_trials) if isinstance(session.n_trials, int) and session.n_trials > 0 else "?"
 
     def _print_status_line(display_total_wall_sec: float) -> float:
+        if bool(getattr(session, "disable_optimizer_status_line", False)):
+            return 0.0
         status_started_at = time.perf_counter()
         line = (
             f"{session.colors['gray']}⏳ [累積 {trial.number + 1:>4} | 本輪 {session.current_session_trial:>3}/{total_trials_display}] "
