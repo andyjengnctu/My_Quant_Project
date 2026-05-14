@@ -148,8 +148,8 @@ class _RawCacheBuildLock:
                 }
                 try:
                     self.owner_path.write_text(json.dumps(owner, ensure_ascii=False, indent=2), encoding="utf-8")
-                except OSError:
-                    pass
+                except OSError as exc:
+                    print(f"⚠️ raw cache lock owner 寫入失敗，將繼續持有 lock: {format_exception_summary(exc, include_traceback=False)}")
                 self.acquired = True
                 return self
             except FileExistsError:
@@ -179,8 +179,8 @@ class _RawCacheBuildLock:
         _safe_unlink(self.owner_path)
         try:
             os.rmdir(self.lock_dir)
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"⚠️ raw cache lock 釋放失敗: {format_exception_summary(exc, include_traceback=False)}")
         self.acquired = False
         return False
 

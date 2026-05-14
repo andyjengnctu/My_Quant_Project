@@ -191,9 +191,9 @@ def validate_model_io_schema_case(base_params):
 
     default_payload = params_to_json_dict(V16StrategyParams())
     trial_params = {
-        "high_len": 55,
+        "high_len": 100,
         "atr_len": 12,
-        "atr_buy_tol": 0.8,
+        "atr_buy_tol": 2.5,
         "atr_times_init": 1.7,
         "atr_times_trail": 2.3,
         "bb_len": 18,
@@ -205,7 +205,7 @@ def validate_model_io_schema_case(base_params):
         "fixed_risk": 0.02,
         "min_history_trades": 5,
         "min_history_ev": 0.2,
-        "min_history_win_rate": 0.35,
+        "min_history_win_rate": 0.5,
     }
     fake_trial = _FakeTrial(trial_params, user_attrs={"fixed_tp_percent": 0.25})
     best_params_payload = build_best_params_payload_from_trial(fake_trial, fixed_tp_percent=None)
@@ -246,30 +246,49 @@ def validate_model_io_schema_case(base_params):
             actual = isinstance(actual_value, type(default_value))
         add_check(results, "strategy_schema", case_id, f"best_params_type::{field_name}", expected, actual)
 
+    from core.active_param_ensemble import build_active_param_ensemble_schedule, is_active_param_ensemble_payload
+
+    def _extract_reference_param_payloads(payload):
+        if not is_active_param_ensemble_payload(payload):
+            return [payload]
+        members = []
+        for record in build_active_param_ensemble_schedule(payload):
+            for member in record.get("members") or []:
+                params = member.get("params")
+                if isinstance(params, dict):
+                    members.append(params)
+        return members
+
     shipped_best_params_paths = [Path("models/candidate_best_params.json"), Path("models/run_best_params.json")]
     shipped_payload_keys = {}
     shipped_payload_type_mismatches = {}
     for shipped_path in shipped_best_params_paths:
         shipped_payload = json.loads(shipped_path.read_text(encoding="utf-8"))
-        shipped_payload_keys[shipped_path.name] = sorted(shipped_payload.keys())
+        reference_param_payloads = _extract_reference_param_payloads(shipped_payload)
+        representative_payload = reference_param_payloads[0] if reference_param_payloads else {}
+        shipped_payload_keys[shipped_path.name] = sorted(representative_payload.keys())
         mismatch_fields = []
-        for field_name, default_value in default_payload.items():
-            if field_name not in shipped_payload:
-                mismatch_fields.append(f"{field_name}:MISSING")
-                continue
-            actual_value = shipped_payload[field_name]
-            if isinstance(default_value, bool):
-                field_ok = isinstance(actual_value, bool)
-            elif isinstance(default_value, int) and not isinstance(default_value, bool):
-                field_ok = isinstance(actual_value, int) and not isinstance(actual_value, bool)
-            elif isinstance(default_value, float):
-                field_ok = isinstance(actual_value, float)
-            elif default_value is None:
-                field_ok = actual_value is None or isinstance(actual_value, int)
-            else:
-                field_ok = isinstance(actual_value, type(default_value))
-            if not field_ok:
-                mismatch_fields.append(f"{field_name}:{type(actual_value).__name__}")
+        if not reference_param_payloads:
+            mismatch_fields.append("params:MISSING")
+        for member_idx, param_payload in enumerate(reference_param_payloads, start=1):
+            member_prefix = f"member#{member_idx}:" if len(reference_param_payloads) > 1 else ""
+            for field_name, default_value in default_payload.items():
+                if field_name not in param_payload:
+                    mismatch_fields.append(f"{member_prefix}{field_name}:MISSING")
+                    continue
+                actual_value = param_payload[field_name]
+                if isinstance(default_value, bool):
+                    field_ok = isinstance(actual_value, bool)
+                elif isinstance(default_value, int) and not isinstance(default_value, bool):
+                    field_ok = isinstance(actual_value, int) and not isinstance(actual_value, bool)
+                elif isinstance(default_value, float):
+                    field_ok = isinstance(actual_value, float)
+                elif default_value is None:
+                    field_ok = actual_value is None or isinstance(actual_value, int)
+                else:
+                    field_ok = isinstance(actual_value, type(default_value))
+                if not field_ok:
+                    mismatch_fields.append(f"{member_prefix}{field_name}:{type(actual_value).__name__}")
         shipped_payload_type_mismatches[shipped_path.name] = mismatch_fields
 
     add_check(
@@ -525,15 +544,15 @@ def validate_strategy_repeatability_case(base_params):
             preset_values={
                 "use_bb": True,
                 "use_kc": True,
-                "use_vol": True,
+                "use_vol": False,
                 "atr_len": 11,
                 "atr_times_init": 1.6,
                 "atr_times_trail": 2.6,
-                "atr_buy_tol": 0.9,
-                "high_len": 60,
-                "min_history_trades": 1,
+                "atr_buy_tol": 2.5,
+                "high_len": 100,
+                "min_history_trades": 5,
                 "min_history_ev": 0.0,
-                "min_history_win_rate": 0.35,
+                "min_history_win_rate": 0.5,
             },
         )
         perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
@@ -618,15 +637,15 @@ def validate_strategy_minimum_viability_case(base_params):
         preset_values={
             "use_bb": True,
             "use_kc": True,
-            "use_vol": True,
+            "use_vol": False,
             "atr_len": 11,
             "atr_times_init": 1.6,
             "atr_times_trail": 2.6,
-            "atr_buy_tol": 0.9,
-            "high_len": 60,
-            "min_history_trades": 1,
+            "atr_buy_tol": 2.5,
+            "high_len": 100,
+            "min_history_trades": 5,
             "min_history_ev": 0.0,
-            "min_history_win_rate": 0.35,
+            "min_history_win_rate": 0.5,
         },
     )
     perf_counter_values = iter([0.00, 0.01, 0.02, 0.03, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10])
@@ -722,7 +741,7 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
         params={
             "high_len": 65,
             "atr_len": 13,
-            "atr_buy_tol": 0.9,
+            "atr_buy_tol": 2.5,
             "atr_times_init": 1.8,
             "atr_times_trail": 2.8,
             "bb_len": 20,
@@ -732,9 +751,9 @@ def validate_strategy_reporting_schema_compatibility_case(base_params):
             "vol_short_len": 5,
             "vol_long_len": 19,
             "fixed_risk": 0.01,
-            "min_history_trades": 1,
+            "min_history_trades": 5,
             "min_history_ev": 0.0,
-            "min_history_win_rate": 0.3,
+            "min_history_win_rate": 0.5,
         },
         user_attrs={"fixed_tp_percent": 0.27},
         value=88.123,
@@ -892,7 +911,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
 
     explicit_tp_params = build_optimizer_trial_params(
-        {"high_len": 55, "tp_percent": 0.11},
+        {"high_len": 100, "tp_percent": 0.11},
         user_attrs={"fixed_tp_percent": 0.22},
         fixed_tp_percent=0.33,
     )
@@ -921,15 +940,15 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         preset_values={
             "use_bb": True,
             "use_kc": True,
-            "use_vol": True,
+            "use_vol": False,
             "atr_len": 10,
             "atr_times_init": 1.5,
             "atr_times_trail": 2.5,
-            "atr_buy_tol": 0.8,
-            "high_len": 55,
-            "min_history_trades": 1,
+            "atr_buy_tol": 2.5,
+            "high_len": 100,
+            "min_history_trades": 5,
             "min_history_ev": 0.0,
-            "min_history_win_rate": 0.3,
+            "min_history_win_rate": 0.5,
         },
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02"])), patch(
@@ -958,15 +977,15 @@ def validate_optimizer_objective_export_contract_case(_base_params):
         preset_values={
             "use_bb": True,
             "use_kc": True,
-            "use_vol": True,
+            "use_vol": False,
             "atr_len": 11,
             "atr_times_init": 1.6,
             "atr_times_trail": 2.6,
-            "atr_buy_tol": 0.9,
-            "high_len": 60,
-            "min_history_trades": 1,
+            "atr_buy_tol": 2.5,
+            "high_len": 100,
+            "min_history_trades": 5,
             "min_history_ev": 0.0,
-            "min_history_win_rate": 0.35,
+            "min_history_win_rate": 0.5,
         },
     )
     with patch("tools.optimizer.objective_runner.prepare_trial_inputs", return_value=_build_fake_prepare_result(master_dates=["2026-01-02", "2026-01-03"])), patch(
@@ -1006,7 +1025,7 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     )
     rejected_export_trial = SimpleNamespace(
         number=2,
-        params={"high_len": 55, "atr_len": 10},
+        params={"high_len": 100, "atr_len": 10},
         user_attrs={"fixed_tp_percent": 0.19},
         value=INVALID_TRIAL_VALUE,
     )
@@ -1097,13 +1116,14 @@ def validate_optimizer_objective_export_contract_case(_base_params):
     add_check(results, "strategy_contract", case_id, "optimizer_promote_reports_stale_run_best_policy_baseline", True, "effective policy" in stale_policy_reason)
 
     robustness = importlib.import_module("tools.optimizer.robustness")
+    training_policy = importlib.import_module("config.training_policy")
     no_neighbor_session = SimpleNamespace()
     no_neighbor_trial = SimpleNamespace(number=99, user_attrs={"base_score": 42.0}, value=42.0)
     with patch.object(robustness, "_build_neighbor_candidates", return_value=[]):
         no_neighbor_local_min = robustness.compute_local_min_score(no_neighbor_session, no_neighbor_trial)
-    add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_fails_gate_conservatively", INVALID_TRIAL_VALUE, no_neighbor_local_min)
+    expected_no_neighbor_local_min = INVALID_TRIAL_VALUE if training_policy.is_optimizer_local_min_review_enabled() else 42.0
+    add_check(results, "strategy_contract", case_id, "local_min_score_no_legal_neighbor_respects_training_policy", expected_no_neighbor_local_min, no_neighbor_local_min)
 
-    training_policy = importlib.import_module("config.training_policy")
     add_check(
         results,
         "strategy_contract",

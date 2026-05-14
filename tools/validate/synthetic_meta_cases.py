@@ -3122,7 +3122,7 @@ def validate_portfolio_rotation_mark_to_market_return_contract_case(_base_params
     source_text = source_path.read_text(encoding="utf-8")
 
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_mark_to_market_helper", True, "def _calc_position_mark_to_market_return(" in source_text)
-    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, params, trade_date=today)" in source_text)
+    add_check(results, "meta_contract", case_id, "portfolio_rotation_uses_mark_to_market_helper", True, "ret = _calc_position_mark_to_market_return(pos, pt_y_close, pos_params, trade_date=today)" in source_text)
     add_check(results, "meta_contract", case_id, "portfolio_rotation_has_no_legacy_raw_close_minus_entry_formula", False, "ret = (pt_y_close - pos['entry']) / pos['entry']" in source_text)
 
     summary["source_path"] = source_path.relative_to(PROJECT_ROOT).as_posix()

@@ -36,7 +36,7 @@ OPTIMIZER_FIXED_TP_PERCENT = 0.0
 # local_min review 計算開關。
 # True  = 正式計算 finalist 鄰點 local_min_score。
 # False = 不跑鄰點 review；全專案統一使用 base_score 作為 local_min_score 等價值，retention 固定為 1.0。
-OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = False
+OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED = True
 
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
 OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數

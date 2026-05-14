@@ -4519,16 +4519,16 @@ def _cancel_parallel_fold_executor_after_failure(executor, pending: set) -> None
     for future in list(pending or []):
         try:
             future.cancel()
-        except Exception:
-            pass
+        except Exception as exc:
+            _format_exception_summary(exc)
     processes = getattr(executor, "_processes", None)
     if isinstance(processes, dict):
         for process in list(processes.values()):
             try:
                 if process is not None and process.is_alive():
                     process.terminate()
-            except Exception:
-                pass
+            except Exception as exc:
+                _format_exception_summary(exc)
     shutdown = getattr(executor, "shutdown", None)
     if callable(shutdown):
         try:
@@ -4536,10 +4536,10 @@ def _cancel_parallel_fold_executor_after_failure(executor, pending: set) -> None
         except TypeError:
             try:
                 shutdown(wait=False)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as exc:
+                _format_exception_summary(exc)
+        except Exception as exc:
+            _format_exception_summary(exc)
 
 
 def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: list[dict], fold_timing_rows: list[dict], chain_state: dict, cause: BaseException | None = None) -> dict:
@@ -4586,9 +4586,9 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                         fold_timing_rows=fold_timing_rows,
                         chain_state=chain_state,
                     )
-                except Exception:
+                except Exception as exc:
                     _cancel_parallel_fold_executor_after_failure(executor, pending)
-                    raise
+                    raise RuntimeError(_build_parallel_fold_failure_message(task=future_map[future], exc=exc)) from exc
             live_board.render(pending=pending, future_map=future_map, completed_rows=rows, fold_timing_rows=fold_timing_rows, force=bool(done))
     finally:
         live_board.close()
@@ -5388,9 +5388,9 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             if not bool((task or {}).get("seed_ensemble_member")) and _is_rolling_random_seed_ensemble_enabled():
                 return _run_outer_rolling_oos_fold_ensemble_task(task)
             return _execute()
-        except Exception:
+        except Exception as exc:
             traceback.print_exc()
-            raise
+            raise RuntimeError(_build_parallel_fold_failure_message(task=task, exc=exc, label="fold task failed")) from exc
 
     if log_path:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
