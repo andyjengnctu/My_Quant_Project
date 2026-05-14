@@ -676,6 +676,7 @@ def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[in
     _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
     _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, summary)
     print(f"{C_GREEN}💾 candidate_best seed ensemble 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+    return payload, summary
 
 
 def _run_nonrolling_random_seed_ensemble_training(
@@ -728,7 +729,12 @@ def _run_nonrolling_random_seed_ensemble_training(
             print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
             study = create_optimizer_study(db_name, seed=int(seed), sampler_kind="tpe")
             ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
-            member_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            member_session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data,
+                required_min_rows=optimizer_required_min_rows,
+                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+            )
             member_session.profile_recorder.init_output_files()
             member_session.profile_recorder.mark_run_started()
             search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(environ, sampler_kind="tpe")
@@ -777,7 +783,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         )
         return 0
 
-    _write_static_seed_ensemble_candidate(
+    ensemble_payload, _ensemble_summary = _write_static_seed_ensemble_candidate(
         members=members,
         seeds=seeds,
         objective_mode=objective_mode,
@@ -791,6 +797,16 @@ def _run_nonrolling_random_seed_ensemble_training(
         policy=policy,
         colors=COLORS,
     )
+    if bool(is_optimizer_nonrolling_train_result_table_enabled()):
+        from tools.optimizer.callbacks import print_optimizer_static_ensemble_console_dashboard
+        dashboard_session = member_session
+        print_optimizer_static_ensemble_console_dashboard(
+            dashboard_session,
+            ensemble_payload=ensemble_payload,
+            seeds=seeds,
+            milestone_title="🏆 ENSEMBLE 訓練結果",
+            title="ENSEMBLE 績效與風險對比表",
+        )
     promote_status = _promote_candidate_to_run_best()
     if promote_status != 0:
         return int(promote_status)
@@ -918,6 +934,7 @@ def main(argv=None, environ=None):
         select_best_finalist_by_local_retention,
     )
     from tools.optimizer.session import close_study_storage
+    from tools.optimizer.callbacks import print_optimizer_static_ensemble_console_dashboard
     from tools.optimizer.study_utils import (
         build_best_params_payload_from_trial,
         build_optimizer_db_file_path,
@@ -1061,7 +1078,12 @@ def main(argv=None, environ=None):
             csv_inputs, _ = discover_unique_csv_inputs(selected_data_dir)
             if not csv_inputs:
                 raise FileNotFoundError(build_empty_dataset_dir_message(dataset_profile_key, selected_data_dir))
-            session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data,
+                required_min_rows=optimizer_required_min_rows,
+                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+            )
             finalists, best_trial = print_local_min_score_finalist_review(
                 study,
                 session=session,
@@ -1221,7 +1243,12 @@ def main(argv=None, environ=None):
     optimize_wall_sec = 0.0
     try:
         raw_data_load_started_at = time.perf_counter()
-        session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+        session.load_raw_data(
+                selected_data_dir,
+                load_all_raw_data=load_all_raw_data,
+                required_min_rows=optimizer_required_min_rows,
+                verbose=bool(is_optimizer_nonrolling_train_result_table_enabled()),
+            )
         raw_data_load_sec = max(0.0, time.perf_counter() - raw_data_load_started_at)
 
         maybe_print_history_best(

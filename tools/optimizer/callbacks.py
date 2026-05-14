@@ -18,6 +18,8 @@ from core.display_common import C_CYAN, C_GREEN, C_RED, C_RESET, C_YELLOW, get_p
 from core.walk_forward_policy import filter_search_train_dates
 from core.model_paths import resolve_run_best_params_path
 from core.params_io import build_params_from_mapping, load_params_from_json, params_to_json_dict
+from core.portfolio_param_runtime import load_portfolio_param_source_from_json
+from core.active_param_ensemble import get_active_param_ensemble_policy
 from core.portfolio_engine import run_portfolio_timeline
 from core.runtime_utils import stdout_supports_inline_progress, write_inline_progress
 from core.strategy_params import V16StrategyParams, build_runtime_param_raw_value
@@ -426,12 +428,132 @@ def _build_hard_gate_lines():
     ]
 
 
+
+
+def _portfolio_replay_metrics_from_result(result, *, initial_capital: float) -> tuple[dict, dict, str]:
+    if len(result) < 26:
+        raise ValueError(f"portfolio replay result 欄位數不足：{len(result)}")
+    total_return = _safe_float(result[2])
+    max_drawdown = _safe_float(result[3])
+    trade_count = _safe_int(result[4])
+    win_rate = _safe_float(result[5])
+    pf_ev = _safe_float(result[6])
+    pf_payoff = _safe_float(result[7])
+    final_equity = _safe_float(result[8])
+    avg_exp = _safe_float(result[9])
+    benchmark_return = _safe_float(result[11])
+    benchmark_mdd = _safe_float(result[12])
+    missed_buys = _safe_int(result[13])
+    missed_sells = _safe_int(result[14])
+    r_squared = _safe_float(result[15])
+    monthly_win_rate = _safe_float(result[16])
+    bm_r_squared = _safe_float(result[17])
+    bm_monthly_win_rate = _safe_float(result[18])
+    normal_trade_count = _safe_int(result[19])
+    extended_trade_count = _safe_int(result[20])
+    annual_trades = _safe_float(result[21])
+    reserved_buy_fill_rate = _safe_float(result[22])
+    annual_return_pct = _safe_float(result[23])
+    bm_annual_return_pct = _safe_float(result[24])
+    profile = dict(result[25] or {})
+    candidate_metrics = {
+        "pf_return": total_return,
+        "annual_return_pct": annual_return_pct,
+        "min_full_year_return_pct": _safe_float(profile.get("min_full_year_return_pct", 0.0)),
+        "pf_mdd": max_drawdown,
+        "pf_romd": _calc_romd(total_return, max_drawdown),
+        "r_squared": r_squared,
+        "m_win_rate": monthly_win_rate,
+        "win_rate": win_rate,
+        "pf_payoff": pf_payoff,
+        "pf_ev": pf_ev,
+        "pf_trades": trade_count,
+        "normal_trades": normal_trade_count,
+        "extended_trades": extended_trade_count,
+        "missed_buys": missed_buys,
+        "missed_sells": missed_sells,
+        "missed_total": missed_buys + missed_sells,
+        "annual_trades": annual_trades,
+        "reserved_buy_fill_rate": reserved_buy_fill_rate,
+        "avg_exposure": avg_exp,
+        "final_equity": final_equity,
+    }
+    benchmark_metrics = {
+        "pf_return": benchmark_return,
+        "annual_return_pct": bm_annual_return_pct,
+        "min_full_year_return_pct": _safe_float(profile.get("bm_min_full_year_return_pct", 0.0)),
+        "pf_mdd": benchmark_mdd,
+        "pf_romd": _calc_romd(benchmark_return, benchmark_mdd),
+        "r_squared": bm_r_squared,
+        "m_win_rate": bm_monthly_win_rate,
+        "final_equity": _benchmark_final_equity(float(initial_capital), benchmark_return),
+    }
+    range_start = str(profile.get("active_replay_start_date") or "").strip()
+    range_end = str(profile.get("active_replay_end_date") or "").strip()
+    if not range_start and len(result) > 0 and hasattr(result[0], "empty") and not result[0].empty:
+        range_start = str(result[0].iloc[0].get("Date", ""))[:10]
+        range_end = str(result[0].iloc[-1].get("Date", ""))[:10]
+    range_text = f"{range_start} ~ {range_end}" if range_start and range_end else "-"
+    return candidate_metrics, benchmark_metrics, range_text
+
+
+def _run_static_ensemble_dashboard_replay(session, ensemble_payload: dict, *, start_date, end_date, initial_capital: float):
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
+    data_dir = getattr(session, "raw_data_cache_data_dir", None)
+    if not data_dir:
+        raise ValueError("session 尚未載入 data_dir，無法建立 ensemble console dashboard")
+    result = run_portfolio_simulation_with_param_ensemble(
+        data_dir,
+        ensemble_payload,
+        max_positions=session.train_max_positions,
+        enable_rotation=session.train_enable_rotation,
+        start_year=int(pd.Timestamp(start_date).year) if start_date is not None else None,
+        benchmark_ticker="0050",
+        verbose=False,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return _portfolio_replay_metrics_from_result(result, initial_capital=float(initial_capital))
+
 def _compute_reference_console_cache(session):
     params_path = resolve_run_best_params_path(PROJECT_ROOT)
     if not os.path.exists(params_path):
         return None
     try:
-        params = load_params_from_json(params_path)
+        source = load_portfolio_param_source_from_json(params_path)
+        initial_capital = _safe_float(get_p(source["primary_params"], "initial_capital", 0.0))
+        search_train_dates = _build_search_train_dates_for_session(session)
+        reference_oos_metrics = None
+        reference_oos_benchmark_metrics = None
+        if source.get("source_type") == "active_param_ensemble":
+            train_start_date = search_train_dates[0] if search_train_dates else _policy_date(session, "train_start_date")
+            train_end_date = search_train_dates[-1] if search_train_dates else _policy_date(session, "search_train_end_date")
+            cache, _benchmark_metrics, _train_range = _run_static_ensemble_dashboard_replay(
+                session,
+                source["payload"],
+                start_date=train_start_date,
+                end_date=train_end_date,
+                initial_capital=initial_capital,
+            )
+            cache["source_path"] = params_path
+            cache["wf_report"] = None
+            if _resolve_model_mode(session.objective_mode) == "split":
+                oos_start_date = _policy_date(session, "oos_start_date")
+                if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
+                    oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
+                if oos_start_date:
+                    reference_oos_metrics, reference_oos_benchmark_metrics, _unused_range = _run_static_ensemble_dashboard_replay(
+                        session,
+                        source["payload"],
+                        start_date=oos_start_date,
+                        end_date=_policy_date(session, "oos_end_date"),
+                        initial_capital=initial_capital,
+                    )
+                    cache["oos_metrics"] = reference_oos_metrics
+                    cache["oos_benchmark_metrics"] = reference_oos_benchmark_metrics
+            return cache
+
+        params = source["primary_params"]
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
         prep_result = prepare_trial_inputs(
             raw_data_cache=session.raw_data_cache,
@@ -443,7 +565,6 @@ def _compute_reference_console_cache(session):
             include_trade_logs=False,
             include_pit_stats_index=True,
         )
-        search_train_dates = _build_search_train_dates_for_session(session)
         benchmark_data = prep_result["all_dfs_fast"].get("0050", None)
         pf_profile = {}
         (
@@ -531,7 +652,6 @@ def _compute_reference_console_cache(session):
     except Exception as exc:
         setattr(session, "_optimizer_console_reference_cache_error", repr(exc))
         return None
-
 
 def _get_reference_console_cache(session):
     cache = getattr(session, "_optimizer_console_reference_cache", None)
@@ -694,6 +814,8 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 report=reference_cache.get("wf_report"),
                 initial_capital=initial_capital,
             )
+        elif reference_cache and isinstance(reference_cache.get("oos_metrics"), dict):
+            reference_test_metrics = dict(reference_cache.get("oos_metrics") or {})
         test_title = f"【OOS 驗證績效摘要｜{oos_range_text}｜資料終點：{latest_data_end}】"
         test_rows = _build_first_zone_rows(
             candidate_metrics=candidate_test_metrics,
@@ -749,6 +871,101 @@ def print_optimizer_trial_milestone_dashboard(session, trial, *, milestone_title
         "render_sec": float(render_elapsed),
     }
 
+
+
+def print_optimizer_static_ensemble_console_dashboard(
+    session,
+    *,
+    ensemble_payload: dict,
+    seeds: list[int],
+    milestone_title: str = "🏆 ENSEMBLE 訓練結果",
+    title: str = "ENSEMBLE 績效與風險對比表",
+):
+    if not bool(is_optimizer_nonrolling_train_result_table_enabled()):
+        return {"payload_sec": 0.0, "render_sec": 0.0}
+    payload_started_at = time.perf_counter()
+    policy = get_active_param_ensemble_policy(ensemble_payload)
+    schedule = ensemble_payload.get("params_ensemble") or []
+    first_member = schedule[0] if schedule else {}
+    primary_params = _build_trial_params_object(first_member.get("params") or {})
+    initial_capital = _safe_float(get_p(primary_params, "initial_capital", 0.0))
+    model_mode = _resolve_model_mode(session.objective_mode)
+    search_train_dates = _build_search_train_dates_for_session(session)
+    train_start_date = search_train_dates[0] if search_train_dates else _policy_date(session, "train_start_date")
+    train_end_date = search_train_dates[-1] if search_train_dates else _policy_date(session, "search_train_end_date")
+    candidate_train_metrics, benchmark_train_metrics, train_range_text = _run_static_ensemble_dashboard_replay(
+        session,
+        ensemble_payload,
+        start_date=train_start_date,
+        end_date=train_end_date,
+        initial_capital=initial_capital,
+    )
+    reference_cache = _get_reference_console_cache(session)
+    train_rows = _build_first_zone_rows(
+        candidate_metrics=candidate_train_metrics,
+        reference_metrics=reference_cache,
+        benchmark_metrics=benchmark_train_metrics,
+    )
+    test_title = None
+    test_rows = None
+    latest_data_end = _latest_data_end_text(session)
+    if model_mode == "split":
+        oos_start_date = _policy_date(session, "oos_start_date")
+        if oos_start_date is None and session.walk_forward_policy.get("oos_start_year") is not None:
+            oos_start_date = f"{int(session.walk_forward_policy['oos_start_year'])}-01-01"
+        if oos_start_date:
+            candidate_test_metrics, benchmark_test_metrics, oos_range_text = _run_static_ensemble_dashboard_replay(
+                session,
+                ensemble_payload,
+                start_date=oos_start_date,
+                end_date=_policy_date(session, "oos_end_date"),
+                initial_capital=initial_capital,
+            )
+            reference_test_metrics = None
+            if reference_cache and reference_cache.get("wf_report"):
+                reference_test_metrics, _unused_bm, _unused_range = _build_oos_metrics_from_report(
+                    report=reference_cache.get("wf_report"),
+                    initial_capital=initial_capital,
+                )
+            elif reference_cache and isinstance(reference_cache.get("oos_metrics"), dict):
+                reference_test_metrics = dict(reference_cache.get("oos_metrics") or {})
+            test_title = f"【OOS 驗證績效摘要｜{oos_range_text}｜資料終點：{latest_data_end}】"
+            test_rows = _build_first_zone_rows(
+                candidate_metrics=candidate_test_metrics,
+                reference_metrics=reference_test_metrics,
+                benchmark_metrics=benchmark_test_metrics,
+            )
+    seed_text = ",".join(str(int(seed)) for seed in seeds)
+    params_lines = [
+        f"ENSEMBLE：N={int(policy['seed_count'])}｜min_agree={int(policy['min_agree'])}｜seeds={seed_text}",
+        *[f"代表 member#1｜{line}" if idx == 0 else line for idx, line in enumerate(_build_training_param_lines(primary_params))],
+    ]
+    payload_elapsed = max(0.0, time.perf_counter() - payload_started_at)
+    render_started_at = time.perf_counter()
+    print_optimizer_trial_console_dashboard(
+        title=title,
+        milestone_title=milestone_title,
+        global_strategy_text=_build_global_strategy_text(),
+        mode_display="關閉明牌（穩定鎖倉）" if not session.train_enable_rotation else "啟用 (汰弱換強)",
+        max_pos=session.train_max_positions,
+        model_mode=model_mode,
+        objective_mode=str(session.objective_mode),
+        score_calc_method=SCORE_CALC_METHOD,
+        score_numerator_method=SCORE_NUMERATOR_METHOD,
+        system_score_display=f"{_safe_float(candidate_train_metrics.get('pf_romd', 0.0)):.3f}（Train RoMD／ENSEMBLE）",
+        training_title=f"【訓練期間績效對比｜{train_range_text}】",
+        training_rows=train_rows,
+        testing_title=test_title,
+        testing_rows=test_rows,
+        upgrade_rows=None,
+        compare_rows=None,
+        params_lines=params_lines,
+        hard_gate_lines=_build_hard_gate_lines(),
+    )
+    return {
+        "payload_sec": float(payload_elapsed),
+        "render_sec": float(max(0.0, time.perf_counter() - render_started_at)),
+    }
 
 def run_optimizer_monitoring_callback(session, study, trial):
     callback_started_at = time.perf_counter()
