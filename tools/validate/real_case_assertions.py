@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pandas as pd
 
 from core.exact_accounting import round_money_for_display
+from core.history_filters import evaluate_history_candidate_metrics
 from tools.validate.checks import (
     add_check,
     add_fail_result,
@@ -11,6 +14,38 @@ from tools.validate.checks import (
     calc_validation_sim_years,
 )
 from tools.validate.trade_rebuild import rebuild_completed_trades_from_debug_log
+
+
+def _calc_raw_expected_value_from_trade_logs(trade_logs, params):
+    trade_count = 0
+    win_count = 0
+    total_r_sum = 0.0
+    win_r_sum = 0.0
+    loss_r_sum = 0.0
+    for trade in trade_logs or []:
+        trade_count += 1
+        pnl = float(trade.get("pnl", 0.0) or 0.0)
+        r_mult = float(trade.get("r_mult", 0.0) or 0.0)
+        total_r_sum += r_mult
+        if pnl > 0:
+            win_count += 1
+            win_r_sum += r_mult
+        else:
+            loss_r_sum += r_mult
+    raw_params = SimpleNamespace(
+        min_history_trades=0,
+        min_history_ev=-1.0e18,
+        min_history_win_rate=0.0,
+    )
+    _is_candidate, expected_value, _win_rate, _history_trade_count = evaluate_history_candidate_metrics(
+        trade_count,
+        win_count,
+        total_r_sum,
+        win_r_sum,
+        loss_r_sum,
+        raw_params,
+    )
+    return expected_value
 
 
 def append_real_case_checks(
@@ -50,6 +85,7 @@ def append_real_case_checks(
     expected_exit_dates = [pd.to_datetime(log["exit_date"]).strftime("%Y-%m-%d") for log in standalone_logs]
     expected_trade_pnls = [round_money_for_display(log["pnl"]) for log in standalone_logs]
     expected_realized_pnl_sum = round_money_for_display(sum(expected_trade_pnls))
+    expected_raw_ev = _calc_raw_expected_value_from_trade_logs(standalone_logs, params)
     expected_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["yearly_return_rows"])
     expected_bm_full_year_metrics = calc_expected_full_year_metrics(portfolio_stats["bm_yearly_return_rows"])
 
@@ -93,8 +129,15 @@ def append_real_case_checks(
               single_stats["win_rate"], portfolio_stats["win_rate"])
     add_check(results, "single_vs_portfolio", ticker, "payoff_ratio",
               single_stats["payoff_ratio"], portfolio_stats["pf_payoff"])
-    add_check(results, "single_vs_portfolio", ticker, "expected_value",
-              single_stats["expected_value"], portfolio_stats["pf_ev"])
+    add_check(
+        results,
+        "single_vs_portfolio",
+        ticker,
+        "expected_value",
+        expected_raw_ev,
+        portfolio_stats["pf_ev"],
+        note="portfolio pf_ev 是完整交易 raw EV；single_stats expected_value 可能受 min_history_trades gate 影響，不能混用。",
+    )
 
     add_check(results, "portfolio_sim", ticker, "total_return", portfolio_stats["total_return"], portfolio_sim_stats["total_return"])
     add_check(results, "portfolio_sim", ticker, "mdd", portfolio_stats["mdd"], portfolio_sim_stats["mdd"])

@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
 
+from core.active_param_ensemble import is_active_param_ensemble_payload, build_active_param_ensemble_schedule
 from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR
 from core.runtime_utils import PeakTracedMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from tools.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
@@ -67,25 +68,89 @@ def _read_db_metrics(db_path: Path) -> Dict[str, Any]:
     }
 
 
+def _read_db_metrics_many(db_paths: list[Path]) -> Dict[str, Any]:
+    if not db_paths:
+        return {
+            "trial_count": 0,
+            "qualified_trial_count": 0,
+            "best_trial_value": None,
+            "db_read_error": "",
+            "db_count": 0,
+        }
+    total_trials = 0
+    total_qualified = 0
+    best_values = []
+    errors = []
+    for db_path in db_paths:
+        metrics = _read_db_metrics(db_path)
+        total_trials += int(metrics.get("trial_count", 0) or 0)
+        total_qualified += int(metrics.get("qualified_trial_count", 0) or 0)
+        if metrics.get("best_trial_value") is not None:
+            best_values.append(float(metrics["best_trial_value"]))
+        if metrics.get("db_read_error"):
+            errors.append(f"{db_path.name}: {metrics['db_read_error']}")
+    return {
+        "trial_count": int(total_trials),
+        "qualified_trial_count": int(total_qualified),
+        "best_trial_value": max(best_values) if best_values else None,
+        "db_read_error": "; ".join(errors),
+        "db_count": len(db_paths),
+    }
+
+
+def _discover_optimizer_db_paths(models_dir: Path, legacy_db_path: Path) -> list[Path]:
+    paths = []
+    if legacy_db_path.exists():
+        paths.append(legacy_db_path)
+    ensemble_dir = models_dir / "seed_ensemble"
+    if ensemble_dir.exists():
+        paths.extend(sorted(path for path in ensemble_dir.glob("*.db") if path.is_file()))
+    return paths
+
+
 def _load_params_payload(params_path: Path) -> Dict[str, Any]:
     params_read_error = ""
     payload: Dict[str, Any] = {}
+    is_ensemble = False
+    member_count = 0
     if not params_path.exists():
         return {
             "payload": payload,
             "params_read_error": params_read_error,
             "missing_keys": [],
+            "is_active_param_ensemble": False,
+            "ensemble_member_count": 0,
         }
     try:
         payload = json.loads(params_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        is_ensemble = is_active_param_ensemble_payload(payload)
+    except (json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
         params_read_error = f"{type(exc).__name__}: {exc}"
         payload = {}
-    missing_keys = [key for key in REQUIRED_PARAM_KEYS if key not in payload]
+    missing_keys = []
+    if payload and not params_read_error:
+        if is_ensemble:
+            try:
+                schedule = build_active_param_ensemble_schedule(payload)
+                members = []
+                for record in schedule:
+                    members.extend(list(record.get("members") or []))
+                member_count = len(members)
+                for idx, member in enumerate(members, start=1):
+                    params = member.get("params") if isinstance(member, dict) else {}
+                    for key in REQUIRED_PARAM_KEYS:
+                        if key not in params:
+                            missing_keys.append(f"member{idx}.{key}")
+            except (ValueError, TypeError, KeyError) as exc:
+                params_read_error = f"{type(exc).__name__}: {exc}"
+        else:
+            missing_keys = [key for key in REQUIRED_PARAM_KEYS if key not in payload]
     return {
         "payload": payload,
         "params_read_error": params_read_error,
         "missing_keys": missing_keys,
+        "is_active_param_ensemble": bool(is_ensemble),
+        "ensemble_member_count": int(member_count),
     }
 
 
@@ -188,16 +253,18 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         elif outcome["returncode"] != 0:
             failures.append("optimizer_exit_nonzero")
 
-        if not db_path.exists():
+        db_paths = _discover_optimizer_db_paths(models_dir, db_path)
+        if not db_paths:
             failures.append("missing_optimizer_db")
             db_metrics = {
                 "trial_count": 0,
                 "qualified_trial_count": 0,
                 "best_trial_value": None,
                 "db_read_error": "",
+                "db_count": 0,
             }
         else:
-            db_metrics = _read_db_metrics(db_path)
+            db_metrics = _read_db_metrics_many(db_paths)
             if db_metrics["db_read_error"]:
                 failures.append("optimizer_db_unreadable")
             elif db_metrics["trial_count"] < 1:
@@ -234,6 +301,8 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             "label": label,
             "status": "PASS" if not failures else "FAIL",
             "db_path": str(db_path),
+            "db_paths": [str(path) for path in db_paths],
+            "db_count": int(db_metrics.get("db_count", len(db_paths))),
             "run_best_params_path": str(params_path),
             "candidate_best_params_path": str(candidate_params_path),
             "candidate_best_summary_path": str(candidate_summary_path),
@@ -248,10 +317,14 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             "candidate_best_summary_exists": candidate_summary_exists,
             "candidate_best_params_keys": sorted(candidate_params_info["payload"].keys()) if candidate_params_info["payload"] else [],
             "candidate_best_params_digest": candidate_payload_digest,
+            "candidate_best_is_active_param_ensemble": bool(candidate_params_info.get("is_active_param_ensemble", False)),
+            "candidate_best_ensemble_member_count": int(candidate_params_info.get("ensemble_member_count", 0) or 0),
             "candidate_best_params_read_error": candidate_params_info["params_read_error"],
             "candidate_retention_best_params_exists": candidate_retention_params_exists,
             "candidate_retention_best_summary_exists": candidate_retention_summary_exists,
             "run_best_params_keys": sorted(params_info["payload"].keys()) if params_info["payload"] else [],
+            "run_best_is_active_param_ensemble": bool(params_info.get("is_active_param_ensemble", False)),
+            "run_best_ensemble_member_count": int(params_info.get("ensemble_member_count", 0) or 0),
             "run_best_params_payload": params_info["payload"],
             "run_best_params_digest": payload_digest,
             "db_read_error": db_metrics["db_read_error"],
@@ -280,31 +353,56 @@ def _extract_run_best_params_digest(run_summary: Dict[str, Any]) -> str:
 def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) -> Dict[str, Any]:
     first_digest = _extract_run_best_params_digest(first_run)
     second_digest = _extract_run_best_params_digest(second_run)
+    random_seed_ensemble_mode = (
+        bool(first_run.get("candidate_best_is_active_param_ensemble", False))
+        or bool(second_run.get("candidate_best_is_active_param_ensemble", False))
+        or int(first_run.get("db_count", 0) or 0) > 1
+        or int(second_run.get("db_count", 0) or 0) > 1
+    )
     comparisons = {
         "trial_count_match": first_run["db_trial_count"] == second_run["db_trial_count"],
-        "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
-        "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
         "candidate_best_available_match": first_run.get("candidate_best_available", False) == second_run.get("candidate_best_available", False),
-        "candidate_best_params_digest_match": first_run.get("candidate_best_params_digest", "") == second_run.get("candidate_best_params_digest", ""),
-        "run_best_params_digest_match": first_digest == second_digest,
         "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
-    all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
+    if random_seed_ensemble_mode:
+        comparisons.update({
+            "random_seed_ensemble_mode": True,
+            "both_runs_pass": first_run["status"] == second_run["status"] == "PASS",
+            "both_runs_record_trials": first_run["db_trial_count"] >= 1 and second_run["db_trial_count"] >= 1,
+        })
+        all_match = (
+            comparisons["both_runs_pass"]
+            and comparisons["both_runs_record_trials"]
+            and comparisons["trial_count_match"]
+            and comparisons["candidate_best_available_match"]
+        )
+    else:
+        comparisons.update({
+            "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
+            "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
+            "candidate_best_params_digest_match": first_run.get("candidate_best_params_digest", "") == second_run.get("candidate_best_params_digest", ""),
+            "run_best_params_digest_match": first_digest == second_digest,
+        })
+        all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
     return {
         "enabled": True,
         "run_count": ML_SMOKE_REPRO_RUN_COUNT,
         "seed": ML_SMOKE_REPRO_SEED,
+        "mode": "random_seed_ensemble_contract" if random_seed_ensemble_mode else "deterministic_single_seed_repro",
         "all_match": all_match,
         "comparisons": comparisons,
         "runs": [
             {
                 "label": first_run["label"],
                 "status": first_run["status"],
+                "db_count": first_run.get("db_count", 0),
                 "db_trial_count": first_run["db_trial_count"],
                 "qualified_trial_count": first_run["qualified_trial_count"],
                 "best_trial_value": first_run["best_trial_value"],
                 "run_best_params_digest": first_digest,
                 "candidate_best_available": first_run.get("candidate_best_available", False),
+                "candidate_best_is_active_param_ensemble": first_run.get("candidate_best_is_active_param_ensemble", False),
+                "candidate_best_ensemble_member_count": first_run.get("candidate_best_ensemble_member_count", 0),
                 "candidate_best_params_digest": first_run.get("candidate_best_params_digest", ""),
                 "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": first_run["optimizer_profile_avg_objective_wall_sec"],
@@ -314,11 +412,14 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
             {
                 "label": second_run["label"],
                 "status": second_run["status"],
+                "db_count": second_run.get("db_count", 0),
                 "db_trial_count": second_run["db_trial_count"],
                 "qualified_trial_count": second_run["qualified_trial_count"],
                 "best_trial_value": second_run["best_trial_value"],
                 "run_best_params_digest": second_digest,
                 "candidate_best_available": second_run.get("candidate_best_available", False),
+                "candidate_best_is_active_param_ensemble": second_run.get("candidate_best_is_active_param_ensemble", False),
+                "candidate_best_ensemble_member_count": second_run.get("candidate_best_ensemble_member_count", 0),
                 "candidate_best_params_digest": second_run.get("candidate_best_params_digest", ""),
                 "optimizer_profile_trial_count": second_run["optimizer_profile_trial_count"],
                 "optimizer_profile_avg_objective_wall_sec": second_run["optimizer_profile_avg_objective_wall_sec"],
@@ -356,6 +457,8 @@ def main(argv=None) -> int:
             "dataset": manifest["dataset"],
             "dataset_info": dataset_info,
             "db_path": first_run["db_path"],
+            "db_paths": first_run.get("db_paths", []),
+            "db_count": first_run.get("db_count", 0),
             "db_trial_count": first_run["db_trial_count"],
             "db_read_error": first_run["db_read_error"],
             "run_best_params_path": first_run["run_best_params_path"],
@@ -365,6 +468,8 @@ def main(argv=None) -> int:
             "candidate_best_summary_path": first_run.get("candidate_best_summary_path", ""),
             "candidate_best_params_keys": first_run.get("candidate_best_params_keys", []),
             "candidate_best_params_digest": first_run.get("candidate_best_params_digest", ""),
+            "candidate_best_is_active_param_ensemble": first_run.get("candidate_best_is_active_param_ensemble", False),
+            "candidate_best_ensemble_member_count": first_run.get("candidate_best_ensemble_member_count", 0),
             "candidate_best_params_read_error": first_run.get("candidate_best_params_read_error", ""),
             "candidate_retention_best_params_path": first_run.get("candidate_retention_best_params_path", ""),
             "candidate_retention_best_summary_path": first_run.get("candidate_retention_best_summary_path", ""),
@@ -373,6 +478,8 @@ def main(argv=None) -> int:
             "qualified_trial_count": first_run["qualified_trial_count"],
             "best_trial_value": first_run["best_trial_value"],
             "run_best_params_keys": first_run["run_best_params_keys"],
+            "run_best_is_active_param_ensemble": first_run.get("run_best_is_active_param_ensemble", False),
+            "run_best_ensemble_member_count": first_run.get("run_best_ensemble_member_count", 0),
             "run_best_params_read_error": first_run["run_best_params_read_error"],
             "optimizer_profile_summary_path": first_run["optimizer_profile_summary_path"],
             "optimizer_profile_trial_count": first_run["optimizer_profile_trial_count"],

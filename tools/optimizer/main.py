@@ -508,6 +508,15 @@ def _resolve_nonrolling_seed_ensemble_policy():
     )
 
 
+def _resolve_optimizer_session_ts(session, *, fallback_label: str = "") -> str:
+    raw_session_ts = str(getattr(session, "session_ts", "") or "").strip()
+    if raw_session_ts:
+        return raw_session_ts
+    suffix = str(fallback_label or "").strip()
+    generated = get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
+    return generated if not suffix else f"{generated}_{suffix}"
+
+
 def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, finalist_entry: dict, params_payload: dict) -> dict:
     member = {
         "member_index": int(member_index),
@@ -633,7 +642,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         return None
 
     seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
-    ensemble_db_dir = os.path.join(OUTPUT_DIR, "seed_ensemble")
+    ensemble_db_dir = os.path.join(MODELS_DIR, "seed_ensemble")
     os.makedirs(ensemble_db_dir, exist_ok=True)
     print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
 
@@ -643,7 +652,8 @@ def _run_nonrolling_random_seed_ensemble_training(
         member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
-        db_file = os.path.join(ensemble_db_dir, f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{member_session.session_ts}.db")
+        member_session_ts = _resolve_optimizer_session_ts(member_session, fallback_label=f"seed{int(seed)}")
+        db_file = os.path.join(ensemble_db_dir, f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{member_session_ts}.db")
         db_name = f"sqlite:///{db_file}"
         study = None
         try:
@@ -668,8 +678,8 @@ def _run_nonrolling_random_seed_ensemble_training(
                 winner_trial=None,
             )
             if best_trial is None or not is_qualified_trial_value(best_trial.value):
-                print(f"{C_RED}❌ seed={int(seed)} 無可用 winner，無法建立完整 N-seed ensemble。{C_RESET}", file=sys.stderr)
-                return 1
+                print(f"{C_YELLOW}ℹ️ seed={int(seed)} 目前尚無通過 local_min_score gate 的 winner；本次不建立完整 N-seed ensemble member。{C_RESET}")
+                continue
             print_local_min_score_winner_summary(
                 winner_trial=best_trial,
                 session=member_session,
@@ -690,6 +700,13 @@ def _run_nonrolling_random_seed_ensemble_training(
             member_session.close_trial_prep_executor()
             if study is not None:
                 close_study_storage(study)
+
+    if len(members) != len(seeds):
+        print(
+            f"{C_YELLOW}ℹ️ 非 rolling random seed ensemble 未建立 candidate："
+            f"可用 members={len(members)}/{len(seeds)}，不輸出不完整 ensemble。{C_RESET}"
+        )
+        return 0
 
     _write_static_seed_ensemble_candidate(
         members=members,

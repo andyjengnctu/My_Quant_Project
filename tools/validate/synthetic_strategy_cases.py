@@ -1197,6 +1197,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         def __init__(self):
             self.n_trials = 0
             self.current_session_trial = 0
+            self.session_ts = "synthetic"
             self.profile_recorder = _FakeMainProfileRecorder()
             self.get_best_completed_trial_or_none = lambda study: getattr(study, "best_trial", None)
 
@@ -1272,6 +1273,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             stack.enter_context(patch.object(optimizer_main, "OUTPUT_DIR", str(tmp_root / "outputs")))
             stack.enter_context(patch.object(optimizer_main, "MODELS_DIR", str(tmp_root / "models")))
             stack.enter_context(patch.object(optimizer_main, "RUN_BEST_PARAMS_PATH", str(best_params_path)))
+            stack.enter_context(patch.object(optimizer_main, "OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED", False))
             stack.enter_context(patch.object(optimizer_main, "ensure_runtime_dirs", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "configure_optuna_logging", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "build_optimizer_session", side_effect=_fake_build_optimizer_session))
