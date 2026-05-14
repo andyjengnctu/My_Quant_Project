@@ -89,11 +89,11 @@ OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
 
 # random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數。
-# 目前此區只定義 policy / JSON 契約；真正交易時不得把 ensemble JSON 靜默降級成單一 params。
+# rolling / 非 rolling 都必須輸出 active-param ensemble；交易時不得把 ensemble JSON 靜默降級成單一 params。
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 2
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 5
 # "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 2
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 5
 
 # Rolling OOS optimizer search 預設 trial 數。
 # CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。

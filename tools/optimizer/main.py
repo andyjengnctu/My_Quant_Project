@@ -26,6 +26,8 @@ from core.walk_forward_policy import (
     build_optimizer_runtime_policy,
     load_walk_forward_policy,
 )
+from core.active_param_ensemble import build_static_active_param_ensemble_payload, is_active_param_ensemble_payload
+from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, generate_random_seed_ensemble
 from config.training_policy import (
     DEFAULT_OPTIMIZER_MODEL_MODE,
     OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED,
@@ -34,6 +36,9 @@ from config.training_policy import (
     OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
     OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
 )
 
 warnings.simplefilter("default")
@@ -287,10 +292,20 @@ def _should_promote_candidate(*, candidate_summary: dict, run_best_summary: dict
     return False, "candidate 未通過 Pareto promote 比較規則"
 
 
-def _promote_candidate_to_run_best():
+def _load_candidate_params_payload_for_promote():
     candidate_params = _load_json_file_or_none(CANDIDATE_BEST_PARAMS_PATH)
     if candidate_params is None:
         print(f"{C_RED}❌ 找不到 candidate_best 參數檔: {CANDIDATE_BEST_PARAMS_PATH}{C_RESET}", file=sys.stderr)
+        return None
+    if is_active_param_ensemble_payload(candidate_params):
+        return candidate_params
+    from core.params_io import load_params_from_json
+    return load_params_from_json(CANDIDATE_BEST_PARAMS_PATH)
+
+
+def _promote_candidate_to_run_best():
+    candidate_params = _load_candidate_params_payload_for_promote()
+    if candidate_params is None:
         return 1
     candidate_summary = _load_json_file_or_none(CANDIDATE_BEST_SUMMARY_PATH)
     if candidate_summary is None:
@@ -481,6 +496,206 @@ def _export_selected_candidate_artifacts(
     return True
 
 
+def _resolve_nonrolling_seed_ensemble_policy():
+    return build_seed_ensemble_policy_snapshot(
+        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    )
+
+
+def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, finalist_entry: dict, params_payload: dict) -> dict:
+    member = {
+        "member_index": int(member_index),
+        "seed": int(seed),
+        "selected_trial": int(best_trial.number) + 1,
+        "params": dict(params_payload),
+    }
+    if isinstance(finalist_entry, dict):
+        member["score"] = float(finalist_entry.get("base_score", 0.0))
+        member["base_score"] = float(finalist_entry.get("base_score", 0.0))
+        member["local_min_score"] = float(finalist_entry.get("local_min_score", 0.0))
+        member["retention"] = float(finalist_entry.get("local_retention", 0.0))
+        member["local_gate"] = bool(finalist_entry.get("gate_pass", False))
+    return member
+
+
+def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> dict:
+    local_scores = [float(item.get("local_min_score", 0.0)) for item in members]
+    base_scores = [float(item.get("base_score", 0.0)) for item in members]
+    retentions = [float(item.get("retention", 0.0)) for item in members]
+    return {
+        "schema_type": "optimizer_active_param_ensemble_summary",
+        "schema_version": 1,
+        "action": "train",
+        "selection_rule": "random_seed_ensemble_static_consensus",
+        "objective_mode": str(objective_mode),
+        "train_start_year": int(walk_forward_policy.get("train_start_year", 0)),
+        "search_train_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
+        "selection_end_year": int(walk_forward_policy.get("search_train_end_year", 0)),
+        "oos_start_year": walk_forward_policy.get("oos_start_year"),
+        "dataset_label": str(dataset_label),
+        "selected_model_mode": str(selected_model_mode),
+        "trials_per_seed": int(trials_per_seed),
+        "seed_count": len(seeds),
+        "seeds": [int(seed) for seed in seeds],
+        "base_score": min(base_scores) if base_scores else 0.0,
+        "local_min_score": min(local_scores) if local_scores else 0.0,
+        "retention": min(retentions) if retentions else 0.0,
+        "local_gate": all(bool(item.get("local_gate", False)) for item in members),
+        "member_metrics": [
+            {
+                "member_index": int(item.get("member_index", idx + 1)),
+                "seed": int(item.get("seed", 0)),
+                "selected_trial": int(item.get("selected_trial", 0)),
+                "base_score": float(item.get("base_score", 0.0)),
+                "local_min_score": float(item.get("local_min_score", 0.0)),
+                "retention": float(item.get("retention", 0.0)),
+                "local_gate": bool(item.get("local_gate", False)),
+            }
+            for idx, item in enumerate(members)
+        ],
+        "random_seed_ensemble": _resolve_nonrolling_seed_ensemble_policy(),
+        "created_at": get_taipei_now().isoformat(),
+    }
+
+
+def _write_static_seed_ensemble_candidate(*, members: list[dict], seeds: list[int], objective_mode: str, walk_forward_policy: dict, dataset_label: str, selected_model_mode: str, trials_per_seed: int) -> None:
+    policy = _resolve_nonrolling_seed_ensemble_policy()
+    payload = build_static_active_param_ensemble_payload(
+        members=members,
+        random_seed_ensemble=policy,
+        selector="candidate_best",
+        created_at=get_taipei_now().isoformat(),
+        meta={
+            "source": "nonrolling_random_seed_ensemble",
+            "dataset_label": str(dataset_label),
+            "selected_model_mode": str(selected_model_mode),
+            "trials_per_seed": int(trials_per_seed),
+            "seeds": [int(seed) for seed in seeds],
+            "walk_forward_policy": dict(walk_forward_policy),
+        },
+    )
+    summary = _build_static_seed_ensemble_summary(
+        members=members,
+        seeds=seeds,
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        dataset_label=dataset_label,
+        selected_model_mode=selected_model_mode,
+        trials_per_seed=trials_per_seed,
+    )
+    _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
+    _write_json_file(CANDIDATE_BEST_SUMMARY_PATH, summary)
+    print(f"{C_GREEN}💾 candidate_best seed ensemble 已寫入：{CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+
+
+def _run_nonrolling_random_seed_ensemble_training(
+    *,
+    environ,
+    selected_data_dir: str,
+    dataset_profile_key: str,
+    dataset_label: str,
+    selected_model_mode: str,
+    load_all_raw_data: bool,
+    optimizer_required_min_rows: int,
+    objective_mode: str,
+    walk_forward_policy: dict,
+    requested_trials: int,
+    build_optimizer_session,
+    create_optimizer_study,
+    ensure_study_effective_policy_compatible,
+    configure_optuna_logging,
+    print_local_min_score_finalist_review,
+    print_local_min_score_winner_summary,
+    close_study_storage,
+    is_qualified_trial_value,
+    resolve_optimizer_single_fold_search_parallel_trials,
+    build_best_params_payload_from_trial,
+):
+    if int(requested_trials) <= 0:
+        return None
+    if not os.path.isdir(selected_data_dir):
+        raise FileNotFoundError(build_missing_dataset_dir_message(dataset_profile_key, selected_data_dir))
+    policy = _resolve_nonrolling_seed_ensemble_policy()
+    if not bool(policy.get("enabled", False)) or int(policy.get("seed_count", 1)) <= 1:
+        return None
+
+    seeds = generate_random_seed_ensemble(int(policy["seed_count"]))
+    ensemble_db_dir = os.path.join(OUTPUT_DIR, "seed_ensemble")
+    os.makedirs(ensemble_db_dir, exist_ok=True)
+    print(f"{C_GRAY}🎲 Random seed ensemble｜N={len(seeds)}｜min_agree={policy['min_agree']}｜seeds={','.join(str(seed) for seed in seeds)}{C_RESET}")
+
+    members: list[dict] = []
+    configure_optuna_logging()
+    for member_index, seed in enumerate(seeds, start=1):
+        member_session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        member_session.n_trials = int(requested_trials)
+        member_session.run_action = "train"
+        db_file = os.path.join(ensemble_db_dir, f"nonrolling_{dataset_profile_key}_seed{int(seed)}_{member_session.session_ts}.db")
+        db_name = f"sqlite:///{db_file}"
+        study = None
+        try:
+            print(f"{C_CYAN}[seed {member_index}/{len(seeds)}] seed={int(seed)} | trials={int(requested_trials)}{C_RESET}")
+            study = create_optimizer_study(db_name, seed=int(seed), sampler_kind="tpe")
+            ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
+            member_session.load_raw_data(selected_data_dir, load_all_raw_data=load_all_raw_data, required_min_rows=optimizer_required_min_rows)
+            member_session.profile_recorder.init_output_files()
+            member_session.profile_recorder.mark_run_started()
+            search_parallel_trials = resolve_optimizer_single_fold_search_parallel_trials(environ, sampler_kind="tpe")
+            study.optimize(
+                member_session.objective,
+                n_trials=int(requested_trials),
+                n_jobs=int(search_parallel_trials),
+                callbacks=[member_session.monitoring_callback],
+            )
+            finalists, best_trial = print_local_min_score_finalist_review(
+                study,
+                session=member_session,
+                objective_mode=objective_mode,
+                colors=COLORS,
+                winner_trial=None,
+            )
+            if best_trial is None or not is_qualified_trial_value(best_trial.value):
+                print(f"{C_RED}❌ seed={int(seed)} 無可用 winner，無法建立完整 N-seed ensemble。{C_RESET}", file=sys.stderr)
+                return 1
+            print_local_min_score_winner_summary(
+                winner_trial=best_trial,
+                session=member_session,
+                colors=COLORS,
+            )
+            finalist_entry = _find_finalist_entry(finalists, best_trial)
+            if finalist_entry is None:
+                raise ValueError(f"seed={int(seed)} 找不到 finalist entry，無法建立 ensemble member")
+            params_payload = build_best_params_payload_from_trial(best_trial, fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT)
+            members.append(_build_seed_ensemble_member(
+                member_index=member_index,
+                seed=int(seed),
+                best_trial=best_trial,
+                finalist_entry=finalist_entry,
+                params_payload=params_payload,
+            ))
+        finally:
+            member_session.close_trial_prep_executor()
+            if study is not None:
+                close_study_storage(study)
+
+    _write_static_seed_ensemble_candidate(
+        members=members,
+        seeds=seeds,
+        objective_mode=objective_mode,
+        walk_forward_policy=walk_forward_policy,
+        dataset_label=dataset_label,
+        selected_model_mode=selected_model_mode,
+        trials_per_seed=int(requested_trials),
+    )
+    promote_status = _promote_candidate_to_run_best()
+    if promote_status != 0:
+        return int(promote_status)
+    print(f"{C_GREEN}✅ 非 rolling random seed ensemble 訓練完成｜members={len(members)}｜params={CANDIDATE_BEST_PARAMS_PATH}{C_RESET}")
+    return 0
+
+
 def _extract_cli_value(argv, option_name: str):
     args = [] if argv is None else list(argv)
     for idx in range(1, len(args)):
@@ -602,6 +817,7 @@ def main(argv=None, environ=None):
     )
     from tools.optimizer.session import close_study_storage
     from tools.optimizer.study_utils import (
+        build_best_params_payload_from_trial,
         build_optimizer_db_file_path,
         is_qualified_trial_value,
         resolve_optimizer_seed,
@@ -698,6 +914,32 @@ def main(argv=None, environ=None):
         return 1
     if timing_mode and optimizer_seed is None:
         optimizer_seed, seed_source = 42, 'TIMING_DEFAULT:42'
+
+    if not timing_mode and str(getattr(session, "run_action", "train")) == "train":
+        ensemble_result = _run_nonrolling_random_seed_ensemble_training(
+            environ=environ,
+            selected_data_dir=selected_data_dir,
+            dataset_profile_key=dataset_profile_key,
+            dataset_label=dataset_label,
+            selected_model_mode=selected_model_mode,
+            load_all_raw_data=load_all_raw_data,
+            optimizer_required_min_rows=optimizer_required_min_rows,
+            objective_mode=objective_mode,
+            walk_forward_policy=walk_forward_policy,
+            requested_trials=int(session.n_trials),
+            build_optimizer_session=build_optimizer_session,
+            create_optimizer_study=create_optimizer_study,
+            ensure_study_effective_policy_compatible=_ensure_study_effective_policy_compatible,
+            configure_optuna_logging=configure_optuna_logging,
+            print_local_min_score_finalist_review=print_local_min_score_finalist_review,
+            print_local_min_score_winner_summary=print_local_min_score_winner_summary,
+            close_study_storage=close_study_storage,
+            is_qualified_trial_value=is_qualified_trial_value,
+            resolve_optimizer_single_fold_search_parallel_trials=resolve_optimizer_single_fold_search_parallel_trials,
+            build_best_params_payload_from_trial=build_best_params_payload_from_trial,
+        )
+        if ensemble_result is not None:
+            return int(ensemble_result)
 
     if session.n_trials == 0:
         if not os.path.exists(db_file):
