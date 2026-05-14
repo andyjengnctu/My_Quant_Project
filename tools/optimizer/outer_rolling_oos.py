@@ -27,6 +27,9 @@ from config.training_policy import (
     OPTIMIZER_FIXED_TP_PERCENT,
     OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
     OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
     OUTER_ROLLING_OOS_HORIZON_MONTHS,
     OUTER_ROLLING_TRAIN_WINDOW_MONTHS,
 )
@@ -39,11 +42,13 @@ from config.training_performance_policy import (
     resolve_optimizer_single_fold_local_min_process_workers_default,
     resolve_optimizer_single_fold_search_parallel_trials_default,
 )
+from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE, ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_portfolio_score
 from core.runtime_utils import choose_inline_progress_message, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
+from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, normalize_seed_ensemble_members
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from tools.optimizer.param_cache import build_prep_cache_key
@@ -2216,7 +2221,7 @@ def _policy_description(policy_name: str) -> str:
     return f"Use {policy_name} params for each OOS year."
 
 
-def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int], oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
+def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int, selection_period: str, local_rank_map: dict[int, int], retention_rank_map: dict[int, int], oos_start_date: str | None = None, oos_end_date: str | None = None, optimizer_seed: int | None = None) -> dict:
     trial = item["trial"]
     trial_number = int(trial.number)
     effective_start = str(oos_start_date or f"{str(oos_year)[:4]}-01-01")
@@ -2229,6 +2234,7 @@ def _build_policy_schedule_entry(*, item: dict, policy_name: str, oos_year: int,
         "oos_period": f"{effective_start}~{effective_end}",
         "policy": str(policy_name),
         "selected_trial": trial_number + 1,
+        "optimizer_seed": None if optimizer_seed is None else int(optimizer_seed),
         "base_score": float(item.get("base_score", INVALID_TRIAL_VALUE)),
         "base_rank": int(item.get("base_rank", 0) or 0),
         "local_min": float(item.get("local_min_score", INVALID_TRIAL_VALUE)),
@@ -3693,9 +3699,34 @@ def _build_policies_schedule(rows: list[dict]) -> dict:
     return policies
 
 
+def _build_random_seed_ensemble_policy_payload() -> dict:
+    return build_seed_ensemble_policy_snapshot(
+        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    )
+
+
+def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
+    explicit_members = normalize_seed_ensemble_members(schedule.get("params_ensemble"))
+    if explicit_members:
+        return explicit_members
+    params_payload = dict(schedule.get("params") or {})
+    if not params_payload:
+        return []
+    return [{
+        "member_index": 1,
+        "seed": schedule.get("optimizer_seed"),
+        "selected_trial": schedule.get("selected_trial"),
+        "params": params_payload,
+    }]
+
+
 def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config: OuterRollingConfig, summary: dict) -> dict:
     params_by_oos_year = {}
     params_by_effective_date = {}
+    params_ensemble_by_effective_date = {}
+    seed_ensemble_policy = _build_random_seed_ensemble_policy_payload()
     fold_entries = []
     for row in rows:
         schedule = dict((row.get("policy_schedules") or {}).get(policy_name) or {})
@@ -3703,8 +3734,12 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             continue
         oos_year = str(int(schedule.get("oos_year") or row.get("oos_year")))
         params_payload = dict(schedule.get("params") or {})
+        effective_start_key = str(schedule.get("effective_start") or row.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")
         params_by_oos_year[oos_year] = params_payload
-        params_by_effective_date[str(schedule.get("effective_start") or row.get("oos_start_date") or f"{str(oos_year)[:4]}-01-01")] = params_payload
+        params_by_effective_date[effective_start_key] = params_payload
+        params_ensemble_members = _build_params_ensemble_members_for_schedule(schedule)
+        if params_ensemble_members:
+            params_ensemble_by_effective_date[effective_start_key] = params_ensemble_members
         policy_metrics = dict(row.get(policy_name) or {})
         fold_entries.append({
             "fold": row.get("fold"),
@@ -3718,6 +3753,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "effective_start": schedule.get("effective_start"),
             "effective_end": schedule.get("effective_end"),
             "selected_trial": schedule.get("selected_trial"),
+            "optimizer_seed": schedule.get("optimizer_seed"),
             "base_score": schedule.get("base_score"),
             "base_rank": schedule.get("base_rank"),
             "local_min": schedule.get("local_min"),
@@ -3758,8 +3794,10 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     }
     policy_summary = dict(summary.get(policy_name) or {})
     return {
-        "schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
+        "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
         "schema_version": 1,
+        "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+        "legacy_schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
         "usage": ROLLING_OOS_USAGE,
         "type": "outer_rolling_oos_param_set",
         "created_at": get_taipei_now().isoformat(),
@@ -3781,6 +3819,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "live_trading_param": False,
             "active_param_policy": "daily_active_param",
             "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active param；實盤同理使用當下正式 promote 的最新 param.json。",
+            "random_seed_ensemble": seed_ensemble_policy,
         },
         "summary": {
             "folds": int(summary.get("folds", 0)),
@@ -3804,8 +3843,10 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
         },
         "active_param_policy": "daily_active_param",
         "active_param_policy_note": "每日決策使用該日 active param；rolling 只是用歷史 effective date replay，不代表實盤使用固定單期參數組。",
+        "random_seed_ensemble": seed_ensemble_policy,
         "chained_oos": chained_oos,
         "params_by_effective_date": params_by_effective_date,
+        "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
         "params_by_oos_year": params_by_oos_year,
         "folds": fold_entries,
     }
@@ -4718,6 +4759,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     retention_rank_map=retention_rank_map,
                     oos_start_date=oos_start_date,
                     oos_end_date=oos_end_date,
+                    optimizer_seed=optimizer_seed,
                 )
                 for name, item in policy_items.items()
                 if item is not None
@@ -5152,6 +5194,7 @@ def run_outer_rolling_oos(
                     retention_rank_map=retention_rank_map,
                     oos_start_date=oos_start_date,
                     oos_end_date=oos_end_date,
+                    optimizer_seed=optimizer_seed,
                 )
                 for name, item in policy_items.items()
                 if item is not None

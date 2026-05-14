@@ -111,14 +111,15 @@ def execute_reserved_entries_for_day(
     available_cash_milli = coerce_money_like_to_milli(available_cash)
 
     while remaining_orderable_candidates and pre_market_occupied < max_positions:
+        cand = remaining_orderable_candidates.pop(0)
+        candidate_params = cand.get('params_obj') or params
         effective_entry_budget = resolve_portfolio_entry_budget(
             milli_to_money(available_cash_milli),
-            params.initial_capital,
-            params,
+            candidate_params.initial_capital,
+            candidate_params,
         )
         effective_entry_budget_milli = coerce_money_like_to_milli(effective_entry_budget)
 
-        cand = remaining_orderable_candidates.pop(0)
         if cand.get('is_orderable') is False:
             continue
         candidate_kind_label = _candidate_kind_label(cand.get('type'))
@@ -129,13 +130,15 @@ def execute_reserved_entries_for_day(
             cand,
             effective_entry_budget,
             effective_entry_budget_milli,
-            params,
+            candidate_params,
             sizing_equity,
         )
         if chosen_entry_plan is None:
             continue
 
-        fast_df = all_dfs_fast[cand['ticker']]
+        candidate_context = cand.get('_ensemble_context') if isinstance(cand.get('_ensemble_context'), dict) else {}
+        candidate_all_dfs_fast = candidate_context.get('all_dfs_fast') or all_dfs_fast
+        fast_df = candidate_all_dfs_fast[cand['ticker']]
         t_pos = cand['today_pos']
         y_pos = cand['yesterday_pos']
         t_open = get_fast_value(fast_df, 'Open', pos=t_pos)
@@ -157,7 +160,7 @@ def execute_reserved_entries_for_day(
             t_close=t_close,
             t_volume=t_volume,
             y_close=y_close,
-            params=params,
+            params=candidate_params,
             entry_type=cand['type'],
             ticker=cand['ticker'],
             trade_date=today,
@@ -166,6 +169,12 @@ def execute_reserved_entries_for_day(
         if entry_result['filled']:
             actual_total_cost_milli = entry_result['position']['net_buy_total_milli']
             cash_milli -= actual_total_cost_milli
+            entry_result['position']['_entry_params_obj'] = candidate_params
+            entry_result['position']['_entry_params_signature'] = str(cand.get('params_signature') or '')
+            entry_result['position']['_ensemble_vote_count'] = cand.get('ensemble_vote_count')
+            entry_result['position']['_ensemble_min_agree'] = cand.get('ensemble_min_agree')
+            if candidate_context:
+                entry_result['position']['_entry_context'] = candidate_context
             portfolio[cand['ticker']] = entry_result['position']
             if entry_stats is not None:
                 entry_stats['filled_buy_count'] = int(entry_stats.get('filled_buy_count', 0) or 0) + 1
@@ -198,7 +207,7 @@ def execute_reserved_entries_for_day(
                         '單筆損益': 0.0,
                         '該筆總損益': 0.0,
                         'R_Multiple': 0.0,
-                        'Risk': params.fixed_risk,
+                        'Risk': candidate_params.fixed_risk,
                     }
                 )
         elif entry_result['count_as_missed_buy']:
@@ -217,7 +226,7 @@ def execute_reserved_entries_for_day(
                         '單筆損益': 0.0,
                         '該筆總損益': 0.0,
                         'R_Multiple': 0.0,
-                        'Risk': params.fixed_risk,
+                        'Risk': candidate_params.fixed_risk,
                         '買入限價': chosen_entry_plan['limit_price'],
                         '成交價': None,
                         '成本均價': None,

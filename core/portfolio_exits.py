@@ -83,6 +83,20 @@ def _resolve_position_active_tp_half(position):
     return position.get('tp_half')
 
 
+def _resolve_position_params(position, fallback_params):
+    return position.get('_entry_params_obj') or fallback_params
+
+
+def _resolve_position_all_dfs_fast(position, fallback_all_dfs_fast):
+    context = position.get('_entry_context') if isinstance(position.get('_entry_context'), dict) else {}
+    return context.get('all_dfs_fast') or fallback_all_dfs_fast
+
+
+def _resolve_position_pit_stats_index(position, fallback_pit_stats_index):
+    context = position.get('_entry_context') if isinstance(position.get('_entry_context'), dict) else {}
+    return context.get('all_pit_stats_index') or fallback_pit_stats_index
+
+
 def append_portfolio_position_active_level_row(active_level_rows, *, ticker, position, today, require_open_qty=True):
     if active_level_rows is None:
         return
@@ -172,19 +186,22 @@ def try_rotate_weakest_position(
 
         for pt in sorted(portfolio.keys()):
             pos = portfolio[pt]
-            pt_data = all_dfs_fast[pt]
+            pos_params = _resolve_position_params(pos, params)
+            pt_all_dfs_fast = _resolve_position_all_dfs_fast(pos, all_dfs_fast)
+            pt_data = pt_all_dfs_fast[pt]
             pt_pos = get_fast_pos(pt_data, today)
             if pt_pos <= 0:
                 continue
             pt_y_pos = pt_pos - 1
             pt_y_close = get_fast_close(pt_data, pos=pt_y_pos)
-            ret = _calc_position_mark_to_market_return(pos, pt_y_close, params, trade_date=today)
+            ret = _calc_position_mark_to_market_return(pos, pt_y_close, pos_params, trade_date=today)
 
             holding_cost = milli_to_money(pos.get('remaining_cost_basis_milli', 0))
+            pt_pit_stats_index = _resolve_position_pit_stats_index(pos, pit_stats_index)
             _, holding_ev, holding_win_rate, holding_trade_count, holding_asset_growth_pct = get_pit_stats_from_index(
-                pit_stats_index[pt],
+                pt_pit_stats_index[pt],
                 today,
-                params,
+                pos_params,
             )
             holding_sort_value = calc_buy_sort_value(
                 get_buy_sort_method(),
@@ -203,7 +220,9 @@ def try_rotate_weakest_position(
         if weakest_ticker is None:
             continue
 
-        w_data = all_dfs_fast[weakest_ticker]
+        weakest_pos_for_data = portfolio[weakest_ticker]
+        w_all_dfs_fast = _resolve_position_all_dfs_fast(weakest_pos_for_data, all_dfs_fast)
+        w_data = w_all_dfs_fast[weakest_ticker]
         w_pos = get_fast_pos(w_data, today)
         if w_pos <= 0:
             continue
@@ -226,11 +245,12 @@ def try_rotate_weakest_position(
             continue
 
         pos = portfolio[weakest_ticker]
+        pos_params = _resolve_position_params(pos, params)
         est_sell_px = adjust_long_sell_fill_price(w_open, ticker=weakest_ticker)
         sell_ledger = build_sell_ledger_from_price(
             est_sell_px,
             pos['qty'],
-            params,
+            pos_params,
             ticker=weakest_ticker,
             security_profile=pos.get('security_profile'),
             trade_date=today,
@@ -262,7 +282,7 @@ def try_rotate_weakest_position(
                     '單筆損益': _round_money_for_history(display_tail_pnl),
                     '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
-                    'Risk': params.fixed_risk,
+                    'Risk': pos_params.fixed_risk,
                 }
             )
             register_display_realized_pnl(pos, display_tail_pnl)
@@ -299,7 +319,9 @@ def settle_portfolio_positions(
     tickers_to_remove = []
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]
-        fast_df = all_dfs_fast[ticker]
+        pos_params = _resolve_position_params(pos, params)
+        pos_all_dfs_fast = _resolve_position_all_dfs_fast(pos, all_dfs_fast)
+        fast_df = pos_all_dfs_fast[ticker]
         t_pos = get_fast_pos(fast_df, today)
         if t_pos <= 0:
             continue
@@ -315,7 +337,7 @@ def settle_portfolio_positions(
             get_fast_value(fast_df, 'Low', pos=t_pos),
             get_fast_close(fast_df, pos=t_pos),
             get_fast_value(fast_df, 'Volume', pos=t_pos),
-            params,
+            pos_params,
             current_date=today,
             y_high=get_fast_value(fast_df, 'High', pos=y_pos),
             return_milli=is_training,
@@ -340,7 +362,7 @@ def settle_portfolio_positions(
                     '股數': None if tp_context is None else tp_context['qty'],
                     '單筆損益': 0.0 if tp_context is None else _round_money_for_history(round_money_for_display(tp_context['pnl'])),
                     'R_Multiple': 0.0,
-                    'Risk': params.fixed_risk,
+                    'Risk': pos_params.fixed_risk,
                 }
             )
             if tp_context is not None:
@@ -376,7 +398,7 @@ def settle_portfolio_positions(
                         '單筆損益': _round_money_for_history(display_exit_pnl),
                         '該筆總損益': _round_money_for_history(total_pnl),
                         'R_Multiple': total_r,
-                        'Risk': params.fixed_risk,
+                        'Risk': pos_params.fixed_risk,
                     }
                 )
                 register_display_realized_pnl(pos, display_exit_pnl)
@@ -417,7 +439,7 @@ def settle_portfolio_positions(
                         '單筆損益': 0.0,
                         '該筆總損益': _round_money_for_history(pos['realized_pnl']),
                         'R_Multiple': 0.0,
-                        'Risk': params.fixed_risk,
+                        'Risk': pos_params.fixed_risk,
                         '備註': reason_note,
                     }
                 )
@@ -445,6 +467,7 @@ def closeout_open_positions(
 
     for ticker in sorted(list(portfolio.keys())):
         pos = portfolio[ticker]
+        pos_params = _resolve_position_params(pos, params)
         append_portfolio_position_active_level_row(
             active_level_rows,
             ticker=ticker,
@@ -457,7 +480,7 @@ def closeout_open_positions(
         sell_ledger = build_sell_ledger_from_price(
             exec_price,
             pos['qty'],
-            params,
+            pos_params,
             ticker=ticker,
             security_profile=pos.get('security_profile'),
             trade_date=last_date,
@@ -488,7 +511,7 @@ def closeout_open_positions(
                     '單筆損益': _round_money_for_history(display_tail_pnl),
                     '該筆總損益': _round_money_for_history(total_pnl),
                     'R_Multiple': total_r,
-                    'Risk': params.fixed_risk,
+                    'Risk': pos_params.fixed_risk,
                 }
             )
             register_display_realized_pnl(pos, display_tail_pnl)

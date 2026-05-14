@@ -10,6 +10,7 @@ from core.strategy_params import (
 )
 from config.execution_policy import RUNTIME_PARAM_DEFAULTS, RUNTIME_PARAM_TYPES
 from core.log_utils import format_exception_summary
+from core.active_param_ensemble import is_active_param_ensemble_payload
 from core.rolling_oos_params import is_rolling_oos_param_set_payload
 
 
@@ -135,6 +136,12 @@ def load_params_from_json(json_file):
     try:
         with open(json_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
+
+        if is_active_param_ensemble_payload(data):
+            raise ValueError(
+                "此檔案是 active-param ensemble JSON，不是單一 param.json；"
+                "請在支援 ensemble active-param replay 的流程讀取，或改選單一參數檔。"
+            )
 
         if is_rolling_oos_param_set_payload(data):
             raise ValueError(

@@ -17,7 +17,10 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
 
     for ticker in sorted(portfolio.keys()):
         pos = portfolio[ticker]
-        pt_data = all_dfs_fast[ticker]
+        position_params = pos.get('_entry_params_obj') or params
+        position_context = pos.get('_entry_context') if isinstance(pos.get('_entry_context'), dict) else {}
+        position_all_dfs_fast = position_context.get('all_dfs_fast') or all_dfs_fast
+        pt_data = position_all_dfs_fast[ticker]
         pt_pos = get_fast_pos(pt_data, today)
 
         if pt_pos >= 0:
@@ -31,7 +34,7 @@ def calc_mark_to_market_equity(cash, portfolio, all_dfs_fast, today, params):
         sell_ledger = build_sell_ledger_from_price(
             floating_exec_price,
             pos['qty'],
-            params,
+            position_params,
             ticker=ticker,
             security_profile=pos.get('security_profile'),
             trade_date=today,

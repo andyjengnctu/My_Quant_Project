@@ -17,6 +17,13 @@ from core.params_io import build_params_from_mapping, params_to_json_dict
 from core.walk_forward_policy import load_walk_forward_policy
 from core.portfolio_stats import find_sim_start_idx
 from core.rolling_oos_params import build_active_param_schedule
+from core.active_param_ensemble import (
+    build_active_param_ensemble_schedule,
+    get_active_param_ensemble_date_range,
+    get_active_param_ensemble_policy,
+    resolve_active_param_ensemble_mode,
+    ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
+)
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_normal_setup_index, build_trade_stats_index, merge_static_market_with_dynamic, pack_static_market_data, pack_prepared_stock_data, prep_optimizer_stock_data_bundle, prep_stock_data_and_trades
 from tools.optimizer.raw_cache import load_all_raw_data
@@ -65,6 +72,30 @@ def _build_active_param_objects_from_payload(payload, *, fixed_risk=None):
     return resolved
 
 
+def _build_active_param_ensemble_objects_from_payload(payload, *, fixed_risk=None):
+    schedule = build_active_param_ensemble_schedule(payload)
+    resolved = []
+    for record in schedule:
+        item = dict(record)
+        members = []
+        for member in record.get("members") or []:
+            params = build_params_from_mapping(member["params"])
+            if fixed_risk is not None:
+                params.fixed_risk = float(fixed_risk)
+            member_item = dict(member)
+            member_item["params_obj"] = params
+            member_item["params_signature"] = _build_portfolio_params_signature(params)
+            member_item["member_key"] = str(member_item.get("member_index") or member_item.get("seed") or len(members) + 1)
+            members.append(member_item)
+        if not members:
+            raise ValueError(f"active-param ensemble 生效日 {record.get('effective_date_text') or '-'} 沒有可用 members")
+        item["members"] = members
+        item["params_obj"] = members[0]["params_obj"]
+        item["params_signature"] = members[0]["params_signature"]
+        resolved.append(item)
+    return resolved
+
+
 def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=True):
     contexts_by_signature = {}
     contexts_by_effective_date = {}
@@ -87,6 +118,44 @@ def _load_contexts_for_active_schedule(data_dir, schedule_records, *, verbose=Tr
             contexts_by_signature[signature] = context
         contexts_by_effective_date[record["effective_date_text"]] = contexts_by_signature[signature]
     return contexts_by_effective_date
+
+
+def _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, *, verbose=True):
+    contexts_by_signature = {}
+    contexts_by_effective_date = {}
+    total_members = sum(len(record.get("members") or []) for record in schedule_records)
+    loaded_count = 0
+    for record in schedule_records:
+        member_contexts = []
+        for member in record.get("members") or []:
+            loaded_count += 1
+            signature = str(member["params_signature"])
+            if signature not in contexts_by_signature:
+                if verbose:
+                    print(
+                        f"{C_CYAN}📦 建立 ensemble active param 快取 [{loaded_count}/{total_members}] "
+                        f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
+                    )
+                context = load_portfolio_market_context(data_dir, member["params_obj"], verbose=verbose)
+                context = dict(context)
+                if not context.get("all_pit_stats_index"):
+                    context["all_pit_stats_index"] = {
+                        ticker: build_trade_stats_index(logs)
+                        for ticker, logs in (context.get("all_trade_logs") or {}).items()
+                    }
+                context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
+                contexts_by_signature[signature] = context
+            member_contexts.append(contexts_by_signature[signature])
+        contexts_by_effective_date[record["effective_date_text"]] = member_contexts
+    return contexts_by_effective_date
+
+
+def _merge_context_market_dates_from_ensemble(contexts_by_effective_date):
+    market_dates = set()
+    for contexts in contexts_by_effective_date.values():
+        for context in contexts:
+            market_dates.update(context.get("sorted_dates") or [])
+    return sorted(market_dates)
 
 
 def _merge_context_market_dates(contexts_by_effective_date):
@@ -639,6 +708,149 @@ def run_portfolio_simulation_with_param_schedule(
             "sorted_dates": list(resolved_sorted_dates),
             "prep_wall_sec": prep_wall_sec,
             "prep_mode": "active_param_replay",
+        }
+    return (*result, pf_profile)
+
+
+def run_portfolio_simulation_with_param_ensemble(
+    data_dir,
+    ensemble_payload,
+    max_positions=5,
+    enable_rotation=False,
+    start_year=None,
+    end_year=None,
+    benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
+    fixed_risk=None,
+    verbose=True,
+    return_context=False,
+    start_date=None,
+    end_date=None,
+):
+    schedule_records = _build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
+    if not schedule_records:
+        raise ValueError("active-param ensemble schedule 為空")
+
+    policy = get_active_param_ensemble_policy(ensemble_payload)
+    mode = resolve_active_param_ensemble_mode(ensemble_payload)
+    if mode == ACTIVE_PARAM_ENSEMBLE_MODE_STATIC:
+        schedule_start_date = None
+        schedule_end_date = None
+        resolved_start_year = resolve_default_portfolio_start_year(data_dir) if start_year is None else int(start_year)
+        requested_start_date = pd.Timestamp(start_date).normalize() if start_date is not None else pd.Timestamp(year=resolved_start_year, month=1, day=1)
+        resolved_start_date = requested_start_date
+        if end_date is not None:
+            resolved_end_date = pd.Timestamp(end_date).normalize()
+        elif end_year is not None:
+            resolved_end_date = pd.Timestamp(year=int(end_year), month=12, day=31)
+        else:
+            resolved_end_date = None
+    else:
+        first_date, last_date = get_active_param_ensemble_date_range(ensemble_payload)
+        schedule_start_date = pd.Timestamp(first_date).normalize()
+        schedule_end_date = pd.Timestamp(last_date).normalize()
+        resolved_start_year = int(schedule_records[0]["year"] if start_year is None else start_year)
+        requested_start_date = pd.Timestamp(start_date).normalize() if start_date is not None else pd.Timestamp(year=resolved_start_year, month=1, day=1)
+        resolved_start_date = max(requested_start_date, schedule_start_date)
+        if end_date is not None:
+            requested_end_date = pd.Timestamp(end_date).normalize()
+        elif end_year is not None:
+            requested_end_date = pd.Timestamp(year=int(end_year), month=12, day=31)
+        else:
+            requested_end_date = schedule_end_date
+        resolved_end_date = min(requested_end_date, schedule_end_date)
+
+    if resolved_end_date is not None and resolved_end_date < resolved_start_date:
+        raise ValueError("active-param ensemble replay 日期區間無效：結束日早於開始日")
+
+    contexts_by_effective_date = _load_contexts_for_active_ensemble_schedule(data_dir, schedule_records, verbose=verbose)
+    merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
+    resolved_sorted_dates = _filter_market_dates_by_date_range(
+        merged_dates,
+        start_date=resolved_start_date,
+        end_date=resolved_end_date,
+    )
+    if not resolved_sorted_dates:
+        raise ValueError("active-param ensemble replay 沒有可回測日期")
+
+    first_sim_idx = find_sim_start_idx(resolved_sorted_dates, resolved_start_year)
+    if first_sim_idx >= len(resolved_sorted_dates):
+        raise ValueError("active-param ensemble replay 起始日期沒有可回測日期")
+    first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
+    base_contexts = contexts_by_effective_date[first_record["effective_date_text"]]
+    base_context = base_contexts[0]
+    base_params = first_record["members"][0]["params_obj"]
+    benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
+
+    def active_param_ensemble_resolver(trade_date):
+        return _resolve_active_schedule_record(schedule_records, trade_date)["members"]
+
+    def active_context_ensemble_resolver(trade_date):
+        record = _resolve_active_schedule_record(schedule_records, trade_date)
+        return contexts_by_effective_date[record["effective_date_text"]]
+
+    replay_end = resolved_end_date if resolved_end_date is not None else pd.Timestamp(resolved_sorted_dates[-1]).normalize()
+    pf_profile = {
+        "param_policy": "active_param_ensemble_replay",
+        "active_param_ensemble": {
+            "mode": mode,
+            "seed_count": int(policy["seed_count"]),
+            "min_agree": int(policy["min_agree"]),
+        },
+        "active_param_ensemble_schedule": [
+            {
+                "effective_date": str(record.get("effective_date_text") or ""),
+                "effective_end_date": str(record.get("effective_end_date_text") or ""),
+                "year": int(record.get("year") or 0),
+                "member_count": int(len(record.get("members") or [])),
+                "params_signature": str(record.get("params_signature") or ""),
+            }
+            for record in schedule_records
+        ],
+    }
+    if verbose:
+        date_label = (
+            f"{schedule_records[0]['effective_date_text']}~{schedule_records[-1]['effective_date_text']}"
+            if mode != ACTIVE_PARAM_ENSEMBLE_MODE_STATIC else "static"
+        )
+        print(
+            f"{C_GREEN}✅ active-param ensemble replay 準備完成："
+            f"{date_label}，members={policy['seed_count']}，min_agree={policy['min_agree']}。{C_RESET}"
+        )
+
+    result = run_portfolio_timeline(
+        base_context.get("all_dfs_fast") or {},
+        base_context.get("all_trade_logs") or {},
+        resolved_sorted_dates,
+        resolved_start_year,
+        base_params,
+        max_positions,
+        enable_rotation,
+        benchmark_ticker=benchmark_ticker,
+        benchmark_data=benchmark_data,
+        is_training=False,
+        profile_stats=pf_profile,
+        verbose=verbose,
+        pit_stats_index=base_context.get("all_pit_stats_index"),
+        active_param_ensemble_resolver=active_param_ensemble_resolver,
+        active_context_ensemble_resolver=active_context_ensemble_resolver,
+        ensemble_min_agree=int(policy["min_agree"]),
+    )
+    prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for contexts in contexts_by_effective_date.values() for ctx in contexts)
+    pf_profile.update({
+        "param_policy": "active_param_ensemble_replay",
+        "prep_wall_sec": prep_wall_sec,
+        "prep_mode": "active_param_ensemble_replay",
+        "active_replay_start_date": resolved_start_date.strftime("%Y-%m-%d"),
+        "active_replay_end_date": replay_end.strftime("%Y-%m-%d"),
+    })
+    if return_context:
+        pf_profile["_workbench_context"] = {
+            "all_dfs_fast": base_context.get("all_dfs_fast") or {},
+            "all_trade_logs": base_context.get("all_trade_logs") or {},
+            "all_pit_stats_index": base_context.get("all_pit_stats_index") or {},
+            "sorted_dates": list(resolved_sorted_dates),
+            "prep_wall_sec": prep_wall_sec,
+            "prep_mode": "active_param_ensemble_replay",
         }
     return (*result, pf_profile)
 

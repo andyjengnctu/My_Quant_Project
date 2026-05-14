@@ -1,6 +1,7 @@
 import os
 from typing import Dict, List, Mapping, Optional
 
+from core.active_param_ensemble import is_active_param_ensemble_file, load_json_file as load_ensemble_json_file
 from core.output_paths import build_output_dir
 from core.rolling_oos_params import is_rolling_oos_param_set_file, load_json_file
 
@@ -90,6 +91,53 @@ def _canonical_param_source_sort_rank(filename: str) -> int:
         return len(CANONICAL_PARAM_FILENAME_ORDER)
 
 
+def _discover_active_param_ensemble_sets(project_root: str) -> List[Dict[str, str]]:
+    search_dirs = [
+        resolve_models_dir(project_root),
+        os.path.join(build_output_dir(project_root, "optimizer"), "outer_rolling_oos"),
+    ]
+    records: List[Dict[str, str]] = []
+    seen_paths = set()
+    seen_labels = set()
+    for folder in search_dirs:
+        try:
+            filenames = os.listdir(folder)
+        except FileNotFoundError:
+            continue
+        for filename in filenames:
+            if not filename.endswith(".json"):
+                continue
+            path = os.path.abspath(os.path.join(folder, filename))
+            if path in seen_paths or not os.path.isfile(path):
+                continue
+            if not is_active_param_ensemble_file(path):
+                continue
+            try:
+                payload = load_ensemble_json_file(path)
+            except (OSError, UnicodeDecodeError, ValueError):
+                continue
+            label = os.path.basename(filename)
+            if label in seen_labels:
+                continue
+            seen_paths.add(path)
+            seen_labels.add(label)
+            selector = str(payload.get("selector") or (payload.get("meta") or {}).get("selector") or _param_source_key_from_filename(filename)).strip()
+            mode = str(payload.get("mode") or "ensemble").strip() or "ensemble"
+            records.append({
+                "key": f"active_param_ensemble:{mode}:{selector}:{os.path.splitext(filename)[0]}",
+                "label": label,
+                "path": path,
+                "filename": filename,
+                "kind": "active_param_ensemble",
+            })
+
+    records.sort(key=lambda item: (
+        -int(os.path.getmtime(item["path"])) if os.path.exists(item["path"]) else 0,
+        str(item["label"]).lower(),
+    ))
+    return records
+
+
 def _discover_rolling_oos_param_sets(project_root: str) -> List[Dict[str, str]]:
     # Workbench 下拉選單以「實際檔名」作為唯一顯示名稱；models/ 為主來源，
     # outputs/ 只補充尚未複製到 models/ 的 rolling OOS 參數組。
@@ -138,7 +186,7 @@ def _discover_rolling_oos_param_sets(project_root: str) -> List[Dict[str, str]]:
     return records
 
 
-def discover_model_param_sources(project_root: str, environ: Optional[Mapping[str, str]] = None, *, include_rolling_oos: bool = False) -> List[Dict[str, str]]:
+def discover_model_param_sources(project_root: str, environ: Optional[Mapping[str, str]] = None, *, include_rolling_oos: bool = False, include_active_param_ensemble: bool = False) -> List[Dict[str, str]]:
     """Return selectable parameter files that currently exist under models/.
 
     By default only ``*_params.json`` single-param files are exposed, so optimizer
@@ -159,6 +207,8 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
         path = os.path.abspath(os.path.join(models_dir, filename))
         if not os.path.isfile(path):
             continue
+        if is_active_param_ensemble_file(path) or is_rolling_oos_param_set_file(path):
+            continue
         records.append({
             "key": _param_source_key_from_filename(filename),
             "label": _format_param_source_label(filename),
@@ -167,13 +217,17 @@ def discover_model_param_sources(project_root: str, environ: Optional[Mapping[st
             "kind": "single_param",
         })
 
+    if include_active_param_ensemble:
+        records.extend(_discover_active_param_ensemble_sets(project_root))
+
     if include_rolling_oos:
         records.extend(_discover_rolling_oos_param_sets(project_root))
 
+    kind_rank = {"single_param": 0, "active_param_ensemble": 1, "rolling_oos_param_set": 2}
     records.sort(key=lambda item: (
-        0 if str(item.get("kind", "single_param")) == "single_param" else 1,
+        kind_rank.get(str(item.get("kind", "single_param")), 99),
         _canonical_param_source_sort_rank(item["filename"]) if str(item.get("kind", "single_param")) == "single_param" else 0,
-        -int(os.path.getmtime(item["path"])) if str(item.get("kind")) == "rolling_oos_param_set" and os.path.exists(item["path"]) else 0,
+        -int(os.path.getmtime(item["path"])) if str(item.get("kind")) in {"active_param_ensemble", "rolling_oos_param_set"} and os.path.exists(item["path"]) else 0,
         str(item["label"]).lower(),
     ))
     return records

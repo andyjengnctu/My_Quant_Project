@@ -27,11 +27,20 @@ from tools.portfolio_sim.reporting import export_portfolio_reports, print_yearly
 from tools.portfolio_sim.runtime import ensure_runtime_dirs, load_strict_params
 from core.params_io import build_params_from_mapping
 from core.rolling_oos_params import build_active_param_schedule, format_rolling_oos_summary_lines, get_active_param_date_range, get_active_params_for_date, is_rolling_oos_param_set_file, load_rolling_oos_param_set
+from core.active_param_ensemble import (
+    build_active_param_ensemble_schedule,
+    format_active_param_ensemble_summary_lines,
+    get_active_param_ensemble_date_range,
+    get_active_param_ensemble_members_for_date,
+    is_active_param_ensemble_file,
+    load_active_param_ensemble_set,
+)
 from tools.trade_analysis.trade_log import run_ticker_analysis
 from tools.portfolio_sim.simulation_runner import (
     PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
     load_portfolio_market_context,
     run_portfolio_simulation_prepared,
+    run_portfolio_simulation_with_param_ensemble,
     run_portfolio_simulation_with_param_schedule,
 )
 from tools.trade_analysis.charting import (
@@ -178,6 +187,21 @@ def _format_pct(value):
 
 def _build_rolling_params_schedule_rows(payload):
     return list(build_active_param_schedule(payload))
+
+
+def _build_ensemble_params_schedule_rows(payload, *, fixed_risk):
+    rows = []
+    for record in build_active_param_ensemble_schedule(payload):
+        members = list(record.get("members") or [])
+        if not members:
+            continue
+        params = build_params_from_mapping(members[0]["params"])
+        params.fixed_risk = float(fixed_risk)
+        row = dict(record)
+        row["params_obj"] = params
+        row["params_signature"] = str(members[0].get("params_signature") or "")
+        rows.append(row)
+    return rows
 
 
 def _fast_data_to_price_df(fast_data):
@@ -985,7 +1009,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         self._run_thread = None
         self._active_token = 0
         self._status_var = tk.StringVar(value="尚未執行")
-        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
+        self._param_source_labels, self._param_source_path_by_label, self._param_source_key_by_label, default_param_source_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
         self._param_source_display_var = tk.StringVar(value=default_param_source_label)
         self._rotation_display_var = tk.StringVar(value=DEFAULT_ROTATION_LABEL)
         self._max_positions_var = tk.StringVar(value="10")
@@ -1364,6 +1388,13 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             ]
             self._history_summary_cache[(resolved_ticker, "rolling_active_param_replay")] = list(lines)
             return lines
+        if result_payload.get("ensemble_payload"):
+            lines = [
+                "Active-param ensemble replay：投組績效以本次 N-seed 共識回測報表為準。",
+                "單股歷史摘要不套用單一固定參數，避免與 ensemble min_agree 共識口徑混淆。",
+            ]
+            self._history_summary_cache[(resolved_ticker, "active_param_ensemble_replay")] = list(lines)
+            return lines
         options = result_payload.get("options") or {}
         params = self._resolve_single_stock_history_params()
         fixed_risk = getattr(params, "fixed_risk", options.get("fixed_risk", None))
@@ -1460,7 +1491,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
 
     def _refresh_param_source_options(self):
         current_label = self._param_source_display_var.get().strip()
-        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
+        labels, path_by_label, key_by_label, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
         self._param_source_labels = labels
         self._param_source_path_by_label = path_by_label
         self._param_source_key_by_label = key_by_label
@@ -1487,7 +1518,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         params_path = self._param_source_path_by_label.get(selected_label)
         if params_path:
             return params_path
-        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True)
+        _, path_by_label, _, default_label = build_workbench_param_source_options(WORKBENCH_PROJECT_ROOT, include_rolling_oos=True, include_active_param_ensemble=True)
         return path_by_label[default_label]
 
     def _resolve_fixed_risk(self):
@@ -1689,7 +1720,9 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _execute_portfolio_backtest(self, options):
         data_dir = get_dataset_dir(WORKBENCH_PROJECT_ROOT, DEFAULT_DATASET_PROFILE)
         is_rolling_paramset = is_rolling_oos_param_set_file(options["params_path"])
+        is_ensemble_paramset = is_active_param_ensemble_file(options["params_path"])
         rolling_payload = None
+        ensemble_payload = None
         context = {}
 
         print(f"{C_CYAN}================================================================================{C_RESET}")
@@ -1702,7 +1735,40 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
         start_time = time.time()
         rolling_params_schedule_rows = []
         params_section_title = "訓練參數"
-        if is_rolling_paramset:
+        if is_ensemble_paramset:
+            ensemble_payload = load_active_param_ensemble_set(options["params_path"])
+            try:
+                ensemble_first_date, ensemble_last_date = get_active_param_ensemble_date_range(ensemble_payload)
+            except ValueError:
+                ensemble_first_date, ensemble_last_date = "", ""
+            if ensemble_first_date:
+                representative_date = max(pd.Timestamp(f"{options['start_year']}-01-01").normalize(), pd.Timestamp(ensemble_first_date).normalize()).strftime("%Y-%m-%d")
+            else:
+                representative_date = pd.Timestamp(f"{options['start_year']}-01-01").normalize().strftime("%Y-%m-%d")
+            representative_members = get_active_param_ensemble_members_for_date(ensemble_payload, representative_date)
+            params = build_params_from_mapping(representative_members[0]["params"])
+            params.fixed_risk = float(options["fixed_risk"])
+            params_section_title = "Active-param ensemble 訓練參數"
+            rolling_params_schedule_rows = _build_ensemble_params_schedule_rows(ensemble_payload, fixed_risk=float(options["fixed_risk"]))
+            print(f"\n{C_GREEN}✅ 成功載入 active-param ensemble 參數組！{C_RESET}")
+            print(f"{C_GRAY}📦 參數檔: {options['params_path']}{C_RESET}")
+            for line in format_active_param_ensemble_summary_lines(ensemble_payload):
+                print(f"{C_GRAY}{line}{C_RESET}")
+            result = run_portfolio_simulation_with_param_ensemble(
+                data_dir,
+                ensemble_payload,
+                max_positions=options["max_positions"],
+                enable_rotation=options["enable_rotation"],
+                start_year=options["start_year"],
+                end_year=options["end_year"],
+                start_date=representative_date if ensemble_first_date else None,
+                end_date=ensemble_last_date or None,
+                benchmark_ticker=options["benchmark_ticker"],
+                fixed_risk=float(options["fixed_risk"]),
+                verbose=True,
+                return_context=True,
+            )
+        elif is_rolling_paramset:
             rolling_payload = load_rolling_oos_param_set(options["params_path"])
             rolling_first_date, rolling_last_date = get_active_param_date_range(rolling_payload)
             representative_date = max(pd.Timestamp(f"{options['start_year']}-01-01").normalize(), pd.Timestamp(rolling_first_date).normalize()).strftime("%Y-%m-%d")
@@ -1758,7 +1824,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             reserved_buy_fill_rate, annual_return_pct, bm_annual_return_pct, pf_profile,
         ) = result
 
-        if is_rolling_paramset:
+        if is_rolling_paramset or is_ensemble_paramset:
             context = dict(pf_profile.pop("_workbench_context", {}) or {})
 
         mode_display = "開啟 (強勢輪動)" if options["enable_rotation"] else "關閉 (穩定鎖倉)"
@@ -1826,6 +1892,7 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
             "df_yearly": df_yearly,
             "params": params,
             "rolling_payload": rolling_payload,
+            "ensemble_payload": ensemble_payload,
             "options": dict(options),
             "context": context,
             "profile_stats": dict(pf_profile),
@@ -1962,9 +2029,14 @@ class PortfolioBacktestInspectorPanel(ttk.Frame):
     def _resolve_active_params_for_trade_date(self, trade_date):
         result_payload = self._result or {}
         rolling_payload = result_payload.get("rolling_payload")
-        if not rolling_payload:
+        ensemble_payload = result_payload.get("ensemble_payload")
+        if not rolling_payload and not ensemble_payload:
             return result_payload.get("params")
-        params = build_params_from_mapping(get_active_params_for_date(rolling_payload, trade_date))
+        if ensemble_payload:
+            members = get_active_param_ensemble_members_for_date(ensemble_payload, trade_date)
+            params = build_params_from_mapping(members[0]["params"])
+        else:
+            params = build_params_from_mapping(get_active_params_for_date(rolling_payload, trade_date))
         options = result_payload.get("options") or {}
         if "fixed_risk" in options:
             params.fixed_risk = float(options["fixed_risk"])

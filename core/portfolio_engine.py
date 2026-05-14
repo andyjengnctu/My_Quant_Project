@@ -217,6 +217,182 @@ def _append_portfolio_extended_shadow_level_rows(active_level_rows, active_exten
         })
 
 
+def _iter_ensemble_member_pairs(ensemble_members, ensemble_contexts):
+    members = list(ensemble_members or [])
+    contexts = list(ensemble_contexts or [])
+    for idx, member in enumerate(members):
+        context = contexts[idx] if idx < len(contexts) and isinstance(contexts[idx], dict) else {}
+        yield member, context
+
+
+def _resolve_ensemble_member_key(member, idx):
+    for key in ("member_key", "member_index", "seed"):
+        value = member.get(key) if isinstance(member, dict) else None
+        if value is not None and str(value).strip() != "":
+            return str(value)
+    return str(idx)
+
+
+def _annotate_ensemble_candidate(candidate, *, member, params_obj, member_key, context):
+    row = dict(candidate)
+    row["params_obj"] = params_obj
+    row["_ensemble_context"] = context
+    row["ensemble_member_key"] = member_key
+    row["ensemble_member_index"] = member.get("member_index") if isinstance(member, dict) else None
+    row["ensemble_seed"] = member.get("seed") if isinstance(member, dict) else None
+    row["params_signature"] = member.get("params_signature") if isinstance(member, dict) else ""
+    return row
+
+
+def _median_candidate_row(rows):
+    ordered = sorted(rows, key=lambda item: (float(item.get("sort_value", 0.0) or 0.0), str(item.get("ticker") or "")))
+    return dict(ordered[(len(ordered) - 1) // 2])
+
+
+def _aggregate_ensemble_candidate_rows(rows, *, min_agree):
+    grouped = {}
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip()
+        if not ticker:
+            continue
+        grouped.setdefault(ticker, []).append(row)
+
+    aggregated = []
+    for ticker, group_rows in grouped.items():
+        member_keys = {str(row.get("ensemble_member_key") or "") for row in group_rows}
+        member_keys.discard("")
+        vote_count = len(member_keys)
+        if vote_count < int(min_agree):
+            continue
+        representative = _median_candidate_row(group_rows)
+        sort_values = sorted(float(row.get("sort_value", 0.0) or 0.0) for row in group_rows)
+        median_sort = sort_values[(len(sort_values) - 1) // 2]
+        representative["ensemble_vote_count"] = int(vote_count)
+        representative["ensemble_min_agree"] = int(min_agree)
+        representative["ensemble_member_count"] = int(len(member_keys))
+        representative["ensemble_median_sort_value"] = float(median_sort)
+        representative["sort_value"] = float(median_sort)
+        representative["ensemble_member_keys"] = sorted(member_keys)
+        aggregated.append(representative)
+    aggregated.sort(key=lambda item: (int(item.get("ensemble_vote_count", 0) or 0), float(item.get("ensemble_median_sort_value", item.get("sort_value", 0.0)) or 0.0), str(item.get("ticker") or "")), reverse=True)
+    return aggregated
+
+
+def _flatten_ensemble_extended_signals(active_extended_signals_by_member):
+    flattened = {}
+    for member_signals in (active_extended_signals_by_member or {}).values():
+        for ticker, signal_state in (member_signals or {}).items():
+            flattened.setdefault(ticker, signal_state)
+    return flattened
+
+
+def _build_daily_ensemble_candidates(
+    *,
+    ensemble_members,
+    ensemble_contexts,
+    active_extended_signals_by_member,
+    portfolio,
+    sold_today,
+    today,
+    current_equity_money,
+    initial_capital,
+    collect_all_candidates,
+    min_agree,
+):
+    all_candidate_rows = []
+    all_orderable_rows = []
+    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+        params_obj = member.get("params_obj") if isinstance(member, dict) else None
+        if params_obj is None:
+            continue
+        member_key = _resolve_ensemble_member_key(member, idx)
+        member_signals = active_extended_signals_by_member.setdefault(member_key, {})
+        member_pit_cursor = member.setdefault("pit_stats_cursor", {}) if isinstance(member, dict) else {}
+        member_all_dfs_fast = context.get("all_dfs_fast") or {}
+        member_pit_stats_index = context.get("all_pit_stats_index") or {}
+        member_normal_setup_index = context.get("normal_setup_index") or {}
+        sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params_obj)
+        candidates_today, orderable_candidates_today, _normal_setup_tickers_today = build_daily_candidates(
+            normal_setup_index=member_normal_setup_index,
+            active_extended_signals=member_signals,
+            portfolio=portfolio,
+            sold_today=sold_today,
+            all_dfs_fast=member_all_dfs_fast,
+            pit_stats_index=member_pit_stats_index,
+            pit_stats_cursor=member_pit_cursor,
+            today=today,
+            sizing_equity=sizing_equity,
+            params=params_obj,
+            collect_all_candidates=collect_all_candidates,
+        )
+        for row in candidates_today:
+            all_candidate_rows.append(_annotate_ensemble_candidate(row, member=member, params_obj=params_obj, member_key=member_key, context=context))
+        for row in orderable_candidates_today:
+            all_orderable_rows.append(_annotate_ensemble_candidate(row, member=member, params_obj=params_obj, member_key=member_key, context=context))
+
+    candidates = _aggregate_ensemble_candidate_rows(all_candidate_rows, min_agree=min_agree) if collect_all_candidates else []
+    orderable = _aggregate_ensemble_candidate_rows(all_orderable_rows, min_agree=min_agree)
+    normal_setup_tickers = {str(row.get("ticker") or "") for row in candidates if str(row.get("type") or "") == "normal"}
+    normal_setup_tickers.discard("")
+    return candidates, orderable, normal_setup_tickers
+
+
+def _track_ensemble_normal_setup_signals_for_day(
+    *,
+    ensemble_members,
+    ensemble_contexts,
+    active_extended_signals_by_member,
+    portfolio,
+    sold_today,
+    today,
+):
+    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+        params_obj = member.get("params_obj") if isinstance(member, dict) else None
+        if params_obj is None:
+            continue
+        member_key = _resolve_ensemble_member_key(member, idx)
+        member_signals = active_extended_signals_by_member.setdefault(member_key, {})
+        member_pit_cursor = member.setdefault("pit_stats_cursor", {}) if isinstance(member, dict) else {}
+        track_normal_setup_signals_for_day(
+            normal_setup_entries=(context.get("normal_setup_index") or {}).get(today, []),
+            portfolio=portfolio,
+            sold_today=sold_today,
+            all_dfs_fast=context.get("all_dfs_fast") or {},
+            active_extended_signals=member_signals,
+            pit_stats_index=context.get("all_pit_stats_index") or {},
+            pit_stats_cursor=member_pit_cursor,
+            today=today,
+            params=params_obj,
+        )
+
+
+def _cleanup_ensemble_extended_signals_for_day(
+    *,
+    ensemble_members,
+    ensemble_contexts,
+    active_extended_signals_by_member,
+    portfolio,
+    today,
+    current_equity_money,
+    initial_capital,
+):
+    for idx, (member, context) in enumerate(_iter_ensemble_member_pairs(ensemble_members, ensemble_contexts), start=1):
+        params_obj = member.get("params_obj") if isinstance(member, dict) else None
+        if params_obj is None:
+            continue
+        member_key = _resolve_ensemble_member_key(member, idx)
+        member_signals = active_extended_signals_by_member.setdefault(member_key, {})
+        sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, params_obj)
+        cleanup_extended_signals_for_day(
+            active_extended_signals=member_signals,
+            portfolio=portfolio,
+            all_dfs_fast=context.get("all_dfs_fast") or {},
+            today=today,
+            params=params_obj,
+            sizing_capital=sizing_equity,
+        )
+
+
 def run_portfolio_timeline(
     all_dfs_fast,
     all_standalone_logs,
@@ -234,6 +410,9 @@ def run_portfolio_timeline(
     pit_stats_index=None,
     active_params_resolver=None,
     active_context_resolver=None,
+    active_param_ensemble_resolver=None,
+    active_context_ensemble_resolver=None,
+    ensemble_min_agree=None,
 ):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     capture_equity_curve = bool(profile_stats.get("capture_equity_curve", False)) if profile_stats is not None else False
@@ -284,6 +463,7 @@ def run_portfolio_timeline(
     cash = initial_capital_milli
     portfolio = {}
     active_extended_signals = {}
+    active_extended_signals_by_member = {}
     trade_history, equity_curve, closed_trades_stats = [], [], []
     normal_trade_count, extended_trade_count = 0, 0
     portfolio_entry_stats = {'filled_buy_count': 0}
@@ -332,6 +512,8 @@ def run_portfolio_timeline(
         and replay_counts is None
         and active_params_resolver is None
         and active_context_resolver is None
+        and active_param_ensemble_resolver is None
+        and active_context_ensemble_resolver is None
         and (not capture_equity_curve)
         and benchmark_period_stats is not None
     )
@@ -340,8 +522,15 @@ def run_portfolio_timeline(
         t_day_start = time.perf_counter() if profile_timing_enabled else None
         sim_days += 1
         today = sorted_dates[i]
-        day_params = active_params_resolver(today) if active_params_resolver is not None else params
-        day_context = active_context_resolver(today) if active_context_resolver is not None else None
+        day_ensemble_members = list(active_param_ensemble_resolver(today) or []) if active_param_ensemble_resolver is not None else []
+        day_ensemble_contexts = list(active_context_ensemble_resolver(today) or []) if active_context_ensemble_resolver is not None else []
+        use_param_ensemble = bool(day_ensemble_members)
+        if use_param_ensemble:
+            day_params = day_ensemble_members[0].get("params_obj") or params
+            day_context = day_ensemble_contexts[0] if day_ensemble_contexts else None
+        else:
+            day_params = active_params_resolver(today) if active_params_resolver is not None else params
+            day_context = active_context_resolver(today) if active_context_resolver is not None else None
         if day_context is None:
             day_all_dfs_fast = all_dfs_fast
             day_pit_stats_index = pit_stats_index
@@ -360,7 +549,12 @@ def run_portfolio_timeline(
 
         sold_today = set()
         normal_setup_entries_today = day_normal_setup_index.get(today, [])
-        has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
+        if use_param_ensemble:
+            has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
+            has_ensemble_extended = any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
+            has_portfolio_work_today = bool(portfolio) or bool(has_ensemble_extended) or bool(has_ensemble_normal_setup)
+        else:
+            has_portfolio_work_today = bool(portfolio) or bool(active_extended_signals) or bool(normal_setup_entries_today)
 
         if bool(training_idle_fast_path_enabled) and not bool(has_portfolio_work_today):
             current_equity_money = milli_to_money(current_equity)
@@ -386,7 +580,10 @@ def run_portfolio_timeline(
             available_cash = cash
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
             pre_market_occupied = len(portfolio) + len(sold_today)
-            candidate_sources_today = bool(normal_setup_entries_today) or bool(active_extended_signals)
+            if use_param_ensemble:
+                candidate_sources_today = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts) or any(bool(member_signals) for member_signals in active_extended_signals_by_member.values())
+            else:
+                candidate_sources_today = bool(normal_setup_entries_today) or bool(active_extended_signals)
             orderable_candidates_today = []
             no_entry_capacity_today = (
                 bool(is_training)
@@ -396,7 +593,21 @@ def run_portfolio_timeline(
             )
 
             if no_entry_capacity_today:
-                if normal_setup_entries_today:
+                if use_param_ensemble:
+                    has_ensemble_normal_setup = any(bool((ctx.get("normal_setup_index") or {}).get(today, [])) for ctx in day_ensemble_contexts)
+                    if has_ensemble_normal_setup:
+                        t0 = time.perf_counter() if profile_timing_enabled else None
+                        _track_ensemble_normal_setup_signals_for_day(
+                            ensemble_members=day_ensemble_members,
+                            ensemble_contexts=day_ensemble_contexts,
+                            active_extended_signals_by_member=active_extended_signals_by_member,
+                            portfolio=portfolio,
+                            sold_today=sold_today,
+                            today=today,
+                        )
+                        if profile_timing_enabled:
+                            candidate_scan_sec += time.perf_counter() - t0
+                elif normal_setup_entries_today:
                     t0 = time.perf_counter() if profile_timing_enabled else None
                     track_normal_setup_signals_for_day(
                         normal_setup_entries=normal_setup_entries_today,
@@ -414,19 +625,33 @@ def run_portfolio_timeline(
                 before_trade_rows = -1
             elif candidate_sources_today:
                 t0 = time.perf_counter() if profile_timing_enabled else None
-                candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
-                    normal_setup_index=day_normal_setup_index,
-                    active_extended_signals=active_extended_signals,
-                    portfolio=portfolio,
-                    sold_today=sold_today,
-                    all_dfs_fast=day_all_dfs_fast,
-                    pit_stats_index=day_pit_stats_index,
-                    pit_stats_cursor=day_pit_stats_cursor,
-                    today=today,
-                    sizing_equity=sizing_equity,
-                    params=day_params,
-                    collect_all_candidates=replay_counts is not None,
-                )
+                if use_param_ensemble:
+                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = _build_daily_ensemble_candidates(
+                        ensemble_members=day_ensemble_members,
+                        ensemble_contexts=day_ensemble_contexts,
+                        active_extended_signals_by_member=active_extended_signals_by_member,
+                        portfolio=portfolio,
+                        sold_today=sold_today,
+                        today=today,
+                        current_equity_money=current_equity_money,
+                        initial_capital=initial_capital,
+                        collect_all_candidates=replay_counts is not None,
+                        min_agree=ensemble_min_agree or max(1, len(day_ensemble_members) // 2 + 1),
+                    )
+                else:
+                    candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
+                        normal_setup_index=day_normal_setup_index,
+                        active_extended_signals=active_extended_signals,
+                        portfolio=portfolio,
+                        sold_today=sold_today,
+                        all_dfs_fast=day_all_dfs_fast,
+                        pit_stats_index=day_pit_stats_index,
+                        pit_stats_cursor=day_pit_stats_cursor,
+                        today=today,
+                        sizing_equity=sizing_equity,
+                        params=day_params,
+                        collect_all_candidates=replay_counts is not None,
+                    )
                 if profile_timing_enabled:
                     candidate_scan_sec += time.perf_counter() - t0
 
@@ -516,14 +741,25 @@ def run_portfolio_timeline(
                 if profile_timing_enabled:
                     buy_sec += time.perf_counter() - t0
 
-            cleanup_extended_signals_for_day(
-                active_extended_signals=active_extended_signals,
-                portfolio=portfolio,
-                all_dfs_fast=day_all_dfs_fast,
-                today=today,
-                params=day_params,
-                sizing_capital=sizing_equity,
-            )
+            if use_param_ensemble:
+                _cleanup_ensemble_extended_signals_for_day(
+                    ensemble_members=day_ensemble_members,
+                    ensemble_contexts=day_ensemble_contexts,
+                    active_extended_signals_by_member=active_extended_signals_by_member,
+                    portfolio=portfolio,
+                    today=today,
+                    current_equity_money=current_equity_money,
+                    initial_capital=initial_capital,
+                )
+            else:
+                cleanup_extended_signals_for_day(
+                    active_extended_signals=active_extended_signals,
+                    portfolio=portfolio,
+                    all_dfs_fast=day_all_dfs_fast,
+                    today=today,
+                    params=day_params,
+                    sizing_capital=sizing_equity,
+                )
         elif replay_counts is not None:
             before_trade_rows = len(trade_history)
         else:
@@ -541,7 +777,10 @@ def run_portfolio_timeline(
 
         if active_level_rows is not None:
             _append_portfolio_active_level_rows(active_level_rows, portfolio, today)
-            _append_portfolio_extended_shadow_level_rows(active_level_rows, active_extended_signals, portfolio, today)
+            if use_param_ensemble:
+                _append_portfolio_extended_shadow_level_rows(active_level_rows, _flatten_ensemble_extended_signals(active_extended_signals_by_member), portfolio, today)
+            else:
+                _append_portfolio_extended_shadow_level_rows(active_level_rows, active_extended_signals, portfolio, today)
 
         current_equity = today_equity
         current_equity_money = today_equity_money

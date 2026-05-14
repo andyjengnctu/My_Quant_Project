@@ -1,5 +1,7 @@
 import math
 
+from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
+
 
 # 期望值 (EV) 算法切換
 # 'A' = 嚴格 R_Multiple 期望值 (Mean R)
@@ -31,8 +33,8 @@ SYSTEM_SCORE_DISPLAY_MULTIPLIER = 100000.0  # 系統得分顯示倍率，僅影�
 # 其他數值 = 固定停利比例
 OPTIMIZER_FIXED_TP_PERCENT = 0.0
 
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.02  # local_min_score finalist review 預設取訓練次數的比例
-OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 5  # local_min_score finalist review 的最小候選數
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE = 0.0  # local_min_score finalist review 預設取訓練次數的比例
+OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN = 1  # local_min_score finalist review 的最小候選數
 
 # inner validation anti-overfitting 開關。
 # True  = 從 selection 區間切出最後一年做 inner validation；objective/local_min 只使用前段 training years。
@@ -85,6 +87,13 @@ OOS_EVALUATION_START_YEAR = 2021
 # 年份欄位仍保留給一般 optimizer split/full 與既有相容邏輯。
 OUTER_ROLLING_TRAIN_WINDOW_MONTHS = 120
 OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
+
+# random seed ensemble：每次 retrain 隨機抽 N 個 seeds，正式輸出用同一個 JSON 保存 N 組參數。
+# 目前此區只定義 policy / JSON 契約；真正交易時不得把 ensemble JSON 靜默降級成單一 params。
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 2
+# "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 2
 
 # Rolling OOS optimizer search 預設 trial 數。
 # CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。
@@ -149,6 +158,11 @@ def build_training_score_policy_snapshot():
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
         "OPTIMIZER_BASE_RETENTION_GT_MIN": OPTIMIZER_BASE_RETENTION_GT_MIN,
+        "OPTIMIZER_RANDOM_SEED_ENSEMBLE": build_seed_ensemble_policy_snapshot(
+            enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+            seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+            min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+        ),
         "OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED": OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED,
         "OPTIMIZER_INNER_VALIDATE_MIN_SCORE": OPTIMIZER_INNER_VALIDATE_MIN_SCORE,
         "OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE": OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE,
@@ -164,4 +178,9 @@ def build_optimizer_train_test_policy_snapshot():
     payload["OUTER_ROLLING_TRAIN_WINDOW_MONTHS"] = int(OUTER_ROLLING_TRAIN_WINDOW_MONTHS)
     payload["OUTER_ROLLING_OOS_HORIZON_MONTHS"] = int(OUTER_ROLLING_OOS_HORIZON_MONTHS)
     payload["OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT"] = int(OPTIMIZER_OUTER_ROLLING_OOS_TRIALS_DEFAULT)
+    payload["OPTIMIZER_RANDOM_SEED_ENSEMBLE"] = build_seed_ensemble_policy_snapshot(
+        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    )
     return payload

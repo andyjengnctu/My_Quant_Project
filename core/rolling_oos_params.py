@@ -6,6 +6,13 @@ import os
 from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
+from core.active_param_ensemble import (
+    ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+    ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+    build_active_param_ensemble_schedule as _build_generic_active_param_ensemble_schedule,
+    is_rolling_active_param_ensemble_payload,
+)
+
 ROLLING_OOS_PARAM_SET_SCHEMA_TYPE = "rolling_oos_param_set"
 ROLLING_OOS_USAGE = "validation_only"
 ROLLING_OOS_POLICY_NAMES = ("base", "base_retention_gt_min", "local", "retention")
@@ -14,14 +21,23 @@ ROLLING_OOS_POLICY_NAMES = ("base", "base_retention_gt_min", "local", "retention
 def is_rolling_oos_param_set_payload(payload: Mapping[str, Any] | None) -> bool:
     if not isinstance(payload, Mapping):
         return False
+    if is_rolling_active_param_ensemble_payload(payload):
+        return True
     schema_type = str(payload.get("schema_type") or payload.get("type") or "").strip()
+    mode = str(payload.get("mode") or "").strip().lower()
+    if schema_type == ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE:
+        return mode == ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
     if schema_type == ROLLING_OOS_PARAM_SET_SCHEMA_TYPE:
         return True
     if schema_type == "outer_rolling_oos_param_set":
         return True
     if str(payload.get("usage") or "").strip() != ROLLING_OOS_USAGE:
         return False
-    return isinstance(payload.get("params_by_oos_year"), Mapping) or isinstance(payload.get("params_by_effective_date"), Mapping)
+    return (
+        isinstance(payload.get("params_by_oos_year"), Mapping)
+        or isinstance(payload.get("params_by_effective_date"), Mapping)
+        or isinstance(payload.get("params_ensemble_by_effective_date"), Mapping)
+    )
 
 
 def load_json_file(path: str | os.PathLike[str]) -> dict:
@@ -38,10 +54,15 @@ def load_rolling_oos_param_set(path: str | os.PathLike[str]) -> dict:
         raise ValueError(f"不是 rolling OOS active-param replay 參數組 JSON: {path}")
     params_by_year = payload.get("params_by_oos_year")
     params_by_effective_date = payload.get("params_by_effective_date")
-    if (not isinstance(params_by_year, Mapping) or not params_by_year) and (
-        not isinstance(params_by_effective_date, Mapping) or not params_by_effective_date
+    params_ensemble_by_effective_date = payload.get("params_ensemble_by_effective_date")
+    if (
+        (not isinstance(params_by_year, Mapping) or not params_by_year)
+        and (not isinstance(params_by_effective_date, Mapping) or not params_by_effective_date)
+        and (not isinstance(params_ensemble_by_effective_date, Mapping) or not params_ensemble_by_effective_date)
     ):
-        raise ValueError(f"rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date: {path}")
+        raise ValueError(
+            f"rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date / params_ensemble_by_effective_date: {path}"
+        )
     return payload
 
 
@@ -98,6 +119,10 @@ def _payload_summary_oos_end(payload: Mapping[str, Any]) -> date | None:
     return None
 
 
+def build_active_param_ensemble_schedule(payload: Mapping[str, Any]) -> list[dict]:
+    return _build_generic_active_param_ensemble_schedule(payload)
+
+
 def build_active_param_schedule(payload: Mapping[str, Any]) -> list[dict]:
     params_by_effective_date = payload.get("params_by_effective_date")
     records: list[dict] = []
@@ -119,6 +144,8 @@ def build_active_param_schedule(payload: Mapping[str, Any]) -> list[dict]:
     else:
         params_by_year = payload.get("params_by_oos_year") or {}
         if not isinstance(params_by_year, Mapping) or not params_by_year:
+            if isinstance(payload.get("params_ensemble_by_effective_date"), Mapping) and payload.get("params_ensemble_by_effective_date"):
+                raise ValueError("此 rolling OOS JSON 僅包含 ensemble 參數組；單一 active-param replay 請改用 params_by_oos_year / params_by_effective_date")
             raise ValueError("rolling OOS 參數組缺少 params_by_oos_year / params_by_effective_date")
         for raw_year, params in params_by_year.items():
             if not isinstance(params, Mapping):
