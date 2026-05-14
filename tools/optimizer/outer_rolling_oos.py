@@ -3707,6 +3707,35 @@ def _build_random_seed_ensemble_policy_payload() -> dict:
     )
 
 
+def _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date: dict) -> dict:
+    requested_policy = _build_random_seed_ensemble_policy_payload()
+    member_counts = [
+        len(normalize_seed_ensemble_members(members))
+        for members in (params_ensemble_by_effective_date or {}).values()
+    ]
+    member_counts = [int(count) for count in member_counts if int(count) > 0]
+    actual_min_members = max(1, min(member_counts) if member_counts else 1)
+    actual_max_members = max(member_counts) if member_counts else actual_min_members
+    requested_count = int(requested_policy.get("seed_count", 1) or 1)
+    if actual_min_members == actual_max_members == requested_count:
+        policy = dict(requested_policy)
+    else:
+        policy = build_seed_ensemble_policy_snapshot(
+            enabled=actual_min_members > 1,
+            seed_count=actual_min_members,
+            min_agree=requested_policy.get("min_agree_requested", requested_policy.get("min_agree", "auto")),
+        )
+        policy["requested_random_seed_ensemble"] = dict(requested_policy)
+        policy["generation_note"] = (
+            "outer rolling 目前此 policy schedule 實際產出的 members 數量與設定 N 不一致；"
+            "正式 replay 口徑以 JSON 實際 members 數量為準，避免 min_agree 大於可用 members。"
+        )
+    policy["member_count_min"] = int(actual_min_members)
+    policy["member_count_max"] = int(actual_max_members)
+    policy["member_count_mismatch"] = bool(actual_min_members != requested_count or actual_max_members != requested_count)
+    return policy
+
+
 def _build_params_ensemble_members_for_schedule(schedule: dict) -> list[dict]:
     explicit_members = normalize_seed_ensemble_members(schedule.get("params_ensemble"))
     if explicit_members:
@@ -3726,7 +3755,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
     params_by_oos_year = {}
     params_by_effective_date = {}
     params_ensemble_by_effective_date = {}
-    seed_ensemble_policy = _build_random_seed_ensemble_policy_payload()
+    requested_seed_ensemble_policy = _build_random_seed_ensemble_policy_payload()
     fold_entries = []
     for row in rows:
         schedule = dict((row.get("policy_schedules") or {}).get(policy_name) or {})
@@ -3769,6 +3798,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "best_finalist_return_pct": row.get("best_finalist_return_pct"),
             "best_finalist_oos_score": row.get("best_finalist_oos_score"),
         })
+    seed_ensemble_policy = _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date)
     chain_all = dict(summary.get("chained_oos") or {})
     chain_policy = dict(chain_all.get(policy_name) or {})
     chain_policy_available = _policy_is_available(chain_policy)
@@ -3820,6 +3850,7 @@ def _build_policy_paramset_payload(*, policy_name: str, rows: list[dict], config
             "active_param_policy": "daily_active_param",
             "active_param_policy_note": "驗證 replay 時，每個交易日所有決策都使用該日期已生效的 active param；實盤同理使用當下正式 promote 的最新 param.json。",
             "random_seed_ensemble": seed_ensemble_policy,
+            "requested_random_seed_ensemble": requested_seed_ensemble_policy,
         },
         "summary": {
             "folds": int(summary.get("folds", 0)),

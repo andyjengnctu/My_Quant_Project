@@ -93,7 +93,7 @@ OUTER_ROLLING_OOS_HORIZON_MONTHS = 12
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True
 OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE = 5
 # "auto" = 過半數；整數 = 至少幾個 seed 同意。解析後會 clamp 到 1~N，因此最大值永遠是 N。
-OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 5
+OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE = 3
 
 # Rolling OOS optimizer search 預設 trial 數。
 # CLI --trials 仍可覆寫；此值只控制互動提示與未指定 trials 時的預設。

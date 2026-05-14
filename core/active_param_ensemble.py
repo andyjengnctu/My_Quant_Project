@@ -258,10 +258,32 @@ def build_static_active_param_ensemble_payload(
 def get_active_param_ensemble_policy(payload: Mapping[str, Any]) -> dict:
     policy = payload.get("random_seed_ensemble") if isinstance(payload.get("random_seed_ensemble"), Mapping) else {}
     schedule = build_active_param_ensemble_schedule(payload)
-    seed_count = int(policy.get("seed_count") or len(schedule[0].get("members") or []) or 1)
-    min_agree = policy.get("min_agree", policy.get("min_agree_requested", "auto"))
+    member_counts = [len(record.get("members") or []) for record in schedule if record.get("members")]
+    actual_min_members = max(1, min(member_counts) if member_counts else 1)
+    actual_max_members = max(member_counts) if member_counts else actual_min_members
+    min_agree = policy.get("min_agree_requested", policy.get("min_agree", "auto"))
     from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
-    return build_seed_ensemble_policy_snapshot(enabled=True, seed_count=seed_count, min_agree=min_agree)
+    resolved = build_seed_ensemble_policy_snapshot(
+        enabled=actual_min_members > 1,
+        seed_count=actual_min_members,
+        min_agree=min_agree,
+    )
+    requested_seed_count = policy.get("seed_count")
+    if requested_seed_count is not None:
+        try:
+            requested_seed_count = int(requested_seed_count)
+        except (TypeError, ValueError):
+            requested_seed_count = None
+    if requested_seed_count is not None:
+        resolved["seed_count_requested"] = int(requested_seed_count)
+    resolved["member_count_min"] = int(actual_min_members)
+    resolved["member_count_max"] = int(actual_max_members)
+    if requested_seed_count is not None and int(requested_seed_count) != int(actual_min_members):
+        resolved["member_count_mismatch"] = True
+        resolved["note"] = "seed_count/min_agree 已依 JSON 實際 members 數量修正，避免要求超過可用 members 的共識數。"
+    else:
+        resolved["member_count_mismatch"] = actual_min_members != actual_max_members
+    return resolved
 
 
 def format_active_param_ensemble_summary_lines(payload: Mapping[str, Any]) -> list[str]:
