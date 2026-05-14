@@ -33,6 +33,7 @@ from core.portfolio_ops import (
     try_rotate_weakest_position,
 )
 from core.portfolio_exits import append_portfolio_position_active_level_row
+from core.seed_ensemble_policy import resolve_seed_ensemble_min_agree
 
 
 BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS = 64
@@ -636,7 +637,10 @@ def run_portfolio_timeline(
                         current_equity_money=current_equity_money,
                         initial_capital=initial_capital,
                         collect_all_candidates=replay_counts is not None,
-                        min_agree=ensemble_min_agree or max(1, len(day_ensemble_members) // 2 + 1),
+                        min_agree=resolve_seed_ensemble_min_agree(
+                            len(day_ensemble_members),
+                            ensemble_min_agree if ensemble_min_agree is not None else "auto",
+                        ),
                     )
                 else:
                     candidates_today, orderable_candidates_today, normal_setup_tickers_today = build_daily_candidates(
