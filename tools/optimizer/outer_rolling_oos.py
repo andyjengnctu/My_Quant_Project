@@ -42,13 +42,22 @@ from config.training_performance_policy import (
     resolve_optimizer_single_fold_local_min_process_workers_default,
     resolve_optimizer_single_fold_search_parallel_trials_default,
 )
-from core.active_param_ensemble import ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE, ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING
+from core.active_param_ensemble import (
+    ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+    ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+    get_active_param_ensemble_policy,
+    is_active_param_ensemble_payload,
+)
 from core.display import C_CYAN, C_GRAY, C_GREEN, C_RED, C_RESET, C_YELLOW
 from core.params_io import build_params_from_mapping
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_portfolio_score
 from core.runtime_utils import choose_inline_progress_message, get_taipei_now, is_interactive_console, safe_prompt_choice, stdout_supports_inline_progress, write_inline_progress
 from core.rolling_oos_params import ROLLING_OOS_PARAM_SET_SCHEMA_TYPE, ROLLING_OOS_USAGE
-from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot, normalize_seed_ensemble_members
+from core.seed_ensemble_policy import (
+    build_seed_ensemble_policy_snapshot,
+    generate_random_seed_ensemble,
+    normalize_seed_ensemble_members,
+)
 from core.strategy_params import build_runtime_param_raw_value
 from core.walk_forward_policy import build_optimizer_runtime_policy
 from tools.optimizer.param_cache import build_prep_cache_key
@@ -2648,22 +2657,55 @@ def _calc_stitched_curve_metrics(stitched: dict) -> dict:
 def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_name: str | None = None, best_finalist: bool = False) -> dict:
     params_by_oos_year: dict[str, dict] = {}
     params_by_effective_date: dict[str, dict] = {}
-    for row in sorted(list(rows or []), key=lambda item: int(item.get("oos_year", 0) or 0)):
+    params_ensemble_by_effective_date: dict[str, list[dict]] = {}
+    fold_entries: list[dict] = []
+    has_ensemble_members = False
+    for row in sorted(list(rows or []), key=lambda item: str(item.get("oos_start_date") or item.get("oos_year") or "")):
         try:
             oos_key = int(row.get("oos_year"))
         except (TypeError, ValueError):
             continue
+        effective_start = str(row.get("oos_start_date") or f"{str(oos_key)[:4]}-01-01")
+        effective_end = str(row.get("oos_end_date") or f"{str(oos_key)[:4]}-12-31")
         if best_finalist:
             params_payload = dict(row.get("best_finalist_params") or {})
-            effective_start = str(row.get("oos_start_date") or f"{str(oos_key)[:4]}-01-01")
+            members = normalize_seed_ensemble_members(row.get("best_finalist_params_ensemble"))
         else:
             schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
             params_payload = dict(schedule.get("params") or {})
-            effective_start = str(schedule.get("effective_start") or row.get("oos_start_date") or f"{str(oos_key)[:4]}-01-01")
+            effective_start = str(schedule.get("effective_start") or effective_start)
+            effective_end = str(schedule.get("effective_end") or effective_end)
+            members = _build_params_ensemble_members_for_schedule(schedule)
+        if not params_payload and members:
+            params_payload = dict(members[0].get("params") or {})
         if not params_payload:
             continue
         params_by_oos_year[str(oos_key)] = params_payload
         params_by_effective_date[effective_start] = params_payload
+        if members:
+            params_ensemble_by_effective_date[effective_start] = members
+            if len(members) > 1:
+                has_ensemble_members = True
+        fold_entries.append({
+            "oos_year": int(oos_key),
+            "effective_start": effective_start,
+            "effective_end": effective_end,
+            "oos_start_date": str(row.get("oos_start_date") or effective_start),
+            "oos_end_date": str(row.get("oos_end_date") or effective_end),
+        })
+    if has_ensemble_members:
+        return {
+            "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+            "schema_version": 1,
+            "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+            "type": "outer_rolling_oos_param_set",
+            "active_param_policy": "daily_active_param_ensemble",
+            "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date),
+            "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
+            "params_by_oos_year": params_by_oos_year,
+            "params_by_effective_date": params_by_effective_date,
+            "folds": fold_entries,
+        }
     return {
         "schema_type": ROLLING_OOS_PARAM_SET_SCHEMA_TYPE,
         "schema_version": 1,
@@ -2672,10 +2714,13 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
         "active_param_policy": "daily_active_param",
         "params_by_oos_year": params_by_oos_year,
         "params_by_effective_date": params_by_effective_date,
+        "folds": fold_entries,
     }
 
 
 def _active_replay_payload_has_params(payload: dict) -> bool:
+    if is_active_param_ensemble_payload(payload):
+        return bool(dict(payload.get("params_ensemble_by_effective_date") or {}) or list(payload.get("params_ensemble") or []))
     return bool(dict(payload.get("params_by_effective_date") or {}) or dict(payload.get("params_by_oos_year") or {}))
 
 
@@ -2730,6 +2775,15 @@ def _extract_active_replay_metrics(result) -> dict:
 def _build_active_replay_schedule_records(payload: dict) -> list[dict]:
     if not _active_replay_payload_has_params(payload):
         return []
+    if is_active_param_ensemble_payload(payload):
+        from tools.portfolio_sim.simulation_runner import _build_active_param_ensemble_objects_from_payload
+
+        policy = get_active_param_ensemble_policy(payload)
+        records = list(_build_active_param_ensemble_objects_from_payload(payload, fixed_risk=None))
+        for record in records:
+            record["ensemble_min_agree"] = int(policy.get("min_agree", 1) or 1)
+            record["ensemble_seed_count"] = int(policy.get("seed_count", len(record.get("members") or []) or 1) or 1)
+        return records
     from tools.portfolio_sim.simulation_runner import _build_active_param_objects_from_payload
 
     return list(_build_active_param_objects_from_payload(payload, fixed_risk=None))
@@ -2796,6 +2850,26 @@ def _empty_unavailable_chain_metrics() -> dict:
     }
 
 
+def _iter_active_replay_context_records(*, policy_name: str, group_records: list[dict]):
+    for record in list(group_records or []):
+        members = list(record.get("members") or [])
+        if members:
+            for member in members:
+                item = dict(record)
+                item.pop("members", None)
+                item.update({
+                    "params_obj": member.get("params_obj"),
+                    "params_signature": member.get("params_signature"),
+                    "member_index": member.get("member_index"),
+                    "seed": member.get("seed"),
+                    "selected_trial": member.get("selected_trial"),
+                })
+                item["_ensemble_parent_effective_date"] = record.get("effective_date_text")
+                yield item
+        else:
+            yield dict(record)
+
+
 def _load_active_replay_contexts_by_signature(
     *,
     data_dir: str,
@@ -2814,7 +2888,7 @@ def _load_active_replay_contexts_by_signature(
     records: list[dict] = []
     by_signature: dict[str, dict] = {}
     for policy_name, group_records in dict(schedule_groups or {}).items():
-        for record in list(group_records or []):
+        for record in _iter_active_replay_context_records(policy_name=str(policy_name), group_records=list(group_records or [])):
             signature = str(record.get("params_signature") or "")
             if not signature:
                 continue
@@ -3020,6 +3094,60 @@ def _run_active_replay_metrics_from_schedule_records(
     if first_sim_idx >= len(resolved_sorted_dates):
         raise ValueError("active-param replay 起始日期沒有可回測日期")
     first_record = _resolve_active_schedule_record(schedule_records, resolved_sorted_dates[first_sim_idx])
+    use_param_ensemble = bool(first_record.get("members"))
+    if use_param_ensemble:
+        first_members = list(first_record.get("members") or [])
+        if not first_members:
+            raise ValueError("active-param ensemble schedule 缺少 members")
+        base_contexts = [contexts_by_signature[str(member["params_signature"])] for member in first_members]
+        base_context = base_contexts[0]
+        base_params = first_members[0]["params_obj"]
+        benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
+        ensemble_min_agree = int(first_record.get("ensemble_min_agree", len(first_members)) or len(first_members))
+
+        def active_param_ensemble_resolver(trade_date):
+            return _resolve_active_schedule_record(schedule_records, trade_date)["members"]
+
+        def active_context_ensemble_resolver(trade_date):
+            record = _resolve_active_schedule_record(schedule_records, trade_date)
+            return [contexts_by_signature[str(member["params_signature"])] for member in list(record.get("members") or [])]
+
+        pf_profile = {
+            "param_policy": "active_param_ensemble_replay",
+            "capture_equity_curve": True,
+            "active_param_ensemble": {
+                "seed_count": int(first_record.get("ensemble_seed_count", len(first_members)) or len(first_members)),
+                "min_agree": int(ensemble_min_agree),
+            },
+            "active_param_ensemble_schedule": [
+                {
+                    "effective_date": str(record.get("effective_date_text")),
+                    "year": int(record.get("year", 0) or 0),
+                    "member_count": int(len(record.get("members") or [])),
+                }
+                for record in schedule_records
+            ],
+        }
+        result = run_portfolio_timeline(
+            base_context.get("all_dfs_fast") or {},
+            base_context.get("all_trade_logs") or {},
+            resolved_sorted_dates,
+            int(resolved_start_year),
+            base_params,
+            int(max_positions),
+            bool(enable_rotation),
+            benchmark_ticker=str(benchmark_ticker),
+            benchmark_data=benchmark_data,
+            is_training=False,
+            profile_stats=pf_profile,
+            verbose=False,
+            pit_stats_index=base_context.get("all_pit_stats_index"),
+            active_param_ensemble_resolver=active_param_ensemble_resolver,
+            active_context_ensemble_resolver=active_context_ensemble_resolver,
+            ensemble_min_agree=int(ensemble_min_agree),
+        )
+        return _extract_active_replay_metrics((*result, pf_profile))
+
     base_context = contexts_by_signature[str(first_record["params_signature"])]
     benchmark_data = (base_context.get("all_dfs_fast") or {}).get(benchmark_ticker)
 
@@ -4503,6 +4631,373 @@ class _FoldLogSearchProgress:
         self.emit(int(completed), force=True)
 
 
+
+def _is_rolling_random_seed_ensemble_enabled() -> bool:
+    return bool(OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED) and int(OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE or 1) > 1
+
+
+def _build_rolling_seed_ensemble_policy_payload() -> dict:
+    return build_seed_ensemble_policy_snapshot(
+        enabled=OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED,
+        seed_count=OPTIMIZER_RANDOM_SEED_ENSEMBLE_SIZE,
+        min_agree=OPTIMIZER_RANDOM_SEED_ENSEMBLE_MIN_AGREE,
+    )
+
+
+def _extract_seed_from_policy_schedules(row: dict) -> int | None:
+    for schedule in dict(row.get("policy_schedules") or {}).values():
+        if not isinstance(schedule, dict):
+            continue
+        raw_seed = schedule.get("optimizer_seed")
+        if raw_seed is None:
+            continue
+        try:
+            return int(raw_seed)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _build_members_from_seed_rows_for_policy(seed_rows: list[dict], policy_name: str) -> list[dict]:
+    members: list[dict] = []
+    for idx, row in enumerate(list(seed_rows or []), start=1):
+        schedule = dict((row.get("policy_schedules") or {}).get(str(policy_name)) or {})
+        params_payload = dict(schedule.get("params") or {})
+        if not params_payload:
+            continue
+        seed = schedule.get("optimizer_seed")
+        if seed is None:
+            seed = _extract_seed_from_policy_schedules(row)
+        member = {
+            "member_index": int(len(members) + 1),
+            "seed": seed,
+            "selected_trial": schedule.get("selected_trial"),
+            "params": params_payload,
+        }
+        for key in ("base_score", "base_rank", "local_min", "local_rank", "retention", "retention_rank"):
+            if key in schedule:
+                member[key] = schedule.get(key)
+        members.append(member)
+    return normalize_seed_ensemble_members(members)
+
+
+def _build_members_from_seed_rows_for_best(seed_rows: list[dict]) -> list[dict]:
+    members: list[dict] = []
+    for row in list(seed_rows or []):
+        params_payload = dict(row.get("best_finalist_params") or {})
+        if not params_payload:
+            continue
+        seed = _extract_seed_from_policy_schedules(row)
+        member = {
+            "member_index": int(len(members) + 1),
+            "seed": seed,
+            "selected_trial": row.get("best_finalist_trial"),
+            "params": params_payload,
+            "oos_score": row.get("best_finalist_oos_score"),
+            "return_pct": row.get("best_finalist_return_pct"),
+            "mdd_pct": row.get("best_finalist_mdd_pct"),
+        }
+        members.append(member)
+    return normalize_seed_ensemble_members(members)
+
+
+def _build_single_period_ensemble_payload(*, members: list[dict], effective_start: str, effective_end: str, oos_year: int) -> dict:
+    normalized_members = normalize_seed_ensemble_members(members)
+    if not normalized_members:
+        raise ValueError("rolling seed ensemble 缺少可用 params members")
+    params_ensemble_by_effective_date = {str(effective_start): normalized_members}
+    return {
+        "schema_type": ACTIVE_PARAM_ENSEMBLE_SCHEMA_TYPE,
+        "schema_version": 1,
+        "mode": ACTIVE_PARAM_ENSEMBLE_MODE_ROLLING,
+        "type": "outer_rolling_oos_param_set",
+        "active_param_policy": "daily_active_param_ensemble",
+        "random_seed_ensemble": _build_effective_seed_ensemble_policy_payload(params_ensemble_by_effective_date),
+        "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
+        "folds": [{
+            "oos_year": int(oos_year),
+            "effective_start": str(effective_start),
+            "effective_end": str(effective_end),
+            "oos_start_date": str(effective_start),
+            "oos_end_date": str(effective_end),
+        }],
+    }
+
+
+def _evaluate_period_ensemble_members(
+    *,
+    selected_data_dir: str,
+    members: list[dict],
+    oos_year: int,
+    oos_start_date: str,
+    oos_end_date: str,
+    max_positions: int,
+    enable_rotation: bool,
+) -> dict:
+    from tools.portfolio_sim.simulation_runner import run_portfolio_simulation_with_param_ensemble
+
+    payload = _build_single_period_ensemble_payload(
+        members=members,
+        effective_start=str(oos_start_date),
+        effective_end=str(oos_end_date),
+        oos_year=int(oos_year),
+    )
+    result = run_portfolio_simulation_with_param_ensemble(
+        selected_data_dir,
+        payload,
+        max_positions=int(max_positions),
+        enable_rotation=bool(enable_rotation),
+        start_year=int(pd.Timestamp(oos_start_date).year),
+        end_year=int(pd.Timestamp(oos_end_date).year),
+        start_date=str(oos_start_date),
+        end_date=str(oos_end_date),
+        benchmark_ticker="0050",
+        verbose=False,
+    )
+    return _extract_active_replay_metrics(result)
+
+
+def _policy_metrics_from_ensemble_metrics(metrics: dict, *, best_score: float, benchmark_score: float) -> dict:
+    rank_1_oos = float(metrics.get("score", 0.0))
+    return {
+        "available": True,
+        "rank_1_trial": None,
+        "rank_1_oos": rank_1_oos,
+        "rank_1_return_pct": float(metrics.get("return_pct", 0.0)),
+        "rank_1_mdd_pct": float(metrics.get("mdd_pct", 0.0)),
+        "rank_1_trades": int(metrics.get("trade_count", 0) or 0),
+        "best_gap": rank_1_oos - float(best_score),
+        "benchmark_0050_gap": rank_1_oos - float(benchmark_score),
+        "rank_1_initial_capital": float(metrics.get("initial_equity", 0.0) or 0.0),
+        "rank_1_equity_curve": [],
+        "ensemble_replay": True,
+    }
+
+
+def _build_ensemble_policy_schedule_from_seed_rows(*, seed_rows: list[dict], policy_name: str, oos_year: int, selection_period: str, oos_start_date: str, oos_end_date: str) -> dict:
+    members = _build_members_from_seed_rows_for_policy(seed_rows, policy_name)
+    if not members:
+        return {}
+    first_member = dict(members[0])
+    return {
+        "effective_start": str(oos_start_date),
+        "effective_end": str(oos_end_date),
+        "selection": str(selection_period),
+        "oos_year": int(oos_year),
+        "oos_period": f"{oos_start_date}~{oos_end_date}",
+        "policy": str(policy_name),
+        "selected_trial": first_member.get("selected_trial"),
+        "optimizer_seed": first_member.get("seed"),
+        "optimizer_seeds": [member.get("seed") for member in members],
+        "member_count": int(len(members)),
+        "params": dict(first_member.get("params") or {}),
+        "params_ensemble": members,
+    }
+
+
+def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict]) -> dict:
+    seed_rows = [dict(result.get("row") or {}) for result in list(seed_results or []) if result.get("row")]
+    timing_rows = [dict(result.get("timing_row") or {}) for result in list(seed_results or []) if result.get("timing_row")]
+    if not seed_rows:
+        first = dict(seed_results[0]) if seed_results else {}
+        first["status"] = "skipped_no_finalist"
+        return first
+    if len(seed_rows) != len(list(seed_results or [])):
+        raise RuntimeError(
+            f"rolling seed ensemble 需要完整 N 組 params，但只有 {len(seed_rows)}/{len(list(seed_results or []))} 個 seed 產生可用 row"
+        )
+
+    selected_data_dir = str(task["selected_data_dir"])
+    fold_idx = int(task["fold_idx"])
+    fold_count = int(task["fold_count"])
+    oos_year = int(task["oos_year"])
+    selection_period = str(task.get("selection_period") or seed_rows[0].get("selection_period") or "")
+    selection_start = str(task.get("selection_start_date") or seed_rows[0].get("selection_start_date") or "")
+    selection_end = str(task.get("selection_end_date") or seed_rows[0].get("selection_end_date") or "")
+    oos_start_date = str(task.get("oos_start_date") or seed_rows[0].get("oos_start_date") or f"{oos_year}-01-01")
+    oos_end_date = str(task.get("oos_end_date") or seed_rows[0].get("oos_end_date") or f"{oos_year}-12-31")
+    chain_max_positions = int((seed_results[0] or {}).get("chain_max_positions", 10) or 10)
+    chain_enable_rotation = bool((seed_results[0] or {}).get("chain_enable_rotation", False))
+
+    eval_started = time.perf_counter()
+    best_members = _build_members_from_seed_rows_for_best(seed_rows)
+    best_metrics = _evaluate_period_ensemble_members(
+        selected_data_dir=selected_data_dir,
+        members=best_members,
+        oos_year=oos_year,
+        oos_start_date=oos_start_date,
+        oos_end_date=oos_end_date,
+        max_positions=chain_max_positions,
+        enable_rotation=chain_enable_rotation,
+    ) if best_members else {}
+    best_score = float(best_metrics.get("score", 0.0))
+    benchmark_score = float(best_metrics.get("benchmark_oos_score", 0.0))
+    benchmark_return_pct = float(best_metrics.get("benchmark_return_pct", 0.0))
+    benchmark_mdd_pct = float(best_metrics.get("benchmark_mdd_pct", 0.0))
+
+    policy_schedules: dict[str, dict] = {}
+    policy_metrics: dict[str, dict] = {}
+    for policy_name in CHAIN_POLICY_NAMES:
+        members = _build_members_from_seed_rows_for_policy(seed_rows, policy_name)
+        if not members:
+            continue
+        schedule = _build_ensemble_policy_schedule_from_seed_rows(
+            seed_rows=seed_rows,
+            policy_name=policy_name,
+            oos_year=oos_year,
+            selection_period=selection_period,
+            oos_start_date=oos_start_date,
+            oos_end_date=oos_end_date,
+        )
+        policy_schedules[policy_name] = schedule
+        metrics = _evaluate_period_ensemble_members(
+            selected_data_dir=selected_data_dir,
+            members=members,
+            oos_year=oos_year,
+            oos_start_date=oos_start_date,
+            oos_end_date=oos_end_date,
+            max_positions=chain_max_positions,
+            enable_rotation=chain_enable_rotation,
+        )
+        if benchmark_score == 0.0:
+            benchmark_score = float(metrics.get("benchmark_oos_score", 0.0))
+            benchmark_return_pct = float(metrics.get("benchmark_return_pct", 0.0))
+            benchmark_mdd_pct = float(metrics.get("benchmark_mdd_pct", 0.0))
+        policy_metrics[policy_name] = _policy_metrics_from_ensemble_metrics(
+            metrics,
+            best_score=best_score,
+            benchmark_score=benchmark_score,
+        )
+
+    ensemble_eval_sec = max(0.0, time.perf_counter() - eval_started)
+    fold_elapsed = sum(float(row.get("elapsed_sec", 0.0) or 0.0) for row in seed_rows) + ensemble_eval_sec
+    row = {
+        "fold": f"{fold_idx}/{fold_count}",
+        "oos_year": int(oos_year),
+        "selection_period": selection_period,
+        "selection_start_year": int(pd.Timestamp(selection_start).year),
+        "selection_end_year": int(pd.Timestamp(selection_end).year),
+        "selection_start_date": selection_start,
+        "selection_end_date": selection_end,
+        "oos_start_date": oos_start_date,
+        "oos_end_date": oos_end_date,
+        "oos_period": str(task.get("oos_period") or f"{oos_start_date}~{oos_end_date}"),
+        "best_finalist_oos_score": float(best_score),
+        "best_finalist_trial": None,
+        "best_finalist_return_pct": float(best_metrics.get("return_pct", 0.0)),
+        "best_finalist_mdd_pct": float(best_metrics.get("mdd_pct", 0.0)),
+        "best_finalist_trades": int(best_metrics.get("trade_count", 0) or 0),
+        "best_finalist_initial_capital": float(best_metrics.get("initial_equity", 0.0) or 0.0),
+        "best_finalist_equity_curve": [],
+        "best_finalist_params": dict((best_members[0] or {}).get("params") or {}) if best_members else {},
+        "best_finalist_params_ensemble": best_members,
+        "benchmark_oos_score": float(benchmark_score),
+        "benchmark_return_pct": float(benchmark_return_pct),
+        "benchmark_mdd_pct": float(benchmark_mdd_pct),
+        "base": policy_metrics.get("base", {}),
+        "base_retention_gt_min": policy_metrics.get("base_retention_gt_min", {}),
+        "local": policy_metrics.get("local", {}),
+        "retention": policy_metrics.get("retention", {}),
+        **{policy_name: policy_metrics.get(policy_name, {}) for policy_name in BASE_RETENTION_COMPARISON_POLICY_NAMES},
+        "policy_schedules": policy_schedules,
+        "elapsed_sec": float(fold_elapsed),
+        "optimizer_search_sec": sum(float(row.get("optimizer_search_sec", 0.0) or 0.0) for row in seed_rows),
+        "local_min_review_sec": sum(float(row.get("local_min_review_sec", 0.0) or 0.0) for row in seed_rows),
+        "oos_diagnostics_sec": sum(float(row.get("oos_diagnostics_sec", 0.0) or 0.0) for row in seed_rows) + ensemble_eval_sec,
+        "install_shared_cache_sec": sum(float(row.get("install_shared_cache_sec", 0.0) or 0.0) for row in seed_rows),
+        "study_create_sec": sum(float(row.get("study_create_sec", 0.0) or 0.0) for row in seed_rows),
+        "random_seed_ensemble": _build_rolling_seed_ensemble_policy_payload(),
+        "optimizer_seeds": [_extract_seed_from_policy_schedules(row) for row in seed_rows],
+    }
+
+    timing_row = dict(timing_rows[0]) if timing_rows else {
+        "fold": f"{fold_idx}/{fold_count}",
+        "fold_idx": fold_idx,
+        "fold_count": fold_count,
+        "oos_year": oos_year,
+        "selection_period": selection_period,
+        "db_file": "",
+    }
+    timing_row.update({
+        "status": "done_seed_ensemble",
+        "requested_trials": sum(int(row.get("requested_trials", 0) or 0) for row in timing_rows) or int(task.get("config", {}).get("trials_per_fold", 0) or 0) * len(seed_rows),
+        "completed_trials": sum(int(row.get("completed_trials", 0) or 0) for row in timing_rows),
+        "finalists_count": sum(int(row.get("finalists_count", 0) or 0) for row in timing_rows),
+        "install_shared_cache_sec": float(row["install_shared_cache_sec"]),
+        "study_create_sec": float(row["study_create_sec"]),
+        "optimize_sec": float(row["optimizer_search_sec"]),
+        "local_min_review_sec": float(row["local_min_review_sec"]),
+        "oos_diagnostics_sec": float(row["oos_diagnostics_sec"]),
+        "fold_total_sec": float(row["elapsed_sec"]),
+        "seed_ensemble_members": int(len(seed_rows)),
+        "seed_ensemble_seeds": ",".join(str(seed) for seed in row.get("optimizer_seeds", []) if seed is not None),
+    })
+    return {
+        "status": "done",
+        "fold_idx": fold_idx,
+        "oos_year": int(oos_year),
+        "row": row,
+        "timing_row": timing_row,
+        "chain_max_positions": chain_max_positions,
+        "chain_enable_rotation": chain_enable_rotation,
+        "log_path": str(task.get("log_path") or ""),
+    }
+
+
+def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
+    policy = _build_rolling_seed_ensemble_policy_payload()
+    seeds = generate_random_seed_ensemble(int(policy.get("seed_count", 1) or 1))
+    log_path = str(task.get("log_path") or "")
+    fold_idx = int(task.get("fold_idx", 0) or 0)
+    fold_count = int(task.get("fold_count", 0) or 0)
+    oos_year = int(task.get("oos_year", 0) or 0)
+    selection_start = str(task.get("selection_start_date") or "")
+    selection_end = str(task.get("selection_end_date") or "")
+    _write_parallel_fold_progress_event(
+        stage="START",
+        fold_idx=fold_idx,
+        fold_count=fold_count,
+        oos_year=oos_year,
+        selection_start=selection_start,
+        selection_end=selection_end,
+        status=f"seed ensemble START N={len(seeds)} min_agree={policy.get('min_agree')}",
+        elapsed_sec=0.0,
+    )
+    seed_results: list[dict] = []
+    started = time.perf_counter()
+    for member_index, seed in enumerate(seeds, start=1):
+        member_task = dict(task)
+        member_task["seed_ensemble_member"] = True
+        member_task["optimizer_seed"] = int(seed)
+        member_task["seed_ensemble_member_index"] = int(member_index)
+        member_task["seed_ensemble_member_count"] = int(len(seeds))
+        if log_path:
+            root, ext = os.path.splitext(log_path)
+            member_task["log_path"] = f"{root}_seed{int(member_index):02d}_{int(seed)}{ext or '.log'}"
+        _write_parallel_fold_progress_event(
+            stage="START",
+            fold_idx=fold_idx,
+            fold_count=fold_count,
+            oos_year=oos_year,
+            selection_start=selection_start,
+            selection_end=selection_end,
+            status=f"seed {member_index}/{len(seeds)} seed={int(seed)}",
+            elapsed_sec=max(0.0, time.perf_counter() - started),
+        )
+        seed_results.append(_run_outer_rolling_oos_fold_task(member_task))
+    result = _aggregate_seed_ensemble_fold_results(task=task, seed_results=seed_results)
+    _write_parallel_fold_progress_event(
+        stage="DONE",
+        fold_idx=fold_idx,
+        fold_count=fold_count,
+        oos_year=oos_year,
+        selection_start=selection_start,
+        selection_end=selection_end,
+        status=f"seed ensemble done N={len(seeds)}",
+        elapsed_sec=max(0.0, time.perf_counter() - started),
+    )
+    return result
+
 def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
     """Run one rolling fold in an isolated process for timing-mode fold parallelism."""
     log_path = str((task or {}).get("log_path") or "")
@@ -4879,6 +5374,8 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
 
     def _execute_with_logged_exception() -> dict:
         try:
+            if not bool((task or {}).get("seed_ensemble_member")) and _is_rolling_random_seed_ensemble_enabled():
+                return _run_outer_rolling_oos_fold_ensemble_task(task)
             return _execute()
         except Exception:
             traceback.print_exc()
@@ -5064,6 +5561,61 @@ def run_outer_rolling_oos(
         oos_start_date = str(fold["oos_start_date"])
         oos_end_date = str(fold["oos_end_date"])
         print(f"[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | fold START", flush=True)
+        if _is_rolling_random_seed_ensemble_enabled():
+            log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
+            os.makedirs(log_dir, exist_ok=True)
+            config_payload = {
+                "training_start_year": int(config.training_start_year),
+                "first_oos_year": int(config.first_oos_year),
+                "last_oos_year": int(config.last_oos_year),
+                "trials_per_fold": int(config.trials_per_fold),
+                "window_mode": str(config.window_mode),
+                "train_window_years": int(config.train_window_years),
+                "first_oos_date": str(config.first_oos_date),
+                "last_oos_date": str(config.last_oos_date),
+                "train_window_months": int(config.train_window_months),
+                "oos_horizon_months": int(config.oos_horizon_months),
+            }
+            task = {
+                "project_root": str(project_root),
+                "output_dir": str(output_dir),
+                "base_policy": dict(base_policy),
+                "selected_data_dir": str(selected_data_dir),
+                "optimizer_required_min_rows": int(optimizer_required_min_rows),
+                "session_ts": str(session_ts),
+                "config": dict(config_payload),
+                "fold_idx": int(fold_idx),
+                "fold_count": int(fold_count),
+                "oos_year": int(oos_year),
+                "oos_start_date": str(oos_start_date),
+                "oos_end_date": str(oos_end_date),
+                "oos_period": str(oos_period),
+                "selection_start_date": str(selection_start),
+                "selection_end_date": str(selection_end),
+                "selection_period": str(selection_period),
+                "optimizer_seed": optimizer_seed,
+                "sampler_kind": str(sampler_kind),
+                "timing_mode": bool(timing_mode),
+                "fold_workers": int(fold_workers),
+                "log_path": os.path.join(log_dir, f"fold_{int(fold_idx):02d}_oos_{int(oos_year)}.log"),
+            }
+            result = _run_outer_rolling_oos_fold_task(task)
+            chain_state = {"chain_max_positions": chain_max_positions, "chain_enable_rotation": chain_enable_rotation}
+            _consume_parallel_fold_result(result=result, rows=rows, fold_timing_rows=fold_timing_rows, chain_state=chain_state)
+            if chain_state.get("chain_max_positions") is not None:
+                chain_max_positions = int(chain_state.get("chain_max_positions"))
+            if chain_state.get("chain_enable_rotation") is not None:
+                chain_enable_rotation = bool(chain_state.get("chain_enable_rotation"))
+            row = (result or {}).get("row")
+            if row is not None:
+                local_oos = float((row.get("local") or {}).get("rank_1_oos", 0.0))
+                print(
+                    f"{C_GREEN}[{fold_idx}/{fold_count}] selection={selection_period_display} | OOS {oos_period_display} | DONE seed ensemble | "
+                    f"local_oos={local_oos:.{OOS_SCORE_DECIMALS}f} | best={_format_compare_plain(row['best_finalist_oos_score'], local_oos)} | "
+                    f"0050={_format_compare_plain(row['benchmark_oos_score'], local_oos)} | elapsed={_fmt_duration(row.get('elapsed_sec'))}{C_RESET}"
+                )
+                _print_completed_results(rows)
+            continue
         fold_policy = dict(base_policy)
         fold_policy["selection_start_year"] = int(fold["selection_start_year"])
         fold_policy["train_start_year"] = int(fold["selection_start_year"])
