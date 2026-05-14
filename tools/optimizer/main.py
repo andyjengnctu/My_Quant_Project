@@ -1213,7 +1213,7 @@ def main(argv=None, environ=None):
         return 1
 
     session.timing_mode = timing_mode
-    session.disable_milestone_dashboard = False
+    session.disable_milestone_dashboard = not bool(is_optimizer_nonrolling_train_result_table_enabled())
 
     overall_started_at = time.perf_counter()
     raw_data_load_sec = 0.0

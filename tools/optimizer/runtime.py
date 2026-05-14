@@ -195,6 +195,9 @@ def maybe_print_history_best(study, *, fixed_tp_percent, train_enable_rotation, 
         return
     if not is_qualified_trial_value(best_trial.value):
         return
+    if session is not None and bool(getattr(session, "disable_milestone_dashboard", False)):
+        print(f"{colors['gray']}ℹ️ 非 rolling 訓練結果表格已關閉，略過歷史最佳儀表板還原。{colors['reset']}")
+        return
     print(f"\n{colors['cyan']}📜 【歷史突破紀錄還原】{colors['reset']}")
     if session is not None:
         print_optimizer_trial_milestone_dashboard(

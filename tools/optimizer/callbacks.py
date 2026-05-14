@@ -32,6 +32,7 @@ from core.strategy_dashboard import (
     _format_value_with_delta,
     print_optimizer_trial_console_dashboard,
 )
+from config.training_policy import is_optimizer_nonrolling_train_result_table_enabled
 from tools.optimizer.prep import prepare_trial_inputs
 from tools.optimizer.study_utils import (
     OBJECTIVE_MODE_SPLIT_TRAIN_ROMD,
@@ -796,7 +797,10 @@ def run_optimizer_monitoring_callback(session, study, trial):
     best_lookup_started_at = time.perf_counter()
     best_completed_trial = session.get_best_completed_trial_or_none(study)
     callback_best_lookup_sec = max(0.0, time.perf_counter() - best_lookup_started_at)
-    should_render_milestone_dashboard = not bool(getattr(session, "disable_milestone_dashboard", False))
+    disable_milestone_dashboard = getattr(session, "disable_milestone_dashboard", None)
+    if disable_milestone_dashboard is None:
+        disable_milestone_dashboard = not bool(is_optimizer_nonrolling_train_result_table_enabled())
+    should_render_milestone_dashboard = not bool(disable_milestone_dashboard)
     is_new_best = (
         should_render_milestone_dashboard
         and best_completed_trial is not None
