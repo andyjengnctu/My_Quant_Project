@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.data_utils import discover_unique_csv_inputs, get_required_min_rows, sanitize_ohlcv_dataframe
-from core.params_io import load_params_from_json
+from core.portfolio_param_runtime import load_portfolio_param_source_from_json
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_fast_data import build_trade_stats_index, get_pit_stats_from_index, pack_prepared_stock_data, prep_stock_data_and_trades
 from tools.scanner.stock_processor import process_prepared_stock
@@ -350,7 +350,7 @@ def _build_highlights(summary_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 CHAIN_RERUN_COUNT = 2
 
 
-def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, portfolio_profile, df_equity, df_trades, scanner_snapshot, failures, runtime_error="") -> Dict[str, Any]:
+def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, portfolio_profile, df_equity, df_trades, scanner_snapshot, failures, runtime_error="", param_source_info=None) -> Dict[str, Any]:
     duplicate_issues = list(context.get("duplicate_issues", []))
     skipped_rows = list(context.get("skipped", []))
     return {
@@ -358,6 +358,7 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
         "dataset": manifest["dataset"],
         "dataset_info": dataset_info,
         "runtime_error": runtime_error,
+        "param_source": dict(param_source_info or {}),
         "portfolio_snapshot": {
             "equity_rows": int(len(df_equity)),
             "trade_rows": int(len(df_trades)),
@@ -380,7 +381,7 @@ def _build_summary_payload(*, manifest, dataset_info, context, summary_rows, por
     }
 
 
-def _compute_chain_summary(*, manifest, dataset_info, context, params, start_year, max_positions, enable_rotation, benchmark_ticker, write_outputs=False, run_dir=None, debug_row_count_cache=None):
+def _compute_chain_summary(*, manifest, dataset_info, context, params, start_year, max_positions, enable_rotation, benchmark_ticker, write_outputs=False, run_dir=None, debug_row_count_cache=None, param_source_info=None):
     all_tickers = context["discovered_tickers"]
     portfolio_profile: Dict[str, Any] = {}
     replay_counts = {ticker: {"candidate_dates": [], "orderable_dates": [], "trade_rows": []} for ticker in all_tickers}
@@ -463,6 +464,7 @@ def _compute_chain_summary(*, manifest, dataset_info, context, params, start_yea
         df_trades=df_trades,
         scanner_snapshot=scanner_snapshot,
         failures=failures,
+        param_source_info=param_source_info,
     )
     return summary
 
@@ -501,7 +503,14 @@ def main(argv=None) -> int:
         dataset_info = ensure_reduced_dataset()
 
         try:
-            params = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
+            param_source = load_portfolio_param_source_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
+            params = param_source["primary_params"]
+            param_source_info = {
+                "source_type": str(param_source.get("source_type") or ""),
+                "primary_params_signature": str(param_source.get("primary_params_signature") or ""),
+                "member_count": int(param_source.get("member_count") or 1),
+                "chain_check_mode": "primary_params_for_single_stock_consistency",
+            }
             start_year = int(manifest["portfolio_start_year"])
             max_positions = int(manifest["portfolio_max_positions"])
             enable_rotation = bool(manifest["portfolio_enable_rotation"])
@@ -519,6 +528,7 @@ def main(argv=None) -> int:
                 benchmark_ticker=benchmark_ticker,
                 write_outputs=True,
                 run_dir=run_dir,
+                param_source_info=param_source_info,
             )
             debug_row_count_cache = {row["ticker"]: int(row.get("debug_row_count", 0)) for row in primary_summary.get("rows", [])}
 
@@ -536,6 +546,7 @@ def main(argv=None) -> int:
                     benchmark_ticker=benchmark_ticker,
                     write_outputs=False,
                     debug_row_count_cache=debug_row_count_cache,
+                    param_source_info=param_source_info,
                 )
                 rerun_payload = _canonical_chain_payload(rerun_summary)
                 rerun_summaries.append({

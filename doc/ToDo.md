@@ -4,6 +4,10 @@
 - 改成每月，預計6個月為一個fold
 - 加一個是取local_gate後的base score, 移除best
 
+1. 在Training_policy設定非rolling訓練突破時是否顯示結果表格。
+2. OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED = True 時
+訓練結整時顯示 ENSEMBLE的結果表格。 
+
 1. local* -> local
 2. 報表移除local的best欄位
 3. base與local之間加一個檢查 local_min > 0的base排序版本

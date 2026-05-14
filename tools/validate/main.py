@@ -20,7 +20,7 @@ from core.dataset_profiles import (
     build_empty_dataset_dir_message,
 )
 from core.log_utils import format_exception_summary
-from core.params_io import load_params_from_json
+from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 from core.runtime_utils import PeakTracedMemoryTracker, run_cli_entrypoint, enable_line_buffered_stdout, get_taipei_now, has_help_flag, is_interactive_stdin, resolve_cli_program_name, safe_prompt, validate_cli_args
 from core.output_paths import build_output_dir
 from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, write_json
@@ -80,7 +80,7 @@ def resolve_validate_dataset_profile_key(argv, environ):
 
 
 def load_params():
-    return load_params_from_json(PARAMS_FILE)
+    return load_portfolio_primary_params_from_json(PARAMS_FILE)
 
 
 def discover_available_tickers():

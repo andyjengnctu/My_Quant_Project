@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.output_paths import output_dir_path
 from core.output_retention import RetentionRule, apply_retention_rules
-from core.params_io import load_params_from_json
+from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 from core.runtime_utils import has_help_flag, resolve_cli_program_name, run_cli_entrypoint
 from tools.local_regression.formal_pipeline import DATASET_REQUIRED_STEPS, FORMAL_COMMAND_ORDER, FORMAL_STEP_ORDER
 from tools.validate.preflight_env import REQUIREMENTS_PATH, format_preflight_summary, run_preflight
@@ -993,7 +993,7 @@ def execute_all(
                 cache_summary: Dict[str, Any] = {}
                 cache_error = ""
                 try:
-                    params_for_cache = load_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
+                    params_for_cache = load_portfolio_primary_params_from_json(PROJECT_ROOT / "models" / "run_best_params.json")
                     cache_summary = build_shared_prep_cache(
                         PROJECT_ROOT,
                         Path(dataset_info_local["dataset_dir"]),
